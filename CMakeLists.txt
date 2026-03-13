@@ -12,6 +12,7 @@ find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(GLFW3 REQUIRED glfw3)
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
+find_package(Threads REQUIRED)
 
 set(IB_API_ROOT "/opt/IBAPI" CACHE PATH "Path to Interactive Brokers API")
 set(IB_API_INCLUDE_DIR "${IB_API_ROOT}/ibsapi" CACHE PATH "IB API include directory")
