@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/foxy/intent/workspaces/long-tws/repo/build_test/cmake_install.cmake",
+		"/Users/foxy/intent/workspaces/long-tws/repo/build_test/ixwebsocket_build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
