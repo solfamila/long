@@ -1,9 +1,8 @@
 #import <AppKit/AppKit.h>
 
 #include "app_shared.h"
-#include "controller.h"
+#include "trading_runtime.h"
 #include "trading_wrapper.h"
-#include "websocket_handlers.h"
 
 namespace {
 
@@ -379,14 +378,7 @@ void StylePanel(NSView* view) {
 
 @interface TradingWindowController : NSWindowController <NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate> {
 @private
-    TradingWrapper _wrapper;
-    std::unique_ptr<EReaderOSSignal> _osSignal;
-    std::unique_ptr<EClientSocket> _client;
-    std::unique_ptr<EReader> _reader;
-    std::unique_ptr<ix::WebSocketServer> _wsServer;
-    std::thread _readerThread;
-    std::atomic<bool> _readerRunning;
-    ControllerState _controllerState;
+    std::unique_ptr<TradingRuntime> _runtime;
 
     std::string _symbolInput;
     std::string _subscribedSymbol;
@@ -402,7 +394,7 @@ void StylePanel(NSView* view) {
     std::vector<std::pair<OrderId, OrderInfo>> _ordersSnapshot;
     std::vector<TradeTraceListItem> _traceItems;
 
-    NSTimer* _refreshTimer;
+    bool _refreshScheduled;
 
     NSTextField* _twsStatusLabel;
     NSTextField* _accountStatusLabel;
@@ -439,6 +431,9 @@ void StylePanel(NSView* view) {
 
 - (void)startRuntime;
 - (void)shutdownRuntime;
+- (EClientSocket*)client;
+- (void)scheduleRefresh;
+- (void)handleControllerAction:(TradingRuntimeControllerAction)action;
 
 @end
 
@@ -459,7 +454,6 @@ void StylePanel(NSView* view) {
 
     self = [super initWithWindow:window];
     if (self != nil) {
-        _readerRunning.store(false);
         _symbolInput = DEFAULT_SYMBOL;
         _quantityInput = 1;
         _priceBuffer = 0.01;
@@ -468,6 +462,7 @@ void StylePanel(NSView* view) {
         _messagesVersionSeen = 0;
         _subscribed = false;
         _shuttingDown = false;
+        _refreshScheduled = false;
         [self buildInterface];
         self.window.delegate = self;
     }
@@ -701,84 +696,32 @@ void StylePanel(NSView* view) {
 }
 
 - (void)startRuntime {
-    if (_client) {
+    if (_runtime) {
         return;
     }
 
     syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
+    _runtime = std::make_unique<TradingRuntime>();
 
-    std::cout << "=== TWS Trading GUI ===" << std::endl;
-    std::cout << "Connecting to TWS at " << DEFAULT_HOST << ":" << DEFAULT_PORT << std::endl;
-    std::cout << "Configured account: " << HARDCODED_ACCOUNT << std::endl;
-    std::cout << "Using platform: AppKit native views" << std::endl;
-
-    _osSignal = std::make_unique<EReaderOSSignal>(2000);
-    _client = std::make_unique<EClientSocket>(&_wrapper, _osSignal.get());
-    _wrapper.setClient(_client.get());
-
-    const bool twsConnected = _client->eConnect(DEFAULT_HOST, DEFAULT_PORT, DEFAULT_CLIENT_ID);
-    if (!twsConnected) {
-        std::cerr << "Failed to connect to TWS" << std::endl;
-        g_data.addMessage("Failed to connect to TWS");
-    } else {
-        std::cout << "Connected to TWS socket" << std::endl;
-    }
-
-    if (twsConnected) {
-        _reader = std::make_unique<EReader>(_client.get(), _osSignal.get());
-        _readerRunning.store(true);
-        _reader->start();
-        _readerThread = std::thread(readerLoop, _osSignal.get(), _reader.get(), _client.get(), &_readerRunning);
-    }
-
-    ix::initNetSystem();
-    _wsServer = std::make_unique<ix::WebSocketServer>(WEBSOCKET_PORT, WEBSOCKET_HOST);
-    EClientSocket* const client = _client.get();
-    _wsServer->setOnClientMessageCallback(
-        [client](std::shared_ptr<ix::ConnectionState> connectionState,
-                 ix::WebSocket& webSocket,
-                 const ix::WebSocketMessagePtr& msg) {
-            (void)connectionState;
-
-            if (msg->type == ix::WebSocketMessageType::Message) {
-                handleWebSocketMessage(msg->str, webSocket, client);
-            } else if (msg->type == ix::WebSocketMessageType::Open) {
-                const int total = g_data.wsConnectedClients.fetch_add(1) + 1;
-                g_data.addMessage("WebSocket client connected (total: " + std::to_string(total) + ")");
-                std::cout << "[WebSocket client connected]" << std::endl;
-            } else if (msg->type == ix::WebSocketMessageType::Close) {
-                int observed = g_data.wsConnectedClients.load();
-                int total = 0;
-                do {
-                    total = observed > 0 ? (observed - 1) : 0;
-                } while (!g_data.wsConnectedClients.compare_exchange_weak(observed, total));
-                g_data.addMessage("WebSocket client disconnected (total: " + std::to_string(total) + ")");
-                std::cout << "[WebSocket client disconnected]" << std::endl;
-            } else if (msg->type == ix::WebSocketMessageType::Error) {
-                g_data.addMessage("WebSocket error: " + msg->errorInfo.reason);
-                std::cout << "[WebSocket error: " << msg->errorInfo.reason << "]" << std::endl;
+    __weak TradingWindowController* weakSelf = self;
+    _runtime->setUiInvalidationCallback([weakSelf]() {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TradingWindowController* strongSelf = weakSelf;
+            if (strongSelf != nil) {
+                [strongSelf scheduleRefresh];
             }
         });
-
-    if (_wsServer->listenAndStart()) {
-        g_data.wsServerRunning.store(true);
-        g_data.addMessage("WebSocket server started on localhost port " + std::to_string(WEBSOCKET_PORT));
-        std::cout << "[WebSocket server started on localhost port " << WEBSOCKET_PORT << "]" << std::endl;
-    } else {
-        g_data.addMessage("Failed to start WebSocket server on port " + std::to_string(WEBSOCKET_PORT));
-        std::cerr << "Failed to start WebSocket server on port " << WEBSOCKET_PORT << std::endl;
-    }
-
-    controllerInitialize(_controllerState);
-
-    _refreshTimer = [NSTimer timerWithTimeInterval:0.15
-                                            target:self
-                                          selector:@selector(refreshTick:)
-                                          userInfo:nil
-                                           repeats:YES];
-    [[NSRunLoop mainRunLoop] addTimer:_refreshTimer forMode:NSRunLoopCommonModes];
-
-    [self refreshInterface];
+    });
+    _runtime->setControllerActionCallback([weakSelf](TradingRuntimeControllerAction action) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TradingWindowController* strongSelf = weakSelf;
+            if (strongSelf != nil) {
+                [strongSelf handleControllerAction:action];
+            }
+        });
+    });
+    _runtime->start();
+    [self scheduleRefresh];
 }
 
 - (void)shutdownRuntime {
@@ -786,44 +729,11 @@ void StylePanel(NSView* view) {
         return;
     }
     _shuttingDown = true;
-
-    [_refreshTimer invalidate];
-    _refreshTimer = nil;
-
-    if (_wsServer) {
-        if (g_data.wsServerRunning.load()) {
-            std::cout << "Stopping WebSocket server..." << std::endl;
-            _wsServer->stop();
-            g_data.wsServerRunning.store(false);
-        }
-        _wsServer.reset();
+    _refreshScheduled = false;
+    if (_runtime) {
+        _runtime->shutdown();
+        _runtime.reset();
     }
-    ix::uninitNetSystem();
-
-    if (_client) {
-        cancelActiveSubscription(_client.get());
-    }
-
-    _readerRunning.store(false);
-    if (_osSignal) {
-        _osSignal->issueSignal();
-    }
-
-    if (_readerThread.joinable()) {
-        _readerThread.join();
-    }
-
-    _reader.reset();
-
-    if (_client) {
-        if (_client->isConnected()) {
-            _client->eDisconnect();
-        }
-        _client.reset();
-    }
-
-    controllerCleanup(_controllerState);
-    _osSignal.reset();
 }
 
 - (void)windowWillClose:(NSNotification*)notification {
@@ -832,28 +742,55 @@ void StylePanel(NSView* view) {
     [NSApp terminate:nil];
 }
 
-- (void)refreshTick:(NSTimer*)timer {
-    (void)timer;
+- (EClientSocket*)client {
+    return _runtime ? _runtime->client() : nullptr;
+}
+
+- (void)scheduleRefresh {
     if (_shuttingDown) {
         return;
     }
 
-    controllerPoll(_controllerState);
-    const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
-    [self handleControllerWithState:state];
-    [self refreshInterface];
+    if (![NSThread isMainThread]) {
+        __weak TradingWindowController* weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TradingWindowController* strongSelf = weakSelf;
+            if (strongSelf != nil) {
+                [strongSelf scheduleRefresh];
+            }
+        });
+        return;
+    }
+
+    if (_refreshScheduled) {
+        return;
+    }
+
+    _refreshScheduled = true;
+    __weak TradingWindowController* weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        TradingWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            return;
+        }
+        strongSelf->_refreshScheduled = false;
+        if (strongSelf->_shuttingDown) {
+            return;
+        }
+        [strongSelf refreshInterface];
+    });
 }
 
 - (void)inputFieldAction:(id)sender {
     (void)sender;
     [self syncInputsFromFields];
-    [self refreshInterface];
+    [self scheduleRefresh];
 }
 
 - (void)controlTextDidEndEditing:(NSNotification*)notification {
     (void)notification;
     [self syncInputsFromFields];
-    [self refreshInterface];
+    [self scheduleRefresh];
 }
 
 - (void)syncInputsFromFields {
@@ -880,14 +817,15 @@ void StylePanel(NSView* view) {
     const std::string requestedSymbol = toUpperCase(ToStdString(_symbolField.stringValue));
     if (requestedSymbol.empty()) {
         g_data.addMessage("Subscribe failed: Symbol cannot be empty");
-        [self refreshInterface];
+        [self scheduleRefresh];
         return;
     }
 
+    EClientSocket* client = [self client];
     std::string error;
-    if (!_client || !requestSymbolSubscription(_client.get(), requestedSymbol, false, &error)) {
+    if (!client || !requestSymbolSubscription(client, requestedSymbol, false, &error)) {
         g_data.addMessage("Subscribe failed: " + error);
-        [self refreshInterface];
+        [self scheduleRefresh];
         return;
     }
 
@@ -895,7 +833,7 @@ void StylePanel(NSView* view) {
     _subscribed = true;
     _subscribedSymbol = requestedSymbol;
     [self updateInputFieldsFromState];
-    [self refreshInterface];
+    [self scheduleRefresh];
 }
 
 - (void)buyAction:(id)sender {
@@ -903,7 +841,7 @@ void StylePanel(NSView* view) {
     [self syncInputsFromFields];
     const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
     [self submitBuyWithState:state source:"GUI Button" note:"Buy Limit button pressed" failurePrefix:"Buy failed: "];
-    [self refreshInterface];
+    [self scheduleRefresh];
 }
 
 - (void)closeAction:(id)sender {
@@ -911,19 +849,20 @@ void StylePanel(NSView* view) {
     [self syncInputsFromFields];
     const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
     [self submitCloseWithState:state source:"GUI Button" note:"Close Long button pressed" failurePrefix:"Close failed: "];
-    [self refreshInterface];
+    [self scheduleRefresh];
 }
 
 - (void)cancelSelectedAction:(id)sender {
     (void)sender;
-    if (!_client) {
+    EClientSocket* client = [self client];
+    if (!client) {
         return;
     }
 
     NSIndexSet* selectedRows = _ordersTable.selectedRowIndexes;
     if (selectedRows.count == 0) {
         g_data.addMessage("No orders selected for cancellation");
-        [self refreshInterface];
+        [self scheduleRefresh];
         return;
     }
 
@@ -936,7 +875,7 @@ void StylePanel(NSView* view) {
     }];
 
     const std::vector<OrderId> markedForCancel = markOrdersPendingCancel(selectedOrderIds);
-    const std::vector<bool> cancelSent = sendCancelRequests(_client.get(), markedForCancel);
+    const std::vector<bool> cancelSent = sendCancelRequests(client, markedForCancel);
     for (std::size_t i = 0; i < markedForCancel.size(); ++i) {
         if (cancelSent[i]) {
             g_data.addMessage("Cancel request sent for order " + std::to_string(markedForCancel[i]));
@@ -944,29 +883,30 @@ void StylePanel(NSView* view) {
             g_data.addMessage("Cancel failed (not connected) for order " + std::to_string(markedForCancel[i]));
         }
     }
-    [self refreshInterface];
+    [self scheduleRefresh];
 }
 
 - (void)cancelAllAction:(id)sender {
     (void)sender;
-    if (!_client) {
+    EClientSocket* client = [self client];
+    if (!client) {
         return;
     }
 
     const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
     if (pendingOrders.empty()) {
         g_data.addMessage("No pending orders to cancel");
-        [self refreshInterface];
+        [self scheduleRefresh];
         return;
     }
 
-    const std::vector<bool> cancelSent = sendCancelRequests(_client.get(), pendingOrders);
+    const std::vector<bool> cancelSent = sendCancelRequests(client, pendingOrders);
     const int sentCount = static_cast<int>(std::count(cancelSent.begin(), cancelSent.end(), true));
     if (sentCount != static_cast<int>(pendingOrders.size())) {
         g_data.addMessage("Some cancel requests could not be sent");
     }
     g_data.addMessage("Cancel requested for " + std::to_string(sentCount) + " order(s)");
-    [self refreshInterface];
+    [self scheduleRefresh];
 }
 
 - (void)traceSelectionChanged:(id)sender {
@@ -977,63 +917,64 @@ void StylePanel(NSView* view) {
     [self refreshTraceDetails];
 }
 
-- (void)handleControllerWithState:(const PanelDerivedState&)state {
-    if (!controllerIsConnected(_controllerState)) {
+- (void)handleControllerAction:(TradingRuntimeControllerAction)action {
+    if (_shuttingDown) {
         return;
     }
 
-    const auto now = std::chrono::steady_clock::now();
+    const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
+    EClientSocket* client = [self client];
 
-    if (controllerConsumeDebouncedPress(_controllerState, CONTROLLER_BUTTON_SQUARE, now)) {
-        [self submitBuyWithState:state
-                          source:"Controller"
-                            note:"Controller Square button"
-                   failurePrefix:"[Controller] Buy failed: "];
-    }
-
-    if (controllerConsumeDebouncedPress(_controllerState, CONTROLLER_BUTTON_CIRCLE, now)) {
-        [self submitCloseWithState:state
-                            source:"Controller"
-                              note:"Controller Circle button"
-                     failurePrefix:"[Controller] Close failed: "];
-    }
-
-    if (controllerConsumeDebouncedPress(_controllerState, CONTROLLER_BUTTON_TRIANGLE, now)) {
-        if (!_client) {
-            return;
-        }
-
-        const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
-        if (!pendingOrders.empty()) {
-            const std::vector<bool> cancelSent = sendCancelRequests(_client.get(), pendingOrders);
-            const int sentCount = static_cast<int>(std::count(cancelSent.begin(), cancelSent.end(), true));
-            if (sentCount != static_cast<int>(pendingOrders.size())) {
-                g_data.addMessage("[Controller] Some cancel requests could not be sent");
+    switch (action) {
+        case TradingRuntimeControllerAction::Buy:
+            [self submitBuyWithState:state
+                              source:"Controller"
+                                note:"Controller Square button"
+                       failurePrefix:"[Controller] Buy failed: "];
+            break;
+        case TradingRuntimeControllerAction::Close:
+            [self submitCloseWithState:state
+                                source:"Controller"
+                                  note:"Controller Circle button"
+                         failurePrefix:"[Controller] Close failed: "];
+            break;
+        case TradingRuntimeControllerAction::CancelAll: {
+            if (!client) {
+                break;
             }
-            g_data.addMessage("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
-        } else {
-            g_data.addMessage("[Controller] No pending orders to cancel");
+
+            const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
+            if (!pendingOrders.empty()) {
+                const std::vector<bool> cancelSent = sendCancelRequests(client, pendingOrders);
+                const int sentCount = static_cast<int>(std::count(cancelSent.begin(), cancelSent.end(), true));
+                if (sentCount != static_cast<int>(pendingOrders.size())) {
+                    g_data.addMessage("[Controller] Some cancel requests could not be sent");
+                }
+                g_data.addMessage("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
+            } else {
+                g_data.addMessage("[Controller] No pending orders to cancel");
+            }
+            break;
         }
+        case TradingRuntimeControllerAction::ToggleQuantity:
+            if (state.canTrade && _subscribed) {
+                _quantityInput = (_quantityInput == 1) ? state.maxToggleQuantity : 1;
+                syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
+                [self updateInputFieldsFromState];
+                g_data.addMessage("[Controller] Quantity toggled to " + std::to_string(_quantityInput) + " shares");
+            }
+            break;
     }
 
-    if (controllerConsumeDebouncedPress(_controllerState, CONTROLLER_BUTTON_CROSS, now)) {
-        if (state.canTrade && _subscribed) {
-            _quantityInput = (_quantityInput == 1) ? state.maxToggleQuantity : 1;
-            syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
-            [self updateInputFieldsFromState];
-            g_data.addMessage("[Controller] Quantity toggled to " + std::to_string(_quantityInput) + " shares");
-        }
-    }
-
-    const bool shouldVibrate = state.symbol.hasPosition && state.symbol.currentPositionQty != 0.0;
-    controllerSetVibration(_controllerState, shouldVibrate);
+    [self scheduleRefresh];
 }
 
 - (void)submitBuyWithState:(const PanelDerivedState&)state
                     source:(const std::string&)source
                       note:(const std::string&)note
              failurePrefix:(const std::string&)failurePrefix {
-    if (!_client || !state.canBuy) {
+    EClientSocket* client = [self client];
+    if (!client || !state.canBuy) {
         return;
     }
 
@@ -1045,7 +986,7 @@ void StylePanel(NSView* view) {
                                               state.buySweepAvailable ? state.buyPrice : 0.0,
                                               note);
 
-    if (!submitLimitOrder(_client.get(), _subscribedSymbol, "BUY",
+    if (!submitLimitOrder(client, _subscribedSymbol, "BUY",
                           static_cast<double>(_quantityInput), state.buyPrice,
                           false, &intent, &error, nullptr, &traceId)) {
         g_data.addMessage(failurePrefix + error);
@@ -1060,7 +1001,8 @@ void StylePanel(NSView* view) {
                       source:(const std::string&)source
                         note:(const std::string&)note
                failurePrefix:(const std::string&)failurePrefix {
-    if (!_client || !state.canClosePosition) {
+    EClientSocket* client = [self client];
+    if (!client || !state.canClosePosition) {
         return;
     }
 
@@ -1073,7 +1015,7 @@ void StylePanel(NSView* view) {
                                               state.sellSweepAvailable ? state.sellPrice : 0.0,
                                               note);
 
-    if (!submitLimitOrder(_client.get(), _subscribedSymbol, "SELL",
+    if (!submitLimitOrder(client, _subscribedSymbol, "SELL",
                           state.symbol.availableLongToClose, state.sellPrice,
                           true, &intent, &error, nullptr, &traceId)) {
         g_data.addMessage(failurePrefix + error);
@@ -1106,6 +1048,10 @@ void StylePanel(NSView* view) {
     }
 
     const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
+    if (_runtime) {
+        const bool shouldVibrate = state.symbol.hasPosition && state.symbol.currentPositionQty != 0.0;
+        _runtime->setControllerVibration(shouldVibrate);
+    }
     [self refreshStatusLabels:state];
     [self refreshMarketSection:state];
     [self refreshOrders];

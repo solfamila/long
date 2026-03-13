@@ -17,6 +17,7 @@ public:
         }
         g_data.addMessage("Connected to TWS (awaiting nextValidId)");
         std::cout << "[Connected to TWS]" << std::endl;
+        requestUiInvalidation();
     }
 
     void connectionClosed() override {
@@ -38,6 +39,7 @@ public:
         }
         g_data.addMessage("Disconnected from TWS");
         std::cout << "[Disconnected from TWS]" << std::endl;
+        requestUiInvalidation();
     }
 
     void nextValidId(OrderId orderId) override {
@@ -62,6 +64,7 @@ public:
             g_data.addMessage("Requested positions and open orders...");
             std::cout << "[Requested positions and open orders]" << std::endl;
         }
+        requestUiInvalidation();
     }
 
     void managedAccounts(const std::string& accountsList) override {
@@ -81,6 +84,7 @@ public:
 
         g_data.addMessage(message);
         std::cout << "[" << message << "]" << std::endl;
+        requestUiInvalidation();
     }
 
     void tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attrib) override {
@@ -127,6 +131,7 @@ public:
         if (!autoQtyMsg.empty()) {
             g_data.addMessage(autoQtyMsg);
         }
+        requestUiInvalidation();
     }
 
     void updateMktDepthL2(TickerId id, int position, const std::string& marketMaker, int operation,
@@ -161,6 +166,7 @@ public:
                 book.erase(book.begin() + position);
             }
         }
+        requestUiInvalidation();
     }
 
     void updateMktDepth(TickerId id, int position, int operation, int side,
@@ -292,6 +298,7 @@ public:
             recordTraceOrderStatus(orderId, traceStatus, traceFilled, traceRemaining, traceAvgFill,
                                    permId, lastFillPrice, mktCapPrice);
         }
+        requestUiInvalidation();
     }
 
     void openOrder(OrderId orderId, const Contract& contract,
@@ -334,6 +341,7 @@ public:
                       orderState.status.c_str());
         g_data.addMessage(msg);
         std::cout << "[" << msg << "]" << std::endl;
+        requestUiInvalidation();
     }
 
     void execDetails(int reqId, const Contract& contract, const Execution& execution) override {
@@ -348,6 +356,7 @@ public:
                       DecimalFunctions::decimalToDouble(execution.cumQty));
         g_data.addMessage(msg);
         std::cout << "[" << msg << "]" << std::endl;
+        requestUiInvalidation();
     }
 
     void execDetailsEnd(int reqId) override {
@@ -367,6 +376,7 @@ public:
                       commissionReport.currency.c_str());
         g_data.addMessage(msg);
         std::cout << "[" << msg << "]" << std::endl;
+        requestUiInvalidation();
     }
 
     void error(int id,
@@ -438,6 +448,7 @@ public:
         }
 
         recordTraceError(id, errorCode, errorString);
+        requestUiInvalidation();
     }
 
     void position(const std::string& account, const Contract& contract,
@@ -462,6 +473,7 @@ public:
         std::snprintf(msg, sizeof(msg), "Position: %s %.0f @ %.2f (account: %s)",
                       contract.symbol.c_str(), posQty, avgCost, account.c_str());
         std::cout << "[" << msg << "]" << std::endl;
+        requestUiInvalidation();
     }
 
     void positionEnd() override {
@@ -471,6 +483,7 @@ public:
         }
         g_data.addMessage("Positions loaded");
         std::cout << "[Positions loaded]" << std::endl;
+        requestUiInvalidation();
     }
 
 #if defined(TWS_HAS_PROTOBUF_API)

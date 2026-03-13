@@ -5,6 +5,15 @@ SharedData g_data;
 namespace {
 constexpr std::size_t kMaxTraceEvents = 512;
 constexpr std::size_t kMaxTraceFills = 256;
+std::mutex& uiInvalidationCallbackMutex() {
+    static std::mutex m;
+    return m;
+}
+
+UiInvalidationCallback& uiInvalidationCallbackSlot() {
+    static UiInvalidationCallback callback;
+    return callback;
+}
 
 std::mutex& tradeTraceFileMutex() {
     static std::mutex m;
@@ -116,6 +125,27 @@ std::uint64_t findTraceIdLocked(OrderId orderId, long long permId = 0, const std
 }
 
 } // namespace
+
+void setUiInvalidationCallback(UiInvalidationCallback callback) {
+    std::lock_guard<std::mutex> lock(uiInvalidationCallbackMutex());
+    uiInvalidationCallbackSlot() = std::move(callback);
+}
+
+void clearUiInvalidationCallback() {
+    std::lock_guard<std::mutex> lock(uiInvalidationCallbackMutex());
+    uiInvalidationCallbackSlot() = nullptr;
+}
+
+void requestUiInvalidation() {
+    UiInvalidationCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(uiInvalidationCallbackMutex());
+        callback = uiInvalidationCallbackSlot();
+    }
+    if (callback) {
+        callback();
+    }
+}
 
 std::string toUpperCase(const std::string& str) {
     std::string result = str;

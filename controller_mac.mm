@@ -59,8 +59,17 @@ void updateControllerSharedState(bool connected, const std::string& deviceName) 
 }
 
 void updateControllerLockedState(const std::string& deviceName) {
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    g_data.controllerLockedDeviceName = deviceName;
+    bool changed = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (g_data.controllerLockedDeviceName != deviceName) {
+            g_data.controllerLockedDeviceName = deviceName;
+            changed = true;
+        }
+    }
+    if (changed) {
+        requestUiInvalidation();
+    }
 }
 
 bool setControllerLightColor(GCController* controller, float red, float green, float blue) {

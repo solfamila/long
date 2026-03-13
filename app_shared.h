@@ -97,6 +97,12 @@ inline constexpr int WEBSOCKET_PORT = 8080;
 inline constexpr const char* WEBSOCKET_HOST = "127.0.0.1"; // localhost only
 inline constexpr const char* TRADE_TRACE_LOG_FILENAME = "trade_trace_events.jsonl";
 
+using UiInvalidationCallback = std::function<void()>;
+
+void setUiInvalidationCallback(UiInvalidationCallback callback);
+void clearUiInvalidationCallback();
+void requestUiInvalidation();
+
 struct OrderInfo {
     OrderId orderId = 0;
     std::string account;
@@ -307,12 +313,15 @@ struct SharedData {
     std::uint64_t latestTraceId = 0;
 
     void addMessage(const std::string& msg) {
-        std::lock_guard<std::recursive_mutex> lock(mutex);
-        messages.push_back(msg);
-        while (messages.size() > MAX_MESSAGES) {
-            messages.pop_front();
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            messages.push_back(msg);
+            while (messages.size() > MAX_MESSAGES) {
+                messages.pop_front();
+            }
+            ++messagesVersion;
         }
-        ++messagesVersion;
+        requestUiInvalidation();
     }
 
     void copyMessagesTextIfChanged(std::string& out, std::uint64_t& seenVersion) {

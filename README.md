@@ -27,10 +27,28 @@ cmake --build build -j4
 Run:
 
 ```bash
-./build/tws_gui
+open build/tws_gui.app
+```
+
+Direct executable inside the bundle:
+
+```bash
+./build/tws_gui.app/Contents/MacOS/tws_gui
+```
+
+Package a distributable zip:
+
+```bash
+cmake --build build --target tws_gui_zip
 ```
 
 Dependency paths:
 - ixWebSocket is expected at `./ixwebsocket`
 - nlohmann/json is expected at `./nlohmann_json`
 - The build auto-detects a downloaded IB API under `~/Downloads/twsapi_macunix/...` when present
+
+Packaging notes:
+- The app is built as a real macOS `.app` bundle.
+- Non-system protobuf/abseil dylibs are embedded into `Contents/Frameworks`.
+- The bundle is ad-hoc signed locally after dependency fixup.
+- Notarization is not automated yet.
