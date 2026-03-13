@@ -30,7 +30,7 @@ struct TradingRefreshScheduler::Impl {
     NSProcessInfoThermalState thermalState = NSProcessInfoThermalStateNominal;
     std::uint64_t generation = 0;
 
-    void dispatchPending(const std::shared_ptr<Impl>& self,
+    void dispatchPending(std::shared_ptr<Impl> self,
                          std::uint64_t scheduledGeneration,
                          double delaySeconds) {
         dispatch_block_t block = ^{
@@ -57,14 +57,14 @@ struct TradingRefreshScheduler::Impl {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, nanos), dispatch_get_main_queue(), block);
     }
 
-    void scheduleLocked(const std::shared_ptr<Impl>& self) {
+    void scheduleLocked(std::shared_ptr<Impl> self) {
         pending = true;
         const std::uint64_t scheduledGeneration = ++generation;
         const double delaySeconds = refreshDelaySeconds(appActive, thermalState);
         dispatchPending(self, scheduledGeneration, delaySeconds);
     }
 
-    void rescheduleIfPendingLocked(const std::shared_ptr<Impl>& self) {
+    void rescheduleIfPendingLocked(std::shared_ptr<Impl> self) {
         if (!pending) {
             return;
         }
