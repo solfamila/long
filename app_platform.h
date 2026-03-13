@@ -5,9 +5,7 @@
 #include <memory>
 #include <string>
 
-struct ImGuiIO;
-struct ImVec2;
-struct ImVec4;
+#include "imgui.h"
 
 enum class PlatformType {
     Windows_D3D11,

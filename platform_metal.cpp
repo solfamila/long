@@ -75,7 +75,7 @@ bool MacOSPlatformBackend::initialize(const PlatformWindowInfo& windowInfo) {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     ImGui::StyleColorsDark();
 
-    ImGui_ImplGlfw_InitForOpenGL(m_window, true);
+    ImGui_ImplGlfw_InitForOther(m_window, true);
     ImGui_ImplMetal_Init(m_mtlDevice);
 
     m_running = true;
@@ -159,5 +159,15 @@ PlatformType DetectPlatform() {
 std::unique_ptr<IPlatformFactory> CreateMacOSFactory() {
     return std::make_unique<MacOSPlatformFactory>();
 }
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+std::unique_ptr<IPlatformFactory> CreateDefaultFactory() {
+#if defined(__APPLE__)
+    return CreateMacOSFactory();
+#else
+    return nullptr;
+#endif
+}
+#endif
 
 #endif
