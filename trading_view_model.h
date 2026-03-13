@@ -31,6 +31,9 @@ struct TradingViewModel {
     std::vector<std::pair<OrderId, OrderInfo>> orders;
     std::vector<TradeTraceListItem> traceItems;
     bool traceItemsFromReplayLog = false;
+    std::string traceDetailsText;
+    bool canExportSelectedTrace = false;
+    bool canExportAllTraces = false;
     bool shouldVibrate = false;
 };
 

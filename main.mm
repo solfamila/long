@@ -4,7 +4,11 @@
 #include "app_shared.h"
 #include "trace_exporter.h"
 #include "trading_actions.h"
+#include "trading_refresh_scheduler.h"
 #include "trading_runtime.h"
+#include "trading_runtime_host.h"
+#include "trading_settings_sheet.h"
+#include "trading_ui_format.h"
 #include "trading_view_model.h"
 #include "trading_wrapper.h"
 
@@ -93,6 +97,13 @@ NSColor* PanelBorderColor() {
     return [NSColor colorWithCalibratedWhite:0.82 alpha:1.0];
 }
 
+NSTextField* MakeWrappingLabel(NSString* text, NSFont* font, NSColor* color) {
+    NSTextField* label = [NSTextField wrappingLabelWithString:text ?: @""];
+    label.font = font;
+    label.textColor = color ?: [NSColor labelColor];
+    return label;
+}
+
 NSTextField* MakeInputField(NSString* text, CGFloat width, id target, SEL action, id delegate) {
     NSTextField* field = [[NSTextField alloc] initWithFrame:NSZeroRect];
     field.stringValue = text ?: @"";
@@ -124,6 +135,33 @@ void SetButtonEnabledTint(NSButton* button, bool enabled, NSColor* enabledColor,
     button.enabled = enabled;
     button.bezelColor = enabled ? enabledColor : disabledColor;
     button.contentTintColor = enabled ? [NSColor whiteColor] : [NSColor secondaryLabelColor];
+}
+
+void SetActionButtonAvailability(NSButton* button,
+                                 bool available,
+                                 NSColor* activeColor,
+                                 NSString* unavailableReason) {
+    button.enabled = YES;
+    button.bezelColor = available ? activeColor : [NSColor colorWithCalibratedWhite:0.55 alpha:1.0];
+    button.contentTintColor = [NSColor whiteColor];
+    button.toolTip = available ? nil : unavailableReason;
+}
+
+NSInteger ControllerArmModePopupIndex(ControllerArmMode mode) {
+    return mode == ControllerArmMode::Manual ? 1 : 0;
+}
+
+ControllerArmMode ControllerArmModeFromPopupIndex(NSInteger index) {
+    return index == 1 ? ControllerArmMode::Manual : ControllerArmMode::OneShot;
+}
+
+NSString* ControllerArmSafetyText(const RiskControlsSnapshot& risk) {
+    if (!risk.controllerArmed) {
+        return @"controller disarmed";
+    }
+    return risk.controllerArmMode == ControllerArmMode::Manual
+        ? @"controller armed (manual)"
+        : @"controller armed (1-shot)";
 }
 
 bool WriteStringToURL(const std::string& content, NSURL* url, NSError** error) {
@@ -172,6 +210,14 @@ NSStackView* MakeColumnStack() {
     return stack;
 }
 
+NSView* MakeFlexibleSpacer() {
+    NSView* spacer = [[NSView alloc] initWithFrame:NSZeroRect];
+    spacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [spacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    return spacer;
+}
+
 NSTextView* MakeReadOnlyTextView() {
     NSTextView* textView = [[NSTextView alloc] initWithFrame:NSZeroRect];
     textView.editable = NO;
@@ -214,148 +260,35 @@ NSString* FormatSignedCurrency(double value) {
     return @"$0.00";
 }
 
-std::string FormatOrderTiming(const OrderInfo& order) {
-    std::ostringstream oss;
-    if (order.fillDurationMs >= 0.0) {
-        if (order.fillDurationMs >= 1000.0) {
-            oss << std::fixed << std::setprecision(2) << (order.fillDurationMs / 1000.0) << " s";
-        } else {
-            oss << std::fixed << std::setprecision(0) << order.fillDurationMs << " ms";
-        }
-    } else if (order.submitTime.time_since_epoch().count() > 0 && !order.isTerminal()) {
-        const auto elapsed = std::chrono::steady_clock::now() - order.submitTime;
-        const double elapsedMs = std::chrono::duration<double, std::milli>(elapsed).count();
-        if (elapsedMs >= 1000.0) {
-            oss << std::fixed << std::setprecision(1) << (elapsedMs / 1000.0) << " s...";
-        } else {
-            oss << std::fixed << std::setprecision(0) << elapsedMs << " ms...";
-        }
-    } else {
-        oss << "--";
+NSString* BuyUnavailableReason(const TradingPanelState& state, bool subscribed) {
+    if (!state.status.connected) return @"TWS is disconnected.";
+    if (!state.status.sessionReady) return @"TWS session is still initializing.";
+    if (!subscribed) return @"Subscribe to a symbol first.";
+    if (!state.symbol.hasFreshQuote) return @"Waiting for a fresh quote.";
+    if (state.status.tradingKillSwitch) return @"Kill switch is enabled.";
+    if (state.risk.maxOrderNotional > 0.0 && state.orderNotional > state.risk.maxOrderNotional) {
+        return @"Order exceeds the max order notional limit.";
     }
-    return oss.str();
+    if (state.risk.maxOpenNotional > 0.0 && state.projectedOpenNotional > state.risk.maxOpenNotional) {
+        return @"Projected exposure exceeds the max open notional limit.";
+    }
+    return @"Buy is not currently available.";
 }
 
-void AppendLatencyLine(std::ostringstream& oss, const char* label, double valueMs) {
-    oss << label << ": ";
-    if (valueMs >= 0.0) {
-        if (valueMs >= 1000.0) {
-            oss << std::fixed << std::setprecision(3) << (valueMs / 1000.0) << " s";
-        } else {
-            oss << std::fixed << std::setprecision(1) << valueMs << " ms";
-        }
-    } else {
-        oss << "--";
-    }
-    oss << '\n';
+NSString* CloseUnavailableReason(const TradingPanelState& state, bool subscribed) {
+    if (!state.status.connected) return @"TWS is disconnected.";
+    if (!state.status.sessionReady) return @"TWS session is still initializing.";
+    if (!subscribed) return @"Subscribe to a symbol first.";
+    if (!state.symbol.hasFreshQuote) return @"Waiting for a fresh quote.";
+    if (state.status.tradingKillSwitch) return @"Kill switch is enabled.";
+    if (state.symbol.availableLongToClose <= 0.0) return @"There is no long position to close.";
+    return @"Close is not currently available.";
 }
 
-std::string FormatTraceDetails(const TradeTraceSnapshot& snapshot) {
-    if (!snapshot.found) {
-        return "No trade trace selected.";
-    }
-
-    const TradeTrace& trace = snapshot.trace;
-    std::ostringstream oss;
-    oss << "Trace " << trace.traceId;
-    if (trace.orderId > 0) {
-        oss << "  |  Order " << static_cast<long long>(trace.orderId);
-    } else {
-        oss << "  |  No order ID assigned";
-    }
-    if (trace.permId > 0) {
-        oss << "  |  PermId " << trace.permId;
-    }
-    oss << "\n\n";
-
-    oss << "Source: " << (trace.source.empty() ? "<unknown>" : trace.source) << '\n';
-    oss << "Symbol: " << (trace.symbol.empty() ? "<none>" : trace.symbol) << '\n';
-    oss << "Side: " << (trace.side.empty() ? "<none>" : trace.side) << '\n';
-    oss << "Requested: " << trace.requestedQty << " @ " << std::fixed << std::setprecision(2) << trace.limitPrice << '\n';
-    oss << "Close-only: " << (trace.closeOnly ? "yes" : "no") << '\n';
-    if (!trace.latestStatus.empty()) {
-        oss << "Latest status: " << trace.latestStatus << '\n';
-    }
-    if (!trace.terminalStatus.empty()) {
-        oss << "Terminal status: " << trace.terminalStatus << '\n';
-    }
-    if (!trace.latestError.empty()) {
-        oss << "Latest error: " << trace.latestError << '\n';
-    }
-    oss << '\n';
-
-    oss << "Decision snapshot\n";
-    oss << "  bid=" << std::fixed << std::setprecision(2) << trace.decisionBid
-        << " ask=" << trace.decisionAsk
-        << " last=" << trace.decisionLast
-        << " sweep=" << trace.sweepEstimate
-        << " buffer=" << trace.priceBuffer << '\n';
-    if (!trace.bookSummary.empty()) {
-        oss << "  book: " << trace.bookSummary << '\n';
-    }
-    if (!trace.notes.empty()) {
-        oss << "  notes: " << trace.notes << '\n';
-    }
-    oss << '\n';
-
-    oss << "Latency breakdown\n";
-    AppendLatencyLine(oss, "Validation", durationMs(trace.validationStartMono, trace.validationEndMono));
-    AppendLatencyLine(oss, "Trigger -> placeOrder return", durationMs(trace.triggerMono, trace.placeCallEndMono));
-    AppendLatencyLine(oss, "placeOrder return -> openOrder", durationMs(trace.placeCallEndMono, trace.firstOpenOrderMono));
-    AppendLatencyLine(oss, "placeOrder return -> first orderStatus", durationMs(trace.placeCallEndMono, trace.firstStatusMono));
-    AppendLatencyLine(oss, "placeOrder return -> first exec", durationMs(trace.placeCallEndMono, trace.firstExecMono));
-    AppendLatencyLine(oss, "Trigger -> first exec", durationMs(trace.triggerMono, trace.firstExecMono));
-    AppendLatencyLine(oss, "First exec -> full fill", durationMs(trace.firstExecMono, trace.fullFillMono));
-    AppendLatencyLine(oss, "Trigger -> full fill", durationMs(trace.triggerMono, trace.fullFillMono));
-    oss << '\n';
-
-    if (!trace.fills.empty()) {
-        oss << "Fill slices\n";
-        for (const auto& fill : trace.fills) {
-            oss << "  " << fill.execId
-                << "  shares=" << fill.shares
-                << "  price=" << std::fixed << std::setprecision(2) << fill.price
-                << "  cum=" << fill.cumQty
-                << "  exch=" << fill.exchange;
-            if (fill.commissionKnown) {
-                oss << "  commission=" << std::fixed << std::setprecision(4)
-                    << fill.commission << ' ' << fill.commissionCurrency;
-            }
-            oss << '\n';
-        }
-        if (!trace.commissionCurrency.empty()) {
-            oss << "  total commission=" << std::fixed << std::setprecision(4)
-                << trace.totalCommission << ' ' << trace.commissionCurrency << '\n';
-        }
-        oss << '\n';
-    }
-
-    oss << "Timeline\n";
-    for (const auto& event : trace.events) {
-        oss << "  " << formatWallTime(event.wallTs) << "  ";
-        const double sinceTriggerMs = durationMs(trace.triggerMono, event.monoTs);
-        if (sinceTriggerMs >= 0.0) {
-            oss << std::fixed << std::setprecision(1) << sinceTriggerMs << " ms  ";
-        } else {
-            oss << "--  ";
-        }
-        oss << event.stage << "  " << event.details << '\n';
-    }
-
-    return oss.str();
-}
-
-bool TraceItemsEqual(const std::vector<TradeTraceListItem>& lhs,
-                     const std::vector<TradeTraceListItem>& rhs) {
-    if (lhs.size() != rhs.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < lhs.size(); ++i) {
-        if (lhs[i].traceId != rhs[i].traceId || lhs[i].summary != rhs[i].summary) {
-            return false;
-        }
-    }
-    return true;
+NSString* CancelUnavailableReason(const TradingPanelState& state) {
+    if (!state.status.connected) return @"TWS is disconnected.";
+    if (!state.hasCancelableOrders) return @"There are no working orders to cancel.";
+    return @"Cancel All is not currently available.";
 }
 
 enum {
@@ -380,7 +313,8 @@ void StylePanel(NSView* view) {
 
 @interface TradingWindowController : NSWindowController <NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate> {
 @private
-    std::unique_ptr<TradingRuntime> _runtime;
+    std::unique_ptr<TradingRuntimeHost> _runtimeHost;
+    std::unique_ptr<TradingRefreshScheduler> _refreshScheduler;
 
     std::string _symbolInput;
     std::string _subscribedSymbol;
@@ -396,14 +330,12 @@ void StylePanel(NSView* view) {
     std::vector<std::pair<OrderId, OrderInfo>> _ordersSnapshot;
     std::vector<TradeTraceListItem> _traceItems;
 
-    bool _refreshScheduled;
-    bool _traceItemsFromReplayLog;
+    bool _appActive;
+    NSProcessInfoThermalState _thermalState;
 
     NSTextField* _twsStatusLabel;
     NSTextField* _accountStatusLabel;
     NSTextField* _websocketStatusLabel;
-    NSTextField* _controllerStatusLabel;
-    NSTextField* _controllerLockLabel;
     NSTextField* _recoveryBannerLabel;
 
     NSTextField* _symbolField;
@@ -443,8 +375,11 @@ void StylePanel(NSView* view) {
 - (void)shutdownRuntime;
 - (void)scheduleRefresh;
 - (void)handleControllerAction:(TradingRuntimeControllerAction)action;
+- (void)applyAppActive:(BOOL)active;
+- (void)applyThermalState:(NSProcessInfoThermalState)thermalState;
 - (void)loadPreferences;
 - (void)persistPreferences;
+- (BOOL)isEditingField:(NSTextField*)field;
 
 @end
 
@@ -473,8 +408,20 @@ void StylePanel(NSView* view) {
         _messagesVersionSeen = 0;
         _subscribed = false;
         _shuttingDown = false;
-        _refreshScheduled = false;
-        _traceItemsFromReplayLog = false;
+        _appActive = NSApp == nil ? true : NSApp.isActive;
+        _thermalState = NSProcessInfo.processInfo.thermalState;
+        _refreshScheduler = std::make_unique<TradingRefreshScheduler>();
+        __weak TradingWindowController* weakSelf = self;
+        _refreshScheduler->setCallback([weakSelf]() {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                TradingWindowController* strongSelf = weakSelf;
+                if (strongSelf != nil && !strongSelf->_shuttingDown) {
+                    [strongSelf refreshInterface];
+                }
+            });
+        });
+        _refreshScheduler->setAppActive(_appActive);
+        _refreshScheduler->setThermalState(_thermalState);
         [self loadPreferences];
         [self buildInterface];
         self.window.delegate = self;
@@ -540,7 +487,13 @@ void StylePanel(NSView* view) {
     if ([defaults objectForKey:@"maxOpenNotional"] != nil) {
         risk.maxOpenNotional = std::max(risk.maxOrderNotional, [defaults doubleForKey:@"maxOpenNotional"]);
     }
-    updateRiskControls(risk.staleQuoteThresholdMs, risk.maxOrderNotional, risk.maxOpenNotional);
+    if ([defaults objectForKey:@"controllerArmMode"] != nil) {
+        risk.controllerArmMode = ControllerArmModeFromPopupIndex([defaults integerForKey:@"controllerArmMode"]);
+    }
+    updateRiskControls(risk.staleQuoteThresholdMs,
+                       risk.maxOrderNotional,
+                       risk.maxOpenNotional,
+                       risk.controllerArmMode);
 
     NSString* ensuredToken = ToNSString(ensureWebSocketAuthToken());
     SaveKeychainString(kWebSocketTokenService, kWebSocketTokenAccount, ToStdString(ensuredToken));
@@ -567,6 +520,7 @@ void StylePanel(NSView* view) {
     [defaults setInteger:risk.staleQuoteThresholdMs forKey:@"staleQuoteThresholdMs"];
     [defaults setDouble:risk.maxOrderNotional forKey:@"maxOrderNotional"];
     [defaults setDouble:risk.maxOpenNotional forKey:@"maxOpenNotional"];
+    [defaults setInteger:ControllerArmModePopupIndex(risk.controllerArmMode) forKey:@"controllerArmMode"];
 }
 
 - (void)buildInterface {
@@ -589,17 +543,32 @@ void StylePanel(NSView* view) {
     ]];
 
     NSStackView* statusRow = MakeRowStack();
-    statusRow.distribution = NSStackViewDistributionFillProportionally;
+    statusRow.distribution = NSStackViewDistributionFill;
+    NSStackView* statusLabels = MakeRowStack();
+    statusLabels.spacing = 18.0;
+    statusLabels.distribution = NSStackViewDistributionFillProportionally;
     _twsStatusLabel = MakeLabel(@"TWS: Disconnected", [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold], [NSColor systemRedColor]);
     _accountStatusLabel = MakeLabel(@"Account: --", [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium], [NSColor labelColor]);
     _websocketStatusLabel = MakeLabel(@"WS: Not running", [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium], [NSColor secondaryLabelColor]);
-    _controllerStatusLabel = MakeLabel(@"Controller: Not found", [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium], [NSColor secondaryLabelColor]);
-    _controllerLockLabel = MakeLabel(@"Controller Lock: Waiting to lock", [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium], [NSColor secondaryLabelColor]);
-    [statusRow addArrangedSubview:_twsStatusLabel];
-    [statusRow addArrangedSubview:_accountStatusLabel];
-    [statusRow addArrangedSubview:_websocketStatusLabel];
-    [statusRow addArrangedSubview:_controllerStatusLabel];
-    [statusRow addArrangedSubview:_controllerLockLabel];
+    [statusLabels addArrangedSubview:_twsStatusLabel];
+    [statusLabels addArrangedSubview:_accountStatusLabel];
+    [statusLabels addArrangedSubview:_websocketStatusLabel];
+
+    NSStackView* statusControls = MakeRowStack();
+    statusControls.spacing = 12.0;
+    _armControllerButton = MakeButton(@"Arm Controller", self, @selector(toggleControllerArmed:));
+    [_armControllerButton.widthAnchor constraintEqualToConstant:150.0].active = YES;
+    _killSwitchButton = MakeButton(@"Enable Kill Switch", self, @selector(toggleKillSwitch:));
+    [_killSwitchButton.widthAnchor constraintEqualToConstant:180.0].active = YES;
+    _settingsButton = MakeButton(@"Settings", self, @selector(openSettings:));
+    [_settingsButton.widthAnchor constraintEqualToConstant:118.0].active = YES;
+    [statusControls addArrangedSubview:_armControllerButton];
+    [statusControls addArrangedSubview:_killSwitchButton];
+    [statusControls addArrangedSubview:_settingsButton];
+
+    [statusRow addArrangedSubview:statusLabels];
+    [statusRow addArrangedSubview:MakeFlexibleSpacer()];
+    [statusRow addArrangedSubview:statusControls];
     [rootStack addArrangedSubview:statusRow];
     [statusRow.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
 
@@ -730,19 +699,6 @@ void StylePanel(NSView* view) {
     [leftStack addArrangedSubview:actionRow];
     [actionRow.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
-    NSStackView* safetyRow = MakeRowStack();
-    _armControllerButton = MakeButton(@"Arm Controller", self, @selector(toggleControllerArmed:));
-    [_armControllerButton.widthAnchor constraintEqualToConstant:170.0].active = YES;
-    _killSwitchButton = MakeButton(@"Enable Kill Switch", self, @selector(toggleKillSwitch:));
-    [_killSwitchButton.widthAnchor constraintEqualToConstant:190.0].active = YES;
-    _settingsButton = MakeButton(@"Settings", self, @selector(openSettings:));
-    [_settingsButton.widthAnchor constraintEqualToConstant:120.0].active = YES;
-    [safetyRow addArrangedSubview:_armControllerButton];
-    [safetyRow addArrangedSubview:_killSwitchButton];
-    [safetyRow addArrangedSubview:_settingsButton];
-    [leftStack addArrangedSubview:safetyRow];
-    [safetyRow.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
-
     _controllerHintLabel = MakeLabel(@"Controller: Square buy  |  Circle close  |  Triangle cancel all  |  Cross toggle qty", [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium], [NSColor secondaryLabelColor]);
     [leftStack addArrangedSubview:_controllerHintLabel];
     [_controllerHintLabel.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
@@ -826,23 +782,22 @@ void StylePanel(NSView* view) {
 }
 
 - (void)startRuntime {
-    if (_runtime) {
+    if (_runtimeHost) {
         return;
     }
 
     syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
-    _runtime = std::make_unique<TradingRuntime>();
+    _runtimeHost = std::make_unique<TradingRuntimeHost>();
 
     __weak TradingWindowController* weakSelf = self;
-    _runtime->setUiInvalidationCallback([weakSelf]() {
+    _runtimeHost->start([weakSelf]() {
         dispatch_async(dispatch_get_main_queue(), ^{
             TradingWindowController* strongSelf = weakSelf;
             if (strongSelf != nil) {
                 [strongSelf scheduleRefresh];
             }
         });
-    });
-    _runtime->setControllerActionCallback([weakSelf](TradingRuntimeControllerAction action) {
+    }, [weakSelf](TradingRuntimeControllerAction action) {
         dispatch_async(dispatch_get_main_queue(), ^{
             TradingWindowController* strongSelf = weakSelf;
             if (strongSelf != nil) {
@@ -850,7 +805,6 @@ void StylePanel(NSView* view) {
             }
         });
     });
-    _runtime->start();
     [self scheduleRefresh];
 }
 
@@ -859,10 +813,12 @@ void StylePanel(NSView* view) {
         return;
     }
     _shuttingDown = true;
-    _refreshScheduled = false;
-    if (_runtime) {
-        _runtime->shutdown();
-        _runtime.reset();
+    if (_refreshScheduler) {
+        _refreshScheduler->cancel();
+    }
+    if (_runtimeHost) {
+        _runtimeHost->shutdown();
+        _runtimeHost.reset();
     }
 }
 
@@ -888,23 +844,9 @@ void StylePanel(NSView* view) {
         return;
     }
 
-    if (_refreshScheduled) {
-        return;
+    if (_refreshScheduler) {
+        _refreshScheduler->schedule();
     }
-
-    _refreshScheduled = true;
-    __weak TradingWindowController* weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        TradingWindowController* strongSelf = weakSelf;
-        if (strongSelf == nil) {
-            return;
-        }
-        strongSelf->_refreshScheduled = false;
-        if (strongSelf->_shuttingDown) {
-            return;
-        }
-        [strongSelf refreshInterface];
-    });
 }
 
 - (void)inputFieldAction:(id)sender {
@@ -919,7 +861,23 @@ void StylePanel(NSView* view) {
     [self scheduleRefresh];
 }
 
+- (void)controlTextDidChange:(NSNotification*)notification {
+    id object = notification.object;
+    if (object == _symbolField) {
+        _symbolInput = ToStdString(_symbolField.stringValue);
+    }
+}
+
+- (BOOL)isEditingField:(NSTextField*)field {
+    if (field == nil || field.window == nil) {
+        return NO;
+    }
+    NSText* editor = field.currentEditor;
+    return editor != nil && field.window.firstResponder == editor;
+}
+
 - (void)syncInputsFromFields {
+    _symbolInput = ToStdString(_symbolField.stringValue);
     const int parsedQuantity = _quantityField.intValue;
     _quantityInput = std::max(1, parsedQuantity);
     _priceBuffer = std::max(0.0, _bufferField.doubleValue);
@@ -930,10 +888,16 @@ void StylePanel(NSView* view) {
 }
 
 - (void)updateInputFieldsFromState {
-    _quantityField.stringValue = [NSString stringWithFormat:@"%d", _quantityInput];
-    _bufferField.stringValue = [NSString stringWithFormat:@"%.2f", _priceBuffer];
-    _maxPositionField.stringValue = [NSString stringWithFormat:@"%.0f", _maxPositionDollars];
-    if (!_symbolInput.empty()) {
+    if (![self isEditingField:_quantityField]) {
+        _quantityField.stringValue = [NSString stringWithFormat:@"%d", _quantityInput];
+    }
+    if (![self isEditingField:_bufferField]) {
+        _bufferField.stringValue = [NSString stringWithFormat:@"%.2f", _priceBuffer];
+    }
+    if (![self isEditingField:_maxPositionField]) {
+        _maxPositionField.stringValue = [NSString stringWithFormat:@"%.0f", _maxPositionDollars];
+    }
+    if (![self isEditingField:_symbolField] && !_symbolInput.empty()) {
         _symbolField.stringValue = ToNSString(_symbolInput);
     }
 }
@@ -943,7 +907,7 @@ void StylePanel(NSView* view) {
     [self syncInputsFromFields];
     std::string requestedSymbol;
     std::string error;
-    if (!requestSubscriptionAction(_runtime.get(),
+    if (!requestSubscriptionAction(_runtimeHost ? _runtimeHost->runtime() : nullptr,
                                    ToStdString(_symbolField.stringValue),
                                    false,
                                    &requestedSymbol,
@@ -964,7 +928,7 @@ void StylePanel(NSView* view) {
     (void)sender;
     [self syncInputsFromFields];
     const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
-    const TradingSubmitResult result = submitBuyAction(_runtime.get(),
+    const TradingSubmitResult result = submitBuyAction(_runtimeHost ? _runtimeHost->runtime() : nullptr,
                                                        state,
                                                        _subscribedSymbol,
                                                        _quantityInput,
@@ -984,7 +948,7 @@ void StylePanel(NSView* view) {
     (void)sender;
     [self syncInputsFromFields];
     const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
-    const TradingSubmitResult result = submitCloseAction(_runtime.get(),
+    const TradingSubmitResult result = submitCloseAction(_runtimeHost ? _runtimeHost->runtime() : nullptr,
                                                          state,
                                                          _subscribedSymbol,
                                                          _priceBuffer,
@@ -1001,7 +965,7 @@ void StylePanel(NSView* view) {
 
 - (void)cancelSelectedAction:(id)sender {
     (void)sender;
-    if (!_runtime) {
+    if (!_runtimeHost || !_runtimeHost->runtime()) {
         return;
     }
 
@@ -1020,7 +984,7 @@ void StylePanel(NSView* view) {
         }
     }];
 
-    const TradingCancelResult result = cancelSelectedOrdersAction(_runtime.get(), selectedOrderIds);
+    const TradingCancelResult result = cancelSelectedOrdersAction(_runtimeHost->runtime(), selectedOrderIds);
     for (std::size_t i = 0; i < result.orderIds.size(); ++i) {
         if (i < result.sent.size() && result.sent[i]) {
             g_data.addMessage("Cancel request sent for order " + std::to_string(result.orderIds[i]));
@@ -1033,7 +997,7 @@ void StylePanel(NSView* view) {
 
 - (void)cancelAllAction:(id)sender {
     (void)sender;
-    if (!_runtime) {
+    if (!_runtimeHost || !_runtimeHost->runtime()) {
         return;
     }
 
@@ -1047,7 +1011,7 @@ void StylePanel(NSView* view) {
         return;
     }
 
-    const TradingCancelResult result = cancelAllOrdersAction(_runtime.get());
+    const TradingCancelResult result = cancelAllOrdersAction(_runtimeHost->runtime());
     if (result.orderIds.empty()) {
         g_data.addMessage("No pending orders to cancel");
         [self scheduleRefresh];
@@ -1086,72 +1050,21 @@ void StylePanel(NSView* view) {
 
     const RuntimeConnectionConfig currentConnection = captureRuntimeConnectionConfig();
     const RiskControlsSnapshot currentRisk = captureRiskControlsSnapshot();
-
-    NSAlert* alert = [[NSAlert alloc] init];
-    alert.messageText = @"Trading Settings";
-    alert.informativeText = @"Connection changes apply on next launch. Risk and WebSocket token changes apply immediately.";
-    [alert addButtonWithTitle:@"Save"];
-    [alert addButtonWithTitle:@"Cancel"];
-
-    NSStackView* accessory = MakeColumnStack();
-    accessory.spacing = 10.0;
-    accessory.translatesAutoresizingMaskIntoConstraints = NO;
-
-    auto addRow = ^(NSString* title, NSTextField* field) {
-        NSStackView* row = MakeRowStack();
-        NSTextField* label = MakeLabel(title, [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]);
-        [label.widthAnchor constraintEqualToConstant:170.0].active = YES;
-        [row addArrangedSubview:label];
-        [row addArrangedSubview:field];
-        [accessory addArrangedSubview:row];
-        [row.widthAnchor constraintEqualToAnchor:accessory.widthAnchor].active = YES;
-    };
-
-    NSTextField* hostField = MakeInputField(ToNSString(currentConnection.host), 250.0, nil, nil, nil);
-    NSTextField* portField = MakeInputField([NSString stringWithFormat:@"%d", currentConnection.port], 90.0, nil, nil, nil);
-    NSTextField* clientIdField = MakeInputField([NSString stringWithFormat:@"%d", currentConnection.clientId], 90.0, nil, nil, nil);
-    NSTextField* tokenField = MakeInputField(ToNSString(currentConnection.websocketAuthToken), 300.0, nil, nil, nil);
-    NSTextField* staleQuoteField = MakeInputField([NSString stringWithFormat:@"%d", currentRisk.staleQuoteThresholdMs], 90.0, nil, nil, nil);
-    NSTextField* maxOrderField = MakeInputField([NSString stringWithFormat:@"%.0f", currentRisk.maxOrderNotional], 110.0, nil, nil, nil);
-    NSTextField* maxOpenField = MakeInputField([NSString stringWithFormat:@"%.0f", currentRisk.maxOpenNotional], 110.0, nil, nil, nil);
-    NSButton* websocketCheckbox = [NSButton checkboxWithTitle:@"Enable localhost WebSocket automation" target:nil action:nil];
-    websocketCheckbox.state = currentConnection.websocketEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-    NSButton* controllerCheckbox = [NSButton checkboxWithTitle:@"Enable controller input" target:nil action:nil];
-    controllerCheckbox.state = currentConnection.controllerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-
-    addRow(@"TWS Host", hostField);
-    addRow(@"TWS Port", portField);
-    addRow(@"TWS Client ID", clientIdField);
-    addRow(@"WebSocket Token", tokenField);
-    addRow(@"Stale Quote (ms)", staleQuoteField);
-    addRow(@"Max Order Notional", maxOrderField);
-    addRow(@"Max Open Notional", maxOpenField);
-    [accessory addArrangedSubview:websocketCheckbox];
-    [accessory addArrangedSubview:controllerCheckbox];
-    [accessory.widthAnchor constraintEqualToConstant:520.0].active = YES;
-
-    alert.accessoryView = accessory;
-
-    if ([alert runModal] != NSAlertFirstButtonReturn) {
+    RuntimeConnectionConfig updatedConnection = currentConnection;
+    RiskControlsSnapshot updatedRisk = currentRisk;
+    if (!RunTradingSettingsSheet(self.window, currentConnection, currentRisk, &updatedConnection, &updatedRisk)) {
         return;
     }
-
-    RuntimeConnectionConfig updatedConnection = currentConnection;
-    updatedConnection.host = ToStdString(hostField.stringValue);
-    updatedConnection.port = std::max(1, portField.intValue);
-    updatedConnection.clientId = std::max(1, clientIdField.intValue);
-    updatedConnection.websocketAuthToken = ToStdString(tokenField.stringValue);
-    updatedConnection.websocketEnabled = (websocketCheckbox.state == NSControlStateValueOn);
-    updatedConnection.controllerEnabled = (controllerCheckbox.state == NSControlStateValueOn);
 
     updateRuntimeConnectionConfig(updatedConnection);
     const std::string ensuredToken = ensureWebSocketAuthToken();
     updatedConnection.websocketAuthToken = ensuredToken;
     updateRuntimeConnectionConfig(updatedConnection);
 
-    updateRiskControls(std::max(250, staleQuoteField.intValue),
-                       std::max(100.0, maxOrderField.doubleValue),
-                       std::max(maxOrderField.doubleValue, maxOpenField.doubleValue));
+    updateRiskControls(updatedRisk.staleQuoteThresholdMs,
+                       updatedRisk.maxOrderNotional,
+                       updatedRisk.maxOpenNotional,
+                       updatedRisk.controllerArmMode);
 
     [self persistPreferences];
     g_data.addMessage("Settings saved");
@@ -1235,7 +1148,7 @@ void StylePanel(NSView* view) {
     if (selectedIndex >= 0 && static_cast<std::size_t>(selectedIndex) < _traceItems.size()) {
         _selectedTraceId = _traceItems[static_cast<std::size_t>(selectedIndex)].traceId;
     }
-    [self refreshTraceDetails];
+    [self scheduleRefresh];
 }
 
 - (void)handleControllerAction:(TradingRuntimeControllerAction)action {
@@ -1244,7 +1157,7 @@ void StylePanel(NSView* view) {
     }
 
     const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
-    const TradingControllerActionResult result = handleControllerActionIntent(_runtime.get(),
+    const TradingControllerActionResult result = handleControllerActionIntent(_runtimeHost ? _runtimeHost->runtime() : nullptr,
                                                                               action,
                                                                               state,
                                                                               _subscribedSymbol,
@@ -1260,6 +1173,38 @@ void StylePanel(NSView* view) {
     }
     for (const auto& message : result.messages) {
         g_data.addMessage(message);
+    }
+
+    [self scheduleRefresh];
+}
+
+- (void)applyAppActive:(BOOL)active {
+    _appActive = active;
+    if (_refreshScheduler) {
+        _refreshScheduler->setAppActive(active);
+    }
+    [self scheduleRefresh];
+}
+
+- (void)applyThermalState:(NSProcessInfoThermalState)thermalState {
+    if (_thermalState == thermalState) {
+        return;
+    }
+
+    const NSProcessInfoThermalState previousState = _thermalState;
+    _thermalState = thermalState;
+    if (_refreshScheduler) {
+        _refreshScheduler->setThermalState(thermalState);
+    }
+
+    if (thermalState == NSProcessInfoThermalStateSerious) {
+        g_data.addMessage("macOS thermal state is serious: slowing UI refresh");
+    } else if (thermalState == NSProcessInfoThermalStateCritical) {
+        g_data.addMessage("macOS thermal state is critical: strongly throttling UI refresh");
+    } else if ((previousState == NSProcessInfoThermalStateSerious ||
+                previousState == NSProcessInfoThermalStateCritical) &&
+               thermalState == NSProcessInfoThermalStateNominal) {
+        g_data.addMessage("macOS thermal state returned to nominal");
     }
 
     [self scheduleRefresh];
@@ -1287,17 +1232,18 @@ void StylePanel(NSView* view) {
     _messagesText = model.messagesText;
     _ordersSnapshot = model.orders;
     _traceItems = model.traceItems;
-    _traceItemsFromReplayLog = model.traceItemsFromReplayLog;
     [self updateInputFieldsFromState];
 
-    if (_runtime) {
-        _runtime->setControllerVibration(model.shouldVibrate);
+    if (_runtimeHost) {
+        _runtimeHost->setControllerVibration(model.shouldVibrate);
     }
     [self refreshStatusLabels:model.panel];
     [self refreshMarketSection:model.panel];
     [self refreshOrders];
     [self refreshTracePopup];
-    [self refreshTraceDetails];
+    _traceTextView.string = ToNSString(model.traceDetailsText);
+    _exportTraceButton.enabled = model.canExportSelectedTrace;
+    _exportAllButton.enabled = model.canExportAllTraces;
     [self refreshMessages];
 }
 
@@ -1324,28 +1270,6 @@ void StylePanel(NSView* view) {
     } else {
         _websocketStatusLabel.stringValue = @"WS: Not running";
         _websocketStatusLabel.textColor = [NSColor systemRedColor];
-    }
-
-    if (!state.status.controllerEnabled) {
-        _controllerStatusLabel.stringValue = @"Controller: Disabled";
-        _controllerStatusLabel.textColor = [NSColor secondaryLabelColor];
-    } else if (state.status.controllerConnected) {
-        const std::string label = state.status.controllerDeviceName.empty()
-            ? std::string("Connected")
-            : state.status.controllerDeviceName;
-        _controllerStatusLabel.stringValue = [NSString stringWithFormat:@"Controller: %@", ToNSString(label)];
-        _controllerStatusLabel.textColor = [NSColor systemGreenColor];
-    } else {
-        _controllerStatusLabel.stringValue = @"Controller: Not found";
-        _controllerStatusLabel.textColor = [NSColor secondaryLabelColor];
-    }
-
-    if (!state.status.controllerLockedDeviceName.empty()) {
-        _controllerLockLabel.stringValue = [NSString stringWithFormat:@"Controller Lock: %@", ToNSString(state.status.controllerLockedDeviceName)];
-        _controllerLockLabel.textColor = state.status.controllerConnected ? [NSColor systemBlueColor] : [NSColor systemOrangeColor];
-    } else {
-        _controllerLockLabel.stringValue = @"Controller Lock: Waiting to lock";
-        _controllerLockLabel.textColor = [NSColor secondaryLabelColor];
     }
 
     _armControllerButton.title = state.status.controllerArmed ? @"Disarm Controller" : @"Arm Controller";
@@ -1422,7 +1346,7 @@ void StylePanel(NSView* view) {
     NSString* quoteSegment = state.symbol.quoteAgeMs >= 0.0
         ? [NSString stringWithFormat:@"quote %.0f ms", state.symbol.quoteAgeMs]
         : @"quote waiting";
-    NSString* armSegment = state.status.controllerArmed ? @"controller armed" : @"controller disarmed";
+    NSString* armSegment = ControllerArmSafetyText(state.risk);
     NSString* killSegment = state.status.tradingKillSwitch ? @"kill switch ON" : @"kill switch off";
     NSString* exposureSegment = [NSString stringWithFormat:@"open $%.0f / cap $%.0f",
                                  state.projectedOpenNotional,
@@ -1437,18 +1361,18 @@ void StylePanel(NSView* view) {
         _safetyStatusLabel.textColor = [NSColor secondaryLabelColor];
     }
 
-    SetButtonEnabledTint(_buyButton,
-                         state.canBuy,
-                         [NSColor colorWithCalibratedRed:0.13 green:0.64 blue:0.32 alpha:1.0],
-                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
-    SetButtonEnabledTint(_closeButton,
-                         state.canClosePosition,
-                         [NSColor colorWithCalibratedRed:0.96 green:0.60 blue:0.18 alpha:1.0],
-                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
-    SetButtonEnabledTint(_cancelAllButton,
-                         state.hasCancelableOrders,
-                         [NSColor colorWithCalibratedRed:0.90 green:0.27 blue:0.22 alpha:1.0],
-                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+    SetActionButtonAvailability(_buyButton,
+                                state.canBuy,
+                                [NSColor colorWithCalibratedRed:0.13 green:0.64 blue:0.32 alpha:1.0],
+                                BuyUnavailableReason(state, _subscribed));
+    SetActionButtonAvailability(_closeButton,
+                                state.canClosePosition,
+                                [NSColor colorWithCalibratedRed:0.96 green:0.60 blue:0.18 alpha:1.0],
+                                CloseUnavailableReason(state, _subscribed));
+    SetActionButtonAvailability(_cancelAllButton,
+                                state.hasCancelableOrders,
+                                [NSColor colorWithCalibratedRed:0.90 green:0.27 blue:0.22 alpha:1.0],
+                                CancelUnavailableReason(state));
 
     if (state.buyPrice > 0.0) {
         _buyButton.title = [NSString stringWithFormat:@"Buy Limit @ %.2f", state.buyPrice];
@@ -1505,30 +1429,6 @@ void StylePanel(NSView* view) {
     }
     [_tracePopup selectItemAtIndex:selectedIndex];
     _selectedTraceId = _traceItems[static_cast<std::size_t>(selectedIndex)].traceId;
-    _exportTraceButton.enabled = (_selectedTraceId != 0 && !_traceItems.empty());
-    _exportAllButton.enabled = !_traceItems.empty();
-}
-
-- (void)refreshTraceDetails {
-    if (_traceItems.empty()) {
-        _traceTextView.string = @"No trade trace yet.";
-        return;
-    }
-
-    if (_selectedTraceId == 0) {
-        _selectedTraceId = _traceItems.front().traceId;
-    }
-
-    TradeTraceSnapshot snapshot = captureTradeTraceSnapshot(_selectedTraceId);
-    if (!snapshot.found) {
-        std::string replayError;
-        replayTradeTraceSnapshotFromLog(_selectedTraceId, &snapshot, &replayError);
-        if (!snapshot.found && _traceItemsFromReplayLog) {
-            _traceTextView.string = ToNSString(replayError.empty() ? "Replay trace not available." : replayError);
-            return;
-        }
-    }
-    _traceTextView.string = ToNSString(FormatTraceDetails(snapshot));
 }
 
 - (void)refreshMessages {
@@ -1581,7 +1481,7 @@ void StylePanel(NSView* view) {
             label.textColor = [NSColor labelColor];
             break;
         case OrderColumnTime:
-            label.stringValue = ToNSString(FormatOrderTiming(order));
+            label.stringValue = ToNSString(formatOrderTimingText(order));
             label.textColor = order.fillDurationMs >= 0.0 ? [NSColor systemGreenColor]
                                                           : (!order.isTerminal() ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor]);
             break;
@@ -1607,8 +1507,7 @@ void StylePanel(NSView* view) {
         const std::uint64_t traceId = findTraceIdByOrderId(orderId);
         if (traceId != 0) {
             _selectedTraceId = traceId;
-            [self refreshTracePopup];
-            [self refreshTraceDetails];
+            [self scheduleRefresh];
         }
     }
 }
@@ -1639,6 +1538,12 @@ void StylePanel(NSView* view) {
 
     self.windowController = [[TradingWindowController alloc] init];
     [self.windowController showWindowAndStart];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(processThermalStateDidChange:)
+                                                 name:NSProcessInfoThermalStateDidChangeNotification
+                                               object:nil];
+    [self.windowController applyAppActive:NSApp.isActive];
+    [self.windowController applyThermalState:NSProcessInfo.processInfo.thermalState];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
@@ -1646,8 +1551,26 @@ void StylePanel(NSView* view) {
     return YES;
 }
 
+- (void)applicationDidBecomeActive:(NSNotification*)notification {
+    (void)notification;
+    [self.windowController applyAppActive:YES];
+}
+
+- (void)applicationDidResignActive:(NSNotification*)notification {
+    (void)notification;
+    [self.windowController applyAppActive:NO];
+}
+
+- (void)processThermalStateDidChange:(NSNotification*)notification {
+    (void)notification;
+    [self.windowController applyThermalState:NSProcessInfo.processInfo.thermalState];
+}
+
 - (void)applicationWillTerminate:(NSNotification*)notification {
     (void)notification;
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSProcessInfoThermalStateDidChangeNotification
+                                                  object:nil];
     [self.windowController shutdownRuntime];
 }
 

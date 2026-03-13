@@ -69,9 +69,13 @@ set(APP_SOURCES
     main.mm
     app_shared.cpp
     mac_observability.mm
+    trading_refresh_scheduler.mm
     trading_actions.cpp
+    trading_settings_sheet.mm
+    trading_ui_format.cpp
     trace_exporter.cpp
     trading_runtime.cpp
+    trading_runtime_host.cpp
     trading_view_model.cpp
     websocket_handlers.cpp
     controller_mac.mm
@@ -281,6 +285,8 @@ add_custom_target(tws_gui_notarize
 set_source_files_properties(
     main.mm
     mac_observability.mm
+    trading_refresh_scheduler.mm
+    trading_settings_sheet.mm
     controller_mac.mm
     PROPERTIES
         LANGUAGE OBJCXX

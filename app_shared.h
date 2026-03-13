@@ -98,6 +98,11 @@ inline constexpr const char* WEBSOCKET_HOST = "127.0.0.1"; // localhost only
 inline constexpr const char* TRADE_TRACE_LOG_FILENAME = "trade_trace_events.jsonl";
 inline constexpr const char* RUNTIME_JOURNAL_LOG_FILENAME = "trade_runtime_journal.jsonl";
 
+enum class ControllerArmMode {
+    OneShot = 0,
+    Manual = 1,
+};
+
 using UiInvalidationCallback = std::function<void()>;
 
 void setUiInvalidationCallback(UiInvalidationCallback callback);
@@ -289,6 +294,7 @@ struct SharedData {
     double maxOrderNotional = 15000.0;
     double maxOpenNotional = 50000.0;
     int staleQuoteThresholdMs = 1500;
+    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
 
@@ -430,6 +436,7 @@ struct RiskControlsSnapshot {
     int staleQuoteThresholdMs = 1500;
     double maxOrderNotional = 15000.0;
     double maxOpenNotional = 50000.0;
+    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
 };
@@ -459,6 +466,9 @@ struct RuntimeRecoverySnapshot {
 std::string chooseConfiguredAccount(const std::string& accountsCsv);
 std::string makePositionKey(const std::string& account, const std::string& symbol);
 std::string runtimeSessionStateToString(RuntimeSessionState state);
+std::string appDataDirectory();
+std::string tradeTraceLogPath();
+std::string runtimeJournalLogPath();
 void setRuntimeSessionState(RuntimeSessionState state);
 int allocateReqId();
 int toShareCount(double qty);
@@ -473,6 +483,10 @@ RuntimeConnectionConfig captureRuntimeConnectionConfig();
 void updateRuntimeConnectionConfig(const RuntimeConnectionConfig& config);
 RiskControlsSnapshot captureRiskControlsSnapshot();
 void updateRiskControls(int staleQuoteThresholdMs, double maxOrderNotional, double maxOpenNotional);
+void updateRiskControls(int staleQuoteThresholdMs,
+                        double maxOrderNotional,
+                        double maxOpenNotional,
+                        ControllerArmMode controllerArmMode);
 void setControllerArmed(bool armed);
 void setTradingKillSwitch(bool enabled);
 std::string ensureWebSocketAuthToken();

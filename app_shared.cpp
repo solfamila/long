@@ -1,8 +1,12 @@
 #include "app_shared.h"
+#include "trace_exporter.h"
 #include "mac_observability.h"
 
 #include <random>
 #include <atomic>
+#include <cstdlib>
+#include <filesystem>
+#include <system_error>
 #include <unordered_map>
 
 namespace {
@@ -12,6 +16,59 @@ constexpr auto kRecentSubmitWindow = std::chrono::milliseconds(750);
 constexpr auto kRecentWebSocketOrderWindow = std::chrono::seconds(2);
 constexpr int kMaxWebSocketOrdersPerWindow = 5;
 constexpr auto kWebSocketIdempotencyWindow = std::chrono::minutes(10);
+
+const std::string& resolvedAppDataDirectory() {
+    static const std::string path = []() -> std::string {
+        namespace fs = std::filesystem;
+
+        fs::path basePath;
+        if (const char* overridePath = std::getenv("TWS_GUI_DATA_DIR");
+            overridePath != nullptr && *overridePath != '\0') {
+            basePath = fs::path(overridePath);
+        } else if (const char* home = std::getenv("HOME");
+                   home != nullptr && *home != '\0') {
+            basePath = fs::path(home) / "Library" / "Application Support" / "TWS Trading GUI";
+        } else {
+            basePath = fs::current_path() / "tws_gui_data";
+        }
+
+        std::error_code ec;
+        fs::create_directories(basePath, ec);
+        return basePath.string();
+    }();
+    return path;
+}
+
+void reserveTraceIdFloor(std::atomic<std::uint64_t>& nextTraceId, std::uint64_t traceId) {
+    std::uint64_t next = nextTraceId.load(std::memory_order_relaxed);
+    while (next <= traceId &&
+           !nextTraceId.compare_exchange_weak(next, traceId + 1, std::memory_order_relaxed)) {
+    }
+}
+
+std::uint64_t recoverHighestTraceIdFromLog(const std::string& logPath) {
+    std::ifstream in(logPath);
+    if (!in.is_open()) {
+        return 0;
+    }
+
+    std::uint64_t highestTraceId = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+
+        const json parsed = json::parse(line, nullptr, false);
+        if (parsed.is_discarded()) {
+            continue;
+        }
+
+        highestTraceId = std::max(highestTraceId, parsed.value("traceId", 0ULL));
+    }
+    return highestTraceId;
+}
+
 SharedData& bootstrapSharedData() {
     static SharedData data;
     return data;
@@ -49,6 +106,7 @@ void copySharedDataState(const SharedData& src, SharedData& dst) {
     dst.maxOrderNotional = src.maxOrderNotional;
     dst.maxOpenNotional = src.maxOpenNotional;
     dst.staleQuoteThresholdMs = src.staleQuoteThresholdMs;
+    dst.controllerArmMode = src.controllerArmMode;
     dst.controllerArmed = src.controllerArmed;
     dst.tradingKillSwitch = src.tradingKillSwitch;
 
@@ -243,6 +301,48 @@ std::uint64_t makeRecoveredTraceId() {
     return g_data.nextTraceId.fetch_add(1, std::memory_order_relaxed);
 }
 
+void reserveTraceIdLocked(std::uint64_t traceId) {
+    reserveTraceIdFloor(g_data.nextTraceId, traceId);
+}
+
+std::uint64_t registerRecoveredTraceLocked(const TradeTrace& sourceTrace,
+                                           OrderId orderIdHint,
+                                           long long permIdHint,
+                                           const std::string& execIdHint) {
+    TradeTrace trace = sourceTrace;
+    if (trace.traceId == 0) {
+        trace.traceId = makeRecoveredTraceId();
+    } else {
+        reserveTraceIdLocked(trace.traceId);
+    }
+
+    if (trace.orderId <= 0) {
+        trace.orderId = orderIdHint;
+    }
+    if (trace.permId <= 0) {
+        trace.permId = permIdHint;
+    }
+
+    g_data.traces[trace.traceId] = trace;
+    g_data.traceRecency.push_back(trace.traceId);
+    g_data.latestTraceId = trace.traceId;
+    if (trace.orderId > 0) {
+        g_data.traceIdByOrderId[trace.orderId] = trace.traceId;
+    }
+    if (trace.permId > 0) {
+        g_data.traceIdByPermId[trace.permId] = trace.traceId;
+    }
+    for (const auto& fill : trace.fills) {
+        if (!fill.execId.empty()) {
+            g_data.traceIdByExecId[fill.execId] = trace.traceId;
+        }
+    }
+    if (!execIdHint.empty()) {
+        g_data.traceIdByExecId[execIdHint] = trace.traceId;
+    }
+    return trace.traceId;
+}
+
 std::uint64_t ensureRecoveredTraceLocked(OrderId orderId,
                                          long long permId,
                                          const std::string& execId,
@@ -255,6 +355,26 @@ std::uint64_t ensureRecoveredTraceLocked(OrderId orderId,
                                          const std::string& note) {
     std::uint64_t traceId = findTraceIdLocked(orderId, permId, execId);
     if (traceId != 0) {
+        return traceId;
+    }
+
+    TradeTraceSnapshot replayedSnapshot;
+    if (replayTradeTraceSnapshotByIdentityFromLog(orderId,
+                                                  permId,
+                                                  execId,
+                                                  &replayedSnapshot,
+                                                  nullptr,
+                                                  tradeTraceLogPath()) &&
+        replayedSnapshot.found) {
+        traceId = registerRecoveredTraceLocked(replayedSnapshot.trace, orderId, permId, execId);
+        appendRuntimeJournalEvent("recovered_trace_hydrated", {
+            {"traceId", static_cast<unsigned long long>(traceId)},
+            {"orderId", static_cast<long long>(orderId)},
+            {"permId", permId},
+            {"execId", execId},
+            {"symbol", replayedSnapshot.trace.symbol},
+            {"side", replayedSnapshot.trace.side}
+        });
         return traceId;
     }
 
@@ -421,6 +541,18 @@ SharedData& appState() {
     return *(active != nullptr ? active : &bootstrapSharedData());
 }
 
+std::string appDataDirectory() {
+    return resolvedAppDataDirectory();
+}
+
+std::string tradeTraceLogPath() {
+    return (std::filesystem::path(resolvedAppDataDirectory()) / TRADE_TRACE_LOG_FILENAME).string();
+}
+
+std::string runtimeJournalLogPath() {
+    return (std::filesystem::path(resolvedAppDataDirectory()) / RUNTIME_JOURNAL_LOG_FILENAME).string();
+}
+
 void bindSharedDataOwner(SharedData* owner) {
     if (owner == nullptr) {
         return;
@@ -433,6 +565,7 @@ void bindSharedDataOwner(SharedData* owner) {
         std::scoped_lock lock(current->mutex, owner->mutex);
         copySharedDataState(*current, *owner);
     }
+    reserveTraceIdFloor(owner->nextTraceId, recoverHighestTraceIdFromLog(tradeTraceLogPath()));
     activeSharedDataSlot().store(owner, std::memory_order_release);
 }
 
@@ -707,17 +840,31 @@ RiskControlsSnapshot captureRiskControlsSnapshot() {
     snapshot.staleQuoteThresholdMs = g_data.staleQuoteThresholdMs;
     snapshot.maxOrderNotional = g_data.maxOrderNotional;
     snapshot.maxOpenNotional = g_data.maxOpenNotional;
+    snapshot.controllerArmMode = g_data.controllerArmMode;
     snapshot.controllerArmed = g_data.controllerArmed;
     snapshot.tradingKillSwitch = g_data.tradingKillSwitch;
     return snapshot;
 }
 
 void updateRiskControls(int staleQuoteThresholdMs, double maxOrderNotional, double maxOpenNotional) {
+    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        controllerArmMode = g_data.controllerArmMode;
+    }
+    updateRiskControls(staleQuoteThresholdMs, maxOrderNotional, maxOpenNotional, controllerArmMode);
+}
+
+void updateRiskControls(int staleQuoteThresholdMs,
+                        double maxOrderNotional,
+                        double maxOpenNotional,
+                        ControllerArmMode controllerArmMode) {
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         g_data.staleQuoteThresholdMs = std::max(250, staleQuoteThresholdMs);
         g_data.maxOrderNotional = std::max(100.0, maxOrderNotional);
         g_data.maxOpenNotional = std::max(g_data.maxOrderNotional, maxOpenNotional);
+        g_data.controllerArmMode = controllerArmMode;
     }
     requestUiInvalidation();
 }
@@ -1065,6 +1212,7 @@ bool submitLimitOrder(EClientSocket* client,
     double maxOpenNotional = 0.0;
     double openBuyExposure = 0.0;
     double currentPositionValue = 0.0;
+    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
     std::string duplicateFingerprint;
@@ -1076,6 +1224,7 @@ bool submitLimitOrder(EClientSocket* client,
         staleQuoteThresholdMs = g_data.staleQuoteThresholdMs;
         maxOrderNotional = g_data.maxOrderNotional;
         maxOpenNotional = g_data.maxOpenNotional;
+        controllerArmMode = g_data.controllerArmMode;
         controllerArmed = g_data.controllerArmed;
         tradingKillSwitch = g_data.tradingKillSwitch;
         openBuyExposure = calculateOpenBuyExposureUnlocked(account);
@@ -1231,7 +1380,8 @@ bool submitLimitOrder(EClientSocket* client,
     g_data.addMessage(msg);
 
     if (outOrderId) *outOrderId = orderId;
-    if (effectiveIntent.source.find("Controller") != std::string::npos) {
+    if (effectiveIntent.source.find("Controller") != std::string::npos &&
+        controllerArmMode == ControllerArmMode::OneShot) {
         setControllerArmed(false);
     }
     return true;
@@ -1312,14 +1462,14 @@ std::string tradeEventTypeToString(TradeEventType type) {
 
 void appendTradeTraceLogLine(const json& line) {
     std::lock_guard<std::mutex> lock(tradeTraceFileMutex());
-    std::ofstream out(TRADE_TRACE_LOG_FILENAME, std::ios::app);
+    std::ofstream out(tradeTraceLogPath(), std::ios::app);
     if (!out.is_open()) return;
     out << line.dump() << '\n';
 }
 
 void appendRuntimeJournalLine(const json& line) {
     std::lock_guard<std::mutex> lock(runtimeJournalFileMutex());
-    std::ofstream out(RUNTIME_JOURNAL_LOG_FILENAME, std::ios::app);
+    std::ofstream out(runtimeJournalLogPath(), std::ios::app);
     if (!out.is_open()) return;
     out << line.dump() << '\n';
 }
@@ -1329,7 +1479,7 @@ void appendRuntimeJournalEvent(const std::string& event, const json& details) {
 }
 
 std::vector<std::string> recoverUnfinishedTraceSummariesFromLog(std::size_t maxItems) {
-    std::ifstream in(TRADE_TRACE_LOG_FILENAME);
+    std::ifstream in(tradeTraceLogPath());
     if (!in.is_open()) {
         return {};
     }
@@ -1381,7 +1531,7 @@ RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems
     snapshot.unfinishedTraceSummaries = recoverUnfinishedTraceSummariesFromLog(maxTraceItems);
     snapshot.unfinishedTraceCount = static_cast<int>(snapshot.unfinishedTraceSummaries.size());
 
-    std::ifstream in(RUNTIME_JOURNAL_LOG_FILENAME);
+    std::ifstream in(runtimeJournalLogPath());
     if (!in.is_open()) {
         return snapshot;
     }

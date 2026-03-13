@@ -13,8 +13,17 @@ struct TraceExportBundle {
 bool replayTradeTraceSnapshotFromLog(std::uint64_t traceId,
                                      TradeTraceSnapshot* outSnapshot,
                                      std::string* error = nullptr,
-                                     const std::string& logPath = TRADE_TRACE_LOG_FILENAME);
+                                     const std::string& logPath = {});
+bool replayTradeTraceSnapshotByIdentityFromLog(OrderId orderId,
+                                               long long permId,
+                                               const std::string& execId,
+                                               TradeTraceSnapshot* outSnapshot,
+                                               std::string* error = nullptr,
+                                               const std::string& logPath = {});
+bool enrichTradeTraceSnapshotFromLog(TradeTraceSnapshot* snapshot,
+                                     std::string* error = nullptr,
+                                     const std::string& logPath = {});
 std::vector<TradeTraceListItem> buildTradeTraceListItemsFromLog(std::size_t maxItems = 100,
-                                                                const std::string& logPath = TRADE_TRACE_LOG_FILENAME);
+                                                                const std::string& logPath = {});
 bool buildTraceExportBundle(std::uint64_t traceId, TraceExportBundle* outBundle, std::string* error = nullptr);
 std::string buildAllTradesSummaryCsv(std::size_t maxItems = 1000);

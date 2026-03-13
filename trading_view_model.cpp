@@ -1,6 +1,7 @@
 #include "trading_view_model.h"
 
 #include "trace_exporter.h"
+#include "trading_ui_format.h"
 
 #include <algorithm>
 
@@ -47,6 +48,24 @@ TradingViewModel buildTradingViewModel(const TradingViewModelInput& input) {
         model.selectedTraceId = 0;
     }
 
+    if (model.selectedTraceId == 0) {
+        model.traceDetailsText = "No trade trace yet.";
+    } else {
+        TradeTraceSnapshot snapshot = captureTradeTraceSnapshot(model.selectedTraceId);
+        if (!snapshot.found) {
+            std::string replayError;
+            replayTradeTraceSnapshotFromLog(model.selectedTraceId, &snapshot, &replayError);
+            if (!snapshot.found && model.traceItemsFromReplayLog) {
+                model.traceDetailsText = replayError.empty() ? "Replay trace not available." : replayError;
+            }
+        }
+        if (model.traceDetailsText.empty()) {
+            model.traceDetailsText = formatTradeTraceDetailsText(snapshot);
+        }
+    }
+
+    model.canExportSelectedTrace = (model.selectedTraceId != 0 && !model.traceItems.empty());
+    model.canExportAllTraces = !model.traceItems.empty();
     g_data.copyMessagesTextIfChanged(model.messagesText, model.messagesVersionSeen);
     model.shouldVibrate = model.panel.symbol.hasPosition && model.panel.symbol.currentPositionQty != 0.0;
     return model;

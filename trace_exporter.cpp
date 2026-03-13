@@ -1,6 +1,7 @@
 #include "trace_exporter.h"
 
 #include <fstream>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -80,6 +81,10 @@ std::chrono::system_clock::time_point parseWallTimeText(const std::string& value
         return {};
     }
     return std::chrono::system_clock::from_time_t(wallTime) + std::chrono::milliseconds(millis);
+}
+
+bool hasSteadyTime(std::chrono::steady_clock::time_point tp) {
+    return tp.time_since_epoch().count() != 0;
 }
 
 std::chrono::steady_clock::time_point replayEventMono(TradeTrace& trace, double sinceTriggerMs) {
@@ -227,6 +232,92 @@ TradeTraceListItem makeTraceListItem(const TradeTrace& trace) {
     return item;
 }
 
+std::string resolvedTraceLogPath(const std::string& logPath) {
+    return logPath.empty() ? tradeTraceLogPath() : logPath;
+}
+
+bool traceContainsExecId(const TradeTrace& trace, const std::string& execId) {
+    if (execId.empty()) {
+        return false;
+    }
+    for (const auto& fill : trace.fills) {
+        if (fill.execId == execId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int traceRichnessScore(const TradeTrace& trace) {
+    int score = 0;
+    if (!trace.source.empty() && trace.source != "Broker Reconcile") score += 120;
+    if (!trace.terminalStatus.empty()) score += 60;
+    if (!trace.latestStatus.empty()) score += 25;
+    if (!trace.latestError.empty()) score += 15;
+    if (hasSteadyTime(trace.validationStartMono)) score += 10;
+    if (hasSteadyTime(trace.validationEndMono)) score += 10;
+    if (hasSteadyTime(trace.placeCallStartMono)) score += 10;
+    if (hasSteadyTime(trace.placeCallEndMono)) score += 10;
+    if (hasSteadyTime(trace.firstOpenOrderMono)) score += 10;
+    if (hasSteadyTime(trace.firstStatusMono)) score += 10;
+    if (hasSteadyTime(trace.firstExecMono)) score += 15;
+    if (hasSteadyTime(trace.fullFillMono)) score += 15;
+    score += static_cast<int>(std::min<std::size_t>(trace.events.size(), 32));
+    score += static_cast<int>(std::min<std::size_t>(trace.fills.size(), 8) * 4);
+    return score;
+}
+
+const TradeTrace* findMatchingTraceInLog(const std::map<std::uint64_t, TradeTrace>& traces,
+                                         std::uint64_t traceId,
+                                         OrderId orderId,
+                                         long long permId,
+                                         const std::string& execId,
+                                         const std::vector<FillSlice>& fills) {
+    const TradeTrace* bestMatch = nullptr;
+    int bestScore = std::numeric_limits<int>::min();
+
+    const auto considerCandidate = [&](const TradeTrace& candidate, bool directMatch) {
+        int score = traceRichnessScore(candidate);
+        if (directMatch) {
+            score += 1;
+        }
+        if (bestMatch == nullptr || score > bestScore) {
+            bestMatch = &candidate;
+            bestScore = score;
+        }
+    };
+
+    if (traceId != 0) {
+        const auto direct = traces.find(traceId);
+        if (direct != traces.end()) {
+            considerCandidate(direct->second, true);
+        }
+    }
+
+    for (const auto& [candidateId, candidate] : traces) {
+        bool matched = false;
+        if (orderId > 0 && candidate.orderId == orderId) {
+            matched = true;
+        }
+        if (permId > 0 && candidate.permId == permId) {
+            matched = true;
+        }
+        if (!execId.empty() && traceContainsExecId(candidate, execId)) {
+            matched = true;
+        }
+        for (const auto& fill : fills) {
+            if (!fill.execId.empty() && traceContainsExecId(candidate, fill.execId)) {
+                matched = true;
+                break;
+            }
+        }
+        if (matched) {
+            considerCandidate(candidate, candidateId == traceId);
+        }
+    }
+    return bestMatch;
+}
+
 bool loadTradeTracesFromLog(const std::string& logPath,
                             std::map<std::uint64_t, TradeTrace>* outTraces,
                             std::vector<std::uint64_t>* outReplayOrder,
@@ -238,10 +329,11 @@ bool loadTradeTracesFromLog(const std::string& logPath,
         return false;
     }
 
-    std::ifstream in(logPath);
+    const std::string resolvedPath = resolvedTraceLogPath(logPath);
+    std::ifstream in(resolvedPath);
     if (!in.is_open()) {
         if (error) {
-            *error = "Trace log not found at " + logPath;
+            *error = "Trace log not found at " + resolvedPath;
         }
         return false;
     }
@@ -267,7 +359,11 @@ bool loadTradeTracesFromLog(const std::string& logPath,
         trace.traceId = traceId;
         trace.orderId = parsed.value("orderId", static_cast<long long>(trace.orderId));
         trace.permId = parsed.value("permId", trace.permId);
-        trace.source = parsed.value("source", trace.source);
+        const std::string parsedSource = parsed.value("source", std::string());
+        if (!parsedSource.empty() &&
+            (trace.source.empty() || (trace.source == "Broker Reconcile" && parsedSource != "Broker Reconcile"))) {
+            trace.source = parsedSource;
+        }
         trace.symbol = parsed.value("symbol", trace.symbol);
         trace.side = parsed.value("side", trace.side);
         trace.requestedQty = parsed.value("requestedQty", trace.requestedQty);
@@ -381,6 +477,74 @@ bool replayTradeTraceSnapshotFromLog(std::uint64_t traceId,
     return true;
 }
 
+bool replayTradeTraceSnapshotByIdentityFromLog(OrderId orderId,
+                                               long long permId,
+                                               const std::string& execId,
+                                               TradeTraceSnapshot* outSnapshot,
+                                               std::string* error,
+                                               const std::string& logPath) {
+    if (outSnapshot == nullptr) {
+        if (error) {
+            *error = "Missing output snapshot";
+        }
+        return false;
+    }
+
+    std::map<std::uint64_t, TradeTrace> traces;
+    std::vector<std::uint64_t> replayOrder;
+    if (!loadTradeTracesFromLog(logPath, &traces, &replayOrder, error)) {
+        return false;
+    }
+
+    const TradeTrace* match = findMatchingTraceInLog(traces, 0, orderId, permId, execId, {});
+    if (match == nullptr) {
+        if (error) {
+            *error = "No matching trace found in " + resolvedTraceLogPath(logPath);
+        }
+        return false;
+    }
+
+    outSnapshot->found = true;
+    outSnapshot->trace = *match;
+    return true;
+}
+
+bool enrichTradeTraceSnapshotFromLog(TradeTraceSnapshot* snapshot,
+                                     std::string* error,
+                                     const std::string& logPath) {
+    if (snapshot == nullptr || !snapshot->found) {
+        if (error) {
+            *error = "Missing input snapshot";
+        }
+        return false;
+    }
+
+    std::map<std::uint64_t, TradeTrace> traces;
+    std::vector<std::uint64_t> replayOrder;
+    if (!loadTradeTracesFromLog(logPath, &traces, &replayOrder, error)) {
+        return false;
+    }
+
+    const TradeTrace& current = snapshot->trace;
+    const TradeTrace* match = findMatchingTraceInLog(traces,
+                                                     current.traceId,
+                                                     current.orderId,
+                                                     current.permId,
+                                                     {},
+                                                     current.fills);
+    if (match == nullptr) {
+        if (error) {
+            *error = "No matching trace found in " + resolvedTraceLogPath(logPath);
+        }
+        return false;
+    }
+
+    if (traceRichnessScore(*match) >= traceRichnessScore(current)) {
+        snapshot->trace = *match;
+    }
+    return true;
+}
+
 std::vector<TradeTraceListItem> buildTradeTraceListItemsFromLog(std::size_t maxItems,
                                                                 const std::string& logPath) {
     std::map<std::uint64_t, TradeTrace> traces;
@@ -416,6 +580,8 @@ bool buildTraceExportBundle(std::uint64_t traceId, TraceExportBundle* outBundle,
     TradeTraceSnapshot snapshot = captureTradeTraceSnapshot(traceId);
     if (!snapshot.found) {
         replayTradeTraceSnapshotFromLog(traceId, &snapshot, error);
+    } else {
+        enrichTradeTraceSnapshotFromLog(&snapshot, nullptr);
     }
     if (!snapshot.found) {
         if (error) {
@@ -521,6 +687,8 @@ std::string buildAllTradesSummaryCsv(std::size_t maxItems) {
         TradeTraceSnapshot snapshot = captureTradeTraceSnapshot(item.traceId);
         if (!snapshot.found) {
             replayTradeTraceSnapshotFromLog(item.traceId, &snapshot, nullptr);
+        } else {
+            enrichTradeTraceSnapshotFromLog(&snapshot, nullptr);
         }
         if (!snapshot.found) {
             continue;

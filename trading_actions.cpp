@@ -252,7 +252,9 @@ TradingControllerActionResult handleControllerActionIntent(TradingRuntime* runti
                     result.messages.push_back("[Controller] Some cancel requests could not be sent");
                 }
                 result.messages.push_back("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
-                setControllerArmed(false);
+                if (state.risk.controllerArmMode == ControllerArmMode::OneShot) {
+                    setControllerArmed(false);
+                }
             } else {
                 result.messages.push_back("[Controller] No pending orders to cancel");
             }
