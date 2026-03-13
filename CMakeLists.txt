@@ -12,6 +12,7 @@ find_package(PkgConfig REQUIRED)
 
 pkg_check_modules(GLFW3 REQUIRED glfw3)
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
+pkg_check_modules(NLOHMANN_JSON REQUIRED nlohmann_json)
 find_package(Threads REQUIRED)
 
 set(IB_API_ROOT "/opt/IBAPI" CACHE PATH "Path to Interactive Brokers API")
@@ -49,14 +50,19 @@ set(IXWEBSOCKET_DIR "${CMAKE_SOURCE_DIR}/ixwebsocket" CACHE PATH "Path to ixWebS
 set(SOURCE_FILES
     main.cpp
     app_shared.cpp
-    platform_win32.cpp
-    platform_metal.cpp
+    platform_metal.mm
     trading_panel.cpp
     websocket_handlers.cpp
     dualsense_controller.cpp
-    d3d_helpers.cpp
     ${IMGUI_SOURCES}
 )
+
+if(WIN32)
+    set(SOURCE_FILES ${SOURCE_FILES}
+        platform_win32.cpp
+        d3d_helpers.cpp
+    )
+endif()
 
 if(APPLE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-arc")
@@ -73,13 +79,14 @@ if(APPLE)
         ${APP_KIT_LIBRARY}
     )
     
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -x objective-c++")
+    set_source_files_properties(platform_metal.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
 endif()
 
 include_directories(
     ${CMAKE_SOURCE_DIR}
     ${GLFW3_INCLUDE_DIRS}
     ${PROTOBUF_INCLUDE_DIR}
+    ${NLOHMANN_JSON_INCLUDE_DIRS}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
     ${IMGUI_DIR}/misc/cpp
@@ -89,6 +96,8 @@ include_directories(
 if(EXISTS ${IB_API_INCLUDE_DIR})
     include_directories(${IB_API_INCLUDE_DIR})
     add_compile_definitions(IB_API_AVAILABLE)
+else()
+    add_compile_definitions(IB_API_STUB)
 endif()
 
 add_executable(tws_gui ${SOURCE_FILES})
@@ -96,8 +105,9 @@ add_executable(tws_gui ${SOURCE_FILES})
 target_link_libraries(tws_gui PRIVATE
     ${GLFW3_LIBRARIES}
     ${PROTOBUF_LIBRARIES}
+    ${NLOHMANN_JSON_LIBRARIES}
     ixwebsocket
-   Threads::Threads
+    Threads::Threads
 )
 
 if(APPLE)
@@ -115,9 +125,9 @@ endif()
 target_compile_definitions(tws_gui PRIVATE
     $<$<BOOL:${GLFW3_LIBRARIES}>:IMGUI_HAS_GLFW>
     $<$<BOOL:${GLFW3_LIBRARIES}>:IMGUI_IMPL_GLFW_HAS_MONITOR>
+    GLFW_EXPOSE_NATIVE_COCOA
 )
 
 if(APPLE)
-    set_source_files_properties(platform_metal.cpp PROPERTIES COMPILE_FLAGS "-x objective-c++")
     set_source_files_properties(${IMGUI_DIR}/backends/imgui_impl_metal.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
 endif()

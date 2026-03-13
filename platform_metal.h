@@ -5,7 +5,6 @@
 #if defined(__APPLE__)
 
 #include <GLFW/glfw3.h>
-#include <Metal/Metal.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_metal.h>
@@ -29,13 +28,13 @@ public:
     void requestShutdown() override;
 
     GLFWwindow* getWindow() const { return m_window; }
-    CAMetalLayer* getMetalLayer() const { return m_metalLayer; }
+    void* getMetalLayer() const { return m_metalLayer; }
 
 private:
     GLFWwindow* m_window = nullptr;
-    CAMetalLayer* m_metalLayer = nullptr;
-    id<MTLDevice> m_mtlDevice = nil;
-    id<MTLCommandQueue> m_mtlCommandQueue = nil;
+    void* m_metalLayer = nullptr;
+    void* m_mtlDevice = nullptr;
+    void* m_mtlCommandQueue = nullptr;
     bool m_running = false;
 };
 

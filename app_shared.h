@@ -60,6 +60,159 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
+#if defined(IB_API_STUB)
+using OrderId = long;
+using TickerId = int;
+using TickType = int;
+struct Decimal {};
+struct TickAttrib {
+    bool canAutoExecute = false;
+    bool pastLow = false;
+    bool pastHigh = false;
+};
+using TagValueListSPtr = void*;
+
+namespace DecimalFunctions {
+    static Decimal doubleToDecimal(double) { return Decimal{}; }
+    static double decimalToDouble(const Decimal&) { return 0.0; }
+}
+
+namespace protobuf {
+    struct ErrorMessage {};
+    struct ManagedAccounts {};
+    struct TickPrice {};
+    struct Position {};
+    struct PositionEnd {};
+    struct MarketDepth {};
+    struct MarketDepthL2 {};
+}
+
+struct Contract {
+    std::string symbol;
+    std::string secType;
+    std::string exchange;
+    std::string currency;
+};
+
+struct Order {
+    long orderId = 0;
+    long permId = 0;
+    std::string action;
+    Decimal totalQuantity;
+    std::string orderType;
+    double lmtPrice = 0.0;
+    std::string tif;
+    std::string account;
+    bool outsideRth = false;
+    bool transmit = true;
+};
+
+struct OrderState {
+    std::string status;
+};
+
+struct OrderCancel {};
+
+struct Execution {
+    long orderId = 0;
+    long permId = 0;
+    std::string execId;
+    Decimal shares;
+    double price = 0.0;
+    Decimal cumQty;
+    std::string exchange;
+    int lastLiquidity = 0;
+    double avgPrice = 0.0;
+    std::string time;
+};
+
+struct CommissionReport {
+    std::string execId;
+    double commission = 0.0;
+    std::string currency;
+};
+
+struct EReaderOSSignal {
+    EReaderOSSignal(int) {}
+    void issueSignal() {}
+    void waitForSignal() {}
+};
+
+struct EClientSocket {
+    EClientSocket(void*, void*) {}
+    bool isConnected() const { return false; }
+    bool eConnect(const char*, int, int) { return false; }
+    void eDisconnect() {}
+    bool cancelOrder(OrderId, const OrderCancel&) { return false; }
+    void reqMktData(int, const Contract&, const char*, bool, bool, TagValueListSPtr) {}
+    void cancelMktData(int) {}
+    void reqMktDepth(int, const Contract&, int, bool, TagValueListSPtr) {}
+    void cancelMktDepth(int, bool) {}
+    void placeOrder(OrderId, const Contract&, const Order&) {}
+    void reqPositions() {}
+    void reqOpenOrders() {}
+};
+
+struct EReader {
+    EReader(void*, void*) {}
+    void start() {}
+    void processMsgs() {}
+};
+
+class DefaultEWrapper {
+public:
+    virtual ~DefaultEWrapper() = default;
+    virtual void connectAck() {}
+    virtual void connectionClosed() {}
+    virtual void nextValidId(OrderId) {}
+    virtual void managedAccounts(const std::string&) {}
+    virtual void tickPrice(TickerId, TickType, double, const TickAttrib&) {}
+    virtual void tickSize(TickerId, TickType, int) {}
+    virtual void tickOptionComputation(TickerId, TickType, double, double, double, double, double, double, int) {}
+    virtual void tickGeneric(TickerId, TickType, double) {}
+    virtual void tickString(TickerId, TickType, const std::string&) {}
+    virtual void tickEFP(TickerId, TickType, double, const std::string&, double, int, const std::string&, double, int) {}
+    virtual void orderStatus(OrderId, const std::string&, Decimal, Decimal, double, long long, int, Decimal, double, int, Decimal) {}
+    virtual void openOrder(OrderId, const Contract&, const Order&, const OrderState&) {}
+    virtual void openOrderEnd() {}
+    virtual void updateAccountValue(const std::string&, const std::string&, const std::string&, const std::string&) {}
+    virtual void updatePortfolio(const Contract*, Decimal, double, double, double, double, const std::string&) {}
+    virtual void accountDownloadEnd(const std::string&) {}
+    virtual void contractDetails(int, const void*) {}
+    virtual void contractDetailsEnd(int) {}
+    virtual void execDetails(int, const Contract*, const Execution&) {}
+    virtual void execDetailsEnd(int) {}
+    virtual void commissionReport(const CommissionReport&) {}
+    virtual void historicalData(int, const std::string&, double, double, double, double, int, int, double, int) {}
+    virtual void scannerParameters(const std::string&) {}
+    virtual void scannerData(int, int, const void*, const std::string&, const std::string&, const std::string&, const std::string&, double, int, int, const std::vector<std::string>&) {}
+    virtual void scannerDataEnd(int) {}
+    virtual void realtimeBar(TickerId, long, double, double, double, double, long, int, double, int) {}
+    virtual void currentTime(long) {}
+    virtual void deltaNeutralValidation(int, const void*) {}
+    virtual void tickSnapshotEnd(int) {}
+    virtual void marketDataType(TickerId, int) {}
+    virtual void updateMktDepth(TickerId, int, int, int, double, Decimal) {}
+    virtual void updateMktDepthL2(TickerId, int, const std::string&, int, int, double, Decimal, bool) {}
+    virtual void tickFlashCallBack(TickerId, double, double) {}
+    virtual void orderBound(long long, int) {}
+    virtual void error(int, int, const std::string&, const std::string&, const std::string&) {}
+    virtual void error(const std::string&) {}
+    virtual void winError(const std::string&, int) {}
+    virtual void quickMsg(const std::string&) {}
+    virtual void position(const std::string&, const Contract&, Decimal, double, double) {}
+    virtual void positionEnd() {}
+    virtual void errorProtoBuf(const protobuf::ErrorMessage&) {}
+    virtual void managedAccountsProtoBuf(const protobuf::ManagedAccounts&) {}
+    virtual void tickPriceProtoBuf(const protobuf::TickPrice&) {}
+    virtual void positionProtoBuf(const protobuf::Position&) {}
+    virtual void positionEndProtoBuf(const protobuf::PositionEnd&) {}
+    virtual void updateMarketDepthProtoBuf(const protobuf::MarketDepth&) {}
+    virtual void updateMarketDepthL2ProtoBuf(const protobuf::MarketDepthL2&) {}
+};
+
+#endif
+
 std::string toUpperCase(const std::string& str);
 
 inline constexpr const char* DEFAULT_HOST = "127.0.0.1";
