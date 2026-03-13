@@ -10,7 +10,7 @@ A new project created with Intent by Augment.
 
 ```bash
 # Install system dependencies via Homebrew
-brew install cmake glfw protobuf
+brew install cmake glfw protobuf nlohmann-json
 ```
 
 **External Dependencies:**

@@ -111,7 +111,8 @@ bool MacOSPlatformBackend::pumpEvents() {
 }
 
 void MacOSPlatformBackend::beginFrame() {
-    ImGui_ImplMetal_NewFrame();
+    MTLRenderPassDescriptor* passDesc = nullptr;
+    ImGui_ImplMetal_NewFrame(passDesc);
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 }

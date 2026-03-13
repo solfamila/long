@@ -82,11 +82,13 @@ include_directories(
     ${PROTOBUF_INCLUDE_DIR}
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
+    ${IMGUI_DIR}/misc/cpp
     ${IXWEBSOCKET_DIR}
 )
 
 if(EXISTS ${IB_API_INCLUDE_DIR})
     include_directories(${IB_API_INCLUDE_DIR})
+    add_compile_definitions(IB_API_AVAILABLE)
 endif()
 
 add_executable(tws_gui ${SOURCE_FILES})

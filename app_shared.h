@@ -4,6 +4,7 @@
 #define NOMINMAX
 #endif
 
+#ifdef IB_API_AVAILABLE
 #include "DefaultEWrapper.h"
 #include "EReaderOSSignal.h"
 #include "EReader.h"
@@ -20,6 +21,7 @@
 #include "TickPrice.pb.h"
 #include "Position.pb.h"
 #include "PositionEnd.pb.h"
+#endif
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
