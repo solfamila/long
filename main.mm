@@ -72,6 +72,15 @@ void SaveKeychainString(NSString* service, NSString* account, const std::string&
     (void)status;
 }
 
+void SaveKeychainStringAsync(NSString* service, NSString* account, std::string value) {
+    if (value.empty()) {
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        SaveKeychainString(service, account, value);
+    });
+}
+
 NSTextField* MakeLabel(NSString* text, NSFont* font, NSColor* color) {
     NSTextField* label = [NSTextField labelWithString:text ?: @""];
     label.font = font;
@@ -355,6 +364,7 @@ void StylePanel(NSView* view) {
 - (void)applyAppActive:(BOOL)active;
 - (void)applyThermalState:(NSProcessInfoThermalState)thermalState;
 - (void)loadPreferences;
+- (void)resolveStartupWebSocketTokenAndStartRuntime;
 - (void)persistPreferences;
 - (BOOL)isEditingField:(NSTextField*)field;
 
@@ -438,13 +448,8 @@ void StylePanel(NSView* view) {
     if ([defaults objectForKey:@"twsClientId"] != nil) {
         connection.clientId = std::max(1, static_cast<int>([defaults integerForKey:@"twsClientId"]));
     }
-    const std::string keychainToken = LoadKeychainString(kWebSocketTokenService, kWebSocketTokenAccount);
-    if (!keychainToken.empty()) {
-        connection.websocketAuthToken = keychainToken;
-    } else if (NSString* token = [defaults stringForKey:@"websocketToken"]) {
+    if (NSString* token = [defaults stringForKey:@"websocketToken"]) {
         connection.websocketAuthToken = ToStdString(token);
-        SaveKeychainString(kWebSocketTokenService, kWebSocketTokenAccount, connection.websocketAuthToken);
-        [defaults removeObjectForKey:@"websocketToken"];
     }
     if ([defaults objectForKey:@"websocketEnabled"] != nil) {
         connection.websocketEnabled = [defaults boolForKey:@"websocketEnabled"];
@@ -471,10 +476,6 @@ void StylePanel(NSView* view) {
                        risk.maxOrderNotional,
                        risk.maxOpenNotional,
                        risk.controllerArmMode);
-
-    NSString* ensuredToken = ToNSString(ensureWebSocketAuthToken());
-    SaveKeychainString(kWebSocketTokenService, kWebSocketTokenAccount, ToStdString(ensuredToken));
-    [defaults removeObjectForKey:@"websocketToken"];
 }
 
 - (void)persistPreferences {
@@ -488,7 +489,7 @@ void StylePanel(NSView* view) {
     [defaults setObject:ToNSString(connection.host) forKey:@"twsHost"];
     [defaults setInteger:connection.port forKey:@"twsPort"];
     [defaults setInteger:connection.clientId forKey:@"twsClientId"];
-    SaveKeychainString(kWebSocketTokenService, kWebSocketTokenAccount, connection.websocketAuthToken);
+    SaveKeychainStringAsync(kWebSocketTokenService, kWebSocketTokenAccount, connection.websocketAuthToken);
     [defaults removeObjectForKey:@"websocketToken"];
     [defaults setBool:connection.websocketEnabled forKey:@"websocketEnabled"];
     [defaults setBool:connection.controllerEnabled forKey:@"controllerEnabled"];
@@ -755,7 +756,42 @@ void StylePanel(NSView* view) {
     [self showWindow:nil];
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
-    [self startRuntime];
+    [self resolveStartupWebSocketTokenAndStartRuntime];
+}
+
+- (void)resolveStartupWebSocketTokenAndStartRuntime {
+    __weak TradingWindowController* weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+        RuntimeConnectionConfig connection = captureRuntimeConnectionConfig();
+        bool removeLegacyDefaultsToken = false;
+
+        const std::string keychainToken = LoadKeychainString(kWebSocketTokenService, kWebSocketTokenAccount);
+        if (!keychainToken.empty()) {
+            connection.websocketAuthToken = keychainToken;
+        } else if (NSString* token = [defaults stringForKey:@"websocketToken"]) {
+            connection.websocketAuthToken = ToStdString(token);
+            removeLegacyDefaultsToken = true;
+        }
+
+        if (connection.websocketAuthToken.empty()) {
+            connection.websocketAuthToken = ensureWebSocketAuthToken();
+        }
+        SaveKeychainStringAsync(kWebSocketTokenService, kWebSocketTokenAccount, connection.websocketAuthToken);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TradingWindowController* strongSelf = weakSelf;
+            if (strongSelf == nil || strongSelf->_shuttingDown || strongSelf->_runtimeHost) {
+                return;
+            }
+
+            updateRuntimeConnectionConfig(connection);
+            if (removeLegacyDefaultsToken) {
+                [defaults removeObjectForKey:@"websocketToken"];
+            }
+            [strongSelf startRuntime];
+        });
+    });
 }
 
 - (void)startRuntime {

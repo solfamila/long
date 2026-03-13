@@ -412,7 +412,6 @@ void TradingRuntime::shutdown() {
     }
 
     impl_->wrapper.setEventDispatcher({});
-    impl_->stopActionLoop();
 
     if (impl_->client) {
         cancelActiveSubscription(impl_->client.get());
@@ -441,6 +440,7 @@ void TradingRuntime::shutdown() {
     appendRuntimeJournalEvent("runtime_shutdown");
     setRuntimeSessionState(RuntimeSessionState::Disconnected);
     clearSharedDataMutationDispatcher();
+    impl_->stopActionLoop();
     unbindSharedDataOwner(&impl_->sharedData);
     clearUiInvalidationCallback();
     macLogInfo("runtime", "Runtime shutdown complete");
