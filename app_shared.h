@@ -4,8 +4,6 @@
 #define NOMINMAX
 #endif
 
-#include "StdAfx.h"
-
 #include "DefaultEWrapper.h"
 #include "EReaderOSSignal.h"
 #include "EReader.h"

@@ -1,6 +1,8 @@
 #include "app_shared.h"
 #include "app_platform.h"
+#if defined(_WIN32)
 #include "platform_win32.h"
+#endif
 #include "controller.h"
 #include "websocket_handlers.h"
 #include "trading_wrapper.h"
@@ -11,7 +13,13 @@ int main() {
     std::cout << "Connecting to TWS at " << DEFAULT_HOST << ":" << DEFAULT_PORT << std::endl;
     std::cout << "Configured account: " << HARDCODED_ACCOUNT << std::endl;
 
+#if defined(_WIN32)
     std::unique_ptr<IPlatformFactory> factory = CreateWin32Factory();
+#elif defined(__APPLE__)
+    std::unique_ptr<IPlatformFactory> factory = CreateMacOSFactory();
+#else
+    std::unique_ptr<IPlatformFactory> factory = CreateDefaultFactory();
+#endif
     if (!factory) {
         std::cerr << "Failed to create platform factory" << std::endl;
         return 1;
@@ -99,8 +107,13 @@ int main() {
     }
 
     ControllerState dsState;
-    HWND hwnd = reinterpret_cast<HWND>(backend->getNativeWindowHandle());
-    controllerInitialize(dsState, GetModuleHandle(nullptr), hwnd);
+#if defined(_WIN32)
+    void* hwnd = backend->getNativeWindowHandle();
+    void* hInstance = reinterpret_cast<void*>(GetModuleHandle(nullptr));
+    controllerInitialize(dsState, hInstance, hwnd);
+#else
+    controllerInitialize(dsState, nullptr, nullptr);
+#endif
 
     TradingPanelUiState uiState;
     ImVec4 clearColor = ImVec4(0.1f, 0.1f, 0.1f, 1.0f);
