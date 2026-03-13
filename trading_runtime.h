@@ -1,9 +1,12 @@
 #pragma once
 
-#include <functional>
-#include <memory>
+#include "app_shared.h"
 
-class EClientSocket;
+#include <functional>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <vector>
 
 enum class TradingRuntimeControllerAction {
     Buy,
@@ -29,9 +32,16 @@ public:
     bool start();
     void shutdown();
 
-    EClientSocket* client() const;
     bool isStarted() const;
     void setControllerVibration(bool enable);
+    bool requestSymbolSubscription(const std::string& symbol, bool recalcQtyFromFirstAsk, std::string* error = nullptr);
+    bool submitOrderIntent(const SubmitIntent& intent,
+                           double quantity,
+                           double limitPrice,
+                           bool closeOnly,
+                           std::string* error = nullptr,
+                           std::uint64_t* outTraceId = nullptr);
+    std::vector<bool> requestCancelOrders(const std::vector<OrderId>& orderIds);
 
 private:
     struct Impl;

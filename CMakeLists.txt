@@ -13,6 +13,11 @@ if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS deployment target" FORCE)
 endif()
 
+option(TWS_GUI_BUILD_UNIVERSAL "Build a universal macOS binary (arm64 + x86_64)" OFF)
+if(TWS_GUI_BUILD_UNIVERSAL)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures" FORCE)
+endif()
+
 if(NOT APPLE)
     message(FATAL_ERROR "TWSTradingGUI now supports macOS only")
 endif()
@@ -25,7 +30,13 @@ find_package(Threads REQUIRED)
 set(APP_BUNDLE_NAME "TWS Trading GUI")
 set(APP_BUNDLE_IDENTIFIER "com.foxy.twstradinggui")
 set(APP_BUNDLE_VERSION "1.0.0")
-set(APP_PACKAGE_FILENAME "tws_gui-macos-${CMAKE_SYSTEM_PROCESSOR}.zip")
+if(CMAKE_OSX_ARCHITECTURES MATCHES ";")
+    set(APP_PACKAGE_ARCH "universal")
+else()
+    set(APP_PACKAGE_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+set(APP_PACKAGE_FILENAME "tws_gui-macos-${APP_PACKAGE_ARCH}.zip")
+set(APP_DMG_FILENAME "tws_gui-macos-${APP_PACKAGE_ARCH}.dmg")
 set(BUNDLE_SEARCH_DIRS
     "/opt/homebrew/opt/protobuf/lib"
     "/opt/homebrew/opt/abseil/lib"
@@ -57,7 +68,11 @@ endif()
 set(APP_SOURCES
     main.mm
     app_shared.cpp
+    mac_observability.mm
+    trading_actions.cpp
+    trace_exporter.cpp
     trading_runtime.cpp
+    trading_view_model.cpp
     websocket_handlers.cpp
     controller_mac.mm
 )
@@ -192,10 +207,12 @@ endif()
 
 find_library(APP_KIT_LIBRARY AppKit REQUIRED)
 find_library(GAME_CONTROLLER_LIBRARY GameController REQUIRED)
+find_library(SECURITY_LIBRARY Security REQUIRED)
 
 target_link_libraries(tws_gui PRIVATE
     ${APP_KIT_LIBRARY}
     ${GAME_CONTROLLER_LIBRARY}
+    ${SECURITY_LIBRARY}
 )
 
 set_target_properties(tws_gui PROPERTIES
@@ -212,6 +229,9 @@ set_target_properties(tws_gui PROPERTIES
 find_program(CODESIGN_EXECUTABLE codesign)
 configure_file("${CMAKE_SOURCE_DIR}/cmake/FixupBundle.cmake.in"
                "${CMAKE_BINARY_DIR}/FixupBundle.cmake"
+               @ONLY)
+configure_file("${CMAKE_SOURCE_DIR}/cmake/NotarizeBundle.cmake.in"
+               "${CMAKE_BINARY_DIR}/NotarizeBundle.cmake"
                @ONLY)
 
 add_custom_command(TARGET tws_gui POST_BUILD
@@ -231,8 +251,36 @@ add_custom_target(tws_gui_zip
     VERBATIM
 )
 
+set(APP_DMG_STAGING_DIR "${CMAKE_BINARY_DIR}/dmg-root")
+add_custom_target(tws_gui_dmg
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${APP_DMG_STAGING_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${APP_DMG_STAGING_DIR}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "$<TARGET_BUNDLE_DIR:tws_gui>"
+            "${APP_DMG_STAGING_DIR}/tws_gui.app"
+    COMMAND ln -sfn /Applications "${APP_DMG_STAGING_DIR}/Applications"
+    COMMAND hdiutil create
+            -volname "${APP_BUNDLE_NAME}"
+            -srcfolder "${APP_DMG_STAGING_DIR}"
+            -ov
+            -format UDZO
+            "${CMAKE_BINARY_DIR}/${APP_DMG_FILENAME}"
+    DEPENDS tws_gui
+    VERBATIM
+)
+
+add_custom_target(tws_gui_notarize
+    COMMAND "${CMAKE_COMMAND}"
+            -Dbundle_path="$<TARGET_BUNDLE_DIR:tws_gui>"
+            -Dzip_path="${CMAKE_BINARY_DIR}/${APP_BUNDLE_NAME}-notarize.zip"
+            -P "${CMAKE_BINARY_DIR}/NotarizeBundle.cmake"
+    DEPENDS tws_gui
+    VERBATIM
+)
+
 set_source_files_properties(
     main.mm
+    mac_observability.mm
     controller_mac.mm
     PROPERTIES
         LANGUAGE OBJCXX

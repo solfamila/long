@@ -1,10 +1,17 @@
 #import <AppKit/AppKit.h>
+#import <Security/Security.h>
 
 #include "app_shared.h"
+#include "trace_exporter.h"
+#include "trading_actions.h"
 #include "trading_runtime.h"
+#include "trading_view_model.h"
 #include "trading_wrapper.h"
 
 namespace {
+
+NSString* const kWebSocketTokenService = @"com.foxy.twstradinggui";
+NSString* const kWebSocketTokenAccount = @"websocket-token";
 
 NSString* ToNSString(const std::string& value) {
     return [NSString stringWithUTF8String:value.c_str()];
@@ -15,6 +22,50 @@ std::string ToStdString(NSString* value) {
         return {};
     }
     return std::string([value UTF8String]);
+}
+
+std::string LoadKeychainString(NSString* service, NSString* account) {
+    NSDictionary* query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: service,
+        (__bridge id)kSecAttrAccount: account,
+        (__bridge id)kSecReturnData: @YES,
+        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
+    };
+
+    CFTypeRef result = nullptr;
+    const OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+    if (status != errSecSuccess || result == nullptr) {
+        return {};
+    }
+
+    NSData* data = CFBridgingRelease(result);
+    NSString* value = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return ToStdString(value);
+}
+
+void SaveKeychainString(NSString* service, NSString* account, const std::string& value) {
+    if (value.empty()) {
+        return;
+    }
+
+    NSData* data = [NSData dataWithBytes:value.data() length:value.size()];
+    NSDictionary* query = @{
+        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+        (__bridge id)kSecAttrService: service,
+        (__bridge id)kSecAttrAccount: account,
+    };
+    NSDictionary* update = @{
+        (__bridge id)kSecValueData: data,
+    };
+
+    OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)update);
+    if (status == errSecItemNotFound) {
+        NSMutableDictionary* add = [query mutableCopy];
+        add[(__bridge id)kSecValueData] = data;
+        status = SecItemAdd((__bridge CFDictionaryRef)add, nullptr);
+    }
+    (void)status;
 }
 
 NSTextField* MakeLabel(NSString* text, NSFont* font, NSColor* color) {
@@ -67,6 +118,35 @@ NSButton* MakeButton(NSString* title, id target, SEL action) {
     button.translatesAutoresizingMaskIntoConstraints = NO;
     [button.heightAnchor constraintEqualToConstant:32.0].active = YES;
     return button;
+}
+
+void SetButtonEnabledTint(NSButton* button, bool enabled, NSColor* enabledColor, NSColor* disabledColor) {
+    button.enabled = enabled;
+    button.bezelColor = enabled ? enabledColor : disabledColor;
+    button.contentTintColor = enabled ? [NSColor whiteColor] : [NSColor secondaryLabelColor];
+}
+
+bool WriteStringToURL(const std::string& content, NSURL* url, NSError** error) {
+    NSString* text = [[NSString alloc] initWithBytes:content.data()
+                                              length:content.size()
+                                            encoding:NSUTF8StringEncoding];
+    if (text == nil) {
+        if (error != nullptr) {
+            *error = [NSError errorWithDomain:NSCocoaErrorDomain
+                                         code:NSFileWriteInapplicableStringEncodingError
+                                     userInfo:@{NSLocalizedDescriptionKey: @"Failed to encode UTF-8 text"}];
+        }
+        return false;
+    }
+    return [text writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:error];
+}
+
+void ShowAlert(NSWindow* window, NSString* title, NSString* message, NSAlertStyle style) {
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.messageText = title ?: @"Notice";
+    alert.informativeText = message ?: @"";
+    alert.alertStyle = style;
+    [alert beginSheetModalForWindow:window completionHandler:nil];
 }
 
 void StyleTintedButton(NSButton* button, NSColor* bezelColor, NSColor* tintColor) {
@@ -265,84 +345,6 @@ std::string FormatTraceDetails(const TradeTraceSnapshot& snapshot) {
     return oss.str();
 }
 
-struct PanelDerivedState {
-    UiStatusSnapshot status;
-    SymbolUiSnapshot symbol;
-    double buyPrice = 0.0;
-    double sellPrice = 0.0;
-    bool buySweepAvailable = false;
-    bool sellSweepAvailable = false;
-    bool canTrade = false;
-    bool canBuy = false;
-    bool canClosePosition = false;
-    bool hasCancelableOrders = false;
-    int askLevels = 0;
-    int bidLevels = 0;
-    int maxToggleQuantity = 1;
-};
-
-PanelDerivedState BuildPanelState(const std::string& subscribedSymbol,
-                                  bool subscribed,
-                                  int quantityInput,
-                                  double priceBuffer,
-                                  double maxPositionDollars) {
-    PanelDerivedState state;
-    state.status = captureUiStatusSnapshot();
-    state.symbol = captureSymbolUiSnapshot(subscribed ? subscribedSymbol : std::string());
-    state.canTrade = state.symbol.canTrade;
-    state.askLevels = static_cast<int>(state.symbol.askBook.size());
-    state.bidLevels = static_cast<int>(state.symbol.bidBook.size());
-    state.maxToggleQuantity = computeMaxQuantityFromAsk(state.symbol.askPrice, maxPositionDollars);
-
-    if (subscribed) {
-        if (!state.symbol.askBook.empty()) {
-            const double sweep = calculateSweepPrice(state.symbol.askBook, quantityInput, priceBuffer, true);
-            if (sweep > 0.0) {
-                state.buyPrice = sweep;
-                state.buySweepAvailable = true;
-            }
-        }
-
-        if (!state.symbol.bidBook.empty()) {
-            const double sweep = calculateSweepPrice(state.symbol.bidBook, quantityInput, priceBuffer, false);
-            if (sweep > 0.0) {
-                state.sellPrice = sweep;
-                state.sellSweepAvailable = true;
-            }
-        }
-
-        if (state.buyPrice <= 0.0 && state.symbol.askPrice > 0.0) {
-            state.buyPrice = state.symbol.askPrice + priceBuffer;
-        }
-        if (state.sellPrice <= 0.0 && state.symbol.bidPrice > 0.0) {
-            state.sellPrice = std::max(0.01, state.symbol.bidPrice - priceBuffer);
-        }
-
-        if (state.buyPrice > 0.0 && state.symbol.askPrice > 0.0) {
-            state.buyPrice = std::max(state.buyPrice, state.symbol.askPrice + priceBuffer);
-        }
-        if (state.sellPrice > 0.0 && state.symbol.bidPrice > 0.0) {
-            state.sellPrice = std::min(state.sellPrice, std::max(0.01, state.symbol.bidPrice - priceBuffer));
-        }
-    }
-
-    state.canBuy = state.canTrade && subscribed && quantityInput > 0 && state.buyPrice > 0.0;
-    state.canClosePosition = state.canTrade && subscribed &&
-                             state.symbol.availableLongToClose > 0.0 &&
-                             state.sellPrice > 0.0;
-
-    const auto orders = captureOrdersSnapshot();
-    for (const auto& [id, order] : orders) {
-        (void)id;
-        if (!order.isTerminal() && !order.cancelPending) {
-            state.hasCancelableOrders = true;
-            break;
-        }
-    }
-
-    return state;
-}
-
 bool TraceItemsEqual(const std::vector<TradeTraceListItem>& lhs,
                      const std::vector<TradeTraceListItem>& rhs) {
     if (lhs.size() != rhs.size()) {
@@ -395,12 +397,14 @@ void StylePanel(NSView* view) {
     std::vector<TradeTraceListItem> _traceItems;
 
     bool _refreshScheduled;
+    bool _traceItemsFromReplayLog;
 
     NSTextField* _twsStatusLabel;
     NSTextField* _accountStatusLabel;
     NSTextField* _websocketStatusLabel;
     NSTextField* _controllerStatusLabel;
     NSTextField* _controllerLockLabel;
+    NSTextField* _recoveryBannerLabel;
 
     NSTextField* _symbolField;
     NSTextField* _marketHeaderLabel;
@@ -411,6 +415,7 @@ void StylePanel(NSView* view) {
     NSTextField* _pnlLabel;
     NSTextField* _bookDepthLabel;
     NSTextField* _pricePreviewLabel;
+    NSTextField* _safetyStatusLabel;
     NSTextField* _controllerHintLabel;
 
     NSTextField* _quantityField;
@@ -422,6 +427,11 @@ void StylePanel(NSView* view) {
     NSButton* _closeButton;
     NSButton* _cancelSelectedButton;
     NSButton* _cancelAllButton;
+    NSButton* _armControllerButton;
+    NSButton* _killSwitchButton;
+    NSButton* _settingsButton;
+    NSButton* _exportTraceButton;
+    NSButton* _exportAllButton;
 
     NSTableView* _ordersTable;
     NSPopUpButton* _tracePopup;
@@ -431,9 +441,10 @@ void StylePanel(NSView* view) {
 
 - (void)startRuntime;
 - (void)shutdownRuntime;
-- (EClientSocket*)client;
 - (void)scheduleRefresh;
 - (void)handleControllerAction:(TradingRuntimeControllerAction)action;
+- (void)loadPreferences;
+- (void)persistPreferences;
 
 @end
 
@@ -463,6 +474,8 @@ void StylePanel(NSView* view) {
         _subscribed = false;
         _shuttingDown = false;
         _refreshScheduled = false;
+        _traceItemsFromReplayLog = false;
+        [self loadPreferences];
         [self buildInterface];
         self.window.delegate = self;
     }
@@ -471,6 +484,89 @@ void StylePanel(NSView* view) {
 
 - (void)dealloc {
     [self shutdownRuntime];
+}
+
+- (void)loadPreferences {
+    NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+
+    NSString* savedSymbol = [defaults stringForKey:@"defaultSymbol"];
+    if (savedSymbol.length > 0) {
+        _symbolInput = toUpperCase(ToStdString(savedSymbol));
+    }
+
+    if ([defaults objectForKey:@"quantityInput"] != nil) {
+        _quantityInput = std::max(1, static_cast<int>([defaults integerForKey:@"quantityInput"]));
+    }
+    if ([defaults objectForKey:@"priceBuffer"] != nil) {
+        _priceBuffer = std::max(0.0, [defaults doubleForKey:@"priceBuffer"]);
+    }
+    if ([defaults objectForKey:@"maxPositionDollars"] != nil) {
+        _maxPositionDollars = std::max(1000.0, [defaults doubleForKey:@"maxPositionDollars"]);
+    }
+
+    RuntimeConnectionConfig connection = captureRuntimeConnectionConfig();
+    if (NSString* host = [defaults stringForKey:@"twsHost"]) {
+        connection.host = ToStdString(host);
+    }
+    if ([defaults objectForKey:@"twsPort"] != nil) {
+        connection.port = std::max(1, static_cast<int>([defaults integerForKey:@"twsPort"]));
+    }
+    if ([defaults objectForKey:@"twsClientId"] != nil) {
+        connection.clientId = std::max(1, static_cast<int>([defaults integerForKey:@"twsClientId"]));
+    }
+    const std::string keychainToken = LoadKeychainString(kWebSocketTokenService, kWebSocketTokenAccount);
+    if (!keychainToken.empty()) {
+        connection.websocketAuthToken = keychainToken;
+    } else if (NSString* token = [defaults stringForKey:@"websocketToken"]) {
+        connection.websocketAuthToken = ToStdString(token);
+        SaveKeychainString(kWebSocketTokenService, kWebSocketTokenAccount, connection.websocketAuthToken);
+        [defaults removeObjectForKey:@"websocketToken"];
+    }
+    if ([defaults objectForKey:@"websocketEnabled"] != nil) {
+        connection.websocketEnabled = [defaults boolForKey:@"websocketEnabled"];
+    }
+    if ([defaults objectForKey:@"controllerEnabled"] != nil) {
+        connection.controllerEnabled = [defaults boolForKey:@"controllerEnabled"];
+    }
+    updateRuntimeConnectionConfig(connection);
+
+    RiskControlsSnapshot risk = captureRiskControlsSnapshot();
+    if ([defaults objectForKey:@"staleQuoteThresholdMs"] != nil) {
+        risk.staleQuoteThresholdMs = std::max(250, static_cast<int>([defaults integerForKey:@"staleQuoteThresholdMs"]));
+    }
+    if ([defaults objectForKey:@"maxOrderNotional"] != nil) {
+        risk.maxOrderNotional = std::max(100.0, [defaults doubleForKey:@"maxOrderNotional"]);
+    }
+    if ([defaults objectForKey:@"maxOpenNotional"] != nil) {
+        risk.maxOpenNotional = std::max(risk.maxOrderNotional, [defaults doubleForKey:@"maxOpenNotional"]);
+    }
+    updateRiskControls(risk.staleQuoteThresholdMs, risk.maxOrderNotional, risk.maxOpenNotional);
+
+    NSString* ensuredToken = ToNSString(ensureWebSocketAuthToken());
+    SaveKeychainString(kWebSocketTokenService, kWebSocketTokenAccount, ToStdString(ensuredToken));
+    [defaults removeObjectForKey:@"websocketToken"];
+}
+
+- (void)persistPreferences {
+    NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:ToNSString(_symbolInput) forKey:@"defaultSymbol"];
+    [defaults setInteger:_quantityInput forKey:@"quantityInput"];
+    [defaults setDouble:_priceBuffer forKey:@"priceBuffer"];
+    [defaults setDouble:_maxPositionDollars forKey:@"maxPositionDollars"];
+
+    const RuntimeConnectionConfig connection = captureRuntimeConnectionConfig();
+    [defaults setObject:ToNSString(connection.host) forKey:@"twsHost"];
+    [defaults setInteger:connection.port forKey:@"twsPort"];
+    [defaults setInteger:connection.clientId forKey:@"twsClientId"];
+    SaveKeychainString(kWebSocketTokenService, kWebSocketTokenAccount, connection.websocketAuthToken);
+    [defaults removeObjectForKey:@"websocketToken"];
+    [defaults setBool:connection.websocketEnabled forKey:@"websocketEnabled"];
+    [defaults setBool:connection.controllerEnabled forKey:@"controllerEnabled"];
+
+    const RiskControlsSnapshot risk = captureRiskControlsSnapshot();
+    [defaults setInteger:risk.staleQuoteThresholdMs forKey:@"staleQuoteThresholdMs"];
+    [defaults setDouble:risk.maxOrderNotional forKey:@"maxOrderNotional"];
+    [defaults setDouble:risk.maxOpenNotional forKey:@"maxOpenNotional"];
 }
 
 - (void)buildInterface {
@@ -506,6 +602,11 @@ void StylePanel(NSView* view) {
     [statusRow addArrangedSubview:_controllerLockLabel];
     [rootStack addArrangedSubview:statusRow];
     [statusRow.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
+
+    _recoveryBannerLabel = MakeLabel(@"", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor systemRedColor]);
+    _recoveryBannerLabel.hidden = YES;
+    [rootStack addArrangedSubview:_recoveryBannerLabel];
+    [_recoveryBannerLabel.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
 
     NSSplitView* bodySplit = [[NSSplitView alloc] initWithFrame:NSZeroRect];
     bodySplit.translatesAutoresizingMaskIntoConstraints = NO;
@@ -607,6 +708,12 @@ void StylePanel(NSView* view) {
     [leftStack addArrangedSubview:_pricePreviewLabel];
     [_pricePreviewLabel.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
+    _safetyStatusLabel = MakeLabel(@"Safety: quote waiting  |  controller disarmed  |  kill switch off",
+                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                   [NSColor secondaryLabelColor]);
+    [leftStack addArrangedSubview:_safetyStatusLabel];
+    [_safetyStatusLabel.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
+
     NSStackView* actionRow = MakeRowStack();
     _buyButton = MakeButton(@"Buy Limit", self, @selector(buyAction:));
     StyleTintedButton(_buyButton, [NSColor colorWithCalibratedRed:0.13 green:0.64 blue:0.32 alpha:1.0], [NSColor whiteColor]);
@@ -622,6 +729,19 @@ void StylePanel(NSView* view) {
     [actionRow addArrangedSubview:_cancelAllButton];
     [leftStack addArrangedSubview:actionRow];
     [actionRow.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
+
+    NSStackView* safetyRow = MakeRowStack();
+    _armControllerButton = MakeButton(@"Arm Controller", self, @selector(toggleControllerArmed:));
+    [_armControllerButton.widthAnchor constraintEqualToConstant:170.0].active = YES;
+    _killSwitchButton = MakeButton(@"Enable Kill Switch", self, @selector(toggleKillSwitch:));
+    [_killSwitchButton.widthAnchor constraintEqualToConstant:190.0].active = YES;
+    _settingsButton = MakeButton(@"Settings", self, @selector(openSettings:));
+    [_settingsButton.widthAnchor constraintEqualToConstant:120.0].active = YES;
+    [safetyRow addArrangedSubview:_armControllerButton];
+    [safetyRow addArrangedSubview:_killSwitchButton];
+    [safetyRow addArrangedSubview:_settingsButton];
+    [leftStack addArrangedSubview:safetyRow];
+    [safetyRow.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
     _controllerHintLabel = MakeLabel(@"Controller: Square buy  |  Circle close  |  Triangle cancel all  |  Cross toggle qty", [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium], [NSColor secondaryLabelColor]);
     [leftStack addArrangedSubview:_controllerHintLabel];
@@ -673,6 +793,16 @@ void StylePanel(NSView* view) {
     _tracePopup.action = @selector(traceSelectionChanged:);
     [rightStack addArrangedSubview:_tracePopup];
     [_tracePopup.widthAnchor constraintEqualToAnchor:rightStack.widthAnchor].active = YES;
+
+    NSStackView* exportRow = MakeRowStack();
+    _exportTraceButton = MakeButton(@"Export Trace", self, @selector(exportSelectedTrace:));
+    [_exportTraceButton.widthAnchor constraintEqualToConstant:150.0].active = YES;
+    _exportAllButton = MakeButton(@"Export All CSV", self, @selector(exportAllTracesSummary:));
+    [_exportAllButton.widthAnchor constraintEqualToConstant:150.0].active = YES;
+    [exportRow addArrangedSubview:_exportTraceButton];
+    [exportRow addArrangedSubview:_exportAllButton];
+    [rightStack addArrangedSubview:exportRow];
+    [exportRow.widthAnchor constraintEqualToAnchor:rightStack.widthAnchor].active = YES;
 
     _traceTextView = MakeReadOnlyTextView();
     NSScrollView* traceScrollView = MakeScrollView(_traceTextView, 320.0);
@@ -742,10 +872,6 @@ void StylePanel(NSView* view) {
     [NSApp terminate:nil];
 }
 
-- (EClientSocket*)client {
-    return _runtime ? _runtime->client() : nullptr;
-}
-
 - (void)scheduleRefresh {
     if (_shuttingDown) {
         return;
@@ -799,6 +925,7 @@ void StylePanel(NSView* view) {
     _priceBuffer = std::max(0.0, _bufferField.doubleValue);
     _maxPositionDollars = std::max(1000.0, _maxPositionField.doubleValue);
     syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
+    [self persistPreferences];
     [self updateInputFieldsFromState];
 }
 
@@ -814,16 +941,13 @@ void StylePanel(NSView* view) {
 - (void)subscribeAction:(id)sender {
     (void)sender;
     [self syncInputsFromFields];
-    const std::string requestedSymbol = toUpperCase(ToStdString(_symbolField.stringValue));
-    if (requestedSymbol.empty()) {
-        g_data.addMessage("Subscribe failed: Symbol cannot be empty");
-        [self scheduleRefresh];
-        return;
-    }
-
-    EClientSocket* client = [self client];
+    std::string requestedSymbol;
     std::string error;
-    if (!client || !requestSymbolSubscription(client, requestedSymbol, false, &error)) {
+    if (!requestSubscriptionAction(_runtime.get(),
+                                   ToStdString(_symbolField.stringValue),
+                                   false,
+                                   &requestedSymbol,
+                                   &error)) {
         g_data.addMessage("Subscribe failed: " + error);
         [self scheduleRefresh];
         return;
@@ -839,23 +963,45 @@ void StylePanel(NSView* view) {
 - (void)buyAction:(id)sender {
     (void)sender;
     [self syncInputsFromFields];
-    const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
-    [self submitBuyWithState:state source:"GUI Button" note:"Buy Limit button pressed" failurePrefix:"Buy failed: "];
+    const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
+    const TradingSubmitResult result = submitBuyAction(_runtime.get(),
+                                                       state,
+                                                       _subscribedSymbol,
+                                                       _quantityInput,
+                                                       _priceBuffer,
+                                                       "GUI Button",
+                                                       "Buy Limit button pressed");
+    if (!result.submitted && !result.error.empty()) {
+        g_data.addMessage("Buy failed: " + result.error);
+    }
+    if (result.traceId != 0) {
+        _selectedTraceId = result.traceId;
+    }
     [self scheduleRefresh];
 }
 
 - (void)closeAction:(id)sender {
     (void)sender;
     [self syncInputsFromFields];
-    const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
-    [self submitCloseWithState:state source:"GUI Button" note:"Close Long button pressed" failurePrefix:"Close failed: "];
+    const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
+    const TradingSubmitResult result = submitCloseAction(_runtime.get(),
+                                                         state,
+                                                         _subscribedSymbol,
+                                                         _priceBuffer,
+                                                         "GUI Button",
+                                                         "Close Long button pressed");
+    if (!result.submitted && !result.error.empty()) {
+        g_data.addMessage("Close failed: " + result.error);
+    }
+    if (result.traceId != 0) {
+        _selectedTraceId = result.traceId;
+    }
     [self scheduleRefresh];
 }
 
 - (void)cancelSelectedAction:(id)sender {
     (void)sender;
-    EClientSocket* client = [self client];
-    if (!client) {
+    if (!_runtime) {
         return;
     }
 
@@ -874,13 +1020,12 @@ void StylePanel(NSView* view) {
         }
     }];
 
-    const std::vector<OrderId> markedForCancel = markOrdersPendingCancel(selectedOrderIds);
-    const std::vector<bool> cancelSent = sendCancelRequests(client, markedForCancel);
-    for (std::size_t i = 0; i < markedForCancel.size(); ++i) {
-        if (cancelSent[i]) {
-            g_data.addMessage("Cancel request sent for order " + std::to_string(markedForCancel[i]));
+    const TradingCancelResult result = cancelSelectedOrdersAction(_runtime.get(), selectedOrderIds);
+    for (std::size_t i = 0; i < result.orderIds.size(); ++i) {
+        if (i < result.sent.size() && result.sent[i]) {
+            g_data.addMessage("Cancel request sent for order " + std::to_string(result.orderIds[i]));
         } else {
-            g_data.addMessage("Cancel failed (not connected) for order " + std::to_string(markedForCancel[i]));
+            g_data.addMessage("Cancel failed (not connected) for order " + std::to_string(result.orderIds[i]));
         }
     }
     [self scheduleRefresh];
@@ -888,24 +1033,200 @@ void StylePanel(NSView* view) {
 
 - (void)cancelAllAction:(id)sender {
     (void)sender;
-    EClientSocket* client = [self client];
-    if (!client) {
+    if (!_runtime) {
         return;
     }
 
-    const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
-    if (pendingOrders.empty()) {
+    NSAlert* confirm = [[NSAlert alloc] init];
+    confirm.messageText = @"Cancel All Orders?";
+    confirm.informativeText = @"This will send cancel requests for every working order.";
+    confirm.alertStyle = NSAlertStyleWarning;
+    [confirm addButtonWithTitle:@"Cancel All"];
+    [confirm addButtonWithTitle:@"Keep Orders"];
+    if ([confirm runModal] != NSAlertFirstButtonReturn) {
+        return;
+    }
+
+    const TradingCancelResult result = cancelAllOrdersAction(_runtime.get());
+    if (result.orderIds.empty()) {
         g_data.addMessage("No pending orders to cancel");
         [self scheduleRefresh];
         return;
     }
 
-    const std::vector<bool> cancelSent = sendCancelRequests(client, pendingOrders);
-    const int sentCount = static_cast<int>(std::count(cancelSent.begin(), cancelSent.end(), true));
-    if (sentCount != static_cast<int>(pendingOrders.size())) {
+    const int sentCount = static_cast<int>(std::count(result.sent.begin(), result.sent.end(), true));
+    if (sentCount != static_cast<int>(result.orderIds.size())) {
         g_data.addMessage("Some cancel requests could not be sent");
     }
     g_data.addMessage("Cancel requested for " + std::to_string(sentCount) + " order(s)");
+    [self scheduleRefresh];
+}
+
+- (void)toggleControllerArmed:(id)sender {
+    (void)sender;
+    const bool armed = !captureRiskControlsSnapshot().controllerArmed;
+    setControllerArmed(armed);
+    g_data.addMessage(armed ? "Controller trading armed" : "Controller trading disarmed");
+    [self scheduleRefresh];
+}
+
+- (void)toggleKillSwitch:(id)sender {
+    (void)sender;
+    const bool enabled = !captureRiskControlsSnapshot().tradingKillSwitch;
+    setTradingKillSwitch(enabled);
+    if (enabled) {
+        setControllerArmed(false);
+    }
+    g_data.addMessage(enabled ? "Kill switch enabled: trading halted" : "Kill switch disabled: trading may resume");
+    [self scheduleRefresh];
+}
+
+- (void)openSettings:(id)sender {
+    (void)sender;
+
+    const RuntimeConnectionConfig currentConnection = captureRuntimeConnectionConfig();
+    const RiskControlsSnapshot currentRisk = captureRiskControlsSnapshot();
+
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.messageText = @"Trading Settings";
+    alert.informativeText = @"Connection changes apply on next launch. Risk and WebSocket token changes apply immediately.";
+    [alert addButtonWithTitle:@"Save"];
+    [alert addButtonWithTitle:@"Cancel"];
+
+    NSStackView* accessory = MakeColumnStack();
+    accessory.spacing = 10.0;
+    accessory.translatesAutoresizingMaskIntoConstraints = NO;
+
+    auto addRow = ^(NSString* title, NSTextField* field) {
+        NSStackView* row = MakeRowStack();
+        NSTextField* label = MakeLabel(title, [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]);
+        [label.widthAnchor constraintEqualToConstant:170.0].active = YES;
+        [row addArrangedSubview:label];
+        [row addArrangedSubview:field];
+        [accessory addArrangedSubview:row];
+        [row.widthAnchor constraintEqualToAnchor:accessory.widthAnchor].active = YES;
+    };
+
+    NSTextField* hostField = MakeInputField(ToNSString(currentConnection.host), 250.0, nil, nil, nil);
+    NSTextField* portField = MakeInputField([NSString stringWithFormat:@"%d", currentConnection.port], 90.0, nil, nil, nil);
+    NSTextField* clientIdField = MakeInputField([NSString stringWithFormat:@"%d", currentConnection.clientId], 90.0, nil, nil, nil);
+    NSTextField* tokenField = MakeInputField(ToNSString(currentConnection.websocketAuthToken), 300.0, nil, nil, nil);
+    NSTextField* staleQuoteField = MakeInputField([NSString stringWithFormat:@"%d", currentRisk.staleQuoteThresholdMs], 90.0, nil, nil, nil);
+    NSTextField* maxOrderField = MakeInputField([NSString stringWithFormat:@"%.0f", currentRisk.maxOrderNotional], 110.0, nil, nil, nil);
+    NSTextField* maxOpenField = MakeInputField([NSString stringWithFormat:@"%.0f", currentRisk.maxOpenNotional], 110.0, nil, nil, nil);
+    NSButton* websocketCheckbox = [NSButton checkboxWithTitle:@"Enable localhost WebSocket automation" target:nil action:nil];
+    websocketCheckbox.state = currentConnection.websocketEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    NSButton* controllerCheckbox = [NSButton checkboxWithTitle:@"Enable controller input" target:nil action:nil];
+    controllerCheckbox.state = currentConnection.controllerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+
+    addRow(@"TWS Host", hostField);
+    addRow(@"TWS Port", portField);
+    addRow(@"TWS Client ID", clientIdField);
+    addRow(@"WebSocket Token", tokenField);
+    addRow(@"Stale Quote (ms)", staleQuoteField);
+    addRow(@"Max Order Notional", maxOrderField);
+    addRow(@"Max Open Notional", maxOpenField);
+    [accessory addArrangedSubview:websocketCheckbox];
+    [accessory addArrangedSubview:controllerCheckbox];
+    [accessory.widthAnchor constraintEqualToConstant:520.0].active = YES;
+
+    alert.accessoryView = accessory;
+
+    if ([alert runModal] != NSAlertFirstButtonReturn) {
+        return;
+    }
+
+    RuntimeConnectionConfig updatedConnection = currentConnection;
+    updatedConnection.host = ToStdString(hostField.stringValue);
+    updatedConnection.port = std::max(1, portField.intValue);
+    updatedConnection.clientId = std::max(1, clientIdField.intValue);
+    updatedConnection.websocketAuthToken = ToStdString(tokenField.stringValue);
+    updatedConnection.websocketEnabled = (websocketCheckbox.state == NSControlStateValueOn);
+    updatedConnection.controllerEnabled = (controllerCheckbox.state == NSControlStateValueOn);
+
+    updateRuntimeConnectionConfig(updatedConnection);
+    const std::string ensuredToken = ensureWebSocketAuthToken();
+    updatedConnection.websocketAuthToken = ensuredToken;
+    updateRuntimeConnectionConfig(updatedConnection);
+
+    updateRiskControls(std::max(250, staleQuoteField.intValue),
+                       std::max(100.0, maxOrderField.doubleValue),
+                       std::max(maxOrderField.doubleValue, maxOpenField.doubleValue));
+
+    [self persistPreferences];
+    g_data.addMessage("Settings saved");
+    if (updatedConnection.host != currentConnection.host ||
+        updatedConnection.port != currentConnection.port ||
+        updatedConnection.clientId != currentConnection.clientId ||
+        updatedConnection.websocketEnabled != currentConnection.websocketEnabled ||
+        updatedConnection.controllerEnabled != currentConnection.controllerEnabled) {
+        g_data.addMessage("Restart the app to apply new connection/device settings");
+    }
+    [self scheduleRefresh];
+}
+
+- (void)exportSelectedTrace:(id)sender {
+    (void)sender;
+    if (_selectedTraceId == 0) {
+        ShowAlert(self.window, @"No Trace Selected", @"Select a trade trace before exporting.", NSAlertStyleWarning);
+        return;
+    }
+
+    TraceExportBundle bundle;
+    std::string error;
+    if (!buildTraceExportBundle(_selectedTraceId, &bundle, &error)) {
+        ShowAlert(self.window, @"Export Failed", ToNSString(error), NSAlertStyleCritical);
+        return;
+    }
+
+    NSOpenPanel* panel = [NSOpenPanel openPanel];
+    panel.canChooseDirectories = YES;
+    panel.canChooseFiles = NO;
+    panel.canCreateDirectories = YES;
+    panel.prompt = @"Export";
+    panel.message = @"Choose a folder for the selected trace export.";
+    if ([panel runModal] != NSModalResponseOK) {
+        return;
+    }
+
+    NSURL* directoryURL = panel.URL;
+    NSError* writeError = nil;
+    const std::string base = bundle.baseName;
+    const bool wroteReport = WriteStringToURL(bundle.reportText,
+        [directoryURL URLByAppendingPathComponent:ToNSString(base + "-report.txt")], &writeError);
+    const bool wroteSummary = wroteReport && WriteStringToURL(bundle.summaryCsv,
+        [directoryURL URLByAppendingPathComponent:ToNSString(base + "-summary.csv")], &writeError);
+    const bool wroteFills = wroteSummary && WriteStringToURL(bundle.fillsCsv,
+        [directoryURL URLByAppendingPathComponent:ToNSString(base + "-fills.csv")], &writeError);
+    const bool wroteTimeline = wroteFills && WriteStringToURL(bundle.timelineCsv,
+        [directoryURL URLByAppendingPathComponent:ToNSString(base + "-timeline.csv")], &writeError);
+
+    if (!wroteTimeline) {
+        ShowAlert(self.window, @"Export Failed", writeError.localizedDescription ?: @"Failed to write export files.", NSAlertStyleCritical);
+        return;
+    }
+
+    g_data.addMessage("Exported trace bundle to " + ToStdString(directoryURL.path));
+    [self scheduleRefresh];
+}
+
+- (void)exportAllTracesSummary:(id)sender {
+    (void)sender;
+    NSSavePanel* panel = [NSSavePanel savePanel];
+    panel.nameFieldStringValue = @"all-trades-summary.csv";
+    panel.prompt = @"Save CSV";
+    if ([panel runModal] != NSModalResponseOK) {
+        return;
+    }
+
+    NSError* writeError = nil;
+    const std::string csv = buildAllTradesSummaryCsv();
+    if (!WriteStringToURL(csv, panel.URL, &writeError)) {
+        ShowAlert(self.window, @"Export Failed", writeError.localizedDescription ?: @"Failed to save CSV.", NSAlertStyleCritical);
+        return;
+    }
+
+    g_data.addMessage("Exported trade summary CSV to " + ToStdString(panel.URL.path));
     [self scheduleRefresh];
 }
 
@@ -922,150 +1243,70 @@ void StylePanel(NSView* view) {
         return;
     }
 
-    const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
-    EClientSocket* client = [self client];
-
-    switch (action) {
-        case TradingRuntimeControllerAction::Buy:
-            [self submitBuyWithState:state
-                              source:"Controller"
-                                note:"Controller Square button"
-                       failurePrefix:"[Controller] Buy failed: "];
-            break;
-        case TradingRuntimeControllerAction::Close:
-            [self submitCloseWithState:state
-                                source:"Controller"
-                                  note:"Controller Circle button"
-                         failurePrefix:"[Controller] Close failed: "];
-            break;
-        case TradingRuntimeControllerAction::CancelAll: {
-            if (!client) {
-                break;
-            }
-
-            const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
-            if (!pendingOrders.empty()) {
-                const std::vector<bool> cancelSent = sendCancelRequests(client, pendingOrders);
-                const int sentCount = static_cast<int>(std::count(cancelSent.begin(), cancelSent.end(), true));
-                if (sentCount != static_cast<int>(pendingOrders.size())) {
-                    g_data.addMessage("[Controller] Some cancel requests could not be sent");
-                }
-                g_data.addMessage("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
-            } else {
-                g_data.addMessage("[Controller] No pending orders to cancel");
-            }
-            break;
-        }
-        case TradingRuntimeControllerAction::ToggleQuantity:
-            if (state.canTrade && _subscribed) {
-                _quantityInput = (_quantityInput == 1) ? state.maxToggleQuantity : 1;
-                syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
-                [self updateInputFieldsFromState];
-                g_data.addMessage("[Controller] Quantity toggled to " + std::to_string(_quantityInput) + " shares");
-            }
-            break;
+    const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
+    const TradingControllerActionResult result = handleControllerActionIntent(_runtime.get(),
+                                                                              action,
+                                                                              state,
+                                                                              _subscribedSymbol,
+                                                                              _quantityInput,
+                                                                              _priceBuffer,
+                                                                              _maxPositionDollars);
+    if (result.quantityChanged) {
+        _quantityInput = result.quantityInput;
+        [self updateInputFieldsFromState];
+    }
+    if (result.traceId != 0) {
+        _selectedTraceId = result.traceId;
+    }
+    for (const auto& message : result.messages) {
+        g_data.addMessage(message);
     }
 
     [self scheduleRefresh];
 }
 
-- (void)submitBuyWithState:(const PanelDerivedState&)state
-                    source:(const std::string&)source
-                      note:(const std::string&)note
-             failurePrefix:(const std::string&)failurePrefix {
-    EClientSocket* client = [self client];
-    if (!client || !state.canBuy) {
-        return;
-    }
-
-    std::string error;
-    std::uint64_t traceId = 0;
-    SubmitIntent intent = captureSubmitIntent(source, _subscribedSymbol, "BUY",
-                                              _quantityInput, state.buyPrice, false,
-                                              _priceBuffer,
-                                              state.buySweepAvailable ? state.buyPrice : 0.0,
-                                              note);
-
-    if (!submitLimitOrder(client, _subscribedSymbol, "BUY",
-                          static_cast<double>(_quantityInput), state.buyPrice,
-                          false, &intent, &error, nullptr, &traceId)) {
-        g_data.addMessage(failurePrefix + error);
-    }
-
-    if (traceId != 0) {
-        _selectedTraceId = traceId;
-    }
-}
-
-- (void)submitCloseWithState:(const PanelDerivedState&)state
-                      source:(const std::string&)source
-                        note:(const std::string&)note
-               failurePrefix:(const std::string&)failurePrefix {
-    EClientSocket* client = [self client];
-    if (!client || !state.canClosePosition) {
-        return;
-    }
-
-    std::string error;
-    std::uint64_t traceId = 0;
-    SubmitIntent intent = captureSubmitIntent(source, _subscribedSymbol, "SELL",
-                                              toShareCount(state.symbol.availableLongToClose),
-                                              state.sellPrice, true,
-                                              _priceBuffer,
-                                              state.sellSweepAvailable ? state.sellPrice : 0.0,
-                                              note);
-
-    if (!submitLimitOrder(client, _subscribedSymbol, "SELL",
-                          state.symbol.availableLongToClose, state.sellPrice,
-                          true, &intent, &error, nullptr, &traceId)) {
-        g_data.addMessage(failurePrefix + error);
-    }
-
-    if (traceId != 0) {
-        _selectedTraceId = traceId;
-    }
-}
-
 - (void)refreshInterface {
-    std::string syncedSymbolInput = _symbolInput;
-    std::string syncedSubscribedSymbol = _subscribedSymbol;
-    bool syncedSubscribed = _subscribed;
-    int syncedQuantity = _quantityInput;
-    consumeGuiSyncUpdates(syncedSymbolInput, syncedSubscribedSymbol, syncedSubscribed, syncedQuantity);
-    if (syncedSymbolInput != _symbolInput ||
-        syncedSubscribedSymbol != _subscribedSymbol ||
-        syncedSubscribed != _subscribed ||
-        syncedQuantity != _quantityInput) {
-        _symbolInput = syncedSymbolInput;
-        _subscribedSymbol = syncedSubscribedSymbol;
-        _subscribed = syncedSubscribed;
-        _quantityInput = syncedQuantity;
-        [self updateInputFieldsFromState];
-    }
+    TradingViewModelInput input;
+    input.symbolInput = _symbolInput;
+    input.subscribedSymbol = _subscribedSymbol;
+    input.subscribed = _subscribed;
+    input.quantityInput = _quantityInput;
+    input.priceBuffer = _priceBuffer;
+    input.maxPositionDollars = _maxPositionDollars;
+    input.selectedTraceId = _selectedTraceId;
+    input.messagesVersionSeen = _messagesVersionSeen;
+    input.messagesText = _messagesText;
+    const TradingViewModel model = buildTradingViewModel(input);
 
-    if (_selectedTraceId == 0) {
-        _selectedTraceId = latestTradeTraceId();
-    }
+    _symbolInput = model.symbolInput;
+    _subscribedSymbol = model.subscribedSymbol;
+    _subscribed = model.subscribed;
+    _quantityInput = model.quantityInput;
+    _selectedTraceId = model.selectedTraceId;
+    _messagesVersionSeen = model.messagesVersionSeen;
+    _messagesText = model.messagesText;
+    _ordersSnapshot = model.orders;
+    _traceItems = model.traceItems;
+    _traceItemsFromReplayLog = model.traceItemsFromReplayLog;
+    [self updateInputFieldsFromState];
 
-    const PanelDerivedState state = BuildPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
     if (_runtime) {
-        const bool shouldVibrate = state.symbol.hasPosition && state.symbol.currentPositionQty != 0.0;
-        _runtime->setControllerVibration(shouldVibrate);
+        _runtime->setControllerVibration(model.shouldVibrate);
     }
-    [self refreshStatusLabels:state];
-    [self refreshMarketSection:state];
+    [self refreshStatusLabels:model.panel];
+    [self refreshMarketSection:model.panel];
     [self refreshOrders];
     [self refreshTracePopup];
     [self refreshTraceDetails];
     [self refreshMessages];
 }
 
-- (void)refreshStatusLabels:(const PanelDerivedState&)state {
+- (void)refreshStatusLabels:(const TradingPanelState&)state {
     if (state.status.connected && state.status.sessionReady) {
         _twsStatusLabel.stringValue = @"TWS: Ready";
         _twsStatusLabel.textColor = [NSColor systemGreenColor];
     } else if (state.status.connected) {
-        _twsStatusLabel.stringValue = @"TWS: Connected (initializing)";
+        _twsStatusLabel.stringValue = [NSString stringWithFormat:@"TWS: %@", ToNSString(state.status.sessionStateText)];
         _twsStatusLabel.textColor = [NSColor systemOrangeColor];
     } else {
         _twsStatusLabel.stringValue = @"TWS: Disconnected";
@@ -1074,7 +1315,10 @@ void StylePanel(NSView* view) {
 
     _accountStatusLabel.stringValue = [NSString stringWithFormat:@"Account: %@", ToNSString(state.status.accountText)];
 
-    if (state.status.wsServerRunning) {
+    if (!state.status.websocketEnabled) {
+        _websocketStatusLabel.stringValue = @"WS: Disabled";
+        _websocketStatusLabel.textColor = [NSColor secondaryLabelColor];
+    } else if (state.status.wsServerRunning) {
         _websocketStatusLabel.stringValue = [NSString stringWithFormat:@"WS: localhost:%d (%d clients)", WEBSOCKET_PORT, state.status.wsConnectedClients];
         _websocketStatusLabel.textColor = [NSColor systemGreenColor];
     } else {
@@ -1082,7 +1326,10 @@ void StylePanel(NSView* view) {
         _websocketStatusLabel.textColor = [NSColor systemRedColor];
     }
 
-    if (state.status.controllerConnected) {
+    if (!state.status.controllerEnabled) {
+        _controllerStatusLabel.stringValue = @"Controller: Disabled";
+        _controllerStatusLabel.textColor = [NSColor secondaryLabelColor];
+    } else if (state.status.controllerConnected) {
         const std::string label = state.status.controllerDeviceName.empty()
             ? std::string("Connected")
             : state.status.controllerDeviceName;
@@ -1100,9 +1347,32 @@ void StylePanel(NSView* view) {
         _controllerLockLabel.stringValue = @"Controller Lock: Waiting to lock";
         _controllerLockLabel.textColor = [NSColor secondaryLabelColor];
     }
+
+    _armControllerButton.title = state.status.controllerArmed ? @"Disarm Controller" : @"Arm Controller";
+    SetButtonEnabledTint(_armControllerButton,
+                         state.status.controllerEnabled && state.status.controllerConnected,
+                         state.status.controllerArmed ? [NSColor systemOrangeColor] : [NSColor systemBlueColor],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+
+    _killSwitchButton.title = state.status.tradingKillSwitch ? @"Disable Kill Switch" : @"Enable Kill Switch";
+    SetButtonEnabledTint(_killSwitchButton,
+                         true,
+                         state.status.tradingKillSwitch ? [NSColor systemRedColor] : [NSColor colorWithCalibratedRed:0.40 green:0.40 blue:0.40 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+
+    StyleTintedButton(_settingsButton, [NSColor colorWithCalibratedRed:0.25 green:0.45 blue:0.70 alpha:1.0], [NSColor whiteColor]);
+
+    if (!state.status.startupRecoveryBanner.empty()) {
+        _recoveryBannerLabel.hidden = NO;
+        _recoveryBannerLabel.stringValue = ToNSString(state.status.startupRecoveryBanner);
+        _recoveryBannerLabel.textColor = [NSColor systemRedColor];
+    } else {
+        _recoveryBannerLabel.hidden = YES;
+        _recoveryBannerLabel.stringValue = @"";
+    }
 }
 
-- (void)refreshMarketSection:(const PanelDerivedState&)state {
+- (void)refreshMarketSection:(const TradingPanelState&)state {
     if (_subscribed && !_subscribedSymbol.empty()) {
         _marketHeaderLabel.stringValue = [NSString stringWithFormat:@"Market Data: %@", ToNSString(_subscribedSymbol)];
     } else {
@@ -1149,10 +1419,36 @@ void StylePanel(NSView* view) {
         ? [NSString stringWithFormat:@"sell %@ (sweep-%.2f)", FormatPrice(state.sellPrice), _priceBuffer]
         : [NSString stringWithFormat:@"sell %@ (bid-%.2f)", FormatPrice(state.sellPrice), _priceBuffer];
     _pricePreviewLabel.stringValue = [NSString stringWithFormat:@"Prices: %@  |  %@", buySegment, sellSegment];
+    NSString* quoteSegment = state.symbol.quoteAgeMs >= 0.0
+        ? [NSString stringWithFormat:@"quote %.0f ms", state.symbol.quoteAgeMs]
+        : @"quote waiting";
+    NSString* armSegment = state.status.controllerArmed ? @"controller armed" : @"controller disarmed";
+    NSString* killSegment = state.status.tradingKillSwitch ? @"kill switch ON" : @"kill switch off";
+    NSString* exposureSegment = [NSString stringWithFormat:@"open $%.0f / cap $%.0f",
+                                 state.projectedOpenNotional,
+                                 state.risk.maxOpenNotional];
+    _safetyStatusLabel.stringValue = [NSString stringWithFormat:@"Safety: %@  |  %@  |  %@  |  %@",
+                                      quoteSegment, armSegment, killSegment, exposureSegment];
+    if (state.status.tradingKillSwitch) {
+        _safetyStatusLabel.textColor = [NSColor systemRedColor];
+    } else if (!state.symbol.hasFreshQuote) {
+        _safetyStatusLabel.textColor = [NSColor systemOrangeColor];
+    } else {
+        _safetyStatusLabel.textColor = [NSColor secondaryLabelColor];
+    }
 
-    _buyButton.enabled = state.canBuy;
-    _closeButton.enabled = state.canClosePosition;
-    _cancelAllButton.enabled = state.hasCancelableOrders;
+    SetButtonEnabledTint(_buyButton,
+                         state.canBuy,
+                         [NSColor colorWithCalibratedRed:0.13 green:0.64 blue:0.32 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+    SetButtonEnabledTint(_closeButton,
+                         state.canClosePosition,
+                         [NSColor colorWithCalibratedRed:0.96 green:0.60 blue:0.18 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+    SetButtonEnabledTint(_cancelAllButton,
+                         state.hasCancelableOrders,
+                         [NSColor colorWithCalibratedRed:0.90 green:0.27 blue:0.22 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
 
     if (state.buyPrice > 0.0) {
         _buyButton.title = [NSString stringWithFormat:@"Buy Limit @ %.2f", state.buyPrice];
@@ -1168,47 +1464,49 @@ void StylePanel(NSView* view) {
     } else {
         _closeButton.title = @"Close Long";
     }
+
+    if (!state.status.controllerEnabled) {
+        _controllerHintLabel.stringValue = @"Controller input is disabled in Settings.";
+    } else {
+        _controllerHintLabel.stringValue = @"Controller: Square buy  |  Circle close  |  Triangle cancel all  |  Cross toggle qty";
+    }
 }
 
 - (void)refreshOrders {
-    _ordersSnapshot = captureOrdersSnapshot();
     [_ordersTable reloadData];
-    _cancelSelectedButton.enabled = (_ordersTable.numberOfSelectedRows > 0);
+    SetButtonEnabledTint(_cancelSelectedButton,
+                         (_ordersTable.numberOfSelectedRows > 0),
+                         [NSColor colorWithCalibratedRed:0.90 green:0.27 blue:0.22 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
 }
 
 - (void)refreshTracePopup {
-    const std::vector<TradeTraceListItem> newItems = captureTradeTraceListItems(150);
-    if (!newItems.empty() && _selectedTraceId == 0) {
-        _selectedTraceId = newItems.front().traceId;
+    if (!_traceItems.empty() && _selectedTraceId == 0) {
+        _selectedTraceId = _traceItems.front().traceId;
     }
 
-    if (!TraceItemsEqual(_traceItems, newItems)) {
-        _traceItems = newItems;
+    if (_traceItems.empty()) {
         [_tracePopup removeAllItems];
-        if (_traceItems.empty()) {
-            [_tracePopup addItemWithTitle:@"No trade trace yet"];
-            _tracePopup.enabled = NO;
-            return;
-        }
+        [_tracePopup addItemWithTitle:@"No trade trace yet"];
+        _tracePopup.enabled = NO;
+        _exportTraceButton.enabled = NO;
+        _exportAllButton.enabled = NO;
+        return;
+    }
 
-        _tracePopup.enabled = YES;
-        NSInteger selectedIndex = 0;
-        for (std::size_t i = 0; i < _traceItems.size(); ++i) {
-            [_tracePopup addItemWithTitle:ToNSString(_traceItems[i].summary)];
-            if (_traceItems[i].traceId == _selectedTraceId) {
-                selectedIndex = static_cast<NSInteger>(i);
-            }
-        }
-        [_tracePopup selectItemAtIndex:selectedIndex];
-        _selectedTraceId = _traceItems[static_cast<std::size_t>(selectedIndex)].traceId;
-    } else if (!_traceItems.empty()) {
-        for (std::size_t i = 0; i < _traceItems.size(); ++i) {
-            if (_traceItems[i].traceId == _selectedTraceId) {
-                [_tracePopup selectItemAtIndex:static_cast<NSInteger>(i)];
-                break;
-            }
+    [_tracePopup removeAllItems];
+    _tracePopup.enabled = YES;
+    NSInteger selectedIndex = 0;
+    for (std::size_t i = 0; i < _traceItems.size(); ++i) {
+        [_tracePopup addItemWithTitle:ToNSString(_traceItems[i].summary)];
+        if (_traceItems[i].traceId == _selectedTraceId) {
+            selectedIndex = static_cast<NSInteger>(i);
         }
     }
+    [_tracePopup selectItemAtIndex:selectedIndex];
+    _selectedTraceId = _traceItems[static_cast<std::size_t>(selectedIndex)].traceId;
+    _exportTraceButton.enabled = (_selectedTraceId != 0 && !_traceItems.empty());
+    _exportAllButton.enabled = !_traceItems.empty();
 }
 
 - (void)refreshTraceDetails {
@@ -1221,7 +1519,15 @@ void StylePanel(NSView* view) {
         _selectedTraceId = _traceItems.front().traceId;
     }
 
-    const TradeTraceSnapshot snapshot = captureTradeTraceSnapshot(_selectedTraceId);
+    TradeTraceSnapshot snapshot = captureTradeTraceSnapshot(_selectedTraceId);
+    if (!snapshot.found) {
+        std::string replayError;
+        replayTradeTraceSnapshotFromLog(_selectedTraceId, &snapshot, &replayError);
+        if (!snapshot.found && _traceItemsFromReplayLog) {
+            _traceTextView.string = ToNSString(replayError.empty() ? "Replay trace not available." : replayError);
+            return;
+        }
+    }
     _traceTextView.string = ToNSString(FormatTraceDetails(snapshot));
 }
 

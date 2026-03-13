@@ -96,6 +96,7 @@ inline constexpr int MARKET_DEPTH_NUM_ROWS = 20;
 inline constexpr int WEBSOCKET_PORT = 8080;
 inline constexpr const char* WEBSOCKET_HOST = "127.0.0.1"; // localhost only
 inline constexpr const char* TRADE_TRACE_LOG_FILENAME = "trade_trace_events.jsonl";
+inline constexpr const char* RUNTIME_JOURNAL_LOG_FILENAME = "trade_runtime_journal.jsonl";
 
 using UiInvalidationCallback = std::function<void()>;
 
@@ -183,6 +184,14 @@ struct FillSlice {
     std::string commissionCurrency;
 };
 
+enum class RuntimeSessionState {
+    Disconnected,
+    Connecting,
+    SocketConnected,
+    Reconciling,
+    SessionReady
+};
+
 struct SubmitIntent {
     std::string source;
     std::string symbol;
@@ -256,6 +265,7 @@ struct SharedData {
 
     bool connected = false;
     bool sessionReady = false;
+    RuntimeSessionState sessionState = RuntimeSessionState::Disconnected;
     std::string managedAccounts;
     std::string selectedAccount;
 
@@ -276,6 +286,21 @@ struct SharedData {
     int currentQuantity = 1;
     double priceBuffer = 0.01;
     double maxPositionDollars = 40000.0;
+    double maxOrderNotional = 15000.0;
+    double maxOpenNotional = 50000.0;
+    int staleQuoteThresholdMs = 1500;
+    bool controllerArmed = false;
+    bool tradingKillSwitch = false;
+
+    std::string twsHost = DEFAULT_HOST;
+    int twsPort = DEFAULT_PORT;
+    int twsClientId = DEFAULT_CLIENT_ID;
+    std::string websocketAuthToken;
+    bool websocketEnabled = true;
+    bool controllerEnabled = true;
+    std::string appSessionId;
+    std::string runtimeSessionId;
+    std::string startupRecoveryBanner;
 
     std::string pendingSubscribeSymbol;
     bool hasPendingSubscribe = false;
@@ -284,12 +309,15 @@ struct SharedData {
 
     std::string lastWsRequestedSymbol;
     std::chrono::steady_clock::time_point lastWsSubscribeRequest{};
+    std::map<std::string, std::chrono::steady_clock::time_point> recentWsIdempotencyKeys;
+    std::deque<std::chrono::steady_clock::time_point> recentWsOrderTimestamps;
 
     std::atomic<OrderId> nextOrderId{0};
     std::map<OrderId, OrderInfo> orders;
 
     std::map<std::string, PositionInfo> positions;
     bool positionsLoaded = false;
+    bool executionsLoaded = false;
 
     std::atomic<bool> wsServerRunning{false};
     std::atomic<int> wsConnectedClients{0};
@@ -297,6 +325,9 @@ struct SharedData {
     std::atomic<bool> controllerConnected{false};
     std::string controllerDeviceName;
     std::string controllerLockedDeviceName;
+    std::chrono::steady_clock::time_point lastQuoteUpdate{};
+    std::string lastSubmitFingerprint;
+    std::chrono::steady_clock::time_point lastSubmitTime{};
 
     std::deque<std::string> messages;
     std::string messagesCache;
@@ -346,30 +377,61 @@ struct SharedData {
     }
 };
 
-extern SharedData g_data;
+SharedData& appState();
+void bindSharedDataOwner(SharedData* owner);
+void unbindSharedDataOwner(SharedData* owner);
+
+#define g_data appState()
 
 struct UiStatusSnapshot {
     bool connected = false;
     bool sessionReady = false;
     bool wsServerRunning = false;
+    bool websocketEnabled = true;
     bool controllerConnected = false;
+    bool controllerEnabled = true;
+    bool controllerArmed = false;
+    bool tradingKillSwitch = false;
     int wsConnectedClients = 0;
+    std::string sessionStateText;
     std::string accountText;
     std::string controllerDeviceName;
     std::string controllerLockedDeviceName;
+    std::string websocketAuthToken;
+    std::string startupRecoveryBanner;
 };
 
 struct SymbolUiSnapshot {
     bool canTrade = false;
     bool hasPosition = false;
+    bool hasFreshQuote = false;
     double bidPrice = 0.0;
     double askPrice = 0.0;
     double lastPrice = 0.0;
     double currentPositionQty = 0.0;
     double currentPositionAvgCost = 0.0;
     double availableLongToClose = 0.0;
+    double quoteAgeMs = -1.0;
+    double openBuyExposure = 0.0;
     std::vector<BookLevel> askBook;
     std::vector<BookLevel> bidBook;
+};
+
+struct RuntimeConnectionConfig {
+    std::string host = DEFAULT_HOST;
+    int port = DEFAULT_PORT;
+    int clientId = DEFAULT_CLIENT_ID;
+    std::string websocketAuthToken;
+    bool websocketEnabled = true;
+    bool controllerEnabled = true;
+};
+
+struct RiskControlsSnapshot {
+    int staleQuoteThresholdMs = 1500;
+    double maxOrderNotional = 15000.0;
+    double maxOpenNotional = 50000.0;
+    bool controllerArmed = false;
+    bool tradingKillSwitch = false;
 };
 
 struct TradeTraceListItem {
@@ -385,8 +447,19 @@ struct TradeTraceSnapshot {
     TradeTrace trace;
 };
 
+struct RuntimeRecoverySnapshot {
+    bool priorSessionAbnormal = false;
+    std::string priorAppSessionId;
+    std::string priorRuntimeSessionId;
+    int unfinishedTraceCount = 0;
+    std::vector<std::string> unfinishedTraceSummaries;
+    std::string bannerText;
+};
+
 std::string chooseConfiguredAccount(const std::string& accountsCsv);
 std::string makePositionKey(const std::string& account, const std::string& symbol);
+std::string runtimeSessionStateToString(RuntimeSessionState state);
+void setRuntimeSessionState(RuntimeSessionState state);
 int allocateReqId();
 int toShareCount(double qty);
 bool isTerminalStatus(const std::string& status);
@@ -396,6 +469,17 @@ UiStatusSnapshot captureUiStatusSnapshot();
 void consumeGuiSyncUpdates(std::string& symbolInput, std::string& subscribedSymbol, bool& subscribed, int& quantityInput);
 void syncSharedGuiInputs(int quantityInput, double priceBuffer, double maxPositionDollars);
 SymbolUiSnapshot captureSymbolUiSnapshot(const std::string& subscribedSymbol);
+RuntimeConnectionConfig captureRuntimeConnectionConfig();
+void updateRuntimeConnectionConfig(const RuntimeConnectionConfig& config);
+RiskControlsSnapshot captureRiskControlsSnapshot();
+void updateRiskControls(int staleQuoteThresholdMs, double maxOrderNotional, double maxOpenNotional);
+void setControllerArmed(bool armed);
+void setTradingKillSwitch(bool enabled);
+std::string ensureWebSocketAuthToken();
+bool consumeWebSocketOrderRateLimit(std::string* error = nullptr);
+bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error = nullptr);
+double calculateOpenBuyExposureUnlocked(const std::string& account);
+double calculatePositionMarketValueUnlocked(const std::string& account, const std::string& symbol);
 std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot();
 std::vector<OrderId> markOrdersPendingCancel(const std::vector<OrderId>& orderIds);
 std::vector<OrderId> markAllPendingOrdersForCancel();
@@ -471,3 +555,7 @@ std::uint64_t latestTradeTraceId();
 std::vector<TradeTraceListItem> captureTradeTraceListItems(std::size_t maxItems = 100);
 TradeTraceSnapshot captureTradeTraceSnapshot(std::uint64_t traceId);
 void appendTradeTraceLogLine(const json& line);
+void appendRuntimeJournalLine(const json& line);
+void appendRuntimeJournalEvent(const std::string& event, const json& details = {});
+std::vector<std::string> recoverUnfinishedTraceSummariesFromLog(std::size_t maxItems = 20);
+RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems = 20);

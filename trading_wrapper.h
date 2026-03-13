@@ -10,11 +10,17 @@ public:
     void setClient(EClientSocket* client) { m_client = client; }
 
     void connectAck() override {
+        std::string host;
+        int port = DEFAULT_PORT;
         {
             std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
             g_data.connected = true;
             g_data.sessionReady = false;
+            g_data.sessionState = RuntimeSessionState::SocketConnected;
+            host = g_data.twsHost;
+            port = g_data.twsPort;
         }
+        appendRuntimeJournalEvent("tws_connect_ack", {{"host", host}, {"port", port}});
         g_data.addMessage("Connected to TWS (awaiting nextValidId)");
         std::cout << "[Connected to TWS]" << std::endl;
         requestUiInvalidation();
@@ -25,10 +31,13 @@ public:
             std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
             g_data.connected = false;
             g_data.sessionReady = false;
+            g_data.sessionState = RuntimeSessionState::Disconnected;
             g_data.nextOrderId.store(0, std::memory_order_relaxed);
             g_data.activeMktDataReqId = 0;
             g_data.activeDepthReqId = 0;
             g_data.depthSubscribed = false;
+            g_data.positionsLoaded = false;
+            g_data.executionsLoaded = false;
             g_data.bidPrice = 0.0;
             g_data.askPrice = 0.0;
             g_data.lastPrice = 0.0;
@@ -37,6 +46,7 @@ public:
             g_data.pendingWSQuantityCalc = false;
             g_data.wsQuantityUpdated = false;
         }
+        appendRuntimeJournalEvent("tws_connection_closed");
         g_data.addMessage("Disconnected from TWS");
         std::cout << "[Disconnected from TWS]" << std::endl;
         requestUiInvalidation();
@@ -46,9 +56,13 @@ public:
         {
             std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
             g_data.connected = true;
-            g_data.sessionReady = true;
+            g_data.sessionReady = false;
+            g_data.sessionState = RuntimeSessionState::Reconciling;
+            g_data.positionsLoaded = false;
+            g_data.executionsLoaded = false;
             g_data.nextOrderId.store(orderId, std::memory_order_relaxed);
         }
+        appendRuntimeJournalEvent("tws_session_ready", {{"nextOrderId", static_cast<long long>(orderId)}});
 
         g_data.addMessage("Next valid order ID: " + std::to_string(orderId));
         std::cout << "[Next valid order ID: " << orderId << "]" << std::endl;
@@ -59,20 +73,24 @@ public:
                 if (m_client->isConnected()) {
                     m_client->reqPositions();
                     m_client->reqOpenOrders();
+                    ExecutionFilter executionFilter;
+                    m_client->reqExecutions(allocateReqId(), executionFilter);
                 }
             }
-            g_data.addMessage("Requested positions and open orders...");
-            std::cout << "[Requested positions and open orders]" << std::endl;
+            g_data.addMessage("Requested positions, open orders, and executions...");
+            std::cout << "[Requested positions, open orders, and executions]" << std::endl;
         }
         requestUiInvalidation();
     }
 
     void managedAccounts(const std::string& accountsList) override {
         std::string message;
+        std::string selectedAccount;
         {
             std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
             g_data.managedAccounts = accountsList;
             g_data.selectedAccount = chooseConfiguredAccount(accountsList);
+            selectedAccount = g_data.selectedAccount;
 
             if (!g_data.selectedAccount.empty()) {
                 message = "Managed accounts: " + accountsList + " | using account " + g_data.selectedAccount;
@@ -82,6 +100,7 @@ public:
             }
         }
 
+        appendRuntimeJournalEvent("managed_accounts", {{"accounts", accountsList}, {"selectedAccount", selectedAccount}});
         g_data.addMessage(message);
         std::cout << "[" << message << "]" << std::endl;
         requestUiInvalidation();
@@ -101,9 +120,11 @@ public:
             switch (field) {
                 case 1:
                     g_data.bidPrice = price;
+                    g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
                     break;
                 case 2: {
                     g_data.askPrice = price;
+                    g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
                     if (g_data.pendingWSQuantityCalc && price > 0.0) {
                         int maxQty = static_cast<int>(std::floor(g_data.maxPositionDollars / price));
                         if (maxQty < 1) maxQty = 1;
@@ -122,6 +143,7 @@ public:
                 }
                 case 4:
                     g_data.lastPrice = price;
+                    g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
                     break;
                 default:
                     break;
@@ -347,6 +369,13 @@ public:
     void execDetails(int reqId, const Contract& contract, const Execution& execution) override {
         (void)reqId;
         recordTraceExecution(contract, execution);
+        appendRuntimeJournalEvent("execution_seen", {
+            {"orderId", static_cast<long long>(execution.orderId)},
+            {"symbol", contract.symbol},
+            {"execId", execution.execId},
+            {"shares", DecimalFunctions::decimalToDouble(execution.shares)},
+            {"price", execution.price}
+        });
 
         char msg[256];
         std::snprintf(msg, sizeof(msg),
@@ -361,6 +390,21 @@ public:
 
     void execDetailsEnd(int reqId) override {
         (void)reqId;
+        bool sessionReadyNow = false;
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+            g_data.executionsLoaded = true;
+            if (g_data.positionsLoaded) {
+                g_data.sessionReady = true;
+                g_data.sessionState = RuntimeSessionState::SessionReady;
+                sessionReadyNow = true;
+            }
+        }
+        appendRuntimeJournalEvent("executions_loaded");
+        if (sessionReadyNow) {
+            g_data.addMessage("TWS session is ready after reconciliation");
+        }
+        requestUiInvalidation();
     }
 
     #if defined(TWS_HAS_COMMISSION_AND_FEES_REPORT)
@@ -369,6 +413,11 @@ public:
     void commissionReport(const CommissionReport& commissionReport) override {
     #endif
         recordTraceCommission(commissionReport);
+        appendRuntimeJournalEvent("commission_seen", {
+            {"execId", commissionReport.execId},
+            {"commission", commissionValue(commissionReport)},
+            {"currency", commissionReport.currency}
+        });
 
         char msg[256];
         std::snprintf(msg, sizeof(msg), "Commission %s: %.4f %s",
@@ -448,6 +497,11 @@ public:
         }
 
         recordTraceError(id, errorCode, errorString);
+        appendRuntimeJournalEvent("broker_error", {
+            {"id", id},
+            {"code", errorCode},
+            {"message", errorString}
+        });
         requestUiInvalidation();
     }
 
@@ -477,11 +531,21 @@ public:
     }
 
     void positionEnd() override {
+        bool sessionReadyNow = false;
         {
             std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
             g_data.positionsLoaded = true;
+            if (g_data.executionsLoaded) {
+                g_data.sessionReady = true;
+                g_data.sessionState = RuntimeSessionState::SessionReady;
+                sessionReadyNow = true;
+            }
         }
+        appendRuntimeJournalEvent("positions_loaded");
         g_data.addMessage("Positions loaded");
+        if (sessionReadyNow) {
+            g_data.addMessage("TWS session is ready after reconciliation");
+        }
         std::cout << "[Positions loaded]" << std::endl;
         requestUiInvalidation();
     }

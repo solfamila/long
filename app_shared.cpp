@@ -1,10 +1,108 @@
 #include "app_shared.h"
+#include "mac_observability.h"
 
-SharedData g_data;
+#include <random>
+#include <atomic>
+#include <unordered_map>
 
 namespace {
 constexpr std::size_t kMaxTraceEvents = 512;
 constexpr std::size_t kMaxTraceFills = 256;
+constexpr auto kRecentSubmitWindow = std::chrono::milliseconds(750);
+constexpr auto kRecentWebSocketOrderWindow = std::chrono::seconds(2);
+constexpr int kMaxWebSocketOrdersPerWindow = 5;
+constexpr auto kWebSocketIdempotencyWindow = std::chrono::minutes(10);
+SharedData& bootstrapSharedData() {
+    static SharedData data;
+    return data;
+}
+
+std::atomic<SharedData*>& activeSharedDataSlot() {
+    static std::atomic<SharedData*> slot{&bootstrapSharedData()};
+    return slot;
+}
+
+void copySharedDataState(const SharedData& src, SharedData& dst) {
+    dst.connected = src.connected;
+    dst.sessionReady = src.sessionReady;
+    dst.sessionState = src.sessionState;
+    dst.managedAccounts = src.managedAccounts;
+    dst.selectedAccount = src.selectedAccount;
+
+    dst.currentSymbol = src.currentSymbol;
+    dst.bidPrice = src.bidPrice;
+    dst.askPrice = src.askPrice;
+    dst.lastPrice = src.lastPrice;
+    dst.askBook = src.askBook;
+    dst.bidBook = src.bidBook;
+    dst.depthSubscribed = src.depthSubscribed;
+
+    dst.nextReqId.store(src.nextReqId.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    dst.activeMktDataReqId = src.activeMktDataReqId;
+    dst.activeDepthReqId = src.activeDepthReqId;
+    dst.suppressedMktDataCancelIds = src.suppressedMktDataCancelIds;
+    dst.suppressedMktDepthCancelIds = src.suppressedMktDepthCancelIds;
+
+    dst.currentQuantity = src.currentQuantity;
+    dst.priceBuffer = src.priceBuffer;
+    dst.maxPositionDollars = src.maxPositionDollars;
+    dst.maxOrderNotional = src.maxOrderNotional;
+    dst.maxOpenNotional = src.maxOpenNotional;
+    dst.staleQuoteThresholdMs = src.staleQuoteThresholdMs;
+    dst.controllerArmed = src.controllerArmed;
+    dst.tradingKillSwitch = src.tradingKillSwitch;
+
+    dst.twsHost = src.twsHost;
+    dst.twsPort = src.twsPort;
+    dst.twsClientId = src.twsClientId;
+    dst.websocketAuthToken = src.websocketAuthToken;
+    dst.websocketEnabled = src.websocketEnabled;
+    dst.controllerEnabled = src.controllerEnabled;
+    dst.appSessionId = src.appSessionId;
+    dst.runtimeSessionId = src.runtimeSessionId;
+    dst.startupRecoveryBanner = src.startupRecoveryBanner;
+
+    dst.pendingSubscribeSymbol = src.pendingSubscribeSymbol;
+    dst.hasPendingSubscribe = src.hasPendingSubscribe;
+    dst.pendingWSQuantityCalc = src.pendingWSQuantityCalc;
+    dst.wsQuantityUpdated = src.wsQuantityUpdated;
+
+    dst.lastWsRequestedSymbol = src.lastWsRequestedSymbol;
+    dst.lastWsSubscribeRequest = src.lastWsSubscribeRequest;
+    dst.recentWsIdempotencyKeys = src.recentWsIdempotencyKeys;
+    dst.recentWsOrderTimestamps = src.recentWsOrderTimestamps;
+
+    dst.nextOrderId.store(src.nextOrderId.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    dst.orders = src.orders;
+
+    dst.positions = src.positions;
+    dst.positionsLoaded = src.positionsLoaded;
+    dst.executionsLoaded = src.executionsLoaded;
+
+    dst.wsServerRunning.store(src.wsServerRunning.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    dst.wsConnectedClients.store(src.wsConnectedClients.load(std::memory_order_relaxed), std::memory_order_relaxed);
+
+    dst.controllerConnected.store(src.controllerConnected.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    dst.controllerDeviceName = src.controllerDeviceName;
+    dst.controllerLockedDeviceName = src.controllerLockedDeviceName;
+    dst.lastQuoteUpdate = src.lastQuoteUpdate;
+    dst.lastSubmitFingerprint = src.lastSubmitFingerprint;
+    dst.lastSubmitTime = src.lastSubmitTime;
+
+    dst.messages = src.messages;
+    dst.messagesCache = src.messagesCache;
+    dst.messagesVersion = src.messagesVersion;
+    dst.messagesCacheVersion = src.messagesCacheVersion;
+
+    dst.nextTraceId.store(src.nextTraceId.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    dst.traces = src.traces;
+    dst.traceRecency = src.traceRecency;
+    dst.traceIdByOrderId = src.traceIdByOrderId;
+    dst.traceIdByPermId = src.traceIdByPermId;
+    dst.traceIdByExecId = src.traceIdByExecId;
+    dst.latestTraceId = src.latestTraceId;
+}
+
 std::mutex& uiInvalidationCallbackMutex() {
     static std::mutex m;
     return m;
@@ -19,6 +117,18 @@ std::mutex& tradeTraceFileMutex() {
     static std::mutex m;
     return m;
 }
+
+std::mutex& runtimeJournalFileMutex() {
+    static std::mutex m;
+    return m;
+}
+
+std::uint64_t findTraceIdLocked(OrderId orderId, long long permId, const std::string& execId);
+json makeTraceEventLogLine(const TradeTrace& trace, const TraceEvent& event);
+void emitMacTraceObservation(std::uint64_t traceId,
+                             TradeEventType type,
+                             const std::string& stage,
+                             const std::string& details);
 
 bool hasTime(std::chrono::steady_clock::time_point tp) {
     return tp.time_since_epoch().count() != 0;
@@ -70,6 +180,131 @@ std::string buildBookSummary(const std::vector<BookLevel>& askBook, const std::v
     return summarizeBookSide(askBook, 3, "ask") + " " + summarizeBookSide(bidBook, 3, "bid");
 }
 
+std::string randomHexToken(std::size_t bytes) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::random_device rd;
+    std::uniform_int_distribution<int> dist(0, 255);
+    std::string token;
+    token.reserve(bytes * 2);
+    for (std::size_t i = 0; i < bytes; ++i) {
+        const int value = dist(rd);
+        token.push_back(kHex[(value >> 4) & 0xF]);
+        token.push_back(kHex[value & 0xF]);
+    }
+    return token;
+}
+
+void pruneWebSocketStateLocked(std::chrono::steady_clock::time_point now) {
+    while (!g_data.recentWsOrderTimestamps.empty() &&
+           (now - g_data.recentWsOrderTimestamps.front()) > kRecentWebSocketOrderWindow) {
+        g_data.recentWsOrderTimestamps.pop_front();
+    }
+
+    for (auto it = g_data.recentWsIdempotencyKeys.begin(); it != g_data.recentWsIdempotencyKeys.end();) {
+        if ((now - it->second) > kWebSocketIdempotencyWindow) {
+            it = g_data.recentWsIdempotencyKeys.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+json makeRuntimeJournalLine(const std::string& event, const json& details) {
+    json line;
+    line["event"] = event;
+    line["wallTime"] = formatWallTime(std::chrono::system_clock::now());
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (!g_data.appSessionId.empty()) {
+            line["appSessionId"] = g_data.appSessionId;
+        }
+        if (!g_data.runtimeSessionId.empty()) {
+            line["runtimeSessionId"] = g_data.runtimeSessionId;
+        }
+    }
+    if (!details.is_null() && !details.empty()) {
+        line["details"] = details;
+    }
+    return line;
+}
+
+std::string makeOrderFingerprint(const SubmitIntent& intent) {
+    std::ostringstream oss;
+    oss << intent.source << '|'
+        << intent.symbol << '|'
+        << intent.side << '|'
+        << intent.requestedQty << '|'
+        << std::fixed << std::setprecision(4) << intent.limitPrice << '|'
+        << (intent.closeOnly ? '1' : '0');
+    return oss.str();
+}
+
+std::uint64_t makeRecoveredTraceId() {
+    return g_data.nextTraceId.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::uint64_t ensureRecoveredTraceLocked(OrderId orderId,
+                                         long long permId,
+                                         const std::string& execId,
+                                         const std::string& source,
+                                         const std::string& symbol,
+                                         const std::string& side,
+                                         int requestedQty,
+                                         double limitPrice,
+                                         const std::string& account,
+                                         const std::string& note) {
+    std::uint64_t traceId = findTraceIdLocked(orderId, permId, execId);
+    if (traceId != 0) {
+        return traceId;
+    }
+
+    TradeTrace trace;
+    trace.traceId = makeRecoveredTraceId();
+    trace.orderId = orderId;
+    trace.permId = permId;
+    trace.source = source;
+    trace.symbol = symbol;
+    trace.side = side;
+    trace.account = account;
+    trace.requestedQty = requestedQty;
+    trace.limitPrice = limitPrice;
+    trace.notes = note;
+    trace.triggerMono = std::chrono::steady_clock::now();
+    trace.triggerWall = std::chrono::system_clock::now();
+
+    TraceEvent event;
+    event.type = TradeEventType::Note;
+    event.monoTs = trace.triggerMono;
+    event.wallTs = trace.triggerWall;
+    event.stage = "Recovered";
+    event.details = note;
+    trace.events.push_back(event);
+
+    g_data.traces[trace.traceId] = trace;
+    g_data.traceRecency.push_back(trace.traceId);
+    g_data.latestTraceId = trace.traceId;
+    if (orderId > 0) {
+        g_data.traceIdByOrderId[orderId] = trace.traceId;
+    }
+    if (permId > 0) {
+        g_data.traceIdByPermId[permId] = trace.traceId;
+    }
+    if (!execId.empty()) {
+        g_data.traceIdByExecId[execId] = trace.traceId;
+    }
+    appendTradeTraceLogLine(makeTraceEventLogLine(trace, event));
+    emitMacTraceObservation(trace.traceId, TradeEventType::Note, event.stage, event.details);
+    appendRuntimeJournalEvent("recovered_trace_created", {
+        {"traceId", static_cast<unsigned long long>(trace.traceId)},
+        {"orderId", static_cast<long long>(orderId)},
+        {"permId", permId},
+        {"execId", execId},
+        {"symbol", symbol},
+        {"side", side}
+    });
+    return trace.traceId;
+}
+
 json makeTraceEventLogLine(const TradeTrace& trace, const TraceEvent& event) {
     json line;
     line["traceId"] = static_cast<unsigned long long>(trace.traceId);
@@ -96,6 +331,61 @@ json makeTraceEventLogLine(const TradeTrace& trace, const TraceEvent& event) {
     if (!trace.notes.empty()) line["notes"] = trace.notes;
     if (!trace.bookSummary.empty()) line["bookSummary"] = trace.bookSummary;
     return line;
+}
+
+void emitMacTraceObservation(std::uint64_t traceId,
+                             TradeEventType type,
+                             const std::string& stage,
+                             const std::string& details) {
+    switch (type) {
+        case TradeEventType::Trigger:
+            macTraceBegin(traceId, "trade_lifecycle", details);
+            macTraceEvent(traceId, "trigger", details);
+            break;
+        case TradeEventType::ValidationStart:
+            macTraceBegin(traceId, "validation", details);
+            break;
+        case TradeEventType::ValidationOk:
+        case TradeEventType::ValidationFailed:
+            macTraceEnd(traceId, "validation", details);
+            break;
+        case TradeEventType::PlaceOrderCallStart:
+            macTraceBegin(traceId, "place_order", details);
+            break;
+        case TradeEventType::PlaceOrderCallEnd:
+            macTraceEnd(traceId, "place_order", details);
+            break;
+        case TradeEventType::OpenOrderSeen:
+            macTraceEvent(traceId, "open_order", details);
+            break;
+        case TradeEventType::OrderStatusSeen:
+            macTraceEvent(traceId, "order_status", details);
+            break;
+        case TradeEventType::ExecDetailsSeen:
+            macTraceEvent(traceId, "exec_details", details);
+            break;
+        case TradeEventType::CommissionSeen:
+            macTraceEvent(traceId, "commission", details);
+            break;
+        case TradeEventType::ErrorSeen:
+            macLogError("orders", "Trace " + std::to_string(static_cast<unsigned long long>(traceId)) + ": " + details);
+            macTraceEvent(traceId, "error", details);
+            break;
+        case TradeEventType::CancelRequestSent:
+            macTraceBegin(traceId, "cancel", details);
+            break;
+        case TradeEventType::CancelAck:
+            macTraceEnd(traceId, "cancel", details);
+            break;
+        case TradeEventType::FinalState:
+            macTraceEnd(traceId, "trade_lifecycle", details);
+            break;
+        case TradeEventType::Note:
+            macTraceEvent(traceId, "note", details);
+            break;
+        default:
+            break;
+    }
 }
 
 void setTraceTerminalFields(TradeTrace& trace, const std::string& terminalStatus, const std::string& reason) {
@@ -125,6 +415,39 @@ std::uint64_t findTraceIdLocked(OrderId orderId, long long permId = 0, const std
 }
 
 } // namespace
+
+SharedData& appState() {
+    SharedData* active = activeSharedDataSlot().load(std::memory_order_acquire);
+    return *(active != nullptr ? active : &bootstrapSharedData());
+}
+
+void bindSharedDataOwner(SharedData* owner) {
+    if (owner == nullptr) {
+        return;
+    }
+    SharedData* current = activeSharedDataSlot().load(std::memory_order_acquire);
+    if (current == owner) {
+        return;
+    }
+    {
+        std::scoped_lock lock(current->mutex, owner->mutex);
+        copySharedDataState(*current, *owner);
+    }
+    activeSharedDataSlot().store(owner, std::memory_order_release);
+}
+
+void unbindSharedDataOwner(SharedData* owner) {
+    SharedData* current = activeSharedDataSlot().load(std::memory_order_acquire);
+    if (owner == nullptr || current != owner) {
+        return;
+    }
+    SharedData& bootstrap = bootstrapSharedData();
+    {
+        std::scoped_lock lock(owner->mutex, bootstrap.mutex);
+        copySharedDataState(*owner, bootstrap);
+    }
+    activeSharedDataSlot().store(&bootstrap, std::memory_order_release);
+}
 
 void setUiInvalidationCallback(UiInvalidationCallback callback) {
     std::lock_guard<std::mutex> lock(uiInvalidationCallbackMutex());
@@ -166,6 +489,33 @@ std::string makePositionKey(const std::string& account, const std::string& symbo
     return account + "|" + symbol;
 }
 
+std::string runtimeSessionStateToString(RuntimeSessionState state) {
+    switch (state) {
+        case RuntimeSessionState::Disconnected: return "Disconnected";
+        case RuntimeSessionState::Connecting: return "Connecting";
+        case RuntimeSessionState::SocketConnected: return "Socket connected";
+        case RuntimeSessionState::Reconciling: return "Reconciling";
+        case RuntimeSessionState::SessionReady: return "Ready";
+        default: return "Unknown";
+    }
+}
+
+void setRuntimeSessionState(RuntimeSessionState state) {
+    bool changed = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (g_data.sessionState != state) {
+            g_data.sessionState = state;
+            changed = true;
+        }
+    }
+    if (changed) {
+        macLogInfo("runtime", "Session state changed: " + runtimeSessionStateToString(state));
+        appendRuntimeJournalEvent("session_state_changed", {{"state", runtimeSessionStateToString(state)}});
+        requestUiInvalidation();
+    }
+}
+
 int allocateReqId() {
     return g_data.nextReqId.fetch_add(1);
 }
@@ -205,16 +555,61 @@ double availableLongToCloseUnlocked(const std::string& account, const std::strin
     return available > 0.0 ? available : 0.0;
 }
 
+double calculateOpenBuyExposureUnlocked(const std::string& account) {
+    double exposure = 0.0;
+    for (const auto& [id, ord] : g_data.orders) {
+        (void)id;
+        if (!ord.account.empty() && ord.account != account) continue;
+        if (ord.side != "BUY") continue;
+        if (ord.isTerminal()) continue;
+        exposure += outstandingOrderQty(ord) * ord.limitPrice;
+    }
+    return exposure;
+}
+
+double calculatePositionMarketValueUnlocked(const std::string& account, const std::string& symbol) {
+    const auto posIt = g_data.positions.find(makePositionKey(account, symbol));
+    if (posIt == g_data.positions.end()) {
+        return 0.0;
+    }
+    const double qty = std::max(0.0, posIt->second.quantity);
+    if (qty <= 0.0) {
+        return 0.0;
+    }
+
+    double price = 0.0;
+    if (symbol == g_data.currentSymbol) {
+        if (g_data.lastPrice > 0.0) {
+            price = g_data.lastPrice;
+        } else if (g_data.askPrice > 0.0) {
+            price = g_data.askPrice;
+        } else if (g_data.bidPrice > 0.0) {
+            price = g_data.bidPrice;
+        }
+    }
+    if (price <= 0.0) {
+        price = posIt->second.avgCost;
+    }
+    return qty * price;
+}
+
 UiStatusSnapshot captureUiStatusSnapshot() {
     UiStatusSnapshot snapshot;
     std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
     snapshot.connected = g_data.connected;
     snapshot.sessionReady = g_data.sessionReady;
+    snapshot.sessionStateText = runtimeSessionStateToString(g_data.sessionState);
     snapshot.wsServerRunning = g_data.wsServerRunning.load();
+    snapshot.websocketEnabled = g_data.websocketEnabled;
     snapshot.controllerConnected = g_data.controllerConnected.load();
+    snapshot.controllerEnabled = g_data.controllerEnabled;
+    snapshot.controllerArmed = g_data.controllerArmed;
+    snapshot.tradingKillSwitch = g_data.tradingKillSwitch;
     snapshot.wsConnectedClients = g_data.wsConnectedClients.load();
     snapshot.controllerDeviceName = g_data.controllerDeviceName;
     snapshot.controllerLockedDeviceName = g_data.controllerLockedDeviceName;
+    snapshot.websocketAuthToken = g_data.websocketAuthToken;
+    snapshot.startupRecoveryBanner = g_data.startupRecoveryBanner;
 
     if (!g_data.selectedAccount.empty()) {
         snapshot.accountText = g_data.selectedAccount;
@@ -261,6 +656,12 @@ SymbolUiSnapshot captureSymbolUiSnapshot(const std::string& subscribedSymbol) {
     snapshot.lastPrice = g_data.lastPrice;
     snapshot.askBook = g_data.askBook;
     snapshot.bidBook = g_data.bidBook;
+    snapshot.openBuyExposure = calculateOpenBuyExposureUnlocked(g_data.selectedAccount);
+    if (hasTime(g_data.lastQuoteUpdate)) {
+        snapshot.quoteAgeMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - g_data.lastQuoteUpdate).count();
+        snapshot.hasFreshQuote = snapshot.quoteAgeMs <= static_cast<double>(g_data.staleQuoteThresholdMs);
+    }
 
     if (!g_data.selectedAccount.empty() && !subscribedSymbol.empty()) {
         auto posIt = g_data.positions.find(makePositionKey(g_data.selectedAccount, subscribedSymbol));
@@ -273,6 +674,126 @@ SymbolUiSnapshot captureSymbolUiSnapshot(const std::string& subscribedSymbol) {
     }
 
     return snapshot;
+}
+
+RuntimeConnectionConfig captureRuntimeConnectionConfig() {
+    RuntimeConnectionConfig config;
+    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+    config.host = g_data.twsHost;
+    config.port = g_data.twsPort;
+    config.clientId = g_data.twsClientId;
+    config.websocketAuthToken = g_data.websocketAuthToken;
+    config.websocketEnabled = g_data.websocketEnabled;
+    config.controllerEnabled = g_data.controllerEnabled;
+    return config;
+}
+
+void updateRuntimeConnectionConfig(const RuntimeConnectionConfig& config) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.twsHost = config.host.empty() ? DEFAULT_HOST : config.host;
+        g_data.twsPort = config.port > 0 ? config.port : DEFAULT_PORT;
+        g_data.twsClientId = config.clientId > 0 ? config.clientId : DEFAULT_CLIENT_ID;
+        g_data.websocketAuthToken = config.websocketAuthToken;
+        g_data.websocketEnabled = config.websocketEnabled;
+        g_data.controllerEnabled = config.controllerEnabled;
+    }
+    requestUiInvalidation();
+}
+
+RiskControlsSnapshot captureRiskControlsSnapshot() {
+    RiskControlsSnapshot snapshot;
+    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+    snapshot.staleQuoteThresholdMs = g_data.staleQuoteThresholdMs;
+    snapshot.maxOrderNotional = g_data.maxOrderNotional;
+    snapshot.maxOpenNotional = g_data.maxOpenNotional;
+    snapshot.controllerArmed = g_data.controllerArmed;
+    snapshot.tradingKillSwitch = g_data.tradingKillSwitch;
+    return snapshot;
+}
+
+void updateRiskControls(int staleQuoteThresholdMs, double maxOrderNotional, double maxOpenNotional) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.staleQuoteThresholdMs = std::max(250, staleQuoteThresholdMs);
+        g_data.maxOrderNotional = std::max(100.0, maxOrderNotional);
+        g_data.maxOpenNotional = std::max(g_data.maxOrderNotional, maxOpenNotional);
+    }
+    requestUiInvalidation();
+}
+
+void setControllerArmed(bool armed) {
+    bool changed = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (g_data.controllerArmed != armed) {
+            g_data.controllerArmed = armed;
+            changed = true;
+        }
+    }
+    if (changed) {
+        appendRuntimeJournalEvent("controller_armed_changed", {{"armed", armed}});
+        requestUiInvalidation();
+    }
+}
+
+void setTradingKillSwitch(bool enabled) {
+    bool changed = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (g_data.tradingKillSwitch != enabled) {
+            g_data.tradingKillSwitch = enabled;
+            changed = true;
+        }
+    }
+    if (changed) {
+        appendRuntimeJournalEvent("trading_kill_switch_changed", {{"enabled", enabled}});
+        requestUiInvalidation();
+    }
+}
+
+std::string ensureWebSocketAuthToken() {
+    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+    if (g_data.websocketAuthToken.empty()) {
+        g_data.websocketAuthToken = randomHexToken(16);
+    }
+    return g_data.websocketAuthToken;
+}
+
+bool consumeWebSocketOrderRateLimit(std::string* error) {
+    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+    const auto now = std::chrono::steady_clock::now();
+    pruneWebSocketStateLocked(now);
+    if (static_cast<int>(g_data.recentWsOrderTimestamps.size()) >= kMaxWebSocketOrdersPerWindow) {
+        if (error) {
+            *error = "Too many WebSocket order requests; slow down";
+        }
+        return false;
+    }
+    g_data.recentWsOrderTimestamps.push_back(now);
+    return true;
+}
+
+bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error) {
+    if (key.empty()) {
+        if (error) {
+            *error = "Missing required string field: idempotencyKey";
+        }
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+    const auto now = std::chrono::steady_clock::now();
+    pruneWebSocketStateLocked(now);
+    const auto it = g_data.recentWsIdempotencyKeys.find(key);
+    if (it != g_data.recentWsIdempotencyKeys.end()) {
+        if (error) {
+            *error = "Duplicate idempotencyKey";
+        }
+        return false;
+    }
+    g_data.recentWsIdempotencyKeys[key] = now;
+    return true;
 }
 
 std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot() {
@@ -336,6 +857,7 @@ std::vector<bool> sendCancelRequests(EClientSocket* client, const std::vector<Or
     for (size_t i = 0; i < orderIds.size(); ++i) {
         if (sent[i]) {
             recordTraceCancelRequest(orderIds[i]);
+            appendRuntimeJournalEvent("cancel_request_sent", {{"orderId", static_cast<long long>(orderIds[i])}});
         }
     }
 
@@ -446,6 +968,10 @@ bool requestSymbolSubscription(EClientSocket* client,
     }
 
     g_data.addMessage("Subscription request sent for " + symbol);
+    appendRuntimeJournalEvent("subscribe_request_sent", {
+        {"symbol", symbol},
+        {"recalculateQuantity", recalcQtyFromFirstAsk}
+    });
     return true;
 }
 
@@ -532,11 +1058,33 @@ bool submitLimitOrder(EClientSocket* client,
     std::string account;
     bool ready = false;
     double availableToClose = 0.0;
+    double quoteAgeMs = -1.0;
+    bool quoteMatchesCurrentSymbol = false;
+    int staleQuoteThresholdMs = 0;
+    double maxOrderNotional = 0.0;
+    double maxOpenNotional = 0.0;
+    double openBuyExposure = 0.0;
+    double currentPositionValue = 0.0;
+    bool controllerArmed = false;
+    bool tradingKillSwitch = false;
+    std::string duplicateFingerprint;
 
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         ready = g_data.connected && g_data.sessionReady;
         account = g_data.selectedAccount;
+        staleQuoteThresholdMs = g_data.staleQuoteThresholdMs;
+        maxOrderNotional = g_data.maxOrderNotional;
+        maxOpenNotional = g_data.maxOpenNotional;
+        controllerArmed = g_data.controllerArmed;
+        tradingKillSwitch = g_data.tradingKillSwitch;
+        openBuyExposure = calculateOpenBuyExposureUnlocked(account);
+        currentPositionValue = calculatePositionMarketValueUnlocked(account, symbol);
+        quoteMatchesCurrentSymbol = (symbol == g_data.currentSymbol);
+        if (hasTime(g_data.lastQuoteUpdate) && quoteMatchesCurrentSymbol) {
+            quoteAgeMs = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - g_data.lastQuoteUpdate).count();
+        }
         if (closeOnly) {
             availableToClose = availableLongToCloseUnlocked(account, symbol);
         }
@@ -548,6 +1096,12 @@ bool submitLimitOrder(EClientSocket* client,
     if (account.empty()) {
         return failValidation("Configured account is not present in managedAccounts");
     }
+    if (tradingKillSwitch) {
+        return failValidation("Trading is halted by the kill switch");
+    }
+    if (effectiveIntent.source.find("Controller") != std::string::npos && !controllerArmed) {
+        return failValidation("Controller trading is not armed");
+    }
     if (closeOnly) {
         if (availableToClose <= 0.0) {
             return failValidation("No long shares available to close");
@@ -555,6 +1109,44 @@ bool submitLimitOrder(EClientSocket* client,
         if (quantity > availableToClose + 1e-9) {
             return failValidation("Requested sell quantity exceeds available long shares");
         }
+    } else {
+        const double orderNotional = quantity * limitPrice;
+        if (maxOrderNotional > 0.0 && orderNotional > maxOrderNotional + 1e-9) {
+            std::ostringstream oss;
+            oss << "Order notional $" << std::fixed << std::setprecision(2) << orderNotional
+                << " exceeds max order notional $" << maxOrderNotional;
+            return failValidation(oss.str());
+        }
+        const double projectedNotional = openBuyExposure + currentPositionValue + orderNotional;
+        if (maxOpenNotional > 0.0 && projectedNotional > maxOpenNotional + 1e-9) {
+            std::ostringstream oss;
+            oss << "Projected open notional $" << std::fixed << std::setprecision(2) << projectedNotional
+                << " exceeds max open notional $" << maxOpenNotional;
+            return failValidation(oss.str());
+        }
+    }
+    if (quoteMatchesCurrentSymbol && staleQuoteThresholdMs > 0) {
+        if (quoteAgeMs < 0.0) {
+            return failValidation("No quote has been received for the active symbol yet");
+        }
+        if (quoteAgeMs > static_cast<double>(staleQuoteThresholdMs)) {
+            std::ostringstream oss;
+            oss << "Quote is stale (" << std::fixed << std::setprecision(0) << quoteAgeMs
+                << " ms old; threshold " << staleQuoteThresholdMs << " ms)";
+            return failValidation(oss.str());
+        }
+    }
+
+    duplicateFingerprint = makeOrderFingerprint(effectiveIntent);
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (g_data.lastSubmitFingerprint == duplicateFingerprint &&
+            hasTime(g_data.lastSubmitTime) &&
+            (std::chrono::steady_clock::now() - g_data.lastSubmitTime) <= kRecentSubmitWindow) {
+            return failValidation("Duplicate order suppressed");
+        }
+        g_data.lastSubmitFingerprint = duplicateFingerprint;
+        g_data.lastSubmitTime = std::chrono::steady_clock::now();
     }
 
     const OrderId nextId = g_data.nextOrderId.load(std::memory_order_relaxed);
@@ -590,6 +1182,14 @@ bool submitLimitOrder(EClientSocket* client,
 
     appendTraceEventByTraceId(traceId, TradeEventType::PlaceOrderCallStart,
                               "placeOrder", "Calling EClientSocket::placeOrder()");
+    appendRuntimeJournalEvent("submit_order_requested", {
+        {"traceId", static_cast<unsigned long long>(traceId)},
+        {"symbol", symbol},
+        {"action", action},
+        {"quantity", quantity},
+        {"limitPrice", limitPrice},
+        {"source", effectiveIntent.source}
+    });
 
     {
         std::lock_guard<std::recursive_mutex> clientLock(g_data.clientMutex);
@@ -631,6 +1231,9 @@ bool submitLimitOrder(EClientSocket* client,
     g_data.addMessage(msg);
 
     if (outOrderId) *outOrderId = orderId;
+    if (effectiveIntent.source.find("Controller") != std::string::npos) {
+        setControllerArmed(false);
+    }
     return true;
 }
 
@@ -714,6 +1317,137 @@ void appendTradeTraceLogLine(const json& line) {
     out << line.dump() << '\n';
 }
 
+void appendRuntimeJournalLine(const json& line) {
+    std::lock_guard<std::mutex> lock(runtimeJournalFileMutex());
+    std::ofstream out(RUNTIME_JOURNAL_LOG_FILENAME, std::ios::app);
+    if (!out.is_open()) return;
+    out << line.dump() << '\n';
+}
+
+void appendRuntimeJournalEvent(const std::string& event, const json& details) {
+    appendRuntimeJournalLine(makeRuntimeJournalLine(event, details));
+}
+
+std::vector<std::string> recoverUnfinishedTraceSummariesFromLog(std::size_t maxItems) {
+    std::ifstream in(TRADE_TRACE_LOG_FILENAME);
+    if (!in.is_open()) {
+        return {};
+    }
+
+    struct PendingInfo {
+        bool terminal = false;
+        std::string summary;
+    };
+
+    std::unordered_map<std::uint64_t, PendingInfo> traces;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        json parsed = json::parse(line, nullptr, false);
+        if (parsed.is_discarded()) continue;
+        const std::uint64_t traceId = parsed.value("traceId", 0ULL);
+        if (traceId == 0) continue;
+
+        auto& info = traces[traceId];
+        std::ostringstream oss;
+        oss << "T" << traceId
+            << " | " << parsed.value("source", std::string("Unknown"))
+            << " | " << parsed.value("side", std::string("?"))
+            << ' ' << parsed.value("symbol", std::string("<none>"))
+            << ' ' << parsed.value("requestedQty", 0)
+            << " @ " << std::fixed << std::setprecision(2)
+            << parsed.value("limitPrice", 0.0);
+        info.summary = oss.str();
+        if (parsed.value("eventType", std::string()) == "FinalState") {
+            info.terminal = true;
+        }
+    }
+
+    std::vector<std::string> summaries;
+    summaries.reserve(std::min(maxItems, traces.size()));
+    for (const auto& [traceId, info] : traces) {
+        if (!info.terminal) {
+            summaries.push_back(info.summary);
+        }
+    }
+    if (summaries.size() > maxItems) {
+        summaries.resize(maxItems);
+    }
+    return summaries;
+}
+
+RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems) {
+    RuntimeRecoverySnapshot snapshot;
+    snapshot.unfinishedTraceSummaries = recoverUnfinishedTraceSummariesFromLog(maxTraceItems);
+    snapshot.unfinishedTraceCount = static_cast<int>(snapshot.unfinishedTraceSummaries.size());
+
+    std::ifstream in(RUNTIME_JOURNAL_LOG_FILENAME);
+    if (!in.is_open()) {
+        return snapshot;
+    }
+
+    struct SessionInfo {
+        bool started = false;
+        bool cleanShutdown = false;
+        std::string appSessionId;
+        std::string runtimeSessionId;
+    };
+
+    std::map<std::string, SessionInfo> sessions;
+    std::string lastAppSessionId;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        json parsed = json::parse(line, nullptr, false);
+        if (parsed.is_discarded()) {
+            continue;
+        }
+
+        const std::string appSessionId = parsed.value("appSessionId", std::string());
+        if (appSessionId.empty()) {
+            continue;
+        }
+        SessionInfo& info = sessions[appSessionId];
+        info.appSessionId = appSessionId;
+        info.runtimeSessionId = parsed.value("runtimeSessionId", info.runtimeSessionId);
+        lastAppSessionId = appSessionId;
+
+        const std::string event = parsed.value("event", std::string());
+        if (event == "runtime_start") {
+            info.started = true;
+        } else if (event == "runtime_shutdown") {
+            info.cleanShutdown = true;
+        }
+    }
+
+    if (lastAppSessionId.empty()) {
+        return snapshot;
+    }
+
+    const auto it = sessions.find(lastAppSessionId);
+    if (it == sessions.end()) {
+        return snapshot;
+    }
+
+    snapshot.priorAppSessionId = it->second.appSessionId;
+    snapshot.priorRuntimeSessionId = it->second.runtimeSessionId;
+    snapshot.priorSessionAbnormal = it->second.started && !it->second.cleanShutdown;
+    if (snapshot.priorSessionAbnormal) {
+        std::ostringstream oss;
+        oss << "Previous session ended unexpectedly";
+        if (snapshot.unfinishedTraceCount > 0) {
+            oss << " with " << snapshot.unfinishedTraceCount << " unfinished trace";
+            if (snapshot.unfinishedTraceCount != 1) {
+                oss << 's';
+            }
+        }
+        snapshot.bannerText = oss.str();
+    }
+    return snapshot;
+}
+
 std::uint64_t beginTradeTrace(const SubmitIntent& intent) {
     TradeTrace trace;
     trace.traceId = g_data.nextTraceId.fetch_add(1, std::memory_order_relaxed);
@@ -757,6 +1491,7 @@ std::uint64_t beginTradeTrace(const SubmitIntent& intent) {
     }
 
     appendTradeTraceLogLine(makeTraceEventLogLine(trace, triggerEvent));
+    emitMacTraceObservation(trace.traceId, triggerEvent.type, triggerEvent.stage, triggerEvent.details);
     return trace.traceId;
 }
 
@@ -828,6 +1563,7 @@ void appendTraceEventByTraceId(std::uint64_t traceId,
         line = makeTraceEventLogLine(trace, event);
     }
     appendTradeTraceLogLine(line);
+    emitMacTraceObservation(traceId, type, stage, details);
 }
 
 void appendTraceEventByOrderId(OrderId orderId,
@@ -867,9 +1603,11 @@ void markTraceSubmitted(std::uint64_t traceId) {
 void markTraceTerminalByOrderId(OrderId orderId, const std::string& terminalStatus, const std::string& reason) {
     json line;
     bool shouldLog = false;
+    std::uint64_t traceId = 0;
+    std::string finalDetails;
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        const auto traceId = findTraceIdLocked(orderId);
+        traceId = findTraceIdLocked(orderId);
         if (traceId == 0) return;
         auto it = g_data.traces.find(traceId);
         if (it == g_data.traces.end()) return;
@@ -885,6 +1623,7 @@ void markTraceTerminalByOrderId(OrderId orderId, const std::string& terminalStat
         event.wallTs = std::chrono::system_clock::now();
         event.stage = "Terminal";
         event.details = reason.empty() ? terminalStatus : terminalStatus + ": " + reason;
+        finalDetails = event.details;
         if (trace.events.size() >= kMaxTraceEvents) {
             trace.events.erase(trace.events.begin(), trace.events.begin() + (trace.events.size() - kMaxTraceEvents + 1));
         }
@@ -892,15 +1631,32 @@ void markTraceTerminalByOrderId(OrderId orderId, const std::string& terminalStat
         line = makeTraceEventLogLine(trace, event);
         shouldLog = true;
     }
-    if (shouldLog) appendTradeTraceLogLine(line);
+    if (shouldLog) {
+        appendTradeTraceLogLine(line);
+        emitMacTraceObservation(traceId, TradeEventType::FinalState, "Terminal", finalDetails);
+    }
 }
 
 void recordTraceOpenOrder(OrderId orderId, const Contract& contract, const Order& order, const OrderState& orderState) {
     json line;
+    std::uint64_t traceId = 0;
+    std::string eventStage;
+    std::string eventDetails;
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        const auto traceId = findTraceIdLocked(orderId, static_cast<long long>(order.permId));
-        if (traceId == 0) return;
+        traceId = findTraceIdLocked(orderId, static_cast<long long>(order.permId));
+        if (traceId == 0) {
+            traceId = ensureRecoveredTraceLocked(orderId,
+                                                 static_cast<long long>(order.permId),
+                                                 {},
+                                                 "Broker Reconcile",
+                                                 contract.symbol,
+                                                 order.action,
+                                                 toShareCount(DecimalFunctions::decimalToDouble(order.totalQuantity)),
+                                                 order.lmtPrice,
+                                                 order.account,
+                                                 "Recovered open order during startup reconciliation");
+        }
         auto it = g_data.traces.find(traceId);
         if (it == g_data.traces.end()) return;
         TradeTrace& trace = it->second;
@@ -931,9 +1687,12 @@ void recordTraceOpenOrder(OrderId orderId, const Contract& contract, const Order
             trace.events.erase(trace.events.begin(), trace.events.begin() + (trace.events.size() - kMaxTraceEvents + 1));
         }
         trace.events.push_back(event);
+        eventStage = event.stage;
+        eventDetails = event.details;
         line = makeTraceEventLogLine(trace, event);
     }
     appendTradeTraceLogLine(line);
+    emitMacTraceObservation(traceId, TradeEventType::OpenOrderSeen, eventStage, eventDetails);
 }
 
 void recordTraceOrderStatus(OrderId orderId,
@@ -948,11 +1707,37 @@ void recordTraceOrderStatus(OrderId orderId,
     bool appendCancelAck = false;
     bool appendTerminal = false;
     std::string terminalReason;
+    std::uint64_t traceId = 0;
+    std::string eventDetails;
 
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        const auto traceId = findTraceIdLocked(orderId, permId);
-        if (traceId == 0) return;
+        traceId = findTraceIdLocked(orderId, permId);
+        if (traceId == 0) {
+            std::string symbol;
+            std::string side;
+            int requestedQty = 0;
+            double limitPrice = 0.0;
+            std::string account;
+            const auto orderIt = g_data.orders.find(orderId);
+            if (orderIt != g_data.orders.end()) {
+                symbol = orderIt->second.symbol;
+                side = orderIt->second.side;
+                requestedQty = toShareCount(orderIt->second.quantity);
+                limitPrice = orderIt->second.limitPrice;
+                account = orderIt->second.account;
+            }
+            traceId = ensureRecoveredTraceLocked(orderId,
+                                                 permId,
+                                                 {},
+                                                 "Broker Reconcile",
+                                                 symbol,
+                                                 side,
+                                                 requestedQty,
+                                                 limitPrice,
+                                                 account,
+                                                 "Recovered order status during startup reconciliation");
+        }
         auto it = g_data.traces.find(traceId);
         if (it == g_data.traces.end()) return;
         TradeTrace& trace = it->second;
@@ -991,6 +1776,7 @@ void recordTraceOrderStatus(OrderId orderId,
             trace.events.erase(trace.events.begin(), trace.events.begin() + (trace.events.size() - kMaxTraceEvents + 1));
         }
         trace.events.push_back(event);
+        eventDetails = event.details;
         line = makeTraceEventLogLine(trace, event);
 
         if (status == "Cancelled" || status == "ApiCancelled") {
@@ -1006,6 +1792,7 @@ void recordTraceOrderStatus(OrderId orderId,
     }
 
     appendTradeTraceLogLine(line);
+    emitMacTraceObservation(traceId, TradeEventType::OrderStatusSeen, status, eventDetails);
 
     if (appendCancelAck) {
         appendTraceEventByOrderId(orderId, TradeEventType::CancelAck,
@@ -1018,12 +1805,25 @@ void recordTraceOrderStatus(OrderId orderId,
 
 void recordTraceExecution(const Contract& contract, const Execution& execution) {
     json line;
+    std::uint64_t traceId = 0;
+    std::string eventDetails;
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         const OrderId orderId = static_cast<OrderId>(execution.orderId);
         const long long permId = static_cast<long long>(execution.permId);
-        const auto traceId = findTraceIdLocked(orderId, permId);
-        if (traceId == 0) return;
+        traceId = findTraceIdLocked(orderId, permId);
+        if (traceId == 0) {
+            traceId = ensureRecoveredTraceLocked(orderId,
+                                                 permId,
+                                                 execution.execId,
+                                                 "Broker Reconcile",
+                                                 contract.symbol,
+                                                 execution.side,
+                                                 toShareCount(DecimalFunctions::decimalToDouble(execution.cumQty)),
+                                                 execution.price,
+                                                 {},
+                                                 "Recovered execution during startup reconciliation");
+        }
         auto it = g_data.traces.find(traceId);
         if (it == g_data.traces.end()) return;
         TradeTrace& trace = it->second;
@@ -1074,6 +1874,7 @@ void recordTraceExecution(const Contract& contract, const Execution& execution) 
             trace.events.erase(trace.events.begin(), trace.events.begin() + (trace.events.size() - kMaxTraceEvents + 1));
         }
         trace.events.push_back(event);
+        eventDetails = event.details;
         line = makeTraceEventLogLine(trace, event);
 
         if (trace.requestedQty > 0 && fill.cumQty >= static_cast<double>(trace.requestedQty) && !hasTime(trace.fullFillMono)) {
@@ -1083,14 +1884,17 @@ void recordTraceExecution(const Contract& contract, const Execution& execution) 
     }
 
     appendTradeTraceLogLine(line);
+    emitMacTraceObservation(traceId, TradeEventType::ExecDetailsSeen, "execDetails", eventDetails);
 }
 
 void recordTraceCommission(const CommissionReport& commissionReport) {
     json line;
+    std::uint64_t traceId = 0;
+    std::string eventDetails;
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         const double commission = commissionValue(commissionReport);
-        const auto traceId = findTraceIdLocked(0, 0, commissionReport.execId);
+        traceId = findTraceIdLocked(0, 0, commissionReport.execId);
         if (traceId == 0) return;
         auto it = g_data.traces.find(traceId);
         if (it == g_data.traces.end()) return;
@@ -1120,9 +1924,11 @@ void recordTraceCommission(const CommissionReport& commissionReport) {
             trace.events.erase(trace.events.begin(), trace.events.begin() + (trace.events.size() - kMaxTraceEvents + 1));
         }
         trace.events.push_back(event);
+        eventDetails = event.details;
         line = makeTraceEventLogLine(trace, event);
     }
     appendTradeTraceLogLine(line);
+    emitMacTraceObservation(traceId, TradeEventType::CommissionSeen, "commissionReport", eventDetails);
 }
 
 void recordTraceError(int id, int errorCode, const std::string& errorString) {
@@ -1132,10 +1938,12 @@ void recordTraceError(int id, int errorCode, const std::string& errorString) {
     bool markCancel = false;
     bool markTerminal = false;
     std::string terminalStatus;
+    std::uint64_t traceId = 0;
+    std::string eventDetails;
 
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        const auto traceId = findTraceIdLocked(static_cast<OrderId>(id));
+        traceId = findTraceIdLocked(static_cast<OrderId>(id));
         if (traceId == 0) return;
         auto it = g_data.traces.find(traceId);
         if (it == g_data.traces.end()) return;
@@ -1155,6 +1963,7 @@ void recordTraceError(int id, int errorCode, const std::string& errorString) {
             trace.events.erase(trace.events.begin(), trace.events.begin() + (trace.events.size() - kMaxTraceEvents + 1));
         }
         trace.events.push_back(event);
+        eventDetails = event.details;
         line = makeTraceEventLogLine(trace, event);
 
         if (errorCode == 202 || errorCode == 10147) {
@@ -1170,6 +1979,7 @@ void recordTraceError(int id, int errorCode, const std::string& errorString) {
     }
 
     appendTradeTraceLogLine(line);
+    emitMacTraceObservation(traceId, TradeEventType::ErrorSeen, "Error", eventDetails);
 
     if (markCancel) {
         appendTraceEventByOrderId(static_cast<OrderId>(id), TradeEventType::CancelAck,

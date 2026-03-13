@@ -1,8 +1,36 @@
 #include "websocket_handlers.h"
+#include "mac_observability.h"
+
+namespace {
+
+bool authorizeWebSocketRequest(const json& request, ix::WebSocket& webSocket) {
+    if (!request.contains("token") || !request["token"].is_string()) {
+        appendRuntimeJournalEvent("ws_auth_failed", {{"reason", "missing_token"}});
+        macLogError("ipc", "WebSocket auth failed: missing token");
+        webSocket.send(json({{"success", false}, {"error", "Missing required string field: token"}}).dump());
+        return false;
+    }
+
+    const std::string providedToken = request["token"].get<std::string>();
+    const std::string expectedToken = ensureWebSocketAuthToken();
+    if (providedToken != expectedToken) {
+        appendRuntimeJournalEvent("ws_auth_failed", {{"reason", "token_mismatch"}});
+        macLogError("ipc", "WebSocket auth failed: token mismatch");
+        webSocket.send(json({{"success", false}, {"error", "Invalid session token"}}).dump());
+        return false;
+    }
+    return true;
+}
+
+} // namespace
 
 void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSocket, EClientSocket* client) {
     try {
         json orderRequest = json::parse(jsonMessage);
+
+        if (!authorizeWebSocketRequest(orderRequest, webSocket)) {
+            return;
+        }
 
         if (!orderRequest.contains("action") || !orderRequest["action"].is_string()) {
             webSocket.send(json({{"success", false}, {"error", "Missing required string field: action"}}).dump());
@@ -50,6 +78,21 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
         int qtyShares = toShareCount(quantity);
         if (qtyShares <= 0) {
             webSocket.send(json({{"success", false}, {"error", "Quantity rounded to zero"}}).dump());
+            return;
+        }
+
+        std::string rateLimitError;
+        if (!consumeWebSocketOrderRateLimit(&rateLimitError)) {
+            appendRuntimeJournalEvent("ws_order_rejected", {{"reason", rateLimitError}});
+            webSocket.send(json({{"success", false}, {"error", rateLimitError}}).dump());
+            return;
+        }
+
+        std::string idempotencyError;
+        const std::string idempotencyKey = orderRequest.value("idempotencyKey", std::string());
+        if (!reserveWebSocketIdempotencyKey(idempotencyKey, &idempotencyError)) {
+            appendRuntimeJournalEvent("ws_order_rejected", {{"reason", idempotencyError}});
+            webSocket.send(json({{"success", false}, {"error", idempotencyError}}).dump());
             return;
         }
 
@@ -129,10 +172,25 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
         std::uint64_t traceId = 0;
         if (!submitLimitOrder(client, symbol, action, static_cast<double>(qtyShares), limitPrice,
                               closeOnly, &intent, &submitError, &orderId, &traceId)) {
+            macLogError("ipc", "WebSocket order rejected: " + submitError);
+            appendRuntimeJournalEvent("ws_order_rejected", {
+                {"reason", submitError},
+                {"symbol", symbol},
+                {"action", action},
+                {"idempotencyKey", idempotencyKey}
+            });
             webSocket.send(json({{"success", false}, {"error", submitError}, {"traceId", static_cast<unsigned long long>(traceId)}}).dump());
             return;
         }
 
+        appendRuntimeJournalEvent("ws_order_accepted", {
+            {"orderId", static_cast<long long>(orderId)},
+            {"traceId", static_cast<unsigned long long>(traceId)},
+            {"symbol", symbol},
+            {"action", action},
+            {"idempotencyKey", idempotencyKey}
+        });
+        macLogInfo("ipc", "WebSocket order accepted for " + symbol + " trace " + std::to_string(static_cast<unsigned long long>(traceId)));
         webSocket.send(json({
             {"success", true},
             {"orderId", static_cast<long long>(orderId)},
@@ -154,6 +212,10 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
 void handleWebSocketSubscribe(const std::string& jsonMessage, ix::WebSocket& webSocket, EClientSocket* client) {
     try {
         json request = json::parse(jsonMessage);
+
+        if (!authorizeWebSocketRequest(request, webSocket)) {
+            return;
+        }
 
         if (!request.contains("subscribe") || !request["subscribe"].is_string()) {
             webSocket.send(json({{"success", false}, {"error", "Missing required string field: subscribe"}}).dump());
@@ -199,6 +261,7 @@ void handleWebSocketSubscribe(const std::string& jsonMessage, ix::WebSocket& web
         }
 
         webSocket.send(json({{"success", true}, {"subscribed", symbol}, {"requestSent", true}}).dump());
+        appendRuntimeJournalEvent("ws_subscribe_accepted", {{"symbol", symbol}});
 
     } catch (const json::exception& e) {
         webSocket.send(json({{"success", false}, {"error", std::string("JSON parse error: ") + e.what()}}).dump());
