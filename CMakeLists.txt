@@ -69,6 +69,12 @@ set(SOURCE_FILES
     ${IMGUI_SOURCES}
 )
 
+if(APPLE)
+    set(SOURCE_FILES ${SOURCE_FILES}
+        controller_mac.mm
+    )
+endif()
+
 if(APPLE AND USE_NATIVE_APPLE_SHELL)
     set(SOURCE_FILES ${SOURCE_FILES}
         main.mm
@@ -96,9 +102,9 @@ if(APPLE)
     find_library(METALKIT_LIBRARY MetalKit)
     find_library(QUARTZ_CORE_LIBRARY QuartzCore)
     find_library(APP_KIT_LIBRARY AppKit)
+    find_library(GAME_CONTROLLER_LIBRARY GameController)
     
     if(USE_NATIVE_APPLE_SHELL)
-        find_library(GAME_CONTROLLER_LIBRARY GameController)
         set(PLATFORM_LIBS 
             ${COCOA_LIBRARY} 
             ${METAL_LIBRARY} 
@@ -113,6 +119,7 @@ if(APPLE)
             ${METAL_LIBRARY} 
             ${QUARTZ_CORE_LIBRARY}
             ${APP_KIT_LIBRARY}
+            ${GAME_CONTROLLER_LIBRARY}
         )
     endif()
     
@@ -120,6 +127,7 @@ if(APPLE)
         set_source_files_properties(platform_metal.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
     endif()
     
+    set_source_files_properties(controller_mac.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
     set_source_files_properties(main.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
     set_source_files_properties(${IMGUI_DIR}/backends/imgui_impl_osx.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
 endif()

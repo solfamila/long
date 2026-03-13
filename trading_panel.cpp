@@ -258,9 +258,24 @@ void RenderTradingPanel(ImGuiIO& io, EClientSocket* client, ControllerState& dsS
     ImGui::Text(" | ");
     ImGui::SameLine();
     if (statusSnapshot.controllerConnected) {
-        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Controller: Connected");
+        const char* controllerLabel = statusSnapshot.controllerDeviceName.empty()
+            ? "Connected"
+            : statusSnapshot.controllerDeviceName.c_str();
+        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "Controller: %s", controllerLabel);
     } else {
         ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Controller: Not found");
+    }
+
+    ImGui::SameLine();
+    ImGui::Text(" | ");
+    ImGui::SameLine();
+    if (!statusSnapshot.controllerLockedDeviceName.empty()) {
+        ImVec4 lockColor = statusSnapshot.controllerConnected
+            ? ImVec4(0.5f, 0.8f, 1.0f, 1.0f)
+            : ImVec4(1.0f, 0.8f, 0.2f, 1.0f);
+        ImGui::TextColored(lockColor, "Controller Lock: %s", statusSnapshot.controllerLockedDeviceName.c_str());
+    } else {
+        ImGui::TextDisabled("Controller Lock: Waiting to lock");
     }
 
     ImGui::Separator();
@@ -472,102 +487,78 @@ void RenderTradingPanel(ImGuiIO& io, EClientSocket* client, ControllerState& dsS
     }
     if (!canClosePosition) ImGui::EndDisabled();
 
-#if defined(_WIN32)
-    if (dsState.device) {
-        controllerPoll(dsState);
-
-        if (controllerIsConnected(dsState)) {
-            auto now = std::chrono::steady_clock::now();
-
-            bool squarePressed = (dsState.currState.rgbButtons[CONTROLLER_BUTTON_SQUARE] & 0x80) != 0;
-            bool squareWasPressed = (dsState.prevState.rgbButtons[CONTROLLER_BUTTON_SQUARE] & 0x80) != 0;
-            if (squarePressed && !squareWasPressed &&
-                (now - dsState.lastSquarePress) > DualSenseState::kDebounceInterval) {
-                dsState.lastSquarePress = now;
-                if (canBuy) {
-                    std::string error;
-                    std::uint64_t traceId = 0;
-                    SubmitIntent intent = captureSubmitIntent("Controller", uiState.subscribedSymbol, "BUY",
-                                                              uiState.quantityInput, buyPrice, false,
-                                                              uiState.priceBuffer,
-                                                              buySweepAvailable ? buyPrice : 0.0,
-                                                              "DualSense Square button");
-                    if (!submitLimitOrder(client, uiState.subscribedSymbol, "BUY",
-                                          static_cast<double>(uiState.quantityInput), buyPrice,
-                                          false, &intent, &error, nullptr, &traceId)) {
-                        g_data.addMessage("[Controller] Buy failed: " + error);
-                    }
-                    if (traceId != 0) {
-                        uiState.selectedTraceId = traceId;
-                    }
-                }
-            }
-
-            bool circlePressed = (dsState.currState.rgbButtons[CONTROLLER_BUTTON_CIRCLE] & 0x80) != 0;
-            bool circleWasPressed = (dsState.prevState.rgbButtons[CONTROLLER_BUTTON_CIRCLE] & 0x80) != 0;
-            if (circlePressed && !circleWasPressed &&
-                (now - dsState.lastCirclePress) > DualSenseState::kDebounceInterval) {
-                dsState.lastCirclePress = now;
-                if (canClosePosition) {
-                    std::string error;
-                    std::uint64_t traceId = 0;
-                    SubmitIntent intent = captureSubmitIntent("Controller", uiState.subscribedSymbol, "SELL",
-                                                              toShareCount(availableLongToClose), sellPrice, true,
-                                                              uiState.priceBuffer,
-                                                              sellSweepAvailable ? sellPrice : 0.0,
-                                                              "DualSense Circle button");
-                    if (!submitLimitOrder(client, uiState.subscribedSymbol, "SELL",
-                                          availableLongToClose, sellPrice,
-                                          true, &intent, &error, nullptr, &traceId)) {
-                        g_data.addMessage("[Controller] Close failed: " + error);
-                    }
-                    if (traceId != 0) {
-                        uiState.selectedTraceId = traceId;
-                    }
-                }
-            }
-
-            bool trianglePressed = (dsState.currState.rgbButtons[CONTROLLER_BUTTON_TRIANGLE] & 0x80) != 0;
-            bool triangleWasPressed = (dsState.prevState.rgbButtons[CONTROLLER_BUTTON_TRIANGLE] & 0x80) != 0;
-            if (trianglePressed && !triangleWasPressed &&
-                (now - dsState.lastTrianglePress) > DualSenseState::kDebounceInterval) {
-                dsState.lastTrianglePress = now;
-                const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
-
-                if (!pendingOrders.empty()) {
-                    const std::vector<bool> cancelSent = sendCancelRequests(client, pendingOrders);
-                    const int sentCount = static_cast<int>(std::count(cancelSent.begin(), cancelSent.end(), true));
-                    if (sentCount != static_cast<int>(pendingOrders.size())) {
-                        g_data.addMessage("[Controller] Some cancel requests could not be sent");
-                    }
-                    g_data.addMessage("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
-                } else {
-                    g_data.addMessage("[Controller] No pending orders to cancel");
-                }
-            }
-
-            bool crossPressed = (dsState.currState.rgbButtons[CONTROLLER_BUTTON_CROSS] & 0x80) != 0;
-            bool crossWasPressed = (dsState.prevState.rgbButtons[CONTROLLER_BUTTON_CROSS] & 0x80) != 0;
-            if (crossPressed && !crossWasPressed &&
-                (now - dsState.lastCrossPress) > DualSenseState::kDebounceInterval) {
-                dsState.lastCrossPress = now;
-                if (canTrade && uiState.subscribed) {
-                    const int maxQty = computeMaxQuantityFromAsk(symbolSnapshot.askPrice, uiState.maxPositionDollars);
-                    uiState.quantityInput = (uiState.quantityInput == 1) ? maxQty : 1;
-                    syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
-                    g_data.addMessage("[Controller] Quantity toggled to " + std::to_string(uiState.quantityInput) + " shares");
-                }
-            }
-
-            dsState.prevState = dsState.currState;
-
-            const bool shouldVibrate = hasPosition && currentPositionQty != 0.0;
-            controllerSetVibration(dsState, shouldVibrate);
-        }
-    }
-#elif defined(__APPLE__)
     controllerPoll(dsState);
-#endif
+
+    if (controllerIsConnected(dsState)) {
+        auto now = std::chrono::steady_clock::now();
+
+        if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_SQUARE, now)) {
+            if (canBuy) {
+                std::string error;
+                std::uint64_t traceId = 0;
+                SubmitIntent intent = captureSubmitIntent("Controller", uiState.subscribedSymbol, "BUY",
+                                                          uiState.quantityInput, buyPrice, false,
+                                                          uiState.priceBuffer,
+                                                          buySweepAvailable ? buyPrice : 0.0,
+                                                          "Controller Square button");
+                if (!submitLimitOrder(client, uiState.subscribedSymbol, "BUY",
+                                      static_cast<double>(uiState.quantityInput), buyPrice,
+                                      false, &intent, &error, nullptr, &traceId)) {
+                    g_data.addMessage("[Controller] Buy failed: " + error);
+                }
+                if (traceId != 0) {
+                    uiState.selectedTraceId = traceId;
+                }
+            }
+        }
+
+        if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_CIRCLE, now)) {
+            if (canClosePosition) {
+                std::string error;
+                std::uint64_t traceId = 0;
+                SubmitIntent intent = captureSubmitIntent("Controller", uiState.subscribedSymbol, "SELL",
+                                                          toShareCount(availableLongToClose), sellPrice, true,
+                                                          uiState.priceBuffer,
+                                                          sellSweepAvailable ? sellPrice : 0.0,
+                                                          "Controller Circle button");
+                if (!submitLimitOrder(client, uiState.subscribedSymbol, "SELL",
+                                      availableLongToClose, sellPrice,
+                                      true, &intent, &error, nullptr, &traceId)) {
+                    g_data.addMessage("[Controller] Close failed: " + error);
+                }
+                if (traceId != 0) {
+                    uiState.selectedTraceId = traceId;
+                }
+            }
+        }
+
+        if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_TRIANGLE, now)) {
+            const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
+
+            if (!pendingOrders.empty()) {
+                const std::vector<bool> cancelSent = sendCancelRequests(client, pendingOrders);
+                const int sentCount = static_cast<int>(std::count(cancelSent.begin(), cancelSent.end(), true));
+                if (sentCount != static_cast<int>(pendingOrders.size())) {
+                    g_data.addMessage("[Controller] Some cancel requests could not be sent");
+                }
+                g_data.addMessage("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
+            } else {
+                g_data.addMessage("[Controller] No pending orders to cancel");
+            }
+        }
+
+        if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_CROSS, now)) {
+            if (canTrade && uiState.subscribed) {
+                const int maxQty = computeMaxQuantityFromAsk(symbolSnapshot.askPrice, uiState.maxPositionDollars);
+                uiState.quantityInput = (uiState.quantityInput == 1) ? maxQty : 1;
+                syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+                g_data.addMessage("[Controller] Quantity toggled to " + std::to_string(uiState.quantityInput) + " shares");
+            }
+        }
+
+        const bool shouldVibrate = hasPosition && currentPositionQty != 0.0;
+        controllerSetVibration(dsState, shouldVibrate);
+    }
 
     ImGui::Separator();
 

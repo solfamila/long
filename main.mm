@@ -24,7 +24,10 @@
 
 @implementation AppViewController {
     TradingRuntime* _tradingRuntime;
+    ControllerState _controllerState;
+    TradingPanelUiState _uiState;
     bool _applicationShouldQuit;
+    bool _controllerInitialized;
 }
 
 - (instancetype)initWithNibName:(NSString*)nibNameOrNil bundle:(NSBundle*)nibBundleOrNil {
@@ -33,6 +36,7 @@
     _device = MTLCreateSystemDefaultDevice();
     _commandQueue = [_device newCommandQueue];
     _applicationShouldQuit = false;
+    _controllerInitialized = false;
     _tradingRuntime = new TradingRuntime();
     
     if (!self.device) {
@@ -66,6 +70,12 @@
     
     ImGui_ImplOSX_Init(self.view);
     [NSApp activateIgnoringOtherApps:YES];
+
+    _controllerInitialized = controllerInitialize(_controllerState, nullptr, nullptr);
+    if (!_controllerInitialized) {
+        std::cerr << "Failed to initialize controller manager" << std::endl;
+        g_data.addMessage("Failed to initialize controller manager");
+    }
     
     TradingRuntimeConfig config;
     config.host = DEFAULT_HOST;
@@ -110,9 +120,7 @@
     
     ImVec4 clearColor = ImVec4(0.1f, 0.1f, 0.1f, 1.0f);
     
-    ControllerState dsState;
-    TradingPanelUiState uiState;
-    RenderTradingPanel(ImGui::GetIO(), _tradingRuntime->getClient(), dsState, uiState);
+    RenderTradingPanel(ImGui::GetIO(), _tradingRuntime->getClient(), _controllerState, _uiState);
     
     ImGui::Render();
     
@@ -147,6 +155,11 @@
 
 - (void)shutdown {
     std::cout << "Shutting down..." << std::endl;
+
+    if (_controllerInitialized) {
+        controllerCleanup(_controllerState);
+        _controllerInitialized = false;
+    }
     
     _tradingRuntime->stop();
     delete _tradingRuntime;
