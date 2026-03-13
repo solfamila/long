@@ -53,7 +53,6 @@ set(SOURCE_FILES
     platform_metal.mm
     trading_panel.cpp
     websocket_handlers.cpp
-    dualsense_controller.cpp
     ${IMGUI_SOURCES}
 )
 
@@ -61,6 +60,7 @@ if(WIN32)
     set(SOURCE_FILES ${SOURCE_FILES}
         platform_win32.cpp
         d3d_helpers.cpp
+        dualsense_controller.cpp
     )
 endif()
 

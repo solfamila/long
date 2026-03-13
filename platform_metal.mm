@@ -9,9 +9,16 @@
 #define __OBJC__
 #endif
 
+#define GLFW_EXPOSE_NATIVE_COCOA
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
+
+#define GLFW_VERSION_COMBINED (GLFW_VERSION_MAJOR * 1000 + GLFW_VERSION_MINOR * 100 + GLFW_VERSION_REVISION)
+
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
+#import <QuartzCore/CAMetalLayer.h>
 
 MacOSPlatformBackend::MacOSPlatformBackend()
     : m_window(nullptr)
@@ -63,7 +70,7 @@ bool MacOSPlatformBackend::initialize(const PlatformWindowInfo& windowInfo) {
         return false;
     }
 
-#if GLFW_VERSION_MAJOR >= 3 && GLFW_VERSION_MINOR >= 3
+#if GLFW_VERSION_COMBINED >= 3000
     NSWindow* nsWindow = glfwGetCocoaWindow(m_window);
     if (nsWindow) {
         CAMetalLayer* metalLayer = [CAMetalLayer layer];
