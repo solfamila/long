@@ -66,6 +66,8 @@ inline bool controllerInitialize(ControllerState& cs) {
 
 inline void controllerPoll(ControllerState& cs) {
     controllerClearButtons(cs);
+    const bool previousConnected = cs.connected;
+    const std::string previousDeviceName = cs.deviceName;
     MacControllerSnapshot snapshot;
     macControllerPoll(cs.nativeHandle, snapshot);
     cs.connected = snapshot.connected;
@@ -75,7 +77,9 @@ inline void controllerPoll(ControllerState& cs) {
     cs.buttons[CONTROLLER_BUTTON_CROSS].current = snapshot.buttons[CONTROLLER_BUTTON_CROSS];
     cs.buttons[CONTROLLER_BUTTON_CIRCLE].current = snapshot.buttons[CONTROLLER_BUTTON_CIRCLE];
     cs.buttons[CONTROLLER_BUTTON_TRIANGLE].current = snapshot.buttons[CONTROLLER_BUTTON_TRIANGLE];
-    controllerSetSharedState(cs.connected, cs.deviceName);
+    if (cs.connected != previousConnected || cs.deviceName != previousDeviceName) {
+        controllerSetSharedState(cs.connected, cs.deviceName);
+    }
 }
 
 inline void controllerSetVibration(ControllerState& cs, bool enable) {

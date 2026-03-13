@@ -253,12 +253,18 @@ void postControllerMessage(const std::string& message) {
         return;
     }
 
+    bool lockedControllerChanged = false;
+    std::string lockedDeviceName;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         if (_lockedController == nil) {
             _lockedController = controller;
-            updateControllerLockedState(nsStringToStd(controller.vendorName ?: @"Game Controller"));
+            lockedControllerChanged = true;
+            lockedDeviceName = nsStringToStd(controller.vendorName ?: @"Game Controller");
         }
+    }
+    if (lockedControllerChanged) {
+        updateControllerLockedState(lockedDeviceName);
     }
 
     [self detachActiveControllerAnnounce:NO];

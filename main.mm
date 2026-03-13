@@ -1,5 +1,4 @@
 #import <AppKit/AppKit.h>
-#import <Security/Security.h>
 
 #include "app_shared.h"
 #include "trading_export_panels.h"
@@ -14,8 +13,7 @@
 
 namespace {
 
-NSString* const kWebSocketTokenService = @"com.foxy.twstradinggui";
-NSString* const kWebSocketTokenAccount = @"websocket-token";
+NSString* const kWebSocketTokenDefaultsKey = @"websocketToken";
 
 NSString* ToNSString(const std::string& value) {
     return [NSString stringWithUTF8String:value.c_str()];
@@ -26,59 +24,6 @@ std::string ToStdString(NSString* value) {
         return {};
     }
     return std::string([value UTF8String]);
-}
-
-std::string LoadKeychainString(NSString* service, NSString* account) {
-    NSDictionary* query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: service,
-        (__bridge id)kSecAttrAccount: account,
-        (__bridge id)kSecReturnData: @YES,
-        (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
-    };
-
-    CFTypeRef result = nullptr;
-    const OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
-    if (status != errSecSuccess || result == nullptr) {
-        return {};
-    }
-
-    NSData* data = CFBridgingRelease(result);
-    NSString* value = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    return ToStdString(value);
-}
-
-void SaveKeychainString(NSString* service, NSString* account, const std::string& value) {
-    if (value.empty()) {
-        return;
-    }
-
-    NSData* data = [NSData dataWithBytes:value.data() length:value.size()];
-    NSDictionary* query = @{
-        (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-        (__bridge id)kSecAttrService: service,
-        (__bridge id)kSecAttrAccount: account,
-    };
-    NSDictionary* update = @{
-        (__bridge id)kSecValueData: data,
-    };
-
-    OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)update);
-    if (status == errSecItemNotFound) {
-        NSMutableDictionary* add = [query mutableCopy];
-        add[(__bridge id)kSecValueData] = data;
-        status = SecItemAdd((__bridge CFDictionaryRef)add, nullptr);
-    }
-    (void)status;
-}
-
-void SaveKeychainStringAsync(NSString* service, NSString* account, std::string value) {
-    if (value.empty()) {
-        return;
-    }
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        SaveKeychainString(service, account, value);
-    });
 }
 
 NSTextField* MakeLabel(NSString* text, NSFont* font, NSColor* color) {
@@ -364,7 +309,6 @@ void StylePanel(NSView* view) {
 - (void)applyAppActive:(BOOL)active;
 - (void)applyThermalState:(NSProcessInfoThermalState)thermalState;
 - (void)loadPreferences;
-- (void)resolveStartupWebSocketTokenAndStartRuntime;
 - (void)persistPreferences;
 - (BOOL)isEditingField:(NSTextField*)field;
 
@@ -448,8 +392,11 @@ void StylePanel(NSView* view) {
     if ([defaults objectForKey:@"twsClientId"] != nil) {
         connection.clientId = std::max(1, static_cast<int>([defaults integerForKey:@"twsClientId"]));
     }
-    if (NSString* token = [defaults stringForKey:@"websocketToken"]) {
+    if (NSString* token = [defaults stringForKey:kWebSocketTokenDefaultsKey]) {
         connection.websocketAuthToken = ToStdString(token);
+    }
+    if (connection.websocketAuthToken.empty()) {
+        connection.websocketAuthToken = ensureWebSocketAuthToken();
     }
     if ([defaults objectForKey:@"websocketEnabled"] != nil) {
         connection.websocketEnabled = [defaults boolForKey:@"websocketEnabled"];
@@ -476,6 +423,7 @@ void StylePanel(NSView* view) {
                        risk.maxOrderNotional,
                        risk.maxOpenNotional,
                        risk.controllerArmMode);
+    [defaults setObject:ToNSString(connection.websocketAuthToken) forKey:kWebSocketTokenDefaultsKey];
 }
 
 - (void)persistPreferences {
@@ -489,8 +437,7 @@ void StylePanel(NSView* view) {
     [defaults setObject:ToNSString(connection.host) forKey:@"twsHost"];
     [defaults setInteger:connection.port forKey:@"twsPort"];
     [defaults setInteger:connection.clientId forKey:@"twsClientId"];
-    SaveKeychainStringAsync(kWebSocketTokenService, kWebSocketTokenAccount, connection.websocketAuthToken);
-    [defaults removeObjectForKey:@"websocketToken"];
+    [defaults setObject:ToNSString(connection.websocketAuthToken) forKey:kWebSocketTokenDefaultsKey];
     [defaults setBool:connection.websocketEnabled forKey:@"websocketEnabled"];
     [defaults setBool:connection.controllerEnabled forKey:@"controllerEnabled"];
 
@@ -756,42 +703,7 @@ void StylePanel(NSView* view) {
     [self showWindow:nil];
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
-    [self resolveStartupWebSocketTokenAndStartRuntime];
-}
-
-- (void)resolveStartupWebSocketTokenAndStartRuntime {
-    __weak TradingWindowController* weakSelf = self;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
-        RuntimeConnectionConfig connection = captureRuntimeConnectionConfig();
-        bool removeLegacyDefaultsToken = false;
-
-        const std::string keychainToken = LoadKeychainString(kWebSocketTokenService, kWebSocketTokenAccount);
-        if (!keychainToken.empty()) {
-            connection.websocketAuthToken = keychainToken;
-        } else if (NSString* token = [defaults stringForKey:@"websocketToken"]) {
-            connection.websocketAuthToken = ToStdString(token);
-            removeLegacyDefaultsToken = true;
-        }
-
-        if (connection.websocketAuthToken.empty()) {
-            connection.websocketAuthToken = ensureWebSocketAuthToken();
-        }
-        SaveKeychainStringAsync(kWebSocketTokenService, kWebSocketTokenAccount, connection.websocketAuthToken);
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            TradingWindowController* strongSelf = weakSelf;
-            if (strongSelf == nil || strongSelf->_shuttingDown || strongSelf->_runtimeHost) {
-                return;
-            }
-
-            updateRuntimeConnectionConfig(connection);
-            if (removeLegacyDefaultsToken) {
-                [defaults removeObjectForKey:@"websocketToken"];
-            }
-            [strongSelf startRuntime];
-        });
-    });
+    [self startRuntime];
 }
 
 - (void)startRuntime {

@@ -6,21 +6,40 @@ class TradingWrapper : public DefaultEWrapper {
 private:
     using BrokerEventDispatcher = std::function<void(std::function<void()>)>;
 
+    mutable std::mutex stateMutex_;
     EClientSocket* m_client = nullptr;
     BrokerEventDispatcher eventDispatcher_;
 
+    BrokerEventDispatcher currentEventDispatcher() const {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return eventDispatcher_;
+    }
+
+    EClientSocket* currentClient() const {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        return m_client;
+    }
+
     template <typename Fn>
     void dispatchBrokerEvent(Fn&& fn) {
-        if (eventDispatcher_) {
-            eventDispatcher_(std::function<void()>(std::forward<Fn>(fn)));
+        BrokerEventDispatcher dispatcher = currentEventDispatcher();
+        if (dispatcher) {
+            dispatcher(std::function<void()>(std::forward<Fn>(fn)));
             return;
         }
         fn();
     }
 
 public:
-    void setClient(EClientSocket* client) { m_client = client; }
-    void setEventDispatcher(BrokerEventDispatcher dispatcher) { eventDispatcher_ = std::move(dispatcher); }
+    void setClient(EClientSocket* client) {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        m_client = client;
+    }
+
+    void setEventDispatcher(BrokerEventDispatcher dispatcher) {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        eventDispatcher_ = std::move(dispatcher);
+    }
 
     void connectAck() override {
         dispatchBrokerEvent([this]() {
@@ -85,14 +104,14 @@ public:
             g_data.addMessage("Next valid order ID: " + std::to_string(orderId));
             std::cout << "[Next valid order ID: " << orderId << "]" << std::endl;
 
-            if (m_client) {
+            if (EClientSocket* client = currentClient()) {
                 {
                     std::lock_guard<std::recursive_mutex> clientLock(g_data.clientMutex);
-                    if (m_client->isConnected()) {
-                        m_client->reqPositions();
-                        m_client->reqOpenOrders();
+                    if (client == currentClient() && client->isConnected()) {
+                        client->reqPositions();
+                        client->reqOpenOrders();
                         ExecutionFilter executionFilter;
-                        m_client->reqExecutions(allocateReqId(), executionFilter);
+                        client->reqExecutions(allocateReqId(), executionFilter);
                     }
                 }
                 g_data.addMessage("Requested positions, open orders, and executions...");

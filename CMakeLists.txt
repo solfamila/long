@@ -253,12 +253,10 @@ endif()
 
 find_library(APP_KIT_LIBRARY AppKit REQUIRED)
 find_library(GAME_CONTROLLER_LIBRARY GameController REQUIRED)
-find_library(SECURITY_LIBRARY Security REQUIRED)
 
 target_link_libraries(tws_gui PRIVATE
     ${APP_KIT_LIBRARY}
     ${GAME_CONTROLLER_LIBRARY}
-    ${SECURITY_LIBRARY}
 )
 
 set_target_properties(tws_gui PROPERTIES
@@ -343,7 +341,6 @@ if(BUILD_TESTING)
         Threads::Threads
         ixwebsocket::ixwebsocket
         ${APP_KIT_LIBRARY}
-        ${SECURITY_LIBRARY}
     )
 
     if(TARGET twsapi)

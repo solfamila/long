@@ -178,6 +178,10 @@ struct TradingRuntime::Impl {
         }
     }
 
+    void drainActionQueue() {
+        invokeOnActionThread([] {});
+    }
+
     template <typename Fn>
     auto invokeOnActionThread(Fn&& fn) -> decltype(fn()) {
         using Result = decltype(fn());
@@ -185,22 +189,35 @@ struct TradingRuntime::Impl {
             return fn();
         }
 
+        bool runInline = false;
         auto promise = std::make_shared<std::promise<Result>>();
         auto future = promise->get_future();
         {
             std::lock_guard<std::mutex> lock(actionMutex);
-            actionQueue.emplace_back([promise, fn = std::forward<Fn>(fn)]() mutable {
-                try {
-                    if constexpr (std::is_void_v<Result>) {
-                        fn();
-                        promise->set_value();
-                    } else {
-                        promise->set_value(fn());
+            if (stopActionThread) {
+                runInline = true;
+            } else {
+                actionQueue.emplace_back([promise, fn = std::forward<Fn>(fn)]() mutable {
+                    try {
+                        if constexpr (std::is_void_v<Result>) {
+                            fn();
+                            promise->set_value();
+                        } else {
+                            promise->set_value(fn());
+                        }
+                    } catch (...) {
+                        promise->set_exception(std::current_exception());
                     }
-                } catch (...) {
-                    promise->set_exception(std::current_exception());
-                }
-            });
+                });
+            }
+        }
+        if (runInline) {
+            if constexpr (std::is_void_v<Result>) {
+                fn();
+                return;
+            } else {
+                return fn();
+            }
         }
         actionCv.notify_one();
         return future.get();
@@ -362,10 +379,7 @@ bool TradingRuntime::start() {
     }
 
     if (connectionConfig.controllerEnabled) {
-        {
-            std::lock_guard<std::mutex> lock(impl_->controllerMutex);
-            controllerInitialize(impl_->controllerState);
-        }
+        controllerInitialize(impl_->controllerState);
         impl_->controllerRunning.store(true, std::memory_order_relaxed);
         impl_->controllerThread = std::thread(&Impl::controllerLoop, impl_.get());
     } else {
@@ -396,10 +410,7 @@ void TradingRuntime::shutdown() {
     if (impl_->controllerThread.joinable()) {
         impl_->controllerThread.join();
     }
-    {
-        std::lock_guard<std::mutex> lock(impl_->controllerMutex);
-        controllerCleanup(impl_->controllerState);
-    }
+    controllerCleanup(impl_->controllerState);
 
     if (impl_->wsServer) {
         if (g_data.wsServerRunning.load()) {
@@ -427,15 +438,16 @@ void TradingRuntime::shutdown() {
     }
 
     impl_->reader.reset();
+    impl_->drainActionQueue();
 
     if (impl_->client) {
         if (impl_->client->isConnected()) {
             impl_->client->eDisconnect();
         }
-        impl_->client.reset();
     }
 
     impl_->wrapper.setClient(nullptr);
+    impl_->client.reset();
     impl_->osSignal.reset();
     appendRuntimeJournalEvent("runtime_shutdown");
     setRuntimeSessionState(RuntimeSessionState::Disconnected);
