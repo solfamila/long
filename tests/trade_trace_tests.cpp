@@ -1,5 +1,6 @@
 #include "app_shared.h"
 #include "trace_exporter.h"
+#include "trading_wrapper.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -87,6 +88,12 @@ json makeTraceLine(std::uint64_t traceId,
 void appendTraceLine(const json& line) {
     std::ofstream out(tradeTraceLogPath(), std::ios::app);
     expect(out.is_open(), "failed to open trace log for append");
+    out << line.dump() << '\n';
+}
+
+void appendJournalLine(const json& line) {
+    std::ofstream out(runtimeJournalLogPath(), std::ios::app);
+    expect(out.is_open(), "failed to open runtime journal for append");
     out << line.dump() << '\n';
 }
 
@@ -233,6 +240,120 @@ void testWebSocketRuntimeGuards() {
     expectContains(error, "Too many WebSocket order requests", "rate limit error should be descriptive");
 }
 
+void testRecoverySnapshotReportsAbnormalShutdown() {
+    clearTestFiles();
+
+    appendTraceLine(makeTraceLine(21, 115, 0, "Controller", "INTC", "BUY",
+                                  "Trigger", "Controller", "BUY 1 INTC @ 45.64", 0.0));
+    appendJournalLine(json{
+        {"event", "runtime_start"},
+        {"wallTime", "2026-03-13T09:30:00.000"},
+        {"appSessionId", "app-test-session"},
+        {"runtimeSessionId", "runtime-test-session"}
+    });
+
+    const RuntimeRecoverySnapshot snapshot = recoverRuntimeRecoverySnapshot(5);
+    expect(snapshot.priorSessionAbnormal, "recovery snapshot should flag abnormal prior session");
+    expect(snapshot.priorAppSessionId == "app-test-session", "recovery snapshot should preserve prior app session id");
+    expect(snapshot.priorRuntimeSessionId == "runtime-test-session", "recovery snapshot should preserve prior runtime session id");
+    expect(snapshot.unfinishedTraceCount == 1, "recovery snapshot should count unfinished traces");
+    expectContains(snapshot.bannerText, "Previous session ended unexpectedly", "recovery banner should mention abnormal shutdown");
+    expectContains(snapshot.bannerText, "1 unfinished trace", "recovery banner should mention unfinished trace count");
+}
+
+void testTradingWrapperSessionReadyAndReconnect() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    TradingWrapper wrapper;
+    wrapper.connectAck();
+    wrapper.managedAccounts("U23154741,U23164862");
+    wrapper.nextValidId(113);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        expect(g_data.connected, "wrapper should mark session connected after connectAck/nextValidId");
+        expect(!g_data.sessionReady, "session should not be ready until reconciliation completes");
+        expect(g_data.sessionState == RuntimeSessionState::Reconciling, "session should enter reconciling after nextValidId");
+        expect(g_data.selectedAccount == "U23154741", "managedAccounts should select configured account");
+        expect(g_data.nextOrderId.load(std::memory_order_relaxed) == 113, "nextValidId should update next order id");
+    }
+
+    wrapper.positionEnd();
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        expect(g_data.positionsLoaded, "positionEnd should mark positions loaded");
+        expect(!g_data.sessionReady, "session should wait for executions before becoming ready");
+    }
+
+    wrapper.execDetailsEnd(1);
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        expect(g_data.executionsLoaded, "execDetailsEnd should mark executions loaded");
+        expect(g_data.sessionReady, "session should become ready after positions and executions load");
+        expect(g_data.sessionState == RuntimeSessionState::SessionReady, "session should transition to ready after reconciliation");
+        expect(!g_data.messages.empty(), "wrapper should have appended status messages");
+    }
+
+    wrapper.connectionClosed();
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        expect(!g_data.connected, "connectionClosed should clear connected state");
+        expect(!g_data.sessionReady, "connectionClosed should clear ready state");
+        expect(g_data.sessionState == RuntimeSessionState::Disconnected, "connectionClosed should return session to disconnected");
+        expect(!g_data.positionsLoaded, "connectionClosed should clear reconciliation flags");
+        expect(!g_data.executionsLoaded, "connectionClosed should clear reconciliation flags");
+        expect(g_data.bidPrice == 0.0 && g_data.askPrice == 0.0 && g_data.lastPrice == 0.0,
+               "connectionClosed should clear quote state");
+    }
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testTradingWrapperIgnoresDuplicateOrderStatus() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    TradingWrapper wrapper;
+#if defined(TWS_ORDER_STATUS_PERMID_IS_INT)
+    const int permId = 7001;
+#else
+    const long long permId = 7001;
+#endif
+    const Decimal zero = DecimalFunctions::doubleToDecimal(0.0);
+    const Decimal one = DecimalFunctions::doubleToDecimal(1.0);
+
+    wrapper.orderStatus(113, "Submitted", zero, one, 0.0, permId, 0, 0.0, 0, "", 0.0);
+
+    std::size_t firstMessageCount = 0;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        const auto orderIt = g_data.orders.find(113);
+        expect(orderIt != g_data.orders.end(), "first orderStatus should create order state");
+        expect(orderIt->second.status == "Submitted", "first orderStatus should record status");
+        firstMessageCount = g_data.messages.size();
+        expect(firstMessageCount == 1, "first orderStatus should add exactly one message");
+    }
+
+    wrapper.orderStatus(113, "Submitted", zero, one, 0.0, permId, 0, 0.0, 0, "", 0.0);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        expect(g_data.messages.size() == firstMessageCount, "duplicate orderStatus should not add a second message");
+        const auto orderIt = g_data.orders.find(113);
+        expect(orderIt != g_data.orders.end(), "duplicate orderStatus should preserve order state");
+        expect(orderIt->second.remainingQty == 1.0, "duplicate orderStatus should preserve remaining quantity");
+    }
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 } // namespace
 
 int main() {
@@ -242,6 +363,9 @@ int main() {
         testTraceIdFloorRecoversFromLog();
         testReplayHandlesPartialFillsAndCommission();
         testWebSocketRuntimeGuards();
+        testRecoverySnapshotReportsAbnormalShutdown();
+        testTradingWrapperSessionReadyAndReconnect();
+        testTradingWrapperIgnoresDuplicateOrderStatus();
         std::cout << "All trace tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -70,6 +70,7 @@ set(APP_SOURCES
     main.mm
     app_shared.cpp
     mac_observability.mm
+    trading_export_panels.mm
     trading_refresh_scheduler.mm
     trading_actions.cpp
     trading_settings_sheet.mm
@@ -328,6 +329,7 @@ endif()
 set_source_files_properties(
     main.mm
     mac_observability.mm
+    trading_export_panels.mm
     trading_refresh_scheduler.mm
     trading_settings_sheet.mm
     controller_mac.mm

@@ -104,10 +104,13 @@ enum class ControllerArmMode {
 };
 
 using UiInvalidationCallback = std::function<void()>;
+using SharedDataMutationDispatcher = std::function<void(std::function<void()>)>;
 
 void setUiInvalidationCallback(UiInvalidationCallback callback);
 void clearUiInvalidationCallback();
 void requestUiInvalidation();
+void setSharedDataMutationDispatcher(SharedDataMutationDispatcher dispatcher);
+void clearSharedDataMutationDispatcher();
 
 struct OrderInfo {
     OrderId orderId = 0;
@@ -349,17 +352,7 @@ struct SharedData {
     std::map<std::string, std::uint64_t> traceIdByExecId;
     std::uint64_t latestTraceId = 0;
 
-    void addMessage(const std::string& msg) {
-        {
-            std::lock_guard<std::recursive_mutex> lock(mutex);
-            messages.push_back(msg);
-            while (messages.size() > MAX_MESSAGES) {
-                messages.pop_front();
-            }
-            ++messagesVersion;
-        }
-        requestUiInvalidation();
-    }
+    void addMessage(const std::string& msg);
 
     void copyMessagesTextIfChanged(std::string& out, std::uint64_t& seenVersion) {
         std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -489,6 +482,10 @@ void updateRiskControls(int staleQuoteThresholdMs,
                         ControllerArmMode controllerArmMode);
 void setControllerArmed(bool armed);
 void setTradingKillSwitch(bool enabled);
+void updateControllerConnectionState(bool connected, const std::string& deviceName);
+void updateControllerLockedDeviceName(const std::string& deviceName);
+void setWebSocketServerRunning(bool running);
+int adjustWebSocketConnectedClients(int delta);
 std::string ensureWebSocketAuthToken();
 bool consumeWebSocketOrderRateLimit(std::string* error = nullptr);
 bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error = nullptr);

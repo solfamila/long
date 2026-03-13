@@ -53,23 +53,11 @@ int controllerScore(GCController* controller) {
 }
 
 void updateControllerSharedState(bool connected, const std::string& deviceName) {
-    g_data.controllerConnected.store(connected);
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    g_data.controllerDeviceName = deviceName;
+    updateControllerConnectionState(connected, deviceName);
 }
 
 void updateControllerLockedState(const std::string& deviceName) {
-    bool changed = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        if (g_data.controllerLockedDeviceName != deviceName) {
-            g_data.controllerLockedDeviceName = deviceName;
-            changed = true;
-        }
-    }
-    if (changed) {
-        requestUiInvalidation();
-    }
+    updateControllerLockedDeviceName(deviceName);
 }
 
 bool setControllerLightColor(GCController* controller, float red, float green, float blue) {

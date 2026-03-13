@@ -136,6 +136,24 @@ struct TradingRuntime::Impl {
         tlsActionLoopOwner = nullptr;
     }
 
+    void postOnActionThread(std::function<void()> action) {
+        if (!action) {
+            return;
+        }
+        if (tlsActionLoopOwner == this) {
+            action();
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(actionMutex);
+            if (stopActionThread) {
+                return;
+            }
+            actionQueue.emplace_back(std::move(action));
+        }
+        actionCv.notify_one();
+    }
+
     void startActionLoop() {
         {
             std::lock_guard<std::mutex> lock(actionMutex);
@@ -219,19 +237,24 @@ bool TradingRuntime::start() {
     bindSharedDataOwner(&impl_->sharedData);
     impl_->installUiInvalidationCallback();
     impl_->startActionLoop();
+    setSharedDataMutationDispatcher([impl = impl_.get()](std::function<void()> mutation) {
+        impl->invokeOnActionThread([mutation = std::move(mutation)]() mutable {
+            mutation();
+        });
+    });
 
     const RuntimeConnectionConfig connectionConfig = captureRuntimeConnectionConfig();
     const std::string websocketToken = ensureWebSocketAuthToken();
     const auto unfinishedTraces = recoverUnfinishedTraceSummariesFromLog(5);
     const RuntimeRecoverySnapshot recovery = recoverRuntimeRecoverySnapshot(5);
-    {
+    impl_->invokeOnActionThread([&]() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         g_data.appSessionId = makeSessionIdentifier("app");
         g_data.runtimeSessionId = makeSessionIdentifier("runtime");
         g_data.startupRecoveryBanner = recovery.bannerText;
         g_data.wsServerRunning.store(false, std::memory_order_relaxed);
         g_data.wsConnectedClients.store(0, std::memory_order_relaxed);
-    }
+    });
 
     std::cout << "=== TWS Trading GUI ===" << std::endl;
     std::cout << "Connecting to TWS at " << connectionConfig.host << ":" << connectionConfig.port << std::endl;
@@ -250,6 +273,9 @@ bool TradingRuntime::start() {
     impl_->osSignal = std::make_unique<EReaderOSSignal>(2000);
     impl_->client = std::make_unique<EClientSocket>(&impl_->wrapper, impl_->osSignal.get());
     impl_->wrapper.setClient(impl_->client.get());
+    impl_->wrapper.setEventDispatcher([impl = impl_.get()](std::function<void()> event) {
+        impl->postOnActionThread(std::move(event));
+    });
 
     const bool twsConnected = impl_->client->eConnect(connectionConfig.host.c_str(),
                                                       connectionConfig.port,
@@ -284,34 +310,38 @@ bool TradingRuntime::start() {
         ix::initNetSystem();
         impl_->wsServer = std::make_unique<ix::WebSocketServer>(WEBSOCKET_PORT, WEBSOCKET_HOST);
         TradingRuntime* const runtime = this;
+        Impl* const impl = impl_.get();
         impl_->wsServer->setOnClientMessageCallback(
-            [runtime](std::shared_ptr<ix::ConnectionState> connectionState,
-                      ix::WebSocket& webSocket,
-                      const ix::WebSocketMessagePtr& msg) {
+            [runtime, impl](std::shared_ptr<ix::ConnectionState> connectionState,
+                            ix::WebSocket& webSocket,
+                            const ix::WebSocketMessagePtr& msg) {
                 (void)connectionState;
 
                 if (msg->type == ix::WebSocketMessageType::Message) {
                     handleWebSocketMessage(msg->str, webSocket, runtime);
                 } else if (msg->type == ix::WebSocketMessageType::Open) {
-                    const int total = g_data.wsConnectedClients.fetch_add(1) + 1;
-                    g_data.addMessage("WebSocket client connected (total: " + std::to_string(total) + ")");
-                    std::cout << "[WebSocket client connected]" << std::endl;
+                    impl->postOnActionThread([]() {
+                        const int total = adjustWebSocketConnectedClients(1);
+                        g_data.addMessage("WebSocket client connected (total: " + std::to_string(total) + ")");
+                        std::cout << "[WebSocket client connected]" << std::endl;
+                    });
                 } else if (msg->type == ix::WebSocketMessageType::Close) {
-                    int observed = g_data.wsConnectedClients.load();
-                    int total = 0;
-                    do {
-                        total = observed > 0 ? (observed - 1) : 0;
-                    } while (!g_data.wsConnectedClients.compare_exchange_weak(observed, total));
-                    g_data.addMessage("WebSocket client disconnected (total: " + std::to_string(total) + ")");
-                    std::cout << "[WebSocket client disconnected]" << std::endl;
+                    impl->postOnActionThread([]() {
+                        const int total = adjustWebSocketConnectedClients(-1);
+                        g_data.addMessage("WebSocket client disconnected (total: " + std::to_string(total) + ")");
+                        std::cout << "[WebSocket client disconnected]" << std::endl;
+                    });
                 } else if (msg->type == ix::WebSocketMessageType::Error) {
-                    g_data.addMessage("WebSocket error: " + msg->errorInfo.reason);
-                    std::cout << "[WebSocket error: " << msg->errorInfo.reason << "]" << std::endl;
+                    const std::string reason = msg->errorInfo.reason;
+                    impl->postOnActionThread([reason]() {
+                        g_data.addMessage("WebSocket error: " + reason);
+                        std::cout << "[WebSocket error: " << reason << "]" << std::endl;
+                    });
                 }
             });
 
         if (impl_->wsServer->listenAndStart()) {
-            g_data.wsServerRunning.store(true);
+            setWebSocketServerRunning(true);
             g_data.addMessage("WebSocket server started on localhost port " + std::to_string(WEBSOCKET_PORT));
             g_data.addMessage("WebSocket token: " + websocketToken);
             std::cout << "[WebSocket server started on localhost port " << WEBSOCKET_PORT << "]" << std::endl;
@@ -375,13 +405,13 @@ void TradingRuntime::shutdown() {
         if (g_data.wsServerRunning.load()) {
             std::cout << "Stopping WebSocket server..." << std::endl;
             impl_->wsServer->stop();
-            g_data.wsServerRunning.store(false);
-            requestUiInvalidation();
+            setWebSocketServerRunning(false);
         }
         impl_->wsServer.reset();
         ix::uninitNetSystem();
     }
 
+    impl_->wrapper.setEventDispatcher({});
     impl_->stopActionLoop();
 
     if (impl_->client) {
@@ -410,6 +440,7 @@ void TradingRuntime::shutdown() {
     impl_->osSignal.reset();
     appendRuntimeJournalEvent("runtime_shutdown");
     setRuntimeSessionState(RuntimeSessionState::Disconnected);
+    clearSharedDataMutationDispatcher();
     unbindSharedDataOwner(&impl_->sharedData);
     clearUiInvalidationCallback();
     macLogInfo("runtime", "Runtime shutdown complete");

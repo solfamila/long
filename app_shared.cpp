@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <system_error>
 #include <unordered_map>
 
@@ -171,6 +172,16 @@ UiInvalidationCallback& uiInvalidationCallbackSlot() {
     return callback;
 }
 
+std::mutex& sharedDataMutationDispatcherMutex() {
+    static std::mutex m;
+    return m;
+}
+
+SharedDataMutationDispatcher& sharedDataMutationDispatcherSlot() {
+    static SharedDataMutationDispatcher dispatcher;
+    return dispatcher;
+}
+
 std::mutex& tradeTraceFileMutex() {
     static std::mutex m;
     return m;
@@ -187,6 +198,35 @@ void emitMacTraceObservation(std::uint64_t traceId,
                              TradeEventType type,
                              const std::string& stage,
                              const std::string& details);
+
+template <typename Fn>
+auto invokeSharedDataMutation(Fn&& fn) -> decltype(fn()) {
+    SharedDataMutationDispatcher dispatcher;
+    {
+        std::lock_guard<std::mutex> lock(sharedDataMutationDispatcherMutex());
+        dispatcher = sharedDataMutationDispatcherSlot();
+    }
+    if (!dispatcher) {
+        return fn();
+    }
+
+    using Result = decltype(fn());
+    auto promise = std::make_shared<std::promise<Result>>();
+    auto future = promise->get_future();
+    dispatcher([promise, fn = std::forward<Fn>(fn)]() mutable {
+        try {
+            if constexpr (std::is_void_v<Result>) {
+                fn();
+                promise->set_value();
+            } else {
+                promise->set_value(fn());
+            }
+        } catch (...) {
+            promise->set_exception(std::current_exception());
+        }
+    });
+    return future.get();
+}
 
 bool hasTime(std::chrono::steady_clock::time_point tp) {
     return tp.time_since_epoch().count() != 0;
@@ -592,6 +632,16 @@ void clearUiInvalidationCallback() {
     uiInvalidationCallbackSlot() = nullptr;
 }
 
+void setSharedDataMutationDispatcher(SharedDataMutationDispatcher dispatcher) {
+    std::lock_guard<std::mutex> lock(sharedDataMutationDispatcherMutex());
+    sharedDataMutationDispatcherSlot() = std::move(dispatcher);
+}
+
+void clearSharedDataMutationDispatcher() {
+    std::lock_guard<std::mutex> lock(sharedDataMutationDispatcherMutex());
+    sharedDataMutationDispatcherSlot() = nullptr;
+}
+
 void requestUiInvalidation() {
     UiInvalidationCallback callback;
     {
@@ -601,6 +651,18 @@ void requestUiInvalidation() {
     if (callback) {
         callback();
     }
+}
+
+void SharedData::addMessage(const std::string& msg) {
+    invokeSharedDataMutation([&]() {
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        messages.push_back(msg);
+        while (messages.size() > MAX_MESSAGES) {
+            messages.pop_front();
+        }
+        ++messagesVersion;
+    });
+    requestUiInvalidation();
 }
 
 std::string toUpperCase(const std::string& str) {
@@ -634,14 +696,14 @@ std::string runtimeSessionStateToString(RuntimeSessionState state) {
 }
 
 void setRuntimeSessionState(RuntimeSessionState state) {
-    bool changed = false;
-    {
+    const bool changed = invokeSharedDataMutation([&]() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        if (g_data.sessionState != state) {
-            g_data.sessionState = state;
-            changed = true;
+        if (g_data.sessionState == state) {
+            return false;
         }
-    }
+        g_data.sessionState = state;
+        return true;
+    });
     if (changed) {
         macLogInfo("runtime", "Session state changed: " + runtimeSessionStateToString(state));
         appendRuntimeJournalEvent("session_state_changed", {{"state", runtimeSessionStateToString(state)}});
@@ -773,10 +835,12 @@ void consumeGuiSyncUpdates(std::string& symbolInput,
 }
 
 void syncSharedGuiInputs(int quantityInput, double priceBuffer, double maxPositionDollars) {
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    g_data.currentQuantity = quantityInput;
-    g_data.priceBuffer = priceBuffer;
-    g_data.maxPositionDollars = maxPositionDollars;
+    invokeSharedDataMutation([&]() {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.currentQuantity = quantityInput;
+        g_data.priceBuffer = priceBuffer;
+        g_data.maxPositionDollars = maxPositionDollars;
+    });
 }
 
 SymbolUiSnapshot captureSymbolUiSnapshot(const std::string& subscribedSymbol) {
@@ -822,7 +886,7 @@ RuntimeConnectionConfig captureRuntimeConnectionConfig() {
 }
 
 void updateRuntimeConnectionConfig(const RuntimeConnectionConfig& config) {
-    {
+    invokeSharedDataMutation([&]() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         g_data.twsHost = config.host.empty() ? DEFAULT_HOST : config.host;
         g_data.twsPort = config.port > 0 ? config.port : DEFAULT_PORT;
@@ -830,7 +894,7 @@ void updateRuntimeConnectionConfig(const RuntimeConnectionConfig& config) {
         g_data.websocketAuthToken = config.websocketAuthToken;
         g_data.websocketEnabled = config.websocketEnabled;
         g_data.controllerEnabled = config.controllerEnabled;
-    }
+    });
     requestUiInvalidation();
 }
 
@@ -859,25 +923,25 @@ void updateRiskControls(int staleQuoteThresholdMs,
                         double maxOrderNotional,
                         double maxOpenNotional,
                         ControllerArmMode controllerArmMode) {
-    {
+    invokeSharedDataMutation([&]() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         g_data.staleQuoteThresholdMs = std::max(250, staleQuoteThresholdMs);
         g_data.maxOrderNotional = std::max(100.0, maxOrderNotional);
         g_data.maxOpenNotional = std::max(g_data.maxOrderNotional, maxOpenNotional);
         g_data.controllerArmMode = controllerArmMode;
-    }
+    });
     requestUiInvalidation();
 }
 
 void setControllerArmed(bool armed) {
-    bool changed = false;
-    {
+    const bool changed = invokeSharedDataMutation([&]() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        if (g_data.controllerArmed != armed) {
-            g_data.controllerArmed = armed;
-            changed = true;
+        if (g_data.controllerArmed == armed) {
+            return false;
         }
-    }
+        g_data.controllerArmed = armed;
+        return true;
+    });
     if (changed) {
         appendRuntimeJournalEvent("controller_armed_changed", {{"armed", armed}});
         requestUiInvalidation();
@@ -885,40 +949,102 @@ void setControllerArmed(bool armed) {
 }
 
 void setTradingKillSwitch(bool enabled) {
-    bool changed = false;
-    {
+    const bool changed = invokeSharedDataMutation([&]() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        if (g_data.tradingKillSwitch != enabled) {
-            g_data.tradingKillSwitch = enabled;
-            changed = true;
+        if (g_data.tradingKillSwitch == enabled) {
+            return false;
         }
-    }
+        g_data.tradingKillSwitch = enabled;
+        return true;
+    });
     if (changed) {
         appendRuntimeJournalEvent("trading_kill_switch_changed", {{"enabled", enabled}});
         requestUiInvalidation();
     }
 }
 
-std::string ensureWebSocketAuthToken() {
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    if (g_data.websocketAuthToken.empty()) {
-        g_data.websocketAuthToken = randomHexToken(16);
+void updateControllerConnectionState(bool connected, const std::string& deviceName) {
+    const bool changed = invokeSharedDataMutation([&]() {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        const bool connectedChanged = g_data.controllerConnected.load(std::memory_order_relaxed) != connected;
+        const bool nameChanged = g_data.controllerDeviceName != deviceName;
+        if (!connectedChanged && !nameChanged) {
+            return false;
+        }
+        g_data.controllerConnected.store(connected, std::memory_order_relaxed);
+        g_data.controllerDeviceName = deviceName;
+        return true;
+    });
+    if (changed) {
+        requestUiInvalidation();
     }
-    return g_data.websocketAuthToken;
+}
+
+void updateControllerLockedDeviceName(const std::string& deviceName) {
+    const bool changed = invokeSharedDataMutation([&]() {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (g_data.controllerLockedDeviceName == deviceName) {
+            return false;
+        }
+        g_data.controllerLockedDeviceName = deviceName;
+        return true;
+    });
+    if (changed) {
+        requestUiInvalidation();
+    }
+}
+
+void setWebSocketServerRunning(bool running) {
+    const bool changed = invokeSharedDataMutation([&]() {
+        const bool previous = g_data.wsServerRunning.load(std::memory_order_relaxed);
+        if (previous == running) {
+            return false;
+        }
+        g_data.wsServerRunning.store(running, std::memory_order_relaxed);
+        return true;
+    });
+    if (changed) {
+        requestUiInvalidation();
+    }
+}
+
+int adjustWebSocketConnectedClients(int delta) {
+    const int total = invokeSharedDataMutation([&]() {
+        int next = g_data.wsConnectedClients.load(std::memory_order_relaxed) + delta;
+        if (next < 0) {
+            next = 0;
+        }
+        g_data.wsConnectedClients.store(next, std::memory_order_relaxed);
+        return next;
+    });
+    requestUiInvalidation();
+    return total;
+}
+
+std::string ensureWebSocketAuthToken() {
+    return invokeSharedDataMutation([&]() {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (g_data.websocketAuthToken.empty()) {
+            g_data.websocketAuthToken = randomHexToken(16);
+        }
+        return g_data.websocketAuthToken;
+    });
 }
 
 bool consumeWebSocketOrderRateLimit(std::string* error) {
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    const auto now = std::chrono::steady_clock::now();
-    pruneWebSocketStateLocked(now);
-    if (static_cast<int>(g_data.recentWsOrderTimestamps.size()) >= kMaxWebSocketOrdersPerWindow) {
-        if (error) {
-            *error = "Too many WebSocket order requests; slow down";
+    return invokeSharedDataMutation([&]() {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        const auto now = std::chrono::steady_clock::now();
+        pruneWebSocketStateLocked(now);
+        if (static_cast<int>(g_data.recentWsOrderTimestamps.size()) >= kMaxWebSocketOrdersPerWindow) {
+            if (error) {
+                *error = "Too many WebSocket order requests; slow down";
+            }
+            return false;
         }
-        return false;
-    }
-    g_data.recentWsOrderTimestamps.push_back(now);
-    return true;
+        g_data.recentWsOrderTimestamps.push_back(now);
+        return true;
+    });
 }
 
 bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error) {
@@ -929,18 +1055,20 @@ bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error) 
         return false;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    const auto now = std::chrono::steady_clock::now();
-    pruneWebSocketStateLocked(now);
-    const auto it = g_data.recentWsIdempotencyKeys.find(key);
-    if (it != g_data.recentWsIdempotencyKeys.end()) {
-        if (error) {
-            *error = "Duplicate idempotencyKey";
+    return invokeSharedDataMutation([&]() {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        const auto now = std::chrono::steady_clock::now();
+        pruneWebSocketStateLocked(now);
+        const auto it = g_data.recentWsIdempotencyKeys.find(key);
+        if (it != g_data.recentWsIdempotencyKeys.end()) {
+            if (error) {
+                *error = "Duplicate idempotencyKey";
+            }
+            return false;
         }
-        return false;
-    }
-    g_data.recentWsIdempotencyKeys[key] = now;
-    return true;
+        g_data.recentWsIdempotencyKeys[key] = now;
+        return true;
+    });
 }
 
 std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot() {
@@ -954,30 +1082,34 @@ std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot() {
 }
 
 std::vector<OrderId> markOrdersPendingCancel(const std::vector<OrderId>& orderIds) {
-    std::vector<OrderId> marked;
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    marked.reserve(orderIds.size());
-    for (OrderId id : orderIds) {
-        auto it = g_data.orders.find(id);
-        if (it != g_data.orders.end() && !it->second.isTerminal() && !it->second.cancelPending) {
-            it->second.cancelPending = true;
-            marked.push_back(id);
+    return invokeSharedDataMutation([&]() {
+        std::vector<OrderId> marked;
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        marked.reserve(orderIds.size());
+        for (OrderId id : orderIds) {
+            auto it = g_data.orders.find(id);
+            if (it != g_data.orders.end() && !it->second.isTerminal() && !it->second.cancelPending) {
+                it->second.cancelPending = true;
+                marked.push_back(id);
+            }
         }
-    }
-    return marked;
+        return marked;
+    });
 }
 
 std::vector<OrderId> markAllPendingOrdersForCancel() {
-    std::vector<OrderId> pendingOrders;
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    pendingOrders.reserve(g_data.orders.size());
-    for (auto& [id, order] : g_data.orders) {
-        if (!order.isTerminal() && !order.cancelPending) {
-            order.cancelPending = true;
-            pendingOrders.push_back(id);
+    return invokeSharedDataMutation([&]() {
+        std::vector<OrderId> pendingOrders;
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        pendingOrders.reserve(g_data.orders.size());
+        for (auto& [id, order] : g_data.orders) {
+            if (!order.isTerminal() && !order.cancelPending) {
+                order.cancelPending = true;
+                pendingOrders.push_back(id);
+            }
         }
-    }
-    return pendingOrders;
+        return pendingOrders;
+    });
 }
 
 std::vector<bool> sendCancelRequests(EClientSocket* client, const std::vector<OrderId>& orderIds) {
@@ -2206,6 +2338,7 @@ TradeTraceSnapshot captureTradeTraceSnapshot(std::uint64_t traceId) {
 
 void resetSharedDataForTesting() {
     clearUiInvalidationCallback();
+    clearSharedDataMutationDispatcher();
 
     SharedData fresh;
     SharedData& bootstrap = bootstrapSharedData();

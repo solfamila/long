@@ -33,19 +33,7 @@ struct ControllerState {
 };
 
 inline void controllerSetSharedState(bool connected, const std::string& deviceName) {
-    bool changed = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        if (g_data.controllerConnected.load() != connected ||
-            g_data.controllerDeviceName != deviceName) {
-            g_data.controllerConnected.store(connected);
-            g_data.controllerDeviceName = deviceName;
-            changed = true;
-        }
-    }
-    if (changed) {
-        requestUiInvalidation();
-    }
+    updateControllerConnectionState(connected, deviceName);
 }
 
 inline void controllerClearButtons(ControllerState& cs) {

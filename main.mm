@@ -2,7 +2,7 @@
 #import <Security/Security.h>
 
 #include "app_shared.h"
-#include "trace_exporter.h"
+#include "trading_export_panels.h"
 #include "trading_actions.h"
 #include "trading_refresh_scheduler.h"
 #include "trading_runtime.h"
@@ -162,29 +162,6 @@ NSString* ControllerArmSafetyText(const RiskControlsSnapshot& risk) {
     return risk.controllerArmMode == ControllerArmMode::Manual
         ? @"controller armed (manual)"
         : @"controller armed (1-shot)";
-}
-
-bool WriteStringToURL(const std::string& content, NSURL* url, NSError** error) {
-    NSString* text = [[NSString alloc] initWithBytes:content.data()
-                                              length:content.size()
-                                            encoding:NSUTF8StringEncoding];
-    if (text == nil) {
-        if (error != nullptr) {
-            *error = [NSError errorWithDomain:NSCocoaErrorDomain
-                                         code:NSFileWriteInapplicableStringEncodingError
-                                     userInfo:@{NSLocalizedDescriptionKey: @"Failed to encode UTF-8 text"}];
-        }
-        return false;
-    }
-    return [text writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:error];
-}
-
-void ShowAlert(NSWindow* window, NSString* title, NSString* message, NSAlertStyle style) {
-    NSAlert* alert = [[NSAlert alloc] init];
-    alert.messageText = title ?: @"Notice";
-    alert.informativeText = message ?: @"";
-    alert.alertStyle = style;
-    [alert beginSheetModalForWindow:window completionHandler:nil];
 }
 
 void StyleTintedButton(NSButton* button, NSColor* bezelColor, NSColor* tintColor) {
@@ -1080,67 +1057,20 @@ void StylePanel(NSView* view) {
 
 - (void)exportSelectedTrace:(id)sender {
     (void)sender;
-    if (_selectedTraceId == 0) {
-        ShowAlert(self.window, @"No Trace Selected", @"Select a trade trace before exporting.", NSAlertStyleWarning);
-        return;
+    std::string successMessage;
+    if (RunSelectedTraceExportPanel(self.window, _selectedTraceId, &successMessage)) {
+        g_data.addMessage(successMessage);
+        [self scheduleRefresh];
     }
-
-    TraceExportBundle bundle;
-    std::string error;
-    if (!buildTraceExportBundle(_selectedTraceId, &bundle, &error)) {
-        ShowAlert(self.window, @"Export Failed", ToNSString(error), NSAlertStyleCritical);
-        return;
-    }
-
-    NSOpenPanel* panel = [NSOpenPanel openPanel];
-    panel.canChooseDirectories = YES;
-    panel.canChooseFiles = NO;
-    panel.canCreateDirectories = YES;
-    panel.prompt = @"Export";
-    panel.message = @"Choose a folder for the selected trace export.";
-    if ([panel runModal] != NSModalResponseOK) {
-        return;
-    }
-
-    NSURL* directoryURL = panel.URL;
-    NSError* writeError = nil;
-    const std::string base = bundle.baseName;
-    const bool wroteReport = WriteStringToURL(bundle.reportText,
-        [directoryURL URLByAppendingPathComponent:ToNSString(base + "-report.txt")], &writeError);
-    const bool wroteSummary = wroteReport && WriteStringToURL(bundle.summaryCsv,
-        [directoryURL URLByAppendingPathComponent:ToNSString(base + "-summary.csv")], &writeError);
-    const bool wroteFills = wroteSummary && WriteStringToURL(bundle.fillsCsv,
-        [directoryURL URLByAppendingPathComponent:ToNSString(base + "-fills.csv")], &writeError);
-    const bool wroteTimeline = wroteFills && WriteStringToURL(bundle.timelineCsv,
-        [directoryURL URLByAppendingPathComponent:ToNSString(base + "-timeline.csv")], &writeError);
-
-    if (!wroteTimeline) {
-        ShowAlert(self.window, @"Export Failed", writeError.localizedDescription ?: @"Failed to write export files.", NSAlertStyleCritical);
-        return;
-    }
-
-    g_data.addMessage("Exported trace bundle to " + ToStdString(directoryURL.path));
-    [self scheduleRefresh];
 }
 
 - (void)exportAllTracesSummary:(id)sender {
     (void)sender;
-    NSSavePanel* panel = [NSSavePanel savePanel];
-    panel.nameFieldStringValue = @"all-trades-summary.csv";
-    panel.prompt = @"Save CSV";
-    if ([panel runModal] != NSModalResponseOK) {
-        return;
+    std::string successMessage;
+    if (RunAllTradesSummaryExportPanel(self.window, &successMessage)) {
+        g_data.addMessage(successMessage);
+        [self scheduleRefresh];
     }
-
-    NSError* writeError = nil;
-    const std::string csv = buildAllTradesSummaryCsv();
-    if (!WriteStringToURL(csv, panel.URL, &writeError)) {
-        ShowAlert(self.window, @"Export Failed", writeError.localizedDescription ?: @"Failed to save CSV.", NSAlertStyleCritical);
-        return;
-    }
-
-    g_data.addMessage("Exported trade summary CSV to " + ToStdString(panel.URL.path));
-    [self scheduleRefresh];
 }
 
 - (void)traceSelectionChanged:(id)sender {
