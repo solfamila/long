@@ -4,9 +4,8 @@
 #include "platform_win32.h"
 #endif
 #include "controller.h"
-#include "websocket_handlers.h"
-#include "trading_wrapper.h"
 #include "trading_panel.h"
+#include "trading_runtime.h"
 
 int main() {
     std::cout << "=== TWS Trading GUI ===" << std::endl;
@@ -43,68 +42,15 @@ int main() {
         return 1;
     }
 
-    TradingWrapper wrapper;
-    EReaderOSSignal osSignal(2000);
-    EClientSocket client(&wrapper, &osSignal);
-    wrapper.setClient(&client);
-
-    bool twsConnected = client.eConnect(DEFAULT_HOST, DEFAULT_PORT, DEFAULT_CLIENT_ID);
-    if (!twsConnected) {
-        std::cerr << "Failed to connect to TWS" << std::endl;
-        g_data.addMessage("Failed to connect to TWS");
-    } else {
-        std::cout << "Connected to TWS socket" << std::endl;
-    }
-
-    std::atomic<bool> readerRunning{twsConnected};
-    EReader* reader = nullptr;
-    std::thread readerThread;
-
-    if (twsConnected) {
-        reader = new EReader(&client, &osSignal);
-        reader->start();
-        readerThread = std::thread(readerLoop, &osSignal, reader, &client, &readerRunning);
-    }
-
-    ix::initNetSystem();
-    ix::WebSocketServer wsServer(WEBSOCKET_PORT, WEBSOCKET_HOST);
-
-    wsServer.setOnClientMessageCallback(
-        [&client](std::shared_ptr<ix::ConnectionState> connectionState,
-                  ix::WebSocket& webSocket,
-                  const ix::WebSocketMessagePtr& msg) {
-            (void)connectionState;
-
-            if (msg->type == ix::WebSocketMessageType::Message) {
-                handleWebSocketMessage(msg->str, webSocket, &client);
-            } else if (msg->type == ix::WebSocketMessageType::Open) {
-                const int total = g_data.wsConnectedClients.fetch_add(1) + 1;
-                g_data.addMessage("WebSocket client connected (total: " + std::to_string(total) + ")");
-                std::cout << "[WebSocket client connected]" << std::endl;
-            } else if (msg->type == ix::WebSocketMessageType::Close) {
-                int observed = g_data.wsConnectedClients.load();
-                int total = 0;
-                do {
-                    total = observed > 0 ? (observed - 1) : 0;
-                } while (!g_data.wsConnectedClients.compare_exchange_weak(observed, total));
-                g_data.addMessage("WebSocket client disconnected (total: " + std::to_string(total) + ")");
-                std::cout << "[WebSocket client disconnected]" << std::endl;
-            } else if (msg->type == ix::WebSocketMessageType::Error) {
-                g_data.addMessage("WebSocket error: " + msg->errorInfo.reason);
-                std::cout << "[WebSocket error: " << msg->errorInfo.reason << "]" << std::endl;
-            }
-        }
-    );
-
-    bool wsStarted = wsServer.listenAndStart();
-    if (wsStarted) {
-        g_data.wsServerRunning.store(true);
-        g_data.addMessage("WebSocket server started on localhost port " + std::to_string(WEBSOCKET_PORT));
-        std::cout << "[WebSocket server started on localhost port " << WEBSOCKET_PORT << "]" << std::endl;
-    } else {
-        g_data.addMessage("Failed to start WebSocket server on port " + std::to_string(WEBSOCKET_PORT));
-        std::cerr << "Failed to start WebSocket server on port " << WEBSOCKET_PORT << std::endl;
-    }
+    TradingRuntime runtime;
+    TradingRuntimeConfig config;
+    config.host = DEFAULT_HOST;
+    config.port = DEFAULT_PORT;
+    config.clientId = DEFAULT_CLIENT_ID;
+    config.account = HARDCODED_ACCOUNT;
+    config.wsHost = WEBSOCKET_HOST;
+    config.wsPort = WEBSOCKET_PORT;
+    runtime.start(config);
 
     ControllerState dsState;
 #if defined(_WIN32)
@@ -125,39 +71,15 @@ int main() {
 
         backend->beginFrame();
 
-        RenderTradingPanel(ImGui::GetIO(), &client, dsState, uiState);
+        RenderTradingPanel(ImGui::GetIO(), &runtime, dsState, uiState);
 
         backend->endFrame(clearColor);
     }
 
     std::cout << "Shutting down..." << std::endl;
 
-    if (g_data.wsServerRunning.load()) {
-        std::cout << "Stopping WebSocket server..." << std::endl;
-        wsServer.stop();
-        g_data.wsServerRunning.store(false);
-    }
-    ix::uninitNetSystem();
-
-    cancelActiveSubscription(&client);
-
-    readerRunning.store(false);
-    osSignal.issueSignal();
-
-    if (readerThread.joinable()) {
-        readerThread.join();
-    }
-
-    if (reader) {
-        delete reader;
-        reader = nullptr;
-    }
-
-    if (twsConnected) {
-        client.eDisconnect();
-    }
-
     controllerCleanup(dsState);
+    runtime.stop();
 
     backend->shutdown();
 

@@ -336,3 +336,35 @@ const char* TradingRuntime::statusString(TradingRuntimeStatus status) {
         default: return "Unknown";
     }
 }
+
+UiStatusSnapshot TradingRuntime::getStatusSnapshot() const {
+    return captureUiStatusSnapshot();
+}
+
+SymbolUiSnapshot TradingRuntime::getSymbolSnapshot(const std::string& symbol) const {
+    return captureSymbolUiSnapshot(symbol);
+}
+
+std::vector<std::pair<OrderId, OrderInfo>> TradingRuntime::getOrdersSnapshot() const {
+    return captureOrdersSnapshot();
+}
+
+std::vector<TradeTraceListItem> TradingRuntime::getTradeTraceListItems(std::size_t maxItems) const {
+    return captureTradeTraceListItems(maxItems);
+}
+
+TradeTraceSnapshot TradingRuntime::getTradeTraceSnapshot(std::uint64_t traceId) const {
+    return captureTradeTraceSnapshot(traceId);
+}
+
+std::uint64_t TradingRuntime::getLatestTraceId() const {
+    return latestTradeTraceId();
+}
+
+void TradingRuntime::addMessage(const std::string& msg) {
+    g_data.addMessage(msg);
+}
+
+void TradingRuntime::copyMessagesTextIfChanged(std::string& out, std::uint64_t& seenVersion) {
+    g_data.copyMessagesTextIfChanged(out, seenVersion);
+}

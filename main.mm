@@ -43,6 +43,7 @@ enum class AppActivityState {
     TradingPanelUiState _uiState;
     bool _applicationShouldQuit;
     bool _controllerInitialized;
+    id _inputEventMonitor;
 }
 
 - (instancetype)initWithNibName:(NSString*)nibNameOrNil bundle:(NSBundle*)nibBundleOrNil {
@@ -52,6 +53,7 @@ enum class AppActivityState {
     _commandQueue = [_device newCommandQueue];
     _applicationShouldQuit = false;
     _controllerInitialized = false;
+    _inputEventMonitor = nil;
     _tradingRuntime = new TradingRuntime();
     _thermalState = [self thermalStateFromProcessInfo];
     _activityState = AppActivityState::Active;
@@ -106,23 +108,54 @@ enum class AppActivityState {
                                              selector:@selector(thermalStateDidChange:)
                                                  name:NSProcessInfoThermalStateDidChangeNotification
                                                object:nil];
+
+    __weak AppViewController* weakSelf = self;
+    _inputEventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:
+        (NSEventMaskLeftMouseDown |
+         NSEventMaskLeftMouseUp |
+         NSEventMaskRightMouseDown |
+         NSEventMaskRightMouseUp |
+         NSEventMaskOtherMouseDown |
+         NSEventMaskOtherMouseUp |
+         NSEventMaskMouseMoved |
+         NSEventMaskLeftMouseDragged |
+         NSEventMaskRightMouseDragged |
+         NSEventMaskOtherMouseDragged |
+         NSEventMaskScrollWheel |
+         NSEventMaskKeyDown |
+         NSEventMaskKeyUp |
+         NSEventMaskFlagsChanged)
+        handler:^NSEvent* (NSEvent* event) {
+            AppViewController* strongSelf = weakSelf;
+            if (strongSelf != nil) {
+                [strongSelf requestRedraw];
+            }
+            return event;
+        }];
 }
 
 - (void)applicationDidBecomeActive:(NSNotification*)notification {
+    (void)notification;
     _activityState = AppActivityState::Active;
-    _needsRedraw = YES;
-    [self.mtkView setNeedsDisplay:YES];
+    [self updateFrameRateForConditions];
+    [self requestRedraw];
     NSLog(@"App became active - full frame rate");
 }
 
 - (void)applicationWillResignActive:(NSNotification*)notification {
+    (void)notification;
     _activityState = AppActivityState::Inactive;
+    [self updateFrameRateForConditions];
+    [self requestRedraw];
     NSLog(@"App became inactive - reduced frame rate");
 }
 
 - (void)thermalStateDidChange:(NSNotification*)notification {
+    (void)notification;
     _thermalState = [self thermalStateFromProcessInfo];
+    [self updateFrameRateForConditions];
     NSLog(@"Thermal state changed: %ld", (long)_thermalState);
+    [self requestRedraw];
 }
 
 - (double)targetFrameInterval {
@@ -145,20 +178,14 @@ enum class AppActivityState {
 }
 
 - (BOOL)shouldDraw {
-    if (_activityState == AppActivityState::Inactive) {
-        return _needsRedraw;
-    }
-    
-    if (_thermalState == ThermalState::Critical) {
-        return _needsRedraw;
-    }
-    
-    return YES;
+    return _needsRedraw;
 }
 
 - (void)requestRedraw {
     _needsRedraw = YES;
-    [self.mtkView setNeedsDisplay:YES];
+    if (self.mtkView != nil) {
+        [self.mtkView setNeedsDisplay:YES];
+    }
 }
 
 - (void)loadView {
@@ -172,6 +199,7 @@ enum class AppActivityState {
     self.mtkView.device = self.device;
     self.mtkView.delegate = self;
     self.mtkView.enableSetNeedsDisplay = YES;
+    self.mtkView.paused = YES;
     self.mtkView.framebufferOnly = NO;
     self.mtkView.preferredFramesPerSecond = 60;
     
@@ -184,7 +212,18 @@ enum class AppActivityState {
         g_data.addMessage("Failed to initialize controller manager");
     }
 
+    __weak AppViewController* weakSelf = self;
+    setUiInvalidationCallback([weakSelf]() {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppViewController* strongSelf = weakSelf;
+            if (strongSelf != nil) {
+                [strongSelf requestRedraw];
+            }
+        });
+    });
+
     [self updateFrameRateForConditions];
+    [self requestRedraw];
     
     TradingRuntimeConfig config;
     config.host = DEFAULT_HOST;
@@ -204,8 +243,10 @@ enum class AppActivityState {
 - (void)updateFrameRateForConditions {
     double interval = [self targetFrameInterval];
     int fps = (int)(1.0 / interval);
-    self.mtkView.preferredFramesPerSecond = fps;
-    NSLog(@"Frame rate set to %d fps (thermal: %ld, active: %d)", fps, (long)_thermalState, _activityState == AppActivityState::Active);
+    if (self.mtkView.preferredFramesPerSecond != fps) {
+        self.mtkView.preferredFramesPerSecond = fps;
+        NSLog(@"Frame rate set to %d fps (thermal: %ld, active: %d)", fps, (long)_thermalState, _activityState == AppActivityState::Active);
+    }
 }
 
 - (void)drawInMTKView:(MTKView*)view {
@@ -218,8 +259,6 @@ enum class AppActivityState {
     if (![self shouldDraw]) {
         return;
     }
-    
-    [self updateFrameRateForConditions];
     
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize.x = view.bounds.size.width;
@@ -260,14 +299,12 @@ enum class AppActivityState {
     [commandBuffer presentDrawable:view.currentDrawable];
     [commandBuffer commit];
     
-    if (_activityState == AppActivityState::Active && _thermalState == ThermalState::Nominal) {
-        [self.mtkView setNeedsDisplay:YES];
-    } else {
-        _needsRedraw = NO;
-    }
+    _needsRedraw = NO;
 }
 
 - (void)mtkView:(MTKView*)view drawableSizeWillChange:(CGSize)size {
+    (void)size;
+    [self requestRedraw];
 }
 
 - (void)viewWillAppear {
@@ -283,6 +320,12 @@ enum class AppActivityState {
     std::cout << "Shutting down..." << std::endl;
     
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    setUiInvalidationCallback({});
+
+    if (_inputEventMonitor != nil) {
+        [NSEvent removeMonitor:_inputEventMonitor];
+        _inputEventMonitor = nil;
+    }
 
     if (_controllerInitialized) {
         controllerCleanup(_controllerState);

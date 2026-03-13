@@ -1,4 +1,5 @@
 #include "trading_panel.h"
+#include "trading_runtime.h"
 
 namespace {
 
@@ -14,10 +15,10 @@ void renderLatencyValue(const char* label, double valueMs) {
     }
 }
 
-void renderTraceViewer(TradingPanelUiState& uiState) {
-    auto traceItems = captureTradeTraceListItems(150);
+void renderTraceViewer(TradingRuntime* runtime, TradingPanelUiState& uiState) {
+    auto traceItems = runtime ? runtime->getTradeTraceListItems(150) : captureTradeTraceListItems(150);
     if (uiState.selectedTraceId == 0) {
-        uiState.selectedTraceId = latestTradeTraceId();
+        uiState.selectedTraceId = runtime ? runtime->getLatestTraceId() : latestTradeTraceId();
     }
     if (uiState.selectedTraceId == 0 && !traceItems.empty()) {
         uiState.selectedTraceId = traceItems.front().traceId;
@@ -51,7 +52,8 @@ void renderTraceViewer(TradingPanelUiState& uiState) {
         return;
     }
 
-    const TradeTraceSnapshot snapshot = captureTradeTraceSnapshot(uiState.selectedTraceId);
+    const TradeTraceSnapshot snapshot = runtime ? runtime->getTradeTraceSnapshot(uiState.selectedTraceId)
+                                                : captureTradeTraceSnapshot(uiState.selectedTraceId);
     if (!snapshot.found) {
         ImGui::TextDisabled("Selected trace not found.");
         return;
@@ -205,9 +207,15 @@ void renderTraceViewer(TradingPanelUiState& uiState) {
 
 } // namespace
 
-#include "trading_runtime.h"
-
 void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& dsState, TradingPanelUiState& uiState) {
+    auto addPanelMessage = [&](const std::string& msg) {
+        if (runtime) {
+            runtime->addMessage(msg);
+        } else {
+            g_data.addMessage(msg);
+        }
+    };
+
     auto subscribeFromGui = [&](const std::string& requestedSymbol) {
         const std::string upperSymbol = toUpperCase(requestedSymbol);
         if (upperSymbol.empty()) return;
@@ -230,7 +238,7 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
         return;
     }
 
-    const UiStatusSnapshot statusSnapshot = captureUiStatusSnapshot();
+    const UiStatusSnapshot statusSnapshot = runtime ? runtime->getStatusSnapshot() : captureUiStatusSnapshot();
 
     if (statusSnapshot.connected && statusSnapshot.sessionReady) {
         ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "TWS: Ready");
@@ -280,7 +288,7 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
     ImGui::Separator();
 
     consumeGuiSyncUpdates(uiState.symbolInput, uiState.subscribedSymbol, uiState.subscribed, uiState.quantityInput);
-    const std::uint64_t newestTraceId = latestTradeTraceId();
+    const std::uint64_t newestTraceId = runtime ? runtime->getLatestTraceId() : latestTradeTraceId();
     if (uiState.selectedTraceId == 0 && newestTraceId != 0) {
         uiState.selectedTraceId = newestTraceId;
     }
@@ -298,7 +306,8 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
 
     ImGui::Separator();
 
-    const SymbolUiSnapshot symbolSnapshot = captureSymbolUiSnapshot(uiState.subscribed ? uiState.subscribedSymbol : std::string());
+    const SymbolUiSnapshot symbolSnapshot = runtime ? runtime->getSymbolSnapshot(uiState.subscribed ? uiState.subscribedSymbol : std::string())
+                                                    : captureSymbolUiSnapshot(uiState.subscribed ? uiState.subscribedSymbol : std::string());
     const double currentPositionQty = symbolSnapshot.currentPositionQty;
     const double currentPositionAvgCost = symbolSnapshot.currentPositionAvgCost;
     const double availableLongToClose = symbolSnapshot.availableLongToClose;
@@ -497,9 +506,9 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
                     }
                 }
                 const int sentCount = static_cast<int>(pendingOrders.size());
-                g_data.addMessage("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
+                addPanelMessage("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
             } else {
-                g_data.addMessage("[Controller] No pending orders to cancel");
+                addPanelMessage("[Controller] No pending orders to cancel");
             }
         }
 
@@ -508,7 +517,7 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
                 const int maxQty = computeMaxQuantityFromAsk(symbolSnapshot.askPrice, uiState.maxPositionDollars);
                 uiState.quantityInput = (uiState.quantityInput == 1) ? maxQty : 1;
                 syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
-                g_data.addMessage("[Controller] Quantity toggled to " + std::to_string(uiState.quantityInput) + " shares");
+                addPanelMessage("[Controller] Quantity toggled to " + std::to_string(uiState.quantityInput) + " shares");
             }
         }
 
@@ -520,7 +529,7 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
 
     ImGui::Text("Working Orders:");
 
-    const auto ordersSnapshot = captureOrdersSnapshot();
+    const auto ordersSnapshot = runtime ? runtime->getOrdersSnapshot() : captureOrdersSnapshot();
 
     if (ImGui::BeginTable("orders", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 60);
@@ -612,7 +621,7 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
             if (runtime) {
                 for (OrderId orderId : markedForCancel) {
                     runtime->submitCancel(orderId);
-                    g_data.addMessage("Cancel request sent for order " + std::to_string(orderId));
+                    addPanelMessage("Cancel request sent for order " + std::to_string(orderId));
                 }
             }
         }
@@ -621,7 +630,7 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
     }
 
     ImGui::Separator();
-    renderTraceViewer(uiState);
+    renderTraceViewer(runtime, uiState);
 
     ImGui::Separator();
 
@@ -630,11 +639,443 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
     if (availableHeight < 100) availableHeight = 100;
     static std::string messagesText;
     static std::uint64_t messagesVersionSeen = 0;
-    g_data.copyMessagesTextIfChanged(messagesText, messagesVersionSeen);
+    if (runtime) {
+        runtime->copyMessagesTextIfChanged(messagesText, messagesVersionSeen);
+    } else {
+        g_data.copyMessagesTextIfChanged(messagesText, messagesVersionSeen);
+    }
 
     ImGui::InputTextMultiline("##messageslog", &messagesText,
                               ImVec2(-1, availableHeight),
                               ImGuiInputTextFlags_ReadOnly);
 
     ImGui::End();
+}
+
+void RenderTradingPanel(ImGuiIO& io, EClientSocket* client, ControllerState& dsState, TradingPanelUiState& uiState) {
+    if (!client) return;
+
+    auto subscribeFromGui = [&](const std::string& requestedSymbol) {
+        const std::string upperSymbol = toUpperCase(requestedSymbol);
+        if (upperSymbol.empty()) return;
+
+        std::string error;
+        if (!requestSymbolSubscription(client, upperSymbol, false, &error)) {
+            g_data.addMessage("Subscribe failed: " + error);
+            return;
+        }
+
+        uiState.symbolInput = upperSymbol;
+        uiState.subscribed = true;
+        uiState.subscribedSymbol = upperSymbol;
+    };
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+
+    if (!ImGui::Begin("Trading Panel", nullptr,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::End();
+        return;
+    }
+
+    const UiStatusSnapshot statusSnapshot = captureUiStatusSnapshot();
+
+    if (statusSnapshot.connected && statusSnapshot.sessionReady) {
+        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "TWS: Ready");
+    } else if (statusSnapshot.connected) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "TWS: Connected (initializing)");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "TWS: Disconnected");
+    }
+    ImGui::SameLine();
+    ImGui::Text("Account: %s", statusSnapshot.accountText.c_str());
+
+    ImGui::SameLine();
+    ImGui::Text(" | ");
+    ImGui::SameLine();
+    if (statusSnapshot.wsServerRunning) {
+        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "WS: localhost:%d", WEBSOCKET_PORT);
+        ImGui::SameLine();
+        ImGui::Text("(%d clients)", statusSnapshot.wsConnectedClients);
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "WS: Not running");
+    }
+
+    ImGui::Separator();
+
+    consumeGuiSyncUpdates(uiState.symbolInput, uiState.subscribedSymbol, uiState.subscribed, uiState.quantityInput);
+    const std::uint64_t newestTraceId = latestTradeTraceId();
+
+    bool justSubscribed = false;
+    if (ImGui::InputText("Symbol", &uiState.symbolInput, ImGuiInputTextFlags_EnterReturnsTrue)) {
+        subscribeFromGui(uiState.symbolInput);
+        justSubscribed = true;
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Subscribe") && !justSubscribed) {
+        subscribeFromGui(uiState.symbolInput);
+    }
+
+    ImGui::Separator();
+
+    const SymbolUiSnapshot symbolSnapshot = captureSymbolUiSnapshot(uiState.subscribedSymbol);
+    bool canTrade = uiState.subscribed && statusSnapshot.connected && statusSnapshot.sessionReady;
+    bool canBuy = canTrade && symbolSnapshot.canTrade;
+    bool canClosePosition = canTrade && symbolSnapshot.hasPosition && symbolSnapshot.availableLongToClose > 0.0;
+
+    ImGui::Text("Position: %.0f @ $%.2f", symbolSnapshot.currentPositionQty, symbolSnapshot.currentPositionAvgCost);
+    if (symbolSnapshot.hasPosition) {
+        ImGui::SameLine();
+        ImGui::Text(" | ");
+        ImGui::SameLine();
+        ImGui::Text("Can close: %.0f", symbolSnapshot.availableLongToClose);
+    }
+
+    ImGui::Separator();
+
+    if (uiState.subscribed) {
+        if (symbolSnapshot.askPrice > 0.0) {
+            ImGui::Text("Ask: $%.2f", symbolSnapshot.askPrice);
+        }
+        if (symbolSnapshot.bidPrice > 0.0) {
+            ImGui::SameLine();
+            ImGui::Text(" | ");
+            ImGui::SameLine();
+            ImGui::Text("Bid: $%.2f", symbolSnapshot.bidPrice);
+        }
+        if (symbolSnapshot.lastPrice > 0.0) {
+            ImGui::SameLine();
+            ImGui::Text(" | ");
+            ImGui::SameLine();
+            ImGui::Text("Last: $%.2f", symbolSnapshot.lastPrice);
+        }
+    }
+
+    ImGui::Separator();
+
+    static char quantityStr[32];
+    if (ImGui::InputText("Quantity", quantityStr, sizeof(quantityStr), ImGuiInputTextFlags_EnterReturnsTrue)) {
+        int qty = std::atoi(quantityStr);
+        if (qty > 0) {
+            uiState.quantityInput = qty;
+            syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Max")) {
+        if (symbolSnapshot.askPrice > 0.0) {
+            int maxQty = computeMaxQuantityFromAsk(symbolSnapshot.askPrice, uiState.maxPositionDollars);
+            uiState.quantityInput = maxQty;
+            syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+            std::snprintf(quantityStr, sizeof(quantityStr), "%d", maxQty);
+        }
+    }
+
+    ImGui::Separator();
+
+    const double buyPrice = symbolSnapshot.askPrice > 0.0 ? symbolSnapshot.askPrice + uiState.priceBuffer : 0.0;
+    const double sellPrice = symbolSnapshot.bidPrice > 0.0 ? symbolSnapshot.bidPrice - uiState.priceBuffer : 0.0;
+    const double availableLongToClose = symbolSnapshot.availableLongToClose;
+    const bool buySweepAvailable = !symbolSnapshot.askBook.empty();
+    const bool sellSweepAvailable = !symbolSnapshot.bidBook.empty();
+
+    ImGui::Text("Buy @ $%.2f", buyPrice);
+    ImGui::SameLine();
+    ImGui::Text(" | ");
+    ImGui::SameLine();
+    ImGui::Text("Close @ $%.2f", sellPrice);
+
+    if (!canBuy) ImGui::BeginDisabled();
+    if (ImGui::Button("Buy Limit", ImVec2(120, 30))) {
+        std::string error;
+        std::uint64_t traceId = 0;
+        SubmitIntent intent = captureSubmitIntent("GUI Button", uiState.subscribedSymbol, "BUY",
+                                                  uiState.quantityInput, buyPrice, false,
+                                                  uiState.priceBuffer,
+                                                  buySweepAvailable ? buyPrice : 0.0,
+                                                  "Buy Limit button pressed");
+        if (!submitLimitOrder(client, uiState.subscribedSymbol, "BUY",
+                              static_cast<double>(uiState.quantityInput), buyPrice,
+                              false, &intent, &error, nullptr, &traceId)) {
+            g_data.addMessage("Buy failed: " + error);
+        }
+    }
+    if (!canBuy) ImGui::EndDisabled();
+
+    ImGui::SameLine();
+
+    char closeBtnLabel[64];
+    if (availableLongToClose > 0.0) {
+        std::snprintf(closeBtnLabel, sizeof(closeBtnLabel), "Close Long (%.0f)", availableLongToClose);
+    } else {
+        std::snprintf(closeBtnLabel, sizeof(closeBtnLabel), "Close Long (N/A)");
+    }
+
+    if (!canClosePosition) ImGui::BeginDisabled();
+    if (ImGui::Button(closeBtnLabel, ImVec2(140, 30))) {
+        std::string error;
+        std::uint64_t traceId = 0;
+        SubmitIntent intent = captureSubmitIntent("GUI Button", uiState.subscribedSymbol, "SELL",
+                                                  toShareCount(availableLongToClose), sellPrice, true,
+                                                  uiState.priceBuffer,
+                                                  sellSweepAvailable ? sellPrice : 0.0,
+                                                  "Close Long button pressed");
+        if (!submitLimitOrder(client, uiState.subscribedSymbol, "SELL",
+                              availableLongToClose, sellPrice,
+                              true, &intent, &error, nullptr, &traceId)) {
+            g_data.addMessage("Close failed: " + error);
+        }
+    }
+    if (!canClosePosition) ImGui::EndDisabled();
+
+    controllerPoll(dsState);
+
+    if (controllerIsConnected(dsState)) {
+        auto now = std::chrono::steady_clock::now();
+
+        if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_SQUARE, now)) {
+            if (canBuy) {
+                std::string error;
+                std::uint64_t traceId = 0;
+                SubmitIntent intent = captureSubmitIntent("Controller", uiState.subscribedSymbol, "BUY",
+                                                          uiState.quantityInput, buyPrice, false,
+                                                          uiState.priceBuffer,
+                                                          buySweepAvailable ? buyPrice : 0.0,
+                                                          "Controller Square button");
+                if (!submitLimitOrder(client, uiState.subscribedSymbol, "BUY",
+                                      static_cast<double>(uiState.quantityInput), buyPrice,
+                                      false, &intent, &error, nullptr, &traceId)) {
+                    g_data.addMessage("[Controller] Buy failed: " + error);
+                }
+            }
+        }
+
+        if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_CIRCLE, now)) {
+            if (canClosePosition) {
+                std::string error;
+                std::uint64_t traceId = 0;
+                SubmitIntent intent = captureSubmitIntent("Controller", uiState.subscribedSymbol, "SELL",
+                                                          toShareCount(availableLongToClose), sellPrice, true,
+                                                          uiState.priceBuffer,
+                                                          sellSweepAvailable ? sellPrice : 0.0,
+                                                          "Controller Circle button");
+                if (!submitLimitOrder(client, uiState.subscribedSymbol, "SELL",
+                                      availableLongToClose, sellPrice,
+                                      true, &intent, &error, nullptr, &traceId)) {
+                    g_data.addMessage("[Controller] Close failed: " + error);
+                }
+            }
+        }
+
+        if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_TRIANGLE, now)) {
+            const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
+
+            if (!pendingOrders.empty()) {
+                const std::vector<bool> cancelSent = sendCancelRequests(client, pendingOrders);
+                const int sentCount = static_cast<int>(std::count(cancelSent.begin(), cancelSent.end(), true));
+                if (sentCount != static_cast<int>(pendingOrders.size())) {
+                    g_data.addMessage("[Controller] Some cancel requests could not be sent");
+                }
+                g_data.addMessage("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
+            } else {
+                g_data.addMessage("[Controller] No pending orders to cancel");
+            }
+        }
+
+        if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_CROSS, now)) {
+            if (canTrade && uiState.subscribed) {
+                const int maxQty = computeMaxQuantityFromAsk(symbolSnapshot.askPrice, uiState.maxPositionDollars);
+                uiState.quantityInput = (uiState.quantityInput == 1) ? maxQty : 1;
+                syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+                g_data.addMessage("[Controller] Quantity toggled to " + std::to_string(uiState.quantityInput) + " shares");
+            }
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Open Orders")) {
+        ImGui::BeginTable("orders", 7, ImGuiTableFlags_Borders);
+        ImGui::TableSetupColumn("ID");
+        ImGui::TableSetupColumn("Symbol");
+        ImGui::TableSetupColumn("Side");
+        ImGui::TableSetupColumn("Qty");
+        ImGui::TableSetupColumn("Filled");
+        ImGui::TableSetupColumn("Price");
+        ImGui::TableSetupColumn("Status");
+        ImGui::TableHeadersRow();
+
+        const std::vector<std::pair<OrderId, OrderInfo>> orders = captureOrdersSnapshot();
+        std::vector<OrderId> ordersToCancel;
+
+        for (const auto& [id, info] : orders) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%lld", static_cast<long long>(id));
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%s", info.symbol.c_str());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%s", info.side.c_str());
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%.0f", info.quantity);
+            ImGui::TableSetColumnIndex(4);
+            ImGui::Text("%.0f", info.filledQty);
+            ImGui::TableSetColumnIndex(5);
+            ImGui::Text("$%.2f", info.avgFillPrice);
+            ImGui::TableSetColumnIndex(6);
+            ImGui::Text("%s", info.status.c_str());
+
+            if (!info.isTerminal() && !info.cancelPending) {
+                ImGui::SameLine();
+                char btnId[64];
+                std::snprintf(btnId, sizeof(btnId), "Cancel##%lld", static_cast<long long>(id));
+                if (ImGui::SmallButton(btnId)) {
+                    ordersToCancel.push_back(id);
+                }
+            } else if (info.cancelPending) {
+                ImGui::TextDisabled("Cancelling...");
+            }
+        }
+
+        if (!ordersToCancel.empty()) {
+            const std::vector<OrderId> markedForCancel = markOrdersPendingCancel(ordersToCancel);
+            const std::vector<bool> cancelSent = sendCancelRequests(client, markedForCancel);
+
+            for (size_t i = 0; i < markedForCancel.size(); ++i) {
+                const OrderId id = markedForCancel[i];
+                if (cancelSent[i]) {
+                    g_data.addMessage("Cancel request sent for order " + std::to_string(id));
+                } else {
+                    g_data.addMessage("Cancel failed (not connected) for order " + std::to_string(id));
+                }
+            }
+        }
+
+        ImGui::EndTable();
+    }
+
+    if (ImGui::CollapsingHeader("Trade Traces")) {
+        ImGui::BeginTable("traces", 4, ImGuiTableFlags_Borders);
+        ImGui::TableSetupColumn("TraceId");
+        ImGui::TableSetupColumn("OrderId");
+        ImGui::TableSetupColumn("Status");
+        ImGui::TableSetupColumn("Summary");
+        ImGui::TableHeadersRow();
+
+        const std::vector<TradeTraceListItem> traceItems = captureTradeTraceListItems(50);
+        for (const auto& item : traceItems) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            if (ImGui::Selectable(std::to_string(item.traceId).c_str(), uiState.selectedTraceId == item.traceId, ImGuiSelectableFlags_SpanAllColumns)) {
+                uiState.selectedTraceId = item.traceId;
+            }
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%lld", static_cast<long long>(item.orderId));
+            ImGui::TableSetColumnIndex(2);
+            if (item.terminal) {
+                ImGui::TextColored(item.failed ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) : ImVec4(0.2f, 0.8f, 0.2f, 1.0f), "%s", item.summary.c_str());
+            } else {
+                ImGui::Text("%s", item.summary.c_str());
+            }
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%s", item.summary.c_str());
+        }
+        ImGui::EndTable();
+    }
+
+    if (uiState.selectedTraceId != 0) {
+        if (ImGui::CollapsingHeader("Selected Trace Details", ImGuiTreeNodeFlags_DefaultOpen)) {
+            const TradeTraceSnapshot traceSnap = captureTradeTraceSnapshot(uiState.selectedTraceId);
+            if (traceSnap.found) {
+                ImGui::Text("Order ID: %lld", static_cast<long long>(traceSnap.trace.orderId));
+                ImGui::Text("Symbol: %s %s", traceSnap.trace.side.c_str(), traceSnap.trace.symbol.c_str());
+                ImGui::Text("Requested: %d @ $%.2f", traceSnap.trace.requestedQty, traceSnap.trace.limitPrice);
+                ImGui::Text("Status: %s", traceSnap.trace.latestStatus.c_str());
+                if (!traceSnap.trace.terminalStatus.empty()) {
+                    ImGui::Text("Terminal: %s", traceSnap.trace.terminalStatus.c_str());
+                }
+                if (traceSnap.trace.totalCommission > 0.0) {
+                    ImGui::Text("Commission: $%.2f %s", traceSnap.trace.totalCommission, traceSnap.trace.commissionCurrency.c_str());
+                }
+
+                if (ImGui::CollapsingHeader("Events")) {
+                    ImGui::BeginTable("events", 5, ImGuiTableFlags_Borders);
+                    ImGui::TableSetupColumn("Time");
+                    ImGui::TableSetupColumn("Type");
+                    ImGui::TableSetupColumn("Stage");
+                    ImGui::TableSetupColumn("Details");
+                    ImGui::TableSetupColumn("Filled");
+                    ImGui::TableHeadersRow();
+
+                    for (const auto& evt : traceSnap.trace.events) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("%s", formatWallTime(evt.wallTs).c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%s", tradeEventTypeToString(evt.type).c_str());
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%s", evt.stage.c_str());
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%s", evt.details.c_str());
+                        ImGui::TableSetColumnIndex(4);
+                        if (evt.cumFilled >= 0.0) {
+                            ImGui::Text("%.0f", evt.cumFilled);
+                        }
+                    }
+                    ImGui::EndTable();
+                }
+
+                if (ImGui::CollapsingHeader("Fills")) {
+                    ImGui::BeginTable("fills", 7, ImGuiTableFlags_Borders);
+                    ImGui::TableSetupColumn("Time");
+                    ImGui::TableSetupColumn("ExecId");
+                    ImGui::TableSetupColumn("Shares");
+                    ImGui::TableSetupColumn("Price");
+                    ImGui::TableSetupColumn("CumQty");
+                    ImGui::TableSetupColumn("Liquidity");
+                    ImGui::TableSetupColumn("Commission");
+                    ImGui::TableHeadersRow();
+
+                    for (const auto& fill : traceSnap.trace.fills) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("%s", fill.execTimeText.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%s", fill.execId.substr(0, 8).c_str());
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%d", fill.shares);
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("$%.2f", fill.price);
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::Text("%.0f", fill.cumQty);
+                        ImGui::TableSetColumnIndex(5);
+                        ImGui::Text("%c", fill.liquidity > 0 ? 'A' : (fill.liquidity < 0 ? 'R' : '-'));
+                        ImGui::TableSetColumnIndex(6);
+                        if (fill.commissionKnown) {
+                            ImGui::Text("$%.2f", fill.commission);
+                        } else {
+                            ImGui::TextDisabled("-");
+                        }
+                    }
+                    ImGui::EndTable();
+                }
+            }
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Messages")) {
+        std::string messagesText;
+        std::uint64_t seenVersion = 0;
+        g_data.copyMessagesTextIfChanged(messagesText, seenVersion);
+        static ImGuiTextFilter filter;
+        filter.Draw("Filter");
+        float availableHeight = ImGui::GetContentRegionAvail().y - 24;
+        ImGui::InputTextMultiline("##messageslog", &messagesText,
+                                  ImVec2(-1, availableHeight),
+                                  ImGuiInputTextFlags_ReadOnly);
+
+        ImGui::End();
+    }
 }

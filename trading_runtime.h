@@ -46,6 +46,22 @@ enum class RuntimeCommandType {
     CancelOrder
 };
 
+enum class RuntimeEventType {
+    ConnectAck,
+    ConnectionClosed,
+    NextValidId,
+    ManagedAccounts,
+    TickPrice,
+    UpdateMktDepthL2,
+    OrderStatus,
+    OpenOrder,
+    ExecDetails,
+    CommissionReport,
+    Error,
+    Position,
+    PositionEnd
+};
+
 struct SubscribeCommand {
     std::string symbol;
     bool recalcQtyFromFirstAsk = true;
@@ -66,6 +82,65 @@ struct CancelOrderCommand {
 };
 
 using RuntimeCommand = std::variant<SubscribeCommand, PlaceOrderCommand, CancelOrderCommand>;
+
+struct OrderStatusEvent {
+    OrderId orderId;
+    std::string status;
+    double filled;
+    double remaining;
+    double avgFillPrice;
+    long long permId;
+    double lastFillPrice;
+    double mktCapPrice;
+};
+
+struct OpenOrderEvent {
+    OrderId orderId;
+    std::string account;
+    std::string symbol;
+    std::string side;
+    double quantity;
+    double limitPrice;
+    std::string status;
+};
+
+struct ExecDetailsEvent {
+    int reqId;
+    std::string execId;
+    OrderId orderId;
+    std::string symbol;
+    double shares;
+    double price;
+    double cumQty;
+};
+
+struct CommissionReportEvent {
+    std::string execId;
+    double commission;
+    std::string currency;
+};
+
+struct ErrorEvent {
+    int id;
+    int errorCode;
+    std::string errorString;
+};
+
+struct PositionEvent {
+    std::string account;
+    std::string symbol;
+    double position;
+    double avgCost;
+};
+
+using RuntimeEvent = std::variant<
+    OrderStatusEvent,
+    OpenOrderEvent,
+    ExecDetailsEvent,
+    CommissionReportEvent,
+    ErrorEvent,
+    PositionEvent
+>;
 
 struct CommandResult {
     bool success = false;
@@ -103,6 +178,28 @@ public:
                              const std::string& source = "Unknown",
                              std::optional<std::uint64_t> traceId = std::nullopt);
     CommandResult submitCancel(OrderId orderId);
+
+    void submitOrderStatusEvent(OrderId orderId, const std::string& status,
+                                double filled, double remaining, double avgFillPrice,
+                                long long permId, double lastFillPrice, double mktCapPrice);
+    void submitOpenOrderEvent(OrderId orderId, const std::string& account,
+                              const std::string& symbol, const std::string& side,
+                              double quantity, double limitPrice, const std::string& status);
+    void submitExecDetailsEvent(int reqId, const std::string& execId, OrderId orderId,
+                                const std::string& symbol, double shares, double price, double cumQty);
+    void submitCommissionReportEvent(const std::string& execId, double commission, const std::string& currency);
+    void submitErrorEvent(int id, int errorCode, const std::string& errorString);
+    void submitPositionEvent(const std::string& account, const std::string& symbol,
+                             double position, double avgCost);
+
+    UiStatusSnapshot getStatusSnapshot() const;
+    SymbolUiSnapshot getSymbolSnapshot(const std::string& symbol) const;
+    std::vector<std::pair<OrderId, OrderInfo>> getOrdersSnapshot() const;
+    std::vector<TradeTraceListItem> getTradeTraceListItems(std::size_t maxItems = 100) const;
+    TradeTraceSnapshot getTradeTraceSnapshot(std::uint64_t traceId) const;
+    std::uint64_t getLatestTraceId() const;
+    void addMessage(const std::string& msg);
+    void copyMessagesTextIfChanged(std::string& out, std::uint64_t& seenVersion);
 
     static const char* statusString(TradingRuntimeStatus status);
 

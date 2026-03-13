@@ -86,6 +86,7 @@ public:
     void tickPrice(TickerId tickerId, TickType field, double price, const TickAttrib& attrib) override {
         (void)attrib;
         std::string autoQtyMsg;
+        bool didUpdate = false;
 
         {
             std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
@@ -97,9 +98,11 @@ public:
             switch (field) {
                 case 1:
                     g_data.bidPrice = price;
+                    didUpdate = true;
                     break;
                 case 2: {
                     g_data.askPrice = price;
+                    didUpdate = true;
                     if (g_data.pendingWSQuantityCalc && price > 0.0) {
                         int maxQty = static_cast<int>(std::floor(g_data.maxPositionDollars / price));
                         if (maxQty < 1) maxQty = 1;
@@ -118,6 +121,7 @@ public:
                 }
                 case 4:
                     g_data.lastPrice = price;
+                    didUpdate = true;
                     break;
                 default:
                     break;
@@ -126,6 +130,8 @@ public:
 
         if (!autoQtyMsg.empty()) {
             g_data.addMessage(autoQtyMsg);
+        } else if (didUpdate) {
+            notifyUiInvalidation();
         }
     }
 
@@ -133,34 +139,38 @@ public:
                           int side, double price, Decimal size, bool isSmartDepth) override {
         (void)marketMaker;
         (void)isSmartDepth;
-        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
 
-        if (id != g_data.activeDepthReqId) {
-            return;
+            if (id != g_data.activeDepthReqId) {
+                return;
+            }
+
+            double sizeDouble = DecimalFunctions::decimalToDouble(size);
+            std::vector<BookLevel>& book = (side == 0) ? g_data.askBook : g_data.bidBook;
+
+            if (operation == 0) {
+                BookLevel level;
+                level.price = price;
+                level.size = sizeDouble;
+                if (position >= static_cast<int>(book.size())) {
+                    book.push_back(level);
+                } else {
+                    book.insert(book.begin() + position, level);
+                }
+            } else if (operation == 1) {
+                if (position < static_cast<int>(book.size())) {
+                    book[position].price = price;
+                    book[position].size = sizeDouble;
+                }
+            } else if (operation == 2) {
+                if (position < static_cast<int>(book.size())) {
+                    book.erase(book.begin() + position);
+                }
+            }
         }
 
-        double sizeDouble = DecimalFunctions::decimalToDouble(size);
-        std::vector<BookLevel>& book = (side == 0) ? g_data.askBook : g_data.bidBook;
-
-        if (operation == 0) {
-            BookLevel level;
-            level.price = price;
-            level.size = sizeDouble;
-            if (position >= static_cast<int>(book.size())) {
-                book.push_back(level);
-            } else {
-                book.insert(book.begin() + position, level);
-            }
-        } else if (operation == 1) {
-            if (position < static_cast<int>(book.size())) {
-                book[position].price = price;
-                book[position].size = sizeDouble;
-            }
-        } else if (operation == 2) {
-            if (position < static_cast<int>(book.size())) {
-                book.erase(book.begin() + position);
-            }
-        }
+        notifyUiInvalidation();
     }
 
     void updateMktDepth(TickerId id, int position, int operation, int side,
@@ -337,7 +347,7 @@ public:
 
         char msg[256];
         std::snprintf(msg, sizeof(msg),
-                      "Execution %s: order %d %s %.0f @ %.2f (cum %.0f)",
+                      "Execution %s: order %ld %s %.0f @ %.2f (cum %.0f)",
                       execution.execId.c_str(), execution.orderId, contract.symbol.c_str(),
                       DecimalFunctions::decimalToDouble(execution.shares), execution.price,
                       DecimalFunctions::decimalToDouble(execution.cumQty));
@@ -447,6 +457,7 @@ public:
         std::snprintf(msg, sizeof(msg), "Position: %s %.0f @ %.2f (account: %s)",
                       contract.symbol.c_str(), posQty, avgCost, account.c_str());
         std::cout << "[" << msg << "]" << std::endl;
+        notifyUiInvalidation();
     }
 
     void positionEnd() override {

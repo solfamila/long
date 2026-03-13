@@ -374,6 +374,11 @@ struct TradeTrace {
     std::string commissionCurrency;
 };
 
+using UiInvalidationCallback = std::function<void()>;
+
+void setUiInvalidationCallback(UiInvalidationCallback callback);
+void notifyUiInvalidation();
+
 struct SharedData {
     std::recursive_mutex mutex;
     std::recursive_mutex clientMutex;
@@ -437,12 +442,15 @@ struct SharedData {
     std::uint64_t latestTraceId = 0;
 
     void addMessage(const std::string& msg) {
-        std::lock_guard<std::recursive_mutex> lock(mutex);
-        messages.push_back(msg);
-        while (messages.size() > MAX_MESSAGES) {
-            messages.pop_front();
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex);
+            messages.push_back(msg);
+            while (messages.size() > MAX_MESSAGES) {
+                messages.pop_front();
+            }
+            ++messagesVersion;
         }
-        ++messagesVersion;
+        notifyUiInvalidation();
     }
 
     void copyMessagesTextIfChanged(std::string& out, std::uint64_t& seenVersion) {

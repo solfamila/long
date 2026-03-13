@@ -16,3 +16,4 @@ struct TradingPanelUiState {
 };
 
 void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& dsState, TradingPanelUiState& uiState);
+void RenderTradingPanel(ImGuiIO& io, EClientSocket* client, ControllerState& dsState, TradingPanelUiState& uiState);
