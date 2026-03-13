@@ -14,6 +14,9 @@ if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 option(TWS_GUI_BUILD_UNIVERSAL "Build a universal macOS binary (arm64 + x86_64)" OFF)
+option(TWS_GUI_USE_STATIC_PROTOBUF "Build protobuf from source as static libs to reduce bundled dylib fan-out" ON)
+set(TWS_GUI_PROTOBUF_SOURCE_DIR "" CACHE PATH "Optional local protobuf source directory for static builds")
+set(TWS_GUI_PROTOBUF_URL "https://github.com/protocolbuffers/protobuf/releases/download/v34.0/protobuf-34.0.tar.gz" CACHE STRING "Official protobuf source tarball URL")
 if(TWS_GUI_BUILD_UNIVERSAL)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures" FORCE)
 endif()
@@ -27,6 +30,7 @@ enable_language(OBJCXX)
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 include(CTest)
+include(FetchContent)
 
 set(APP_BUNDLE_NAME "TWS Trading GUI")
 set(APP_BUNDLE_IDENTIFIER "com.foxy.twstradinggui")
@@ -38,10 +42,13 @@ else()
 endif()
 set(APP_PACKAGE_FILENAME "tws_gui-macos-${APP_PACKAGE_ARCH}.zip")
 set(APP_DMG_FILENAME "tws_gui-macos-${APP_PACKAGE_ARCH}.dmg")
-set(BUNDLE_SEARCH_DIRS
-    "/opt/homebrew/opt/protobuf/lib"
-    "/opt/homebrew/opt/abseil/lib"
-)
+set(BUNDLE_SEARCH_DIRS)
+if(NOT TWS_GUI_USE_STATIC_PROTOBUF)
+    list(APPEND BUNDLE_SEARCH_DIRS
+        "/opt/homebrew/opt/protobuf/lib"
+        "/opt/homebrew/opt/abseil/lib"
+    )
+endif()
 
 set(IB_API_ROOT "/opt/IBAPI" CACHE PATH "Path to Interactive Brokers API")
 set(IB_API_INCLUDE_DIR "${IB_API_ROOT}/ibsapi" CACHE PATH "IB API include directory")
@@ -114,16 +121,55 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
         set(IB_API_PROTO_DIR "${IB_API_SOURCE_DIR}/proto")
         set(IB_API_GENERATED_PROTO_DIR "${CMAKE_BINARY_DIR}/generated/ibapi_protobuf")
 
-        find_package(Protobuf REQUIRED)
-        pkg_check_modules(PROTOBUF REQUIRED IMPORTED_TARGET protobuf)
+        if(TWS_GUI_USE_STATIC_PROTOBUF)
+            set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+            set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+            set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
+            set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+            set(protobuf_BUILD_PROTOBUF_BINARIES ON CACHE BOOL "" FORCE)
+            set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "" FORCE)
+            set(protobuf_BUILD_LIBPROTOC OFF CACHE BOOL "" FORCE)
+            set(protobuf_BUILD_LIBUPB OFF CACHE BOOL "" FORCE)
+            set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+            set(protobuf_FORCE_FETCH_DEPENDENCIES ON CACHE BOOL "" FORCE)
+            set(protobuf_LOCAL_DEPENDENCIES_ONLY OFF CACHE BOOL "" FORCE)
+
+            if(TWS_GUI_PROTOBUF_SOURCE_DIR AND EXISTS "${TWS_GUI_PROTOBUF_SOURCE_DIR}/CMakeLists.txt")
+                add_subdirectory("${TWS_GUI_PROTOBUF_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/third_party/protobuf")
+            else()
+                FetchContent_Declare(
+                    protobuf
+                    URL "${TWS_GUI_PROTOBUF_URL}"
+                    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+                )
+                FetchContent_MakeAvailable(protobuf)
+            endif()
+
+            if(NOT TARGET protobuf::libprotobuf)
+                message(FATAL_ERROR "Static protobuf build did not provide protobuf::libprotobuf")
+            endif()
+
+            list(APPEND IB_API_LINK_LIBS protobuf::libprotobuf)
+        else()
+            find_package(Protobuf REQUIRED)
+            pkg_check_modules(PROTOBUF REQUIRED IMPORTED_TARGET protobuf)
+            list(APPEND IB_API_LINK_LIBS PkgConfig::PROTOBUF)
+            list(APPEND IB_API_EXTRA_INCLUDE_DIRS
+                ${Protobuf_INCLUDE_DIRS}
+                ${PROTOBUF_INCLUDE_DIRS}
+            )
+            list(APPEND BUNDLE_SEARCH_DIRS
+                ${Protobuf_LIBRARY_DIRS}
+                ${PROTOBUF_LIBRARY_DIRS}
+            )
+        endif()
+
         file(MAKE_DIRECTORY "${IB_API_GENERATED_PROTO_DIR}")
         file(GLOB IB_API_PROTO_FILES CONFIGURE_DEPENDS "${IB_API_PROTO_DIR}/*.proto")
 
         if(NOT IB_API_PROTO_FILES)
             message(FATAL_ERROR "Interactive Brokers proto sources not found at ${IB_API_PROTO_DIR}")
         endif()
-
-        list(APPEND IB_API_LINK_LIBS PkgConfig::PROTOBUF)
 
         if(Protobuf_PROTOC_EXECUTABLE)
             set(IB_API_PROTOC_EXECUTABLE "${Protobuf_PROTOC_EXECUTABLE}")
@@ -160,12 +206,6 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
         )
         list(APPEND IB_API_EXTRA_INCLUDE_DIRS
             "${IB_API_GENERATED_PROTO_DIR}"
-            ${Protobuf_INCLUDE_DIRS}
-            ${PROTOBUF_INCLUDE_DIRS}
-        )
-        list(APPEND BUNDLE_SEARCH_DIRS
-            ${Protobuf_LIBRARY_DIRS}
-            ${PROTOBUF_LIBRARY_DIRS}
         )
         list(APPEND IB_API_COMPILE_DEFINITIONS
             TWS_HAS_ORDER_CANCEL_OBJECT=1

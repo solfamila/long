@@ -14,6 +14,12 @@ if(NOT EXISTS "${bundle_path}")
     message(FATAL_ERROR "Bundle path does not exist: ${bundle_path}")
 endif()
 
+set(frameworks_dir "${bundle_path}/Contents/Frameworks")
+if(EXISTS "${frameworks_dir}")
+    file(REMOVE_RECURSE "${frameworks_dir}")
+endif()
+file(MAKE_DIRECTORY "${frameworks_dir}")
+
 fixup_bundle("${bundle_path}" "" "${search_dirs}")
 verify_app("${bundle_path}")
 
