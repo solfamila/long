@@ -205,11 +205,25 @@ enum class AppActivityState {
     
     ImGui_ImplOSX_Init(self.view);
     [NSApp activateIgnoringOtherApps:YES];
+
+    __weak AppViewController* controllerWeakSelf = self;
+    setControllerStatusCallback([controllerWeakSelf](bool connected, const std::string& deviceName, const std::string& lockedDeviceName) {
+        AppViewController* strongSelf = controllerWeakSelf;
+        if (strongSelf != nil && strongSelf->_tradingRuntime != nullptr) {
+            strongSelf->_tradingRuntime->updateControllerStatus(connected, deviceName, lockedDeviceName);
+        }
+    });
+    setControllerMessageCallback([controllerWeakSelf](const std::string& message) {
+        AppViewController* strongSelf = controllerWeakSelf;
+        if (strongSelf != nil && strongSelf->_tradingRuntime != nullptr) {
+            strongSelf->_tradingRuntime->addMessage(message);
+        }
+    });
     
     _controllerInitialized = controllerInitialize(_controllerState, nullptr, nullptr);
     if (!_controllerInitialized) {
         std::cerr << "Failed to initialize controller manager" << std::endl;
-        g_data.addMessage("Failed to initialize controller manager");
+        _tradingRuntime->addMessage("Failed to initialize controller manager");
     }
 
     __weak AppViewController* weakSelf = self;
@@ -236,7 +250,7 @@ enum class AppActivityState {
     bool started = _tradingRuntime->start(config);
     if (!started) {
         std::cerr << "Failed to start trading runtime" << std::endl;
-        g_data.addMessage("Failed to start trading runtime");
+        _tradingRuntime->addMessage("Failed to start trading runtime");
     }
 }
 
@@ -331,6 +345,9 @@ enum class AppActivityState {
         controllerCleanup(_controllerState);
         _controllerInitialized = false;
     }
+
+    setControllerStatusCallback({});
+    setControllerMessageCallback({});
     
     _tradingRuntime->stop();
     delete _tradingRuntime;

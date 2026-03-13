@@ -198,6 +198,14 @@ public:
     std::vector<TradeTraceListItem> getTradeTraceListItems(std::size_t maxItems = 100) const;
     TradeTraceSnapshot getTradeTraceSnapshot(std::uint64_t traceId) const;
     std::uint64_t getLatestTraceId() const;
+    std::uint64_t findTraceIdByOrderId(OrderId orderId) const;
+    void consumePendingUiSync(std::string& symbolInput, std::string& subscribedSymbol,
+                              bool& subscribed, int& quantityInput);
+    void syncUiInputs(int quantityInput, double priceBuffer, double maxPositionDollars);
+    std::vector<OrderId> markOrdersPendingCancel(const std::vector<OrderId>& orderIds);
+    std::vector<OrderId> markAllPendingOrdersForCancel();
+    void updateControllerStatus(bool connected, const std::string& deviceName,
+                                const std::string& lockedDeviceName);
     void addMessage(const std::string& msg);
     void copyMessagesTextIfChanged(std::string& out, std::uint64_t& seenVersion);
 

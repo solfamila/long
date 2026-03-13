@@ -374,10 +374,20 @@ struct TradeTrace {
     std::string commissionCurrency;
 };
 
+struct SharedData;
 using UiInvalidationCallback = std::function<void()>;
+using ControllerStatusCallback = std::function<void(bool, const std::string&, const std::string&)>;
+using ControllerMessageCallback = std::function<void(const std::string&)>;
 
+void setActiveSharedData(SharedData* data);
+SharedData* tryGetActiveSharedData();
+SharedData& requireActiveSharedData();
 void setUiInvalidationCallback(UiInvalidationCallback callback);
 void notifyUiInvalidation();
+void setControllerStatusCallback(ControllerStatusCallback callback);
+void publishControllerStatus(bool connected, const std::string& deviceName, const std::string& lockedDeviceName);
+void setControllerMessageCallback(ControllerMessageCallback callback);
+void publishControllerMessage(const std::string& message);
 
 struct SharedData {
     std::recursive_mutex mutex;
@@ -475,7 +485,7 @@ struct SharedData {
     }
 };
 
-extern SharedData g_data;
+#define g_data (requireActiveSharedData())
 
 struct UiStatusSnapshot {
     bool connected = false;

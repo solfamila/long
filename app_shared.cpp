@@ -1,10 +1,20 @@
 #include "app_shared.h"
 
-SharedData g_data;
+#include <stdexcept>
 
 namespace {
 constexpr std::size_t kMaxTraceEvents = 512;
 constexpr std::size_t kMaxTraceFills = 256;
+
+std::mutex& activeSharedDataMutex() {
+    static std::mutex m;
+    return m;
+}
+
+SharedData*& activeSharedDataStorage() {
+    static SharedData* data = nullptr;
+    return data;
+}
 
 std::mutex& uiInvalidationMutex() {
     static std::mutex m;
@@ -13,6 +23,21 @@ std::mutex& uiInvalidationMutex() {
 
 UiInvalidationCallback& uiInvalidationCallbackStorage() {
     static UiInvalidationCallback callback;
+    return callback;
+}
+
+std::mutex& controllerCallbackMutex() {
+    static std::mutex m;
+    return m;
+}
+
+ControllerStatusCallback& controllerStatusCallbackStorage() {
+    static ControllerStatusCallback callback;
+    return callback;
+}
+
+ControllerMessageCallback& controllerMessageCallbackStorage() {
+    static ControllerMessageCallback callback;
     return callback;
 }
 
@@ -127,6 +152,24 @@ std::uint64_t findTraceIdLocked(OrderId orderId, long long permId = 0, const std
 
 } // namespace
 
+void setActiveSharedData(SharedData* data) {
+    std::lock_guard<std::mutex> lock(activeSharedDataMutex());
+    activeSharedDataStorage() = data;
+}
+
+SharedData* tryGetActiveSharedData() {
+    std::lock_guard<std::mutex> lock(activeSharedDataMutex());
+    return activeSharedDataStorage();
+}
+
+SharedData& requireActiveSharedData() {
+    SharedData* data = tryGetActiveSharedData();
+    if (data == nullptr) {
+        throw std::runtime_error("Trading runtime state is not available");
+    }
+    return *data;
+}
+
 void setUiInvalidationCallback(UiInvalidationCallback callback) {
     std::lock_guard<std::mutex> lock(uiInvalidationMutex());
     uiInvalidationCallbackStorage() = std::move(callback);
@@ -141,6 +184,44 @@ void notifyUiInvalidation() {
 
     if (callback) {
         callback();
+    }
+}
+
+void setControllerStatusCallback(ControllerStatusCallback callback) {
+    std::lock_guard<std::mutex> lock(controllerCallbackMutex());
+    controllerStatusCallbackStorage() = std::move(callback);
+}
+
+void publishControllerStatus(bool connected, const std::string& deviceName, const std::string& lockedDeviceName) {
+    ControllerStatusCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(controllerCallbackMutex());
+        callback = controllerStatusCallbackStorage();
+    }
+
+    if (callback) {
+        callback(connected, deviceName, lockedDeviceName);
+    }
+}
+
+void setControllerMessageCallback(ControllerMessageCallback callback) {
+    std::lock_guard<std::mutex> lock(controllerCallbackMutex());
+    controllerMessageCallbackStorage() = std::move(callback);
+}
+
+void publishControllerMessage(const std::string& message) {
+    if (message.empty()) {
+        return;
+    }
+
+    ControllerMessageCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(controllerCallbackMutex());
+        callback = controllerMessageCallbackStorage();
+    }
+
+    if (callback) {
+        callback(message);
     }
 }
 

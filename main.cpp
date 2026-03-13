@@ -52,6 +52,13 @@ int main() {
     config.wsPort = WEBSOCKET_PORT;
     runtime.start(config);
 
+    setControllerStatusCallback([&runtime](bool connected, const std::string& deviceName, const std::string& lockedDeviceName) {
+        runtime.updateControllerStatus(connected, deviceName, lockedDeviceName);
+    });
+    setControllerMessageCallback([&runtime](const std::string& message) {
+        runtime.addMessage(message);
+    });
+
     ControllerState dsState;
 #if defined(_WIN32)
     void* hwnd = backend->getNativeWindowHandle();
@@ -79,6 +86,8 @@ int main() {
     std::cout << "Shutting down..." << std::endl;
 
     controllerCleanup(dsState);
+    setControllerStatusCallback({});
+    setControllerMessageCallback({});
     runtime.stop();
 
     backend->shutdown();

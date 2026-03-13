@@ -66,10 +66,14 @@ struct ControllerState {
     static constexpr std::chrono::milliseconds kDebounceInterval{300};
 };
 
-inline void controllerSetSharedState(bool connected, const std::string& deviceName) {
-    g_data.controllerConnected.store(connected);
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    g_data.controllerDeviceName = deviceName;
+inline void controllerPublishStatus(bool connected, const std::string& deviceName,
+                                    const std::string& lockedDeviceName = {}) {
+    publishControllerStatus(connected, deviceName, lockedDeviceName);
+}
+
+inline void controllerPostMessage(const std::string& message) {
+    publishControllerMessage(message);
+    std::cout << "[" << message << "]" << std::endl;
 }
 
 inline void controllerClearButtons(ControllerState& cs) {
@@ -87,14 +91,13 @@ inline bool controllerInitialize(ControllerState& cs, void* hInstance, void* hwn
     cs.deviceName.clear();
     cs.vibrating = false;
     controllerClearButtons(cs);
-    controllerSetSharedState(false, "");
+    controllerPublishStatus(false, "", "");
 
     std::string error;
     if (!macControllerInitialize(&cs.nativeHandle, &error)) {
         if (!error.empty()) {
             const std::string message = "Controller initialization failed: " + error;
-            g_data.addMessage(message);
-            std::cout << "[" << message << "]" << std::endl;
+            controllerPostMessage(message);
         }
         return false;
     }
@@ -113,7 +116,7 @@ inline void controllerPoll(ControllerState& cs) {
     cs.buttons[CONTROLLER_BUTTON_CROSS].current = snapshot.buttons[CONTROLLER_BUTTON_CROSS];
     cs.buttons[CONTROLLER_BUTTON_CIRCLE].current = snapshot.buttons[CONTROLLER_BUTTON_CIRCLE];
     cs.buttons[CONTROLLER_BUTTON_TRIANGLE].current = snapshot.buttons[CONTROLLER_BUTTON_TRIANGLE];
-    controllerSetSharedState(cs.connected, cs.deviceName);
+    controllerPublishStatus(cs.connected, cs.deviceName);
 }
 
 inline void controllerSetVibration(ControllerState& cs, bool enable) {
@@ -123,15 +126,14 @@ inline void controllerSetVibration(ControllerState& cs, bool enable) {
 
 inline void controllerCleanup(ControllerState& cs) {
     if (cs.connected) {
-        g_data.addMessage("Controller: Disconnected");
-        std::cout << "[Controller: Disconnected]" << std::endl;
+        controllerPostMessage("Controller: Disconnected");
     }
     cs.connected = false;
     cs.supportsInput = false;
     cs.deviceName.clear();
     cs.vibrating = false;
     controllerClearButtons(cs);
-    controllerSetSharedState(false, "");
+    controllerPublishStatus(false, "", "");
     macControllerCleanup(&cs.nativeHandle);
 }
 

@@ -287,7 +287,11 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
 
     ImGui::Separator();
 
-    consumeGuiSyncUpdates(uiState.symbolInput, uiState.subscribedSymbol, uiState.subscribed, uiState.quantityInput);
+    if (runtime) {
+        runtime->consumePendingUiSync(uiState.symbolInput, uiState.subscribedSymbol, uiState.subscribed, uiState.quantityInput);
+    } else {
+        consumeGuiSyncUpdates(uiState.symbolInput, uiState.subscribedSymbol, uiState.subscribed, uiState.quantityInput);
+    }
     const std::uint64_t newestTraceId = runtime ? runtime->getLatestTraceId() : latestTradeTraceId();
     if (uiState.selectedTraceId == 0 && newestTraceId != 0) {
         uiState.selectedTraceId = newestTraceId;
@@ -377,7 +381,11 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
     ImGui::InputDouble("##maxpos", &uiState.maxPositionDollars, 1000.0, 5000.0, "%.0f");
     if (uiState.maxPositionDollars < 1000.0) uiState.maxPositionDollars = 1000.0;
 
-    syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+    if (runtime) {
+        runtime->syncUiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+    } else {
+        syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+    }
 
     double buyPrice = 0.0;
     double sellPrice = 0.0;
@@ -497,7 +505,9 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
         }
 
         if (controllerConsumeDebouncedPress(dsState, CONTROLLER_BUTTON_TRIANGLE, now)) {
-            const std::vector<OrderId> pendingOrders = markAllPendingOrdersForCancel();
+            const std::vector<OrderId> pendingOrders = runtime
+                ? runtime->markAllPendingOrdersForCancel()
+                : markAllPendingOrdersForCancel();
 
             if (!pendingOrders.empty()) {
                 if (runtime) {
@@ -516,7 +526,11 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
             if (canTrade && uiState.subscribed) {
                 const int maxQty = computeMaxQuantityFromAsk(symbolSnapshot.askPrice, uiState.maxPositionDollars);
                 uiState.quantityInput = (uiState.quantityInput == 1) ? maxQty : 1;
-                syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+                if (runtime) {
+                    runtime->syncUiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+                } else {
+                    syncSharedGuiInputs(uiState.quantityInput, uiState.priceBuffer, uiState.maxPositionDollars);
+                }
                 addPanelMessage("[Controller] Quantity toggled to " + std::to_string(uiState.quantityInput) + " shares");
             }
         }
@@ -593,7 +607,7 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
             }
 
             ImGui::TableNextColumn();
-            const std::uint64_t rowTraceId = findTraceIdByOrderId(id);
+            const std::uint64_t rowTraceId = runtime ? runtime->findTraceIdByOrderId(id) : findTraceIdByOrderId(id);
             if (rowTraceId != 0) {
                 char viewId[32];
                 std::snprintf(viewId, sizeof(viewId), "View##%lld", static_cast<long long>(id));
@@ -616,7 +630,9 @@ void RenderTradingPanel(ImGuiIO& io, TradingRuntime* runtime, ControllerState& d
         }
 
         if (!ordersToCancel.empty()) {
-            const std::vector<OrderId> markedForCancel = markOrdersPendingCancel(ordersToCancel);
+            const std::vector<OrderId> markedForCancel = runtime
+                ? runtime->markOrdersPendingCancel(ordersToCancel)
+                : markOrdersPendingCancel(ordersToCancel);
 
             if (runtime) {
                 for (OrderId orderId : markedForCancel) {

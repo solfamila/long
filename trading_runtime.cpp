@@ -20,6 +20,7 @@
 class TradingRuntime::Impl {
 public:
     TradingRuntime* outer = nullptr;
+    SharedData state;
     TradingWrapper* wrapper = nullptr;
     EClientSocket* client = nullptr;
     EReaderOSSignal* osSignal = nullptr;
@@ -255,11 +256,15 @@ public:
 
 TradingRuntime::TradingRuntime() : pImpl(std::make_unique<Impl>()) {
     pImpl->outer = this;
+    setActiveSharedData(&pImpl->state);
 }
 
 TradingRuntime::~TradingRuntime() {
     if (status() == TradingRuntimeStatus::Running) {
         stop();
+    }
+    if (tryGetActiveSharedData() == &pImpl->state) {
+        setActiveSharedData(nullptr);
     }
 }
 
@@ -359,6 +364,38 @@ TradeTraceSnapshot TradingRuntime::getTradeTraceSnapshot(std::uint64_t traceId) 
 
 std::uint64_t TradingRuntime::getLatestTraceId() const {
     return latestTradeTraceId();
+}
+
+std::uint64_t TradingRuntime::findTraceIdByOrderId(OrderId orderId) const {
+    return ::findTraceIdByOrderId(orderId);
+}
+
+void TradingRuntime::consumePendingUiSync(std::string& symbolInput, std::string& subscribedSymbol,
+                                          bool& subscribed, int& quantityInput) {
+    ::consumeGuiSyncUpdates(symbolInput, subscribedSymbol, subscribed, quantityInput);
+}
+
+void TradingRuntime::syncUiInputs(int quantityInput, double priceBuffer, double maxPositionDollars) {
+    ::syncSharedGuiInputs(quantityInput, priceBuffer, maxPositionDollars);
+}
+
+std::vector<OrderId> TradingRuntime::markOrdersPendingCancel(const std::vector<OrderId>& orderIds) {
+    return ::markOrdersPendingCancel(orderIds);
+}
+
+std::vector<OrderId> TradingRuntime::markAllPendingOrdersForCancel() {
+    return ::markAllPendingOrdersForCancel();
+}
+
+void TradingRuntime::updateControllerStatus(bool connected, const std::string& deviceName,
+                                            const std::string& lockedDeviceName) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.controllerConnected.store(connected);
+        g_data.controllerDeviceName = deviceName;
+        g_data.controllerLockedDeviceName = lockedDeviceName;
+    }
+    notifyUiInvalidation();
 }
 
 void TradingRuntime::addMessage(const std::string& msg) {

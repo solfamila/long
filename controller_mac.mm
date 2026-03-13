@@ -52,15 +52,9 @@ int controllerScore(GCController* controller) {
     return score;
 }
 
-void updateControllerSharedState(bool connected, const std::string& deviceName) {
-    g_data.controllerConnected.store(connected);
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    g_data.controllerDeviceName = deviceName;
-}
-
-void updateControllerLockedState(const std::string& deviceName) {
-    std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-    g_data.controllerLockedDeviceName = deviceName;
+void updateControllerSharedState(bool connected, const std::string& deviceName,
+                                 const std::string& lockedDeviceName) {
+    publishControllerStatus(connected, deviceName, lockedDeviceName);
 }
 
 bool setControllerLightColor(GCController* controller, float red, float green, float blue) {
@@ -77,7 +71,7 @@ void postControllerMessage(const std::string& message) {
         return;
     }
 
-    g_data.addMessage(message);
+    publishControllerMessage(message);
     std::cout << "[" << message << "]" << std::endl;
 }
 
@@ -182,7 +176,7 @@ void postControllerMessage(const std::string& message) {
     if (controller != nil) {
         [self attachController:controller announce:YES];
     } else {
-        updateControllerSharedState(false, "");
+        updateControllerSharedState(false, "", "");
     }
 
     if (error != nullptr) {
@@ -268,7 +262,6 @@ void postControllerMessage(const std::string& message) {
         std::lock_guard<std::mutex> lock(_mutex);
         if (_lockedController == nil) {
             _lockedController = controller;
-            updateControllerLockedState(nsStringToStd(controller.vendorName ?: @"Game Controller"));
         }
     }
 
@@ -318,7 +311,8 @@ void postControllerMessage(const std::string& message) {
     }
 
     const bool lightUpdated = setControllerLightColor(controller, 0.0f, 1.0f, 0.0f);
-    updateControllerSharedState(true, deviceName);
+    const std::string lockedDeviceName = nsStringToStd((_lockedController ?: controller).vendorName ?: @"Game Controller");
+    updateControllerSharedState(true, deviceName, lockedDeviceName);
 
     if (announce) {
         std::string message = "Controller: " + deviceName + " connected";
@@ -354,7 +348,10 @@ void postControllerMessage(const std::string& message) {
     }
     setControllerLightColor(previousController, 0.0f, 0.0f, 0.0f);
 
-    updateControllerSharedState(false, "");
+    const std::string lockedDeviceName = nsStringToStd(_lockedController != nil
+        ? (_lockedController.vendorName ?: @"Game Controller")
+        : @"");
+    updateControllerSharedState(false, "", lockedDeviceName);
 
     if (announce && hadController) {
         postControllerMessage("Controller: Disconnected");
