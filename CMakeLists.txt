@@ -26,6 +26,7 @@ set(IMGUI_SOURCES
     "${IMGUI_DIR}/imgui_draw.cpp"
     "${IMGUI_DIR}/imgui_tables.cpp"
     "${IMGUI_DIR}/imgui_widgets.cpp"
+    "${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp"
     "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
     "${IMGUI_DIR}/backends/imgui_impl_metal.mm"
     "${IMGUI_DIR}/backends/imgui_impl_metal.h"
@@ -46,6 +47,8 @@ if(WIN32)
 endif()
 
 set(IXWEBSOCKET_DIR "${CMAKE_SOURCE_DIR}/ixwebsocket" CACHE PATH "Path to ixWebSocket")
+
+add_subdirectory(${IXWEBSOCKET_DIR} ixwebsocket_build)
 
 set(SOURCE_FILES
     main.cpp

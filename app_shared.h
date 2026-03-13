@@ -38,6 +38,7 @@
 #include <deque>
 #include <cstdint>
 #include <chrono>
+#include <ctime>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -172,7 +173,7 @@ public:
     virtual void tickGeneric(TickerId, TickType, double) {}
     virtual void tickString(TickerId, TickType, const std::string&) {}
     virtual void tickEFP(TickerId, TickType, double, const std::string&, double, int, const std::string&, double, int) {}
-    virtual void orderStatus(OrderId, const std::string&, Decimal, Decimal, double, long long, int, Decimal, double, int, Decimal) {}
+    virtual void orderStatus(OrderId, const std::string&, Decimal, Decimal, double, long long, int, double, int, const std::string&, double) {}
     virtual void openOrder(OrderId, const Contract&, const Order&, const OrderState&) {}
     virtual void openOrderEnd() {}
     virtual void updateAccountValue(const std::string&, const std::string&, const std::string&, const std::string&) {}
@@ -180,7 +181,7 @@ public:
     virtual void accountDownloadEnd(const std::string&) {}
     virtual void contractDetails(int, const void*) {}
     virtual void contractDetailsEnd(int) {}
-    virtual void execDetails(int, const Contract*, const Execution&) {}
+    virtual void execDetails(int, const Contract&, const Execution&) {}
     virtual void execDetailsEnd(int) {}
     virtual void commissionReport(const CommissionReport&) {}
     virtual void historicalData(int, const std::string&, double, double, double, double, int, int, double, int) {}
@@ -196,11 +197,11 @@ public:
     virtual void updateMktDepthL2(TickerId, int, const std::string&, int, int, double, Decimal, bool) {}
     virtual void tickFlashCallBack(TickerId, double, double) {}
     virtual void orderBound(long long, int) {}
-    virtual void error(int, int, const std::string&, const std::string&, const std::string&) {}
+    virtual void error(int, time_t, int, const std::string&, const std::string&) {}
     virtual void error(const std::string&) {}
     virtual void winError(const std::string&, int) {}
     virtual void quickMsg(const std::string&) {}
-    virtual void position(const std::string&, const Contract&, Decimal, double, double) {}
+    virtual void position(const std::string&, const Contract&, Decimal, double) {}
     virtual void positionEnd() {}
     virtual void errorProtoBuf(const protobuf::ErrorMessage&) {}
     virtual void managedAccountsProtoBuf(const protobuf::ManagedAccounts&) {}

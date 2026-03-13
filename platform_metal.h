@@ -4,6 +4,7 @@
 
 #if defined(__APPLE__)
 
+#define GLFW_EXPOSE_NATIVE_COCOA
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>

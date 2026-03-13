@@ -141,7 +141,7 @@ void MacOSPlatformBackend::endFrame(ImVec4 clearColor) {
     if (!m_metalLayer) return;
 
     CAMetalLayer* metalLayer = (__bridge CAMetalLayer*)m_metalLayer;
-    CAMetalDrawable* drawable = [metalLayer nextDrawable];
+    id<CAMetalDrawable> drawable = [metalLayer nextDrawable];
     if (!drawable) return;
 
     MTLRenderPassDescriptor* passDesc = [[MTLRenderPassDescriptor alloc] init];
