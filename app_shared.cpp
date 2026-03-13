@@ -2203,3 +2203,25 @@ TradeTraceSnapshot captureTradeTraceSnapshot(std::uint64_t traceId) {
     snapshot.trace = it->second;
     return snapshot;
 }
+
+void resetSharedDataForTesting() {
+    clearUiInvalidationCallback();
+
+    SharedData fresh;
+    SharedData& bootstrap = bootstrapSharedData();
+    SharedData* active = activeSharedDataSlot().load(std::memory_order_acquire);
+    if (active == nullptr) {
+        active = &bootstrap;
+    }
+
+    if (active == &bootstrap) {
+        std::scoped_lock lock(bootstrap.mutex);
+        copySharedDataState(fresh, bootstrap);
+    } else {
+        std::scoped_lock lock(active->mutex, bootstrap.mutex);
+        copySharedDataState(fresh, *active);
+        copySharedDataState(fresh, bootstrap);
+    }
+
+    activeSharedDataSlot().store(&bootstrap, std::memory_order_release);
+}

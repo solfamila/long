@@ -568,6 +568,7 @@ std::uint64_t findTraceIdByOrderId(OrderId orderId);
 std::uint64_t latestTradeTraceId();
 std::vector<TradeTraceListItem> captureTradeTraceListItems(std::size_t maxItems = 100);
 TradeTraceSnapshot captureTradeTraceSnapshot(std::uint64_t traceId);
+void resetSharedDataForTesting();
 void appendTradeTraceLogLine(const json& line);
 void appendRuntimeJournalLine(const json& line);
 void appendRuntimeJournalEvent(const std::string& event, const json& details = {});

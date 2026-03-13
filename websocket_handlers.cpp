@@ -1,5 +1,6 @@
 #include "websocket_handlers.h"
 #include "mac_observability.h"
+#include "trading_runtime.h"
 
 namespace {
 
@@ -24,11 +25,16 @@ bool authorizeWebSocketRequest(const json& request, ix::WebSocket& webSocket) {
 
 } // namespace
 
-void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSocket, EClientSocket* client) {
+void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSocket, TradingRuntime* runtime) {
     try {
         json orderRequest = json::parse(jsonMessage);
 
         if (!authorizeWebSocketRequest(orderRequest, webSocket)) {
+            return;
+        }
+
+        if (runtime == nullptr || !runtime->isStarted()) {
+            webSocket.send(json({{"success", false}, {"error", "Trading runtime is not started"}}).dump());
             return;
         }
 
@@ -170,8 +176,13 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
         std::string submitError;
         OrderId orderId = 0;
         std::uint64_t traceId = 0;
-        if (!submitLimitOrder(client, symbol, action, static_cast<double>(qtyShares), limitPrice,
-                              closeOnly, &intent, &submitError, &orderId, &traceId)) {
+        if (!runtime->submitOrderIntent(intent,
+                                        static_cast<double>(qtyShares),
+                                        limitPrice,
+                                        closeOnly,
+                                        &submitError,
+                                        &traceId,
+                                        &orderId)) {
             macLogError("ipc", "WebSocket order rejected: " + submitError);
             appendRuntimeJournalEvent("ws_order_rejected", {
                 {"reason", submitError},
@@ -209,11 +220,16 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
     }
 }
 
-void handleWebSocketSubscribe(const std::string& jsonMessage, ix::WebSocket& webSocket, EClientSocket* client) {
+void handleWebSocketSubscribe(const std::string& jsonMessage, ix::WebSocket& webSocket, TradingRuntime* runtime) {
     try {
         json request = json::parse(jsonMessage);
 
         if (!authorizeWebSocketRequest(request, webSocket)) {
+            return;
+        }
+
+        if (runtime == nullptr || !runtime->isStarted()) {
+            webSocket.send(json({{"success", false}, {"error", "Trading runtime is not started"}}).dump());
             return;
         }
 
@@ -255,7 +271,7 @@ void handleWebSocketSubscribe(const std::string& jsonMessage, ix::WebSocket& web
         }
 
         std::string error;
-        if (!requestSymbolSubscription(client, symbol, true, &error)) {
+        if (!runtime->requestSymbolSubscription(symbol, true, &error)) {
             webSocket.send(json({{"success", false}, {"error", error}}).dump());
             return;
         }
@@ -270,7 +286,7 @@ void handleWebSocketSubscribe(const std::string& jsonMessage, ix::WebSocket& web
     }
 }
 
-void handleWebSocketMessage(const std::string& jsonMessage, ix::WebSocket& webSocket, EClientSocket* client) {
+void handleWebSocketMessage(const std::string& jsonMessage, ix::WebSocket& webSocket, TradingRuntime* runtime) {
     if (jsonMessage.size() > 4096) {
         webSocket.send(json({{"success", false}, {"error", "Message too large"}}).dump());
         return;
@@ -280,9 +296,9 @@ void handleWebSocketMessage(const std::string& jsonMessage, ix::WebSocket& webSo
         json request = json::parse(jsonMessage);
 
         if (request.contains("subscribe")) {
-            handleWebSocketSubscribe(jsonMessage, webSocket, client);
+            handleWebSocketSubscribe(jsonMessage, webSocket, runtime);
         } else if (request.contains("action")) {
-            handleWebSocketOrder(jsonMessage, webSocket, client);
+            handleWebSocketOrder(jsonMessage, webSocket, runtime);
         } else {
             webSocket.send(json({
                 {"success", false},

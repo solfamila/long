@@ -26,6 +26,7 @@ enable_language(OBJCXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
+include(CTest)
 
 set(APP_BUNDLE_NAME "TWS Trading GUI")
 set(APP_BUNDLE_IDENTIFIER "com.foxy.twstradinggui")
@@ -281,6 +282,48 @@ add_custom_target(tws_gui_notarize
     DEPENDS tws_gui
     VERBATIM
 )
+
+if(BUILD_TESTING)
+    add_executable(tws_gui_tests
+        tests/trade_trace_tests.cpp
+        app_shared.cpp
+        trace_exporter.cpp
+        trading_ui_format.cpp
+        mac_observability.mm
+    )
+
+    target_include_directories(tws_gui_tests PRIVATE
+        "${CMAKE_SOURCE_DIR}"
+        "${IXWEBSOCKET_DIR}"
+        "${NLOHMANN_JSON_DIR}/single_include"
+    )
+
+    target_link_libraries(tws_gui_tests PRIVATE
+        Threads::Threads
+        ixwebsocket::ixwebsocket
+        ${APP_KIT_LIBRARY}
+        ${SECURITY_LIBRARY}
+    )
+
+    if(TARGET twsapi)
+        target_link_libraries(tws_gui_tests PRIVATE twsapi)
+        target_include_directories(tws_gui_tests PRIVATE
+            "${VENDORED_IB_API_DIR}"
+            ${IB_API_EXTRA_INCLUDE_DIRS}
+        )
+    elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
+        target_include_directories(tws_gui_tests PRIVATE "${IB_API_INCLUDE_DIR}")
+    else()
+        target_include_directories(tws_gui_tests PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+        target_compile_definitions(tws_gui_tests PRIVATE
+            TWS_GUI_MOCK_IBAPI=1
+            TWS_HAS_PROTOBUF_API=1
+            TWS_HAS_ORDER_CANCEL_OBJECT=1
+        )
+    endif()
+
+    add_test(NAME tws_gui_trace_tests COMMAND tws_gui_tests)
+endif()
 
 set_source_files_properties(
     main.mm

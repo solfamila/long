@@ -40,7 +40,8 @@ public:
                            double limitPrice,
                            bool closeOnly,
                            std::string* error = nullptr,
-                           std::uint64_t* outTraceId = nullptr);
+                           std::uint64_t* outTraceId = nullptr,
+                           OrderId* outOrderId = nullptr);
     std::vector<bool> requestCancelOrders(const std::vector<OrderId>& orderIds);
 
 private:

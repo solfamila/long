@@ -7,17 +7,22 @@
 #include "websocket_handlers.h"
 
 #include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <future>
 #include <iomanip>
 #include <mutex>
 #include <random>
 #include <sstream>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
 
 constexpr auto kControllerPollInterval = std::chrono::milliseconds(16);
+thread_local void* tlsActionLoopOwner = nullptr;
 
 std::string makeSessionIdentifier(const char* prefix) {
     static constexpr char kHex[] = "0123456789abcdef";
@@ -44,10 +49,15 @@ struct TradingRuntime::Impl {
     std::unique_ptr<ix::WebSocketServer> wsServer;
     std::thread readerThread;
     std::thread controllerThread;
+    std::thread actionThread;
     std::atomic<bool> readerRunning{false};
     std::atomic<bool> controllerRunning{false};
     mutable std::mutex callbackMutex;
     std::mutex controllerMutex;
+    std::mutex actionMutex;
+    std::condition_variable actionCv;
+    std::deque<std::function<void()>> actionQueue;
+    bool stopActionThread = false;
     UiInvalidationCallback uiInvalidationCallback;
     ControllerActionCallback controllerActionCallback;
     ControllerState controllerState;
@@ -103,6 +113,80 @@ struct TradingRuntime::Impl {
             std::this_thread::sleep_for(kControllerPollInterval);
         }
     }
+
+    void actionLoop() {
+        tlsActionLoopOwner = this;
+
+        while (true) {
+            std::function<void()> action;
+            {
+                std::unique_lock<std::mutex> lock(actionMutex);
+                actionCv.wait(lock, [&] {
+                    return stopActionThread || !actionQueue.empty();
+                });
+                if (stopActionThread && actionQueue.empty()) {
+                    break;
+                }
+                action = std::move(actionQueue.front());
+                actionQueue.pop_front();
+            }
+            action();
+        }
+
+        tlsActionLoopOwner = nullptr;
+    }
+
+    void startActionLoop() {
+        {
+            std::lock_guard<std::mutex> lock(actionMutex);
+            stopActionThread = false;
+            actionQueue.clear();
+        }
+        actionThread = std::thread(&Impl::actionLoop, this);
+    }
+
+    void stopActionLoop() {
+        {
+            std::lock_guard<std::mutex> lock(actionMutex);
+            stopActionThread = true;
+        }
+        actionCv.notify_all();
+        if (actionThread.joinable()) {
+            actionThread.join();
+        }
+        {
+            std::lock_guard<std::mutex> lock(actionMutex);
+            actionQueue.clear();
+        }
+    }
+
+    template <typename Fn>
+    auto invokeOnActionThread(Fn&& fn) -> decltype(fn()) {
+        using Result = decltype(fn());
+        if (tlsActionLoopOwner == this) {
+            return fn();
+        }
+
+        auto promise = std::make_shared<std::promise<Result>>();
+        auto future = promise->get_future();
+        {
+            std::lock_guard<std::mutex> lock(actionMutex);
+            actionQueue.emplace_back([promise, fn = std::forward<Fn>(fn)]() mutable {
+                try {
+                    if constexpr (std::is_void_v<Result>) {
+                        fn();
+                        promise->set_value();
+                    } else {
+                        promise->set_value(fn());
+                    }
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+            });
+        }
+        actionCv.notify_one();
+        return future.get();
+    }
 };
 
 TradingRuntime::TradingRuntime()
@@ -134,6 +218,7 @@ bool TradingRuntime::start() {
 
     bindSharedDataOwner(&impl_->sharedData);
     impl_->installUiInvalidationCallback();
+    impl_->startActionLoop();
 
     const RuntimeConnectionConfig connectionConfig = captureRuntimeConnectionConfig();
     const std::string websocketToken = ensureWebSocketAuthToken();
@@ -198,15 +283,15 @@ bool TradingRuntime::start() {
     if (connectionConfig.websocketEnabled) {
         ix::initNetSystem();
         impl_->wsServer = std::make_unique<ix::WebSocketServer>(WEBSOCKET_PORT, WEBSOCKET_HOST);
-        EClientSocket* const client = impl_->client.get();
+        TradingRuntime* const runtime = this;
         impl_->wsServer->setOnClientMessageCallback(
-            [client](std::shared_ptr<ix::ConnectionState> connectionState,
-                     ix::WebSocket& webSocket,
-                     const ix::WebSocketMessagePtr& msg) {
+            [runtime](std::shared_ptr<ix::ConnectionState> connectionState,
+                      ix::WebSocket& webSocket,
+                      const ix::WebSocketMessagePtr& msg) {
                 (void)connectionState;
 
                 if (msg->type == ix::WebSocketMessageType::Message) {
-                    handleWebSocketMessage(msg->str, webSocket, client);
+                    handleWebSocketMessage(msg->str, webSocket, runtime);
                 } else if (msg->type == ix::WebSocketMessageType::Open) {
                     const int total = g_data.wsConnectedClients.fetch_add(1) + 1;
                     g_data.addMessage("WebSocket client connected (total: " + std::to_string(total) + ")");
@@ -275,6 +360,8 @@ void TradingRuntime::shutdown() {
         return;
     }
 
+    impl_->started = false;
+
     impl_->controllerRunning.store(false, std::memory_order_relaxed);
     if (impl_->controllerThread.joinable()) {
         impl_->controllerThread.join();
@@ -294,6 +381,8 @@ void TradingRuntime::shutdown() {
         impl_->wsServer.reset();
         ix::uninitNetSystem();
     }
+
+    impl_->stopActionLoop();
 
     if (impl_->client) {
         cancelActiveSubscription(impl_->client.get());
@@ -323,7 +412,6 @@ void TradingRuntime::shutdown() {
     setRuntimeSessionState(RuntimeSessionState::Disconnected);
     unbindSharedDataOwner(&impl_->sharedData);
     clearUiInvalidationCallback();
-    impl_->started = false;
     macLogInfo("runtime", "Runtime shutdown complete");
 }
 
@@ -344,13 +432,21 @@ void TradingRuntime::setControllerVibration(bool enable) {
 }
 
 bool TradingRuntime::requestSymbolSubscription(const std::string& symbol, bool recalcQtyFromFirstAsk, std::string* error) {
-    if (!impl_ || !impl_->client) {
+    if (!impl_ || !impl_->started) {
         if (error) {
             *error = "Trading runtime is not started";
         }
         return false;
     }
-    return ::requestSymbolSubscription(impl_->client.get(), symbol, recalcQtyFromFirstAsk, error);
+    return impl_->invokeOnActionThread([this, symbol, recalcQtyFromFirstAsk, error]() {
+        if (!impl_ || !impl_->client) {
+            if (error) {
+                *error = "Trading runtime is not started";
+            }
+            return false;
+        }
+        return ::requestSymbolSubscription(impl_->client.get(), symbol, recalcQtyFromFirstAsk, error);
+    });
 }
 
 bool TradingRuntime::submitOrderIntent(const SubmitIntent& intent,
@@ -358,28 +454,42 @@ bool TradingRuntime::submitOrderIntent(const SubmitIntent& intent,
                                        double limitPrice,
                                        bool closeOnly,
                                        std::string* error,
-                                       std::uint64_t* outTraceId) {
-    if (!impl_ || !impl_->client) {
+                                       std::uint64_t* outTraceId,
+                                       OrderId* outOrderId) {
+    if (!impl_ || !impl_->started) {
         if (error) {
             *error = "Trading runtime is not started";
         }
         return false;
     }
-    return submitLimitOrder(impl_->client.get(),
-                            intent.symbol,
-                            intent.side,
-                            quantity,
-                            limitPrice,
-                            closeOnly,
-                            &intent,
-                            error,
-                            nullptr,
-                            outTraceId);
+    return impl_->invokeOnActionThread([this, intent, quantity, limitPrice, closeOnly, error, outTraceId, outOrderId]() {
+        if (!impl_ || !impl_->client) {
+            if (error) {
+                *error = "Trading runtime is not started";
+            }
+            return false;
+        }
+        return submitLimitOrder(impl_->client.get(),
+                                intent.symbol,
+                                intent.side,
+                                quantity,
+                                limitPrice,
+                                closeOnly,
+                                &intent,
+                                error,
+                                outOrderId,
+                                outTraceId);
+    });
 }
 
 std::vector<bool> TradingRuntime::requestCancelOrders(const std::vector<OrderId>& orderIds) {
-    if (!impl_ || !impl_->client) {
+    if (!impl_ || !impl_->started) {
         return std::vector<bool>(orderIds.size(), false);
     }
-    return sendCancelRequests(impl_->client.get(), orderIds);
+    return impl_->invokeOnActionThread([this, orderIds]() {
+        if (!impl_ || !impl_->client) {
+            return std::vector<bool>(orderIds.size(), false);
+        }
+        return sendCancelRequests(impl_->client.get(), orderIds);
+    });
 }
