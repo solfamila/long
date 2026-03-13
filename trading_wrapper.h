@@ -169,7 +169,12 @@ public:
     }
 
     void orderStatus(OrderId orderId, const std::string& status, Decimal filled,
-                     Decimal remaining, double avgFillPrice, long long permId,
+                     Decimal remaining, double avgFillPrice,
+#if defined(TWS_ORDER_STATUS_PERMID_IS_INT)
+                     int permId,
+#else
+                     long long permId,
+#endif
                      int parentId, double lastFillPrice, int clientId,
                      const std::string& whyHeld, double mktCapPrice) override {
         (void)parentId;
@@ -337,8 +342,8 @@ public:
 
         char msg[256];
         std::snprintf(msg, sizeof(msg),
-                      "Execution %s: order %d %s %.0f @ %.2f (cum %.0f)",
-                      execution.execId.c_str(), execution.orderId, contract.symbol.c_str(),
+                      "Execution %s: order %lld %s %.0f @ %.2f (cum %.0f)",
+                      execution.execId.c_str(), static_cast<long long>(execution.orderId), contract.symbol.c_str(),
                       DecimalFunctions::decimalToDouble(execution.shares), execution.price,
                       DecimalFunctions::decimalToDouble(execution.cumQty));
         g_data.addMessage(msg);
@@ -349,20 +354,30 @@ public:
         (void)reqId;
     }
 
+    #if defined(TWS_HAS_COMMISSION_AND_FEES_REPORT)
+    void commissionAndFeesReport(const CommissionReport& commissionReport) override {
+    #else
     void commissionReport(const CommissionReport& commissionReport) override {
+    #endif
         recordTraceCommission(commissionReport);
 
         char msg[256];
         std::snprintf(msg, sizeof(msg), "Commission %s: %.4f %s",
-                      commissionReport.execId.c_str(), commissionReport.commission,
+                      commissionReport.execId.c_str(), commissionValue(commissionReport),
                       commissionReport.currency.c_str());
         g_data.addMessage(msg);
         std::cout << "[" << msg << "]" << std::endl;
     }
 
-    void error(int id, time_t errorTime, int errorCode, const std::string& errorString,
+    void error(int id,
+#if defined(TWS_ERROR_HAS_TIMESTAMP)
+               time_t errorTime,
+#endif
+               int errorCode, const std::string& errorString,
                const std::string& advancedOrderRejectJson) override {
+#if defined(TWS_ERROR_HAS_TIMESTAMP)
         (void)errorTime;
+#endif
         (void)advancedOrderRejectJson;
         {
             std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
@@ -458,6 +473,7 @@ public:
         std::cout << "[Positions loaded]" << std::endl;
     }
 
+#if defined(TWS_HAS_PROTOBUF_API)
     void errorProtoBuf(const protobuf::ErrorMessage& errorProto) override { (void)errorProto; }
     void managedAccountsProtoBuf(const protobuf::ManagedAccounts& managedAccountsProto) override { (void)managedAccountsProto; }
     void tickPriceProtoBuf(const protobuf::TickPrice& tickPriceProto) override { (void)tickPriceProto; }
@@ -465,4 +481,5 @@ public:
     void positionEndProtoBuf(const protobuf::PositionEnd& positionEndProto) override { (void)positionEndProto; }
     void updateMarketDepthProtoBuf(const protobuf::MarketDepth& marketDepthProto) override { (void)marketDepthProto; }
     void updateMarketDepthL2ProtoBuf(const protobuf::MarketDepthL2& marketDepthL2Proto) override { (void)marketDepthL2Proto; }
+#endif
 };

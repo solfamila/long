@@ -5,7 +5,16 @@ node_modules/
 # Build outputs
 dist/
 build/
+build-*/
 out/
+.cache/
+imgui.ini
+
+# Local vendored dependencies
+imgui/
+ixwebsocket/
+nlohmann_json/
+third_party/
 
 # IDE
 .idea/

@@ -183,6 +183,8 @@ UiStatusSnapshot captureUiStatusSnapshot() {
     snapshot.wsServerRunning = g_data.wsServerRunning.load();
     snapshot.controllerConnected = g_data.controllerConnected.load();
     snapshot.wsConnectedClients = g_data.wsConnectedClients.load();
+    snapshot.controllerDeviceName = g_data.controllerDeviceName;
+    snapshot.controllerLockedDeviceName = g_data.controllerLockedDeviceName;
 
     if (!g_data.selectedAccount.empty()) {
         snapshot.accountText = g_data.selectedAccount;
@@ -291,8 +293,12 @@ std::vector<bool> sendCancelRequests(EClientSocket* client, const std::vector<Or
         }
 
         for (size_t i = 0; i < orderIds.size(); ++i) {
+#if defined(TWS_HAS_ORDER_CANCEL_OBJECT)
             OrderCancel orderCancel;
             client->cancelOrder(orderIds[i], orderCancel);
+#else
+            client->cancelOrder(orderIds[i], "");
+#endif
             sent[i] = true;
         }
     }
@@ -1053,17 +1059,18 @@ void recordTraceCommission(const CommissionReport& commissionReport) {
     json line;
     {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        const double commission = commissionValue(commissionReport);
         const auto traceId = findTraceIdLocked(0, 0, commissionReport.execId);
         if (traceId == 0) return;
         auto it = g_data.traces.find(traceId);
         if (it == g_data.traces.end()) return;
         TradeTrace& trace = it->second;
 
-        trace.totalCommission += commissionReport.commission;
+        trace.totalCommission += commission;
         trace.commissionCurrency = commissionReport.currency;
         for (auto rit = trace.fills.rbegin(); rit != trace.fills.rend(); ++rit) {
             if (rit->execId == commissionReport.execId) {
-                rit->commission = commissionReport.commission;
+                rit->commission = commission;
                 rit->commissionKnown = true;
                 rit->commissionCurrency = commissionReport.currency;
                 break;
@@ -1077,7 +1084,7 @@ void recordTraceCommission(const CommissionReport& commissionReport) {
         event.stage = "commissionReport";
         std::ostringstream oss;
         oss << commissionReport.execId << " commission=" << std::fixed << std::setprecision(4)
-            << commissionReport.commission << ' ' << commissionReport.currency;
+            << commission << ' ' << commissionReport.currency;
         event.details = oss.str();
         if (trace.events.size() >= kMaxTraceEvents) {
             trace.events.erase(trace.events.begin(), trace.events.begin() + (trace.events.size() - kMaxTraceEvents + 1));

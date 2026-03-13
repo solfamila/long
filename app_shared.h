@@ -11,18 +11,32 @@
 #include "Contract.h"
 #include "Order.h"
 #include "OrderState.h"
+#if defined(TWS_HAS_ORDER_CANCEL_OBJECT)
 #include "OrderCancel.h"
+#endif
 #include "Execution.h"
+#if defined(TWS_HAS_COMMISSION_AND_FEES_REPORT)
+#include "CommissionAndFeesReport.h"
+using CommissionReport = CommissionAndFeesReport;
+
+inline double commissionValue(const CommissionReport& report) {
+    return report.commissionAndFees;
+}
+#else
 #include "CommissionReport.h"
+
+inline double commissionValue(const CommissionReport& report) {
+    return report.commission;
+}
+#endif
 #include "Decimal.h"
+#if defined(TWS_HAS_PROTOBUF_API)
 #include "ErrorMessage.pb.h"
 #include "ManagedAccounts.pb.h"
 #include "TickPrice.pb.h"
 #include "Position.pb.h"
 #include "PositionEnd.pb.h"
-
-#include <imgui.h>
-#include <imgui_stdlib.h>
+#endif
 
 // Standard library
 #include <iostream>
@@ -57,6 +71,18 @@
 // JSON parsing
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
+
+#if defined(TWS_NEEDS_DECIMAL_FUNCTIONS_SHIM)
+namespace DecimalFunctions {
+inline double decimalToDouble(Decimal value) {
+    return ::decimalToDouble(value);
+}
+
+inline Decimal doubleToDecimal(double value) {
+    return ::doubleToDecimal(value);
+}
+} // namespace DecimalFunctions
+#endif
 
 std::string toUpperCase(const std::string& str);
 
@@ -264,6 +290,7 @@ struct SharedData {
 
     std::atomic<bool> controllerConnected{false};
     std::string controllerDeviceName;
+    std::string controllerLockedDeviceName;
 
     std::deque<std::string> messages;
     std::string messagesCache;
@@ -319,6 +346,8 @@ struct UiStatusSnapshot {
     bool controllerConnected = false;
     int wsConnectedClients = 0;
     std::string accountText;
+    std::string controllerDeviceName;
+    std::string controllerLockedDeviceName;
 };
 
 struct SymbolUiSnapshot {
