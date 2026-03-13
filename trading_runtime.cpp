@@ -12,9 +12,14 @@
 #include <thread>
 #include <atomic>
 #include <functional>
+#include <queue>
+#include <variant>
+#include <mutex>
+#include <condition_variable>
 
 class TradingRuntime::Impl {
 public:
+    TradingRuntime* outer = nullptr;
     TradingWrapper* wrapper = nullptr;
     EClientSocket* client = nullptr;
     EReaderOSSignal* osSignal = nullptr;
@@ -27,6 +32,92 @@ public:
     std::function<void(std::shared_ptr<ix::ConnectionState>,
                       ix::WebSocket&,
                       const ix::WebSocketMessagePtr&)> wsMessageCallback;
+
+    std::queue<RuntimeCommand> commandQueue;
+    std::mutex commandQueueMutex;
+    std::condition_variable command_cv;
+    std::atomic<bool> commandThreadRunning{false};
+    std::thread commandThread;
+
+    void startCommandProcessor() {
+        commandThreadRunning.store(true);
+        commandThread = std::thread([this]() {
+            while (commandThreadRunning.load()) {
+                RuntimeCommand cmd;
+                bool haveCommand = false;
+                {
+                    std::unique_lock<std::mutex> lock(commandQueueMutex);
+                    command_cv.wait_for(lock, std::chrono::milliseconds(100), [this]() {
+                        return !commandQueue.empty() || !commandThreadRunning.load();
+                    });
+                    if (!commandQueue.empty()) {
+                        cmd = std::move(commandQueue.front());
+                        commandQueue.pop();
+                        haveCommand = true;
+                    }
+                }
+                if (haveCommand) {
+                    processCommand(cmd);
+                }
+            }
+        });
+    }
+
+    void stopCommandProcessor() {
+        commandThreadRunning.store(false);
+        command_cv.notify_all();
+        if (commandThread.joinable()) {
+            commandThread.join();
+        }
+    }
+
+    void enqueueCommand(RuntimeCommand&& cmd) {
+        {
+            std::lock_guard<std::mutex> lock(commandQueueMutex);
+            commandQueue.push(std::move(cmd));
+        }
+        command_cv.notify_one();
+    }
+
+    CommandResult processCommand(const RuntimeCommand& cmd) {
+        CommandResult result;
+        result.success = false;
+
+        std::visit([this, &result](auto&& c) {
+            using T = std::decay_t<decltype(c)>;
+            if constexpr (std::is_same_v<T, SubscribeCommand>) {
+                std::string error;
+                result.success = requestSymbolSubscription(client, c.symbol, c.recalcQtyFromFirstAsk, &error);
+                result.error = error;
+                result.subscribedSymbol = c.symbol;
+            } else if constexpr (std::is_same_v<T, PlaceOrderCommand>) {
+                SubmitIntent intent = captureSubmitIntent(
+                    c.source, c.symbol, c.action, c.quantity, c.limitPrice,
+                    c.closeOnly, 0.01, 0.0, c.source);
+                if (c.traceId) {
+                    intent.triggerMono = std::chrono::steady_clock::now();
+                    intent.triggerWall = std::chrono::system_clock::now();
+                }
+                std::string submitError;
+                OrderId orderId = 0;
+                std::uint64_t traceId = 0;
+                result.success = submitLimitOrder(client, c.symbol, c.action,
+                    static_cast<double>(c.quantity), c.limitPrice, c.closeOnly,
+                    &intent, &submitError, &orderId, &traceId);
+                result.error = submitError;
+                result.orderId = orderId;
+                result.traceId = traceId;
+            } else if constexpr (std::is_same_v<T, CancelOrderCommand>) {
+                OrderCancel cancel;
+                result.success = client->cancelOrder(c.orderId, cancel);
+                if (!result.success) {
+                    result.error = "Failed to send cancel request";
+                }
+            }
+        }, cmd);
+
+        return result;
+    }
 
     bool start(const TradingRuntimeConfig& config) {
         status.store(TradingRuntimeStatus::Starting);
@@ -68,6 +159,8 @@ public:
             });
         }
 
+        startCommandProcessor();
+
         ix::initNetSystem();
         wsServer = new ix::WebSocketServer(config.wsPort, config.wsHost);
 
@@ -79,7 +172,7 @@ public:
                     wsMessageCallback(connectionState, webSocket, msg);
                 } else {
                     if (msg->type == ix::WebSocketMessageType::Message) {
-                        handleWebSocketMessage(msg->str, webSocket, client);
+                        handleWebSocketMessage(msg->str, webSocket, outer);
                     } else if (msg->type == ix::WebSocketMessageType::Open) {
                         const int total = g_data.wsConnectedClients.fetch_add(1) + 1;
                         g_data.addMessage("WebSocket client connected (total: " + std::to_string(total) + ")");
@@ -118,6 +211,8 @@ public:
     void stop() {
         status.store(TradingRuntimeStatus::Stopping);
         std::cout << "=== Trading Runtime Stopping ===" << std::endl;
+
+        stopCommandProcessor();
 
         if (g_data.wsServerRunning.load()) {
             std::cout << "Stopping WebSocket server..." << std::endl;
@@ -158,7 +253,9 @@ public:
     }
 };
 
-TradingRuntime::TradingRuntime() : pImpl(std::make_unique<Impl>()) {}
+TradingRuntime::TradingRuntime() : pImpl(std::make_unique<Impl>()) {
+    pImpl->outer = this;
+}
 
 TradingRuntime::~TradingRuntime() {
     if (status() == TradingRuntimeStatus::Running) {
@@ -195,6 +292,37 @@ void TradingRuntime::setOnWebSocketMessageCallback(
                       ix::WebSocket&,
                       const ix::WebSocketMessagePtr&)> callback) {
     pImpl->wsMessageCallback = std::move(callback);
+}
+
+CommandResult TradingRuntime::submitSubscribe(const std::string& symbol, bool recalcQtyFromFirstAsk) {
+    SubscribeCommand cmd;
+    cmd.symbol = symbol;
+    cmd.recalcQtyFromFirstAsk = recalcQtyFromFirstAsk;
+    pImpl->enqueueCommand(std::move(cmd));
+    return CommandResult{true, {}, 0, 0, symbol};
+}
+
+CommandResult TradingRuntime::submitOrder(const std::string& symbol, const std::string& action,
+                                           int quantity, double limitPrice, bool closeOnly,
+                                           const std::string& source,
+                                           std::optional<std::uint64_t> traceId) {
+    PlaceOrderCommand cmd;
+    cmd.symbol = symbol;
+    cmd.action = action;
+    cmd.quantity = quantity;
+    cmd.limitPrice = limitPrice;
+    cmd.closeOnly = closeOnly;
+    cmd.source = source;
+    cmd.traceId = traceId;
+    pImpl->enqueueCommand(std::move(cmd));
+    return CommandResult{true, {}, 0, 0, {}};
+}
+
+CommandResult TradingRuntime::submitCancel(OrderId orderId) {
+    CancelOrderCommand cmd;
+    cmd.orderId = orderId;
+    pImpl->enqueueCommand(std::move(cmd));
+    return CommandResult{true, {}, orderId, 0, {}};
 }
 
 const char* TradingRuntime::statusString(TradingRuntimeStatus status) {

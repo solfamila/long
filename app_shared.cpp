@@ -183,6 +183,8 @@ UiStatusSnapshot captureUiStatusSnapshot() {
     snapshot.wsServerRunning = g_data.wsServerRunning.load();
     snapshot.controllerConnected = g_data.controllerConnected.load();
     snapshot.wsConnectedClients = g_data.wsConnectedClients.load();
+    snapshot.controllerDeviceName = g_data.controllerDeviceName;
+    snapshot.controllerLockedDeviceName = g_data.controllerLockedDeviceName;
 
     if (!g_data.selectedAccount.empty()) {
         snapshot.accountText = g_data.selectedAccount;

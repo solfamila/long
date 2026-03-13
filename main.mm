@@ -16,15 +16,33 @@
 #include "controller.h"
 #include "trading_panel.h"
 
+enum class ThermalState {
+    Nominal,
+    Fair,
+    Serious,
+    Critical
+};
+
+enum class AppActivityState {
+    Active,
+    Inactive
+};
+
 @interface AppViewController : NSViewController <MTKViewDelegate, NSWindowDelegate>
 @property (nonatomic, strong) MTKView* mtkView;
 @property (nonatomic, strong) id<MTLDevice> device;
 @property (nonatomic, strong) id<MTLCommandQueue> commandQueue;
+@property (nonatomic, assign) ThermalState thermalState;
+@property (nonatomic, assign) AppActivityState activityState;
+@property (nonatomic, assign) BOOL needsRedraw;
 @end
 
 @implementation AppViewController {
     TradingRuntime* _tradingRuntime;
+    ControllerState _controllerState;
+    TradingPanelUiState _uiState;
     bool _applicationShouldQuit;
+    bool _controllerInitialized;
 }
 
 - (instancetype)initWithNibName:(NSString*)nibNameOrNil bundle:(NSBundle*)nibBundleOrNil {
@@ -33,12 +51,18 @@
     _device = MTLCreateSystemDefaultDevice();
     _commandQueue = [_device newCommandQueue];
     _applicationShouldQuit = false;
+    _controllerInitialized = false;
     _tradingRuntime = new TradingRuntime();
+    _thermalState = [self thermalStateFromProcessInfo];
+    _activityState = AppActivityState::Active;
+    _needsRedraw = YES;
     
     if (!self.device) {
         NSLog(@"Metal is not supported");
         abort();
     }
+    
+    [self registerForNotifications];
     
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -49,6 +73,92 @@
     ImGui_ImplMetal_Init(_device);
     
     return self;
+}
+
+- (ThermalState)thermalStateFromProcessInfo {
+    NSProcessInfoThermalState processThermalState = [[NSProcessInfo processInfo] thermalState];
+    switch (processThermalState) {
+        case NSProcessInfoThermalStateNominal:
+            return ThermalState::Nominal;
+        case NSProcessInfoThermalStateFair:
+            return ThermalState::Fair;
+        case NSProcessInfoThermalStateSerious:
+            return ThermalState::Serious;
+        case NSProcessInfoThermalStateCritical:
+            return ThermalState::Critical;
+        default:
+            return ThermalState::Nominal;
+    }
+}
+
+- (void)registerForNotifications {
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applicationDidBecomeActive:)
+                                                 name:NSApplicationDidBecomeActiveNotification
+                                               object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applicationWillResignActive:)
+                                                 name:NSApplicationWillResignActiveNotification
+                                               object:nil];
+    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(thermalStateDidChange:)
+                                                 name:NSProcessInfoThermalStateDidChangeNotification
+                                               object:nil];
+}
+
+- (void)applicationDidBecomeActive:(NSNotification*)notification {
+    _activityState = AppActivityState::Active;
+    _needsRedraw = YES;
+    [self.mtkView setNeedsDisplay:YES];
+    NSLog(@"App became active - full frame rate");
+}
+
+- (void)applicationWillResignActive:(NSNotification*)notification {
+    _activityState = AppActivityState::Inactive;
+    NSLog(@"App became inactive - reduced frame rate");
+}
+
+- (void)thermalStateDidChange:(NSNotification*)notification {
+    _thermalState = [self thermalStateFromProcessInfo];
+    NSLog(@"Thermal state changed: %ld", (long)_thermalState);
+}
+
+- (double)targetFrameInterval {
+    if (_activityState == AppActivityState::Inactive) {
+        return 1.0 / 2.0;
+    }
+    
+    switch (_thermalState) {
+        case ThermalState::Nominal:
+            return 1.0 / 60.0;
+        case ThermalState::Fair:
+            return 1.0 / 30.0;
+        case ThermalState::Serious:
+            return 1.0 / 15.0;
+        case ThermalState::Critical:
+            return 1.0 / 5.0;
+        default:
+            return 1.0 / 60.0;
+    }
+}
+
+- (BOOL)shouldDraw {
+    if (_activityState == AppActivityState::Inactive) {
+        return _needsRedraw;
+    }
+    
+    if (_thermalState == ThermalState::Critical) {
+        return _needsRedraw;
+    }
+    
+    return YES;
+}
+
+- (void)requestRedraw {
+    _needsRedraw = YES;
+    [self.mtkView setNeedsDisplay:YES];
 }
 
 - (void)loadView {
@@ -63,9 +173,18 @@
     self.mtkView.delegate = self;
     self.mtkView.enableSetNeedsDisplay = YES;
     self.mtkView.framebufferOnly = NO;
+    self.mtkView.preferredFramesPerSecond = 60;
     
     ImGui_ImplOSX_Init(self.view);
     [NSApp activateIgnoringOtherApps:YES];
+    
+    _controllerInitialized = controllerInitialize(_controllerState, nullptr, nullptr);
+    if (!_controllerInitialized) {
+        std::cerr << "Failed to initialize controller manager" << std::endl;
+        g_data.addMessage("Failed to initialize controller manager");
+    }
+
+    [self updateFrameRateForConditions];
     
     TradingRuntimeConfig config;
     config.host = DEFAULT_HOST;
@@ -82,12 +201,25 @@
     }
 }
 
+- (void)updateFrameRateForConditions {
+    double interval = [self targetFrameInterval];
+    int fps = (int)(1.0 / interval);
+    self.mtkView.preferredFramesPerSecond = fps;
+    NSLog(@"Frame rate set to %d fps (thermal: %ld, active: %d)", fps, (long)_thermalState, _activityState == AppActivityState::Active);
+}
+
 - (void)drawInMTKView:(MTKView*)view {
     if (_applicationShouldQuit) {
         [self shutdown];
         [NSApp terminate:nil];
         return;
     }
+    
+    if (![self shouldDraw]) {
+        return;
+    }
+    
+    [self updateFrameRateForConditions];
     
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize.x = view.bounds.size.width;
@@ -110,9 +242,7 @@
     
     ImVec4 clearColor = ImVec4(0.1f, 0.1f, 0.1f, 1.0f);
     
-    ControllerState dsState;
-    TradingPanelUiState uiState;
-    RenderTradingPanel(ImGui::GetIO(), _tradingRuntime->getClient(), dsState, uiState);
+    RenderTradingPanel(ImGui::GetIO(), _tradingRuntime, _controllerState, _uiState);
     
     ImGui::Render();
     
@@ -130,7 +260,11 @@
     [commandBuffer presentDrawable:view.currentDrawable];
     [commandBuffer commit];
     
-    [self.mtkView setNeedsDisplay:YES];
+    if (_activityState == AppActivityState::Active && _thermalState == ThermalState::Nominal) {
+        [self.mtkView setNeedsDisplay:YES];
+    } else {
+        _needsRedraw = NO;
+    }
 }
 
 - (void)mtkView:(MTKView*)view drawableSizeWillChange:(CGSize)size {
@@ -147,6 +281,13 @@
 
 - (void)shutdown {
     std::cout << "Shutting down..." << std::endl;
+    
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+
+    if (_controllerInitialized) {
+        controllerCleanup(_controllerState);
+        _controllerInitialized = false;
+    }
     
     _tradingRuntime->stop();
     delete _tradingRuntime;

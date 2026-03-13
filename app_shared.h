@@ -420,6 +420,7 @@ struct SharedData {
 
     std::atomic<bool> controllerConnected{false};
     std::string controllerDeviceName;
+    std::string controllerLockedDeviceName;
 
     std::deque<std::string> messages;
     std::string messagesCache;
@@ -475,6 +476,8 @@ struct UiStatusSnapshot {
     bool controllerConnected = false;
     int wsConnectedClients = 0;
     std::string accountText;
+    std::string controllerDeviceName;
+    std::string controllerLockedDeviceName;
 };
 
 struct SymbolUiSnapshot {

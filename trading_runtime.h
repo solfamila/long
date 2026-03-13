@@ -4,6 +4,8 @@
 #include <atomic>
 #include <thread>
 #include <functional>
+#include <variant>
+#include <optional>
 
 #include "app_shared.h"
 
@@ -38,6 +40,41 @@ enum class TradingRuntimeStatus {
     Failed
 };
 
+enum class RuntimeCommandType {
+    Subscribe,
+    PlaceOrder,
+    CancelOrder
+};
+
+struct SubscribeCommand {
+    std::string symbol;
+    bool recalcQtyFromFirstAsk = true;
+};
+
+struct PlaceOrderCommand {
+    std::string symbol;
+    std::string action;
+    int quantity = 0;
+    double limitPrice = 0.0;
+    bool closeOnly = false;
+    std::string source;
+    std::optional<std::uint64_t> traceId;
+};
+
+struct CancelOrderCommand {
+    OrderId orderId;
+};
+
+using RuntimeCommand = std::variant<SubscribeCommand, PlaceOrderCommand, CancelOrderCommand>;
+
+struct CommandResult {
+    bool success = false;
+    std::string error;
+    OrderId orderId = 0;
+    std::uint64_t traceId = 0;
+    std::string subscribedSymbol;
+};
+
 class TradingRuntime {
 public:
     TradingRuntime();
@@ -60,10 +97,18 @@ public:
                           ix::WebSocket&,
                           const ix::WebSocketMessagePtr&)> callback);
 
+    CommandResult submitSubscribe(const std::string& symbol, bool recalcQtyFromFirstAsk = true);
+    CommandResult submitOrder(const std::string& symbol, const std::string& action,
+                             int quantity, double limitPrice, bool closeOnly,
+                             const std::string& source = "Unknown",
+                             std::optional<std::uint64_t> traceId = std::nullopt);
+    CommandResult submitCancel(OrderId orderId);
+
     static const char* statusString(TradingRuntimeStatus status);
 
 private:
     void readerLoop(EReaderOSSignal* signal, EReader* reader, std::atomic<bool>* running);
+    CommandResult processCommand(const RuntimeCommand& command);
 
     class Impl;
     std::unique_ptr<Impl> pImpl;
