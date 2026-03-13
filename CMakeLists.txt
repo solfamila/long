@@ -10,7 +10,14 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 
-pkg_check_modules(GLFW3 REQUIRED glfw3)
+if(APPLE)
+    set(USE_NATIVE_APPLE_SHELL TRUE CACHE BOOL "Use native AppKit + MTKView shell")
+endif()
+
+if(NOT USE_NATIVE_APPLE_SHELL)
+    pkg_check_modules(GLFW3 REQUIRED glfw3)
+endif()
+
 pkg_check_modules(PROTOBUF REQUIRED protobuf)
 pkg_check_modules(NLOHMANN_JSON REQUIRED nlohmann_json)
 find_package(Threads REQUIRED)
@@ -27,14 +34,18 @@ set(IMGUI_SOURCES
     "${IMGUI_DIR}/imgui_tables.cpp"
     "${IMGUI_DIR}/imgui_widgets.cpp"
     "${IMGUI_DIR}/misc/cpp/imgui_stdlib.cpp"
-    "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
     "${IMGUI_DIR}/backends/imgui_impl_metal.mm"
     "${IMGUI_DIR}/backends/imgui_impl_metal.h"
 )
 
-if(APPLE)
+if(APPLE AND USE_NATIVE_APPLE_SHELL)
     set(IMGUI_SOURCES ${IMGUI_SOURCES}
-        "${IMGUI_DIR}/backends/imgui_impl_metal.h"
+        "${IMGUI_DIR}/backends/imgui_impl_osx.mm"
+        "${IMGUI_DIR}/backends/imgui_impl_osx.h"
+    )
+else()
+    set(IMGUI_SOURCES ${IMGUI_SOURCES}
+        "${IMGUI_DIR}/backends/imgui_impl_glfw.cpp"
     )
 endif()
 
@@ -51,13 +62,23 @@ set(IXWEBSOCKET_DIR "${CMAKE_SOURCE_DIR}/ixwebsocket" CACHE PATH "Path to ixWebS
 add_subdirectory(${IXWEBSOCKET_DIR} ixwebsocket_build)
 
 set(SOURCE_FILES
-    main.cpp
     app_shared.cpp
-    platform_metal.mm
     trading_panel.cpp
+    trading_runtime.cpp
     websocket_handlers.cpp
     ${IMGUI_SOURCES}
 )
+
+if(APPLE AND USE_NATIVE_APPLE_SHELL)
+    set(SOURCE_FILES ${SOURCE_FILES}
+        main.mm
+    )
+else()
+    set(SOURCE_FILES ${SOURCE_FILES}
+        main.cpp
+        platform_metal.mm
+    )
+endif()
 
 if(WIN32)
     set(SOURCE_FILES ${SOURCE_FILES}
@@ -72,22 +93,39 @@ if(APPLE)
     
     find_library(COCOA_LIBRARY Cocoa)
     find_library(METAL_LIBRARY Metal)
+    find_library(METALKIT_LIBRARY MetalKit)
     find_library(QUARTZ_CORE_LIBRARY QuartzCore)
     find_library(APP_KIT_LIBRARY AppKit)
     
-    set(PLATFORM_LIBS 
-        ${COCOA_LIBRARY} 
-        ${METAL_LIBRARY} 
-        ${QUARTZ_CORE_LIBRARY}
-        ${APP_KIT_LIBRARY}
-    )
+    if(USE_NATIVE_APPLE_SHELL)
+        find_library(GAME_CONTROLLER_LIBRARY GameController)
+        set(PLATFORM_LIBS 
+            ${COCOA_LIBRARY} 
+            ${METAL_LIBRARY} 
+            ${METALKIT_LIBRARY}
+            ${QUARTZ_CORE_LIBRARY}
+            ${APP_KIT_LIBRARY}
+            ${GAME_CONTROLLER_LIBRARY}
+        )
+    else()
+        set(PLATFORM_LIBS 
+            ${COCOA_LIBRARY} 
+            ${METAL_LIBRARY} 
+            ${QUARTZ_CORE_LIBRARY}
+            ${APP_KIT_LIBRARY}
+        )
+    endif()
     
-    set_source_files_properties(platform_metal.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
+    if(NOT USE_NATIVE_APPLE_SHELL)
+        set_source_files_properties(platform_metal.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
+    endif()
+    
+    set_source_files_properties(main.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
+    set_source_files_properties(${IMGUI_DIR}/backends/imgui_impl_osx.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
 endif()
 
 include_directories(
     ${CMAKE_SOURCE_DIR}
-    ${GLFW3_INCLUDE_DIRS}
     ${PROTOBUF_INCLUDE_DIR}
     ${NLOHMANN_JSON_INCLUDE_DIRS}
     ${IMGUI_DIR}
@@ -95,6 +133,10 @@ include_directories(
     ${IMGUI_DIR}/misc/cpp
     ${IXWEBSOCKET_DIR}
 )
+
+if(NOT USE_NATIVE_APPLE_SHELL)
+    include_directories(${GLFW3_INCLUDE_DIRS})
+endif()
 
 if(EXISTS ${IB_API_INCLUDE_DIR})
     include_directories(${IB_API_INCLUDE_DIR})
@@ -105,16 +147,25 @@ endif()
 
 add_executable(tws_gui ${SOURCE_FILES})
 
-target_link_libraries(tws_gui PRIVATE
-    ${GLFW3_LIBRARIES}
+set(TARGET_LIBS
     ${PROTOBUF_LIBRARIES}
     ${NLOHMANN_JSON_LIBRARIES}
     ixwebsocket
     Threads::Threads
 )
 
+if(NOT USE_NATIVE_APPLE_SHELL)
+    set(TARGET_LIBS ${TARGET_LIBS} ${GLFW3_LIBRARIES})
+endif()
+
+target_link_libraries(tws_gui PRIVATE ${TARGET_LIBS})
+
 if(APPLE)
     target_link_libraries(tws_gui PRIVATE ${PLATFORM_LIBS})
+    target_link_directories(tws_gui PRIVATE /opt/homebrew/Cellar/protobuf/34.0/lib /opt/homebrew/Cellar/abseil/20260107.1/lib)
+    if(NOT USE_NATIVE_APPLE_SHELL)
+        target_link_directories(tws_gui PRIVATE /opt/homebrew/Cellar/glfw/3.4/lib)
+    endif()
 endif()
 
 if(WIN32)
@@ -128,7 +179,7 @@ endif()
 target_compile_definitions(tws_gui PRIVATE
     $<$<BOOL:${GLFW3_LIBRARIES}>:IMGUI_HAS_GLFW>
     $<$<BOOL:${GLFW3_LIBRARIES}>:IMGUI_IMPL_GLFW_HAS_MONITOR>
-    GLFW_EXPOSE_NATIVE_COCOA
+    $<$<BOOL:${GLFW3_LIBRARIES}>:GLFW_EXPOSE_NATIVE_COCOA>
 )
 
 if(APPLE)
