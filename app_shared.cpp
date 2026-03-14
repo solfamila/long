@@ -202,6 +202,9 @@ void copySharedDataState(const SharedData& src, SharedData& dst) {
     dst.bridgeOutbox = src.bridgeOutbox;
     dst.bridgeOutboxLossCount = src.bridgeOutboxLossCount;
     dst.lastBridgeSourceSeq = src.lastBridgeSourceSeq;
+    dst.bridgeRecoveredPendingCount = src.bridgeRecoveredPendingCount;
+    dst.bridgeRecoveredLossCount = src.bridgeRecoveredLossCount;
+    dst.bridgeRecoveredLastSourceSeq = src.bridgeRecoveredLastSourceSeq;
     dst.bridgeFallbackState = src.bridgeFallbackState;
     dst.bridgeFallbackReason = src.bridgeFallbackReason;
     dst.bridgeRecoveryRequired = src.bridgeRecoveryRequired;
@@ -305,6 +308,9 @@ struct ImmutableSharedDataSnapshot {
     std::deque<BridgeOutboxRecord> bridgeOutbox;
     std::uint64_t bridgeOutboxLossCount = 0;
     std::uint64_t lastBridgeSourceSeq = 0;
+    int bridgeRecoveredPendingCount = 0;
+    int bridgeRecoveredLossCount = 0;
+    std::uint64_t bridgeRecoveredLastSourceSeq = 0;
     std::string bridgeFallbackState;
     std::string bridgeFallbackReason;
     bool bridgeRecoveryRequired = false;
@@ -2260,6 +2266,9 @@ std::shared_ptr<const ImmutableSharedDataSnapshot> buildImmutableSharedDataSnaps
     snapshot->bridgeOutbox = state.bridgeOutbox;
     snapshot->bridgeOutboxLossCount = state.bridgeOutboxLossCount;
     snapshot->lastBridgeSourceSeq = state.lastBridgeSourceSeq;
+    snapshot->bridgeRecoveredPendingCount = state.bridgeRecoveredPendingCount;
+    snapshot->bridgeRecoveredLossCount = state.bridgeRecoveredLossCount;
+    snapshot->bridgeRecoveredLastSourceSeq = state.bridgeRecoveredLastSourceSeq;
     snapshot->bridgeFallbackState = state.bridgeFallbackState;
     snapshot->bridgeFallbackReason = state.bridgeFallbackReason;
     snapshot->bridgeRecoveryRequired = state.bridgeRecoveryRequired;
@@ -2786,9 +2795,29 @@ BridgeOutboxEnqueueResult enqueueBridgeOutboxRecord(const BridgeOutboxRecordInpu
             appendRuntimeJournalEvent("bridge_outbox_loss", lossDetails);
         }
 
-        state.bridgeRecoveryRequired = !state.bridgeOutbox.empty() || state.bridgeOutboxLossCount > 0;
+        state.bridgeRecoveryRequired = (state.bridgeRecoveredPendingCount + static_cast<int>(state.bridgeOutbox.size())) > 0 ||
+                                       (state.bridgeRecoveredLossCount + static_cast<int>(state.bridgeOutboxLossCount)) > 0;
         result.recoveryRequired = state.bridgeRecoveryRequired;
         return result;
+    });
+}
+
+void seedBridgeOutboxRecoveryState(const RuntimeRecoverySnapshot& recovery) {
+    invokeSharedDataMutation([&]() {
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        state.bridgeRecoveredPendingCount = std::max(0, recovery.pendingOutboxCount);
+        state.bridgeRecoveredLossCount = std::max(0, recovery.outboxLossCount);
+        state.bridgeRecoveredLastSourceSeq = recovery.lastOutboxSourceSeq;
+        state.lastBridgeSourceSeq = std::max(state.lastBridgeSourceSeq, recovery.lastOutboxSourceSeq);
+        if (state.bridgeFallbackState.empty()) {
+            state.bridgeFallbackState = "queued_for_recovery";
+        }
+        if (state.bridgeFallbackReason.empty()) {
+            state.bridgeFallbackReason = "engine_unavailable";
+        }
+        state.bridgeRecoveryRequired = (state.bridgeRecoveredPendingCount + static_cast<int>(state.bridgeOutbox.size())) > 0 ||
+                                       (state.bridgeRecoveredLossCount + static_cast<int>(state.bridgeOutboxLossCount)) > 0;
     });
 }
 
@@ -2798,9 +2827,9 @@ BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems) {
     snapshot.fallbackState = published->bridgeFallbackState;
     snapshot.fallbackReason = published->bridgeFallbackReason;
     snapshot.recoveryRequired = published->bridgeRecoveryRequired;
-    snapshot.pendingCount = static_cast<int>(published->bridgeOutbox.size());
-    snapshot.lossCount = static_cast<int>(published->bridgeOutboxLossCount);
-    snapshot.lastSourceSeq = published->lastBridgeSourceSeq;
+    snapshot.pendingCount = published->bridgeRecoveredPendingCount + static_cast<int>(published->bridgeOutbox.size());
+    snapshot.lossCount = published->bridgeRecoveredLossCount + static_cast<int>(published->bridgeOutboxLossCount);
+    snapshot.lastSourceSeq = std::max(published->lastBridgeSourceSeq, published->bridgeRecoveredLastSourceSeq);
 
     if (maxItems > 0) {
         snapshot.records.reserve(std::min(maxItems, published->bridgeOutbox.size()));
@@ -3463,7 +3492,7 @@ RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems
     snapshot.priorAppSessionId = it->second.appSessionId;
     snapshot.priorRuntimeSessionId = it->second.runtimeSessionId;
     snapshot.priorSessionAbnormal = it->second.started && !it->second.cleanShutdown;
-    snapshot.pendingOutboxCount = std::max(0, it->second.outboxQueued - it->second.outboxDelivered);
+    snapshot.pendingOutboxCount = std::max(0, it->second.outboxQueued - it->second.outboxDelivered - it->second.outboxLoss);
     snapshot.outboxLossCount = it->second.outboxLoss;
     snapshot.lastOutboxSourceSeq = it->second.lastOutboxSourceSeq;
     snapshot.bridgeRecoveryRequired = snapshot.pendingOutboxCount > 0 || snapshot.outboxLossCount > 0;

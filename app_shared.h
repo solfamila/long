@@ -457,6 +457,9 @@ struct SharedData {
     std::deque<BridgeOutboxRecord> bridgeOutbox;
     std::uint64_t bridgeOutboxLossCount = 0;
     std::uint64_t lastBridgeSourceSeq = 0;
+    int bridgeRecoveredPendingCount = 0;
+    int bridgeRecoveredLossCount = 0;
+    std::uint64_t bridgeRecoveredLastSourceSeq = 0;
     std::string bridgeFallbackState = "queued_for_recovery";
     std::string bridgeFallbackReason = "engine_unavailable";
     bool bridgeRecoveryRequired = false;
@@ -822,6 +825,7 @@ std::string ensureWebSocketAuthToken();
 bool consumeWebSocketOrderRateLimit(std::string* error = nullptr);
 bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error = nullptr);
 BridgeOutboxEnqueueResult enqueueBridgeOutboxRecord(const BridgeOutboxRecordInput& input);
+void seedBridgeOutboxRecoveryState(const RuntimeRecoverySnapshot& recovery);
 BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems = 100);
 double calculateOpenBuyExposureUnlocked(const std::string& account);
 double calculatePositionMarketValueUnlocked(const std::string& account, const std::string& symbol);
