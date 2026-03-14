@@ -19,6 +19,12 @@ constexpr auto kRecentSubmitWindow = std::chrono::milliseconds(750);
 constexpr auto kRecentWebSocketOrderWindow = std::chrono::seconds(2);
 constexpr int kMaxWebSocketOrdersPerWindow = 5;
 constexpr auto kWebSocketIdempotencyWindow = std::chrono::minutes(10);
+constexpr auto kBrokerEchoTimeout = std::chrono::seconds(2);
+constexpr auto kCancelAckTimeout = std::chrono::seconds(5);
+constexpr auto kPartialFillQuietTimeout = std::chrono::seconds(15);
+constexpr auto kReconciliationRetryDelayShort = std::chrono::seconds(2);
+constexpr auto kReconciliationRetryDelayLong = std::chrono::seconds(5);
+constexpr int kMaxReconciliationAttempts = 3;
 
 const std::string& resolvedAppDataDirectory() {
     static const std::string path = []() -> std::string {
@@ -422,6 +428,87 @@ std::string makeOrderFingerprint(const SubmitIntent& intent) {
         << std::fixed << std::setprecision(4) << intent.limitPrice << '|'
         << (intent.closeOnly ? '1' : '0');
     return oss.str();
+}
+
+std::chrono::steady_clock::duration reconciliationRetryDelayForAttempt(int attempts) {
+    if (attempts <= 1) {
+        return kReconciliationRetryDelayShort;
+    }
+    return kReconciliationRetryDelayLong;
+}
+
+void disarmOrderWatchdogs(OrderInfo& order) {
+    order.watchdogs.brokerEchoArmed = false;
+    order.watchdogs.cancelAckArmed = false;
+    order.watchdogs.partialFillQuietArmed = false;
+}
+
+void noteOrderBrokerCallback(OrderInfo& order, std::chrono::steady_clock::time_point now) {
+    order.watchdogs.lastBrokerCallback = now;
+    order.watchdogs.brokerEchoArmed = false;
+}
+
+void armBrokerEchoWatchdog(OrderInfo& order, std::chrono::steady_clock::time_point now) {
+    order.localState = LocalOrderState::AwaitingBrokerEcho;
+    order.watchdogs.brokerEchoArmed = true;
+    order.watchdogs.brokerEchoDeadline = now + kBrokerEchoTimeout;
+    order.watchdogs.cancelAckArmed = false;
+    order.watchdogs.partialFillQuietArmed = false;
+}
+
+void armCancelAckWatchdog(OrderInfo& order, std::chrono::steady_clock::time_point now) {
+    order.localState = LocalOrderState::AwaitingCancelAck;
+    order.cancelPending = true;
+    order.watchdogs.cancelAckArmed = true;
+    order.watchdogs.cancelAckDeadline = now + kCancelAckTimeout;
+    order.watchdogs.brokerEchoArmed = false;
+    order.watchdogs.partialFillQuietArmed = false;
+}
+
+void armPartialFillQuietWatchdog(OrderInfo& order, std::chrono::steady_clock::time_point now) {
+    order.localState = LocalOrderState::PartiallyFilled;
+    order.watchdogs.partialFillQuietArmed = true;
+    order.watchdogs.partialFillQuietDeadline = now + kPartialFillQuietTimeout;
+    order.watchdogs.brokerEchoArmed = false;
+    order.watchdogs.cancelAckArmed = false;
+}
+
+void transitionOrderToResolvedState(OrderInfo& order,
+                                    LocalOrderState localState,
+                                    std::chrono::steady_clock::time_point now) {
+    order.localState = localState;
+    order.watchdogs.lastBrokerCallback = now;
+    disarmOrderWatchdogs(order);
+}
+
+int beginOrderReconciliation(OrderInfo& order,
+                             const std::string& reason,
+                             std::chrono::steady_clock::time_point now,
+                             bool incrementAttempts) {
+    order.localState = LocalOrderState::NeedsReconciliation;
+    order.lastReconciliationReason = reason;
+    order.lastReconciliationTime = now;
+    order.manualReviewAcknowledged = false;
+    if (incrementAttempts) {
+        order.watchdogs.reconciliationAttempts += 1;
+    } else if (order.watchdogs.reconciliationAttempts < 1) {
+        order.watchdogs.reconciliationAttempts = 1;
+    }
+    order.watchdogs.brokerEchoArmed = true;
+    order.watchdogs.brokerEchoDeadline = now + reconciliationRetryDelayForAttempt(order.watchdogs.reconciliationAttempts);
+    order.watchdogs.cancelAckArmed = false;
+    order.watchdogs.partialFillQuietArmed = false;
+    return order.watchdogs.reconciliationAttempts;
+}
+
+void floorNextOrderIdLocked(SharedData& state, OrderId seenOrderId) {
+    if (seenOrderId <= 0) {
+        return;
+    }
+    OrderId next = state.nextOrderId.load(std::memory_order_relaxed);
+    while (next <= seenOrderId &&
+           !state.nextOrderId.compare_exchange_weak(next, seenOrderId + 1, std::memory_order_relaxed)) {
+    }
 }
 
 std::uint64_t makeRecoveredTraceId(SharedData& state) {
@@ -947,6 +1034,13 @@ void reduce(SharedData& state, const BrokerConnectionClosedEvent&) {
         state.bidBook.clear();
         state.pendingWSQuantityCalc = false;
         state.wsQuantityUpdated = false;
+        for (auto& [orderId, order] : state.orders) {
+            (void)orderId;
+            if (!order.isTerminal()) {
+                order.localState = LocalOrderState::NeedsReconciliation;
+                disarmOrderWatchdogs(order);
+            }
+        }
     }
     appendRuntimeJournalEvent("tws_connection_closed");
     state.addMessage("Disconnected from TWS");
@@ -1059,8 +1153,11 @@ void reduce(SharedData& state, const BrokerMarketDepthEvent& event) {
 
 void reduce(SharedData& state, const BrokerOrderStatusEvent& event) {
     std::string msg;
+    std::string reconciliationJournalEvent;
+    json reconciliationJournalDetails;
     {
         std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        floorNextOrderIdLocked(state, event.orderId);
         auto it = state.orders.find(event.orderId);
         if (it == state.orders.end()) {
             OrderInfo info;
@@ -1069,11 +1166,16 @@ void reduce(SharedData& state, const BrokerOrderStatusEvent& event) {
             info.filledQty = event.filled;
             info.remainingQty = event.remaining;
             info.avgFillPrice = event.avgFillPrice;
+            info.quantity = std::max(event.filled + event.remaining, info.quantity);
+            info.localState = LocalOrderState::NeedsReconciliation;
             state.orders.emplace(event.orderId, info);
             it = state.orders.find(event.orderId);
         }
 
         OrderInfo& ord = it->second;
+        const LocalOrderState previousLocalState = ord.localState;
+        const int previousReconciliationAttempts = ord.watchdogs.reconciliationAttempts;
+        const std::string previousReconciliationReason = ord.lastReconciliationReason;
         if (ord.isTerminal() && !isTerminalStatus(event.status) && event.status != ord.status) {
             return;
         }
@@ -1092,13 +1194,15 @@ void reduce(SharedData& state, const BrokerOrderStatusEvent& event) {
             return;
         }
 
+        const auto now = std::chrono::steady_clock::now();
         ord.status = event.status;
+        ord.quantity = std::max(ord.quantity, event.filled + event.remaining);
         ord.filledQty = event.filled;
         ord.remainingQty = event.remaining;
+        noteOrderBrokerCallback(ord, now);
         if (ord.filledQty > 0.0) {
             ord.avgFillPrice = event.avgFillPrice;
             if (ord.firstFillDurationMs < 0.0 && ord.submitTime.time_since_epoch().count() > 0) {
-                auto now = std::chrono::steady_clock::now();
                 ord.firstFillDurationMs = std::chrono::duration<double, std::milli>(now - ord.submitTime).count();
             }
         }
@@ -1106,8 +1210,25 @@ void reduce(SharedData& state, const BrokerOrderStatusEvent& event) {
             ord.cancelPending = false;
         }
         if (ord.status == "Filled" && ord.fillDurationMs < 0.0 && ord.submitTime.time_since_epoch().count() > 0) {
-            auto now = std::chrono::steady_clock::now();
             ord.fillDurationMs = std::chrono::duration<double, std::milli>(now - ord.submitTime).count();
+        }
+
+        if (event.status == "Cancelled" || event.status == "ApiCancelled") {
+            ord.cancelPending = false;
+            transitionOrderToResolvedState(ord, LocalOrderState::Cancelled, now);
+        } else if (event.status == "Rejected") {
+            transitionOrderToResolvedState(ord, LocalOrderState::Rejected, now);
+        } else if (event.status == "Inactive") {
+            transitionOrderToResolvedState(ord, LocalOrderState::Inactive, now);
+        } else if (event.status == "Filled" || (event.filled > 0.0 && event.remaining <= 1e-9)) {
+            transitionOrderToResolvedState(ord, LocalOrderState::Filled, now);
+        } else if (ord.cancelPending || previousLocalState == LocalOrderState::CancelRequested ||
+                   previousLocalState == LocalOrderState::AwaitingCancelAck) {
+            armCancelAckWatchdog(ord, now);
+        } else if (event.filled > 0.0 && event.remaining > 0.0) {
+            armPartialFillQuietWatchdog(ord, now);
+        } else {
+            transitionOrderToResolvedState(ord, LocalOrderState::Working, now);
         }
 
         char buf[256];
@@ -1133,16 +1254,49 @@ void reduce(SharedData& state, const BrokerOrderStatusEvent& event) {
                           ord.filledQty, ord.avgFillPrice);
         }
         msg = buf;
+
+        const bool wasAwaitingOrReconciling =
+            previousLocalState == LocalOrderState::AwaitingBrokerEcho ||
+            previousLocalState == LocalOrderState::AwaitingCancelAck ||
+            previousLocalState == LocalOrderState::NeedsReconciliation;
+        if (wasAwaitingOrReconciling) {
+            if (ord.localState == LocalOrderState::Working || ord.localState == LocalOrderState::PartiallyFilled) {
+                reconciliationJournalEvent = "reconcile_resolved_working";
+            } else if (ord.localState == LocalOrderState::Filled) {
+                reconciliationJournalEvent = "reconcile_resolved_filled";
+            } else if (ord.localState == LocalOrderState::Cancelled) {
+                reconciliationJournalEvent = "reconcile_resolved_cancelled";
+            } else if (ord.localState == LocalOrderState::Rejected) {
+                reconciliationJournalEvent = "reconcile_resolved_rejected";
+            } else if (ord.localState == LocalOrderState::Inactive) {
+                reconciliationJournalEvent = "reconcile_resolved_inactive";
+            }
+            if (!reconciliationJournalEvent.empty()) {
+                reconciliationJournalDetails = {
+                    {"orderId", static_cast<long long>(event.orderId)},
+                    {"localState", localOrderStateToString(ord.localState)},
+                    {"brokerStatus", ord.status},
+                    {"reconciliationAttempts", previousReconciliationAttempts},
+                    {"reason", previousReconciliationReason}
+                };
+            }
+        }
     }
 
     state.addMessage(msg);
+    if (!reconciliationJournalEvent.empty()) {
+        appendRuntimeJournalEvent(reconciliationJournalEvent, reconciliationJournalDetails);
+    }
     recordTraceOrderStatus(event.orderId, event.status, event.filled, event.remaining, event.avgFillPrice,
                            event.permId, event.lastFillPrice, event.mktCapPrice);
 }
 
 void reduce(SharedData& state, const BrokerOpenOrderEvent& event) {
+    std::string reconciliationJournalEvent;
+    json reconciliationJournalDetails;
     {
         std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        floorNextOrderIdLocked(state, event.orderId);
         auto it = state.orders.find(event.orderId);
         if (it == state.orders.end()) {
             OrderInfo info;
@@ -1155,14 +1309,49 @@ void reduce(SharedData& state, const BrokerOpenOrderEvent& event) {
             info.status = event.orderState.status.empty() ? "Unknown" : event.orderState.status;
             info.filledQty = 0.0;
             info.remainingQty = info.quantity;
+            info.localState = LocalOrderState::NeedsReconciliation;
             state.orders.emplace(event.orderId, info);
-        } else if (!it->second.isTerminal()) {
-            it->second.account = event.order.account;
-            it->second.symbol = event.contract.symbol;
-            it->second.side = event.order.action;
-            it->second.quantity = DecimalFunctions::decimalToDouble(event.order.totalQuantity);
-            it->second.limitPrice = event.order.lmtPrice;
-            it->second.status = event.orderState.status;
+        }
+
+        it = state.orders.find(event.orderId);
+        OrderInfo& ord = it->second;
+        const LocalOrderState previousLocalState = ord.localState;
+        const int previousReconciliationAttempts = ord.watchdogs.reconciliationAttempts;
+        const std::string previousReconciliationReason = ord.lastReconciliationReason;
+        const auto now = std::chrono::steady_clock::now();
+
+        if (!ord.isTerminal()) {
+            ord.account = event.order.account;
+            ord.symbol = event.contract.symbol;
+            ord.side = event.order.action;
+            ord.quantity = DecimalFunctions::decimalToDouble(event.order.totalQuantity);
+            ord.limitPrice = event.order.lmtPrice;
+            ord.status = event.orderState.status.empty() ? ord.status : event.orderState.status;
+            noteOrderBrokerCallback(ord, now);
+            if (ord.cancelPending || previousLocalState == LocalOrderState::CancelRequested ||
+                previousLocalState == LocalOrderState::AwaitingCancelAck) {
+                armCancelAckWatchdog(ord, now);
+            } else if (ord.filledQty > 0.0 && ord.remainingQty > 0.0) {
+                armPartialFillQuietWatchdog(ord, now);
+            } else {
+                transitionOrderToResolvedState(ord, LocalOrderState::Working, now);
+            }
+        }
+
+        const bool wasAwaitingOrReconciling =
+            previousLocalState == LocalOrderState::AwaitingBrokerEcho ||
+            previousLocalState == LocalOrderState::AwaitingCancelAck ||
+            previousLocalState == LocalOrderState::NeedsReconciliation;
+        if (wasAwaitingOrReconciling &&
+            (ord.localState == LocalOrderState::Working || ord.localState == LocalOrderState::PartiallyFilled)) {
+            reconciliationJournalEvent = "reconcile_resolved_working";
+            reconciliationJournalDetails = {
+                {"orderId", static_cast<long long>(event.orderId)},
+                {"localState", localOrderStateToString(ord.localState)},
+                {"brokerStatus", ord.status},
+                {"reconciliationAttempts", previousReconciliationAttempts},
+                {"reason", previousReconciliationReason}
+            };
         }
     }
 
@@ -1177,9 +1366,84 @@ void reduce(SharedData& state, const BrokerOpenOrderEvent& event) {
                   event.order.lmtPrice,
                   event.orderState.status.c_str());
     state.addMessage(msg);
+    if (!reconciliationJournalEvent.empty()) {
+        appendRuntimeJournalEvent(reconciliationJournalEvent, reconciliationJournalDetails);
+    }
 }
 
 void reduce(SharedData& state, const BrokerExecutionEvent& event) {
+    std::string reconciliationJournalEvent;
+    json reconciliationJournalDetails;
+    {
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        const OrderId orderId = static_cast<OrderId>(event.execution.orderId);
+        floorNextOrderIdLocked(state, orderId);
+        auto [it, inserted] = state.orders.try_emplace(orderId);
+        OrderInfo& ord = it->second;
+        if (inserted) {
+            ord.orderId = orderId;
+            ord.symbol = event.contract.symbol;
+            ord.side = event.execution.side;
+            ord.quantity = DecimalFunctions::decimalToDouble(event.execution.cumQty);
+            ord.limitPrice = event.execution.price;
+            ord.localState = LocalOrderState::NeedsReconciliation;
+        }
+
+        if (!event.execution.execId.empty() && !ord.seenExecIds.insert(event.execution.execId).second) {
+            return;
+        }
+
+        const LocalOrderState previousLocalState = ord.localState;
+        const int previousReconciliationAttempts = ord.watchdogs.reconciliationAttempts;
+        const std::string previousReconciliationReason = ord.lastReconciliationReason;
+        const auto now = std::chrono::steady_clock::now();
+        noteOrderBrokerCallback(ord, now);
+
+        ord.symbol = event.contract.symbol;
+        ord.side = event.execution.side;
+        ord.filledQty = std::max(ord.filledQty, DecimalFunctions::decimalToDouble(event.execution.cumQty));
+        if (ord.quantity < ord.filledQty) {
+            ord.quantity = ord.filledQty;
+        }
+        ord.remainingQty = std::max(0.0, ord.quantity - ord.filledQty);
+        if (event.execution.avgPrice > 0.0) {
+            ord.avgFillPrice = event.execution.avgPrice;
+        } else if (event.execution.price > 0.0) {
+            ord.avgFillPrice = event.execution.price;
+        }
+        if (ord.firstFillDurationMs < 0.0 && ord.submitTime.time_since_epoch().count() > 0) {
+            ord.firstFillDurationMs = std::chrono::duration<double, std::milli>(now - ord.submitTime).count();
+        }
+        if (ord.cancelPending) {
+            armCancelAckWatchdog(ord, now);
+        } else if (ord.remainingQty > 0.0) {
+            ord.status = "PartiallyFilled";
+            armPartialFillQuietWatchdog(ord, now);
+        } else {
+            ord.status = "Filled";
+            if (ord.fillDurationMs < 0.0 && ord.submitTime.time_since_epoch().count() > 0) {
+                ord.fillDurationMs = std::chrono::duration<double, std::milli>(now - ord.submitTime).count();
+            }
+            transitionOrderToResolvedState(ord, LocalOrderState::Filled, now);
+        }
+
+        const bool wasAwaitingOrReconciling =
+            previousLocalState == LocalOrderState::AwaitingBrokerEcho ||
+            previousLocalState == LocalOrderState::AwaitingCancelAck ||
+            previousLocalState == LocalOrderState::NeedsReconciliation;
+        if (wasAwaitingOrReconciling) {
+            reconciliationJournalEvent = (ord.localState == LocalOrderState::Filled)
+                ? "reconcile_resolved_filled"
+                : "reconcile_resolved_working";
+            reconciliationJournalDetails = {
+                {"orderId", static_cast<long long>(orderId)},
+                {"localState", localOrderStateToString(ord.localState)},
+                {"reconciliationAttempts", previousReconciliationAttempts},
+                {"reason", previousReconciliationReason}
+            };
+        }
+    }
+
     recordTraceExecution(event.contract, event.execution);
     appendRuntimeJournalEvent("execution_seen", {
         {"orderId", static_cast<long long>(event.execution.orderId)},
@@ -1197,6 +1461,9 @@ void reduce(SharedData& state, const BrokerExecutionEvent& event) {
                   DecimalFunctions::decimalToDouble(event.execution.shares), event.execution.price,
                   DecimalFunctions::decimalToDouble(event.execution.cumQty));
     state.addMessage(msg);
+    if (!reconciliationJournalEvent.empty()) {
+        appendRuntimeJournalEvent(reconciliationJournalEvent, reconciliationJournalDetails);
+    }
 }
 
 void reduce(SharedData& state, const BrokerExecutionsLoadedEvent&) {
@@ -1232,6 +1499,8 @@ void reduce(SharedData& state, const BrokerCommissionEvent& event) {
 }
 
 void reduce(SharedData& state, const BrokerErrorEvent& event) {
+    std::string reconciliationJournalEvent;
+    json reconciliationJournalDetails;
     {
         std::lock_guard<std::recursive_mutex> lock(state.mutex);
         if (event.errorCode == 300 && state.suppressedMktDataCancelIds.erase(event.id) > 0) return;
@@ -1276,11 +1545,33 @@ void reduce(SharedData& state, const BrokerErrorEvent& event) {
         std::lock_guard<std::recursive_mutex> lock(state.mutex);
         auto it = state.orders.find(static_cast<OrderId>(event.id));
         if (it != state.orders.end()) {
+            const LocalOrderState previousLocalState = it->second.localState;
+            const int previousReconciliationAttempts = it->second.watchdogs.reconciliationAttempts;
+            const std::string previousReconciliationReason = it->second.lastReconciliationReason;
+            const auto now = std::chrono::steady_clock::now();
             if (event.errorCode == 201) {
                 it->second.status = "Rejected";
+                transitionOrderToResolvedState(it->second, LocalOrderState::Rejected, now);
+                reconciliationJournalEvent = "reconcile_resolved_rejected";
             } else {
                 it->second.status = "Cancelled";
                 it->second.cancelPending = false;
+                transitionOrderToResolvedState(it->second, LocalOrderState::Cancelled, now);
+                reconciliationJournalEvent = "reconcile_resolved_cancelled";
+            }
+            const bool wasAwaitingOrReconciling =
+                previousLocalState == LocalOrderState::AwaitingBrokerEcho ||
+                previousLocalState == LocalOrderState::AwaitingCancelAck ||
+                previousLocalState == LocalOrderState::NeedsReconciliation;
+            if (!wasAwaitingOrReconciling) {
+                reconciliationJournalEvent.clear();
+            } else if (!reconciliationJournalEvent.empty()) {
+                reconciliationJournalDetails = {
+                    {"orderId", static_cast<long long>(event.id)},
+                    {"localState", localOrderStateToString(it->second.localState)},
+                    {"reconciliationAttempts", previousReconciliationAttempts},
+                    {"reason", previousReconciliationReason}
+                };
             }
         }
     }
@@ -1291,6 +1582,9 @@ void reduce(SharedData& state, const BrokerErrorEvent& event) {
         {"code", event.errorCode},
         {"message", event.errorString}
     });
+    if (!reconciliationJournalEvent.empty()) {
+        appendRuntimeJournalEvent(reconciliationJournalEvent, reconciliationJournalDetails);
+    }
 }
 
 void reduce(SharedData& state, const BrokerPositionEvent& event) {
@@ -1407,6 +1701,7 @@ std::vector<OrderId> reduce(SharedData& state, const OrdersPendingCancelMarkedEv
         auto it = state.orders.find(id);
         if (it != state.orders.end() && !it->second.isTerminal() && !it->second.cancelPending) {
             it->second.cancelPending = true;
+            it->second.localState = LocalOrderState::CancelRequested;
             marked.push_back(id);
         }
     }
@@ -1422,10 +1717,27 @@ std::vector<OrderId> reduce(SharedData& state, const AllPendingOrdersMarkedForCa
     for (auto& [id, order] : state.orders) {
         if (!order.isTerminal() && !order.cancelPending) {
             order.cancelPending = true;
+            order.localState = LocalOrderState::CancelRequested;
             pendingOrders.push_back(id);
         }
     }
     return pendingOrders;
+}
+
+struct CancelRequestsSentEvent {
+    std::vector<OrderId> orderIds;
+    std::chrono::steady_clock::time_point requestTime{};
+};
+
+void reduce(SharedData& state, const CancelRequestsSentEvent& event) {
+    std::lock_guard<std::recursive_mutex> lock(state.mutex);
+    for (const OrderId id : event.orderIds) {
+        auto it = state.orders.find(id);
+        if (it == state.orders.end() || it->second.isTerminal()) {
+            continue;
+        }
+        armCancelAckWatchdog(it->second, event.requestTime);
+    }
 }
 
 struct SubmitOrderStateReservedEvent {
@@ -1485,7 +1797,109 @@ void reduce(SharedData& state, const LocalOrderStoredEvent& event) {
     info.submitTime = event.submitTime;
     info.filledQty = 0.0;
     info.remainingQty = event.quantity;
+    info.localState = LocalOrderState::AwaitingBrokerEcho;
+    armBrokerEchoWatchdog(info, event.submitTime);
     state.orders[event.orderId] = info;
+}
+
+struct OrderWatchdogSweepEvent {
+    std::chrono::steady_clock::time_point now{};
+};
+
+OrderWatchdogSweepResult reduce(SharedData& state, const OrderWatchdogSweepEvent& event) {
+    OrderWatchdogSweepResult result;
+    std::lock_guard<std::recursive_mutex> lock(state.mutex);
+    for (auto& [orderId, order] : state.orders) {
+        if (order.isTerminal()) {
+            continue;
+        }
+
+        auto beginReconciliation = [&](const std::string& reason) {
+            const int attempts = beginOrderReconciliation(order, reason, event.now, true);
+            result.reconciliationOrders.push_back({orderId, reason, attempts});
+        };
+
+        auto requireManualReview = [&](const std::string& reason) {
+            order.localState = LocalOrderState::NeedsManualReview;
+            order.lastReconciliationReason = reason;
+            order.lastReconciliationTime = event.now;
+            disarmOrderWatchdogs(order);
+            result.manualReviewOrders.push_back({orderId, reason, order.watchdogs.reconciliationAttempts});
+        };
+
+        if (order.localState == LocalOrderState::AwaitingBrokerEcho &&
+            order.watchdogs.brokerEchoArmed &&
+            event.now >= order.watchdogs.brokerEchoDeadline) {
+            beginReconciliation("broker_echo_timeout");
+            continue;
+        }
+
+        if (order.localState == LocalOrderState::AwaitingCancelAck &&
+            order.watchdogs.cancelAckArmed &&
+            event.now >= order.watchdogs.cancelAckDeadline) {
+            beginReconciliation("cancel_ack_timeout");
+            continue;
+        }
+
+        if (order.localState == LocalOrderState::PartiallyFilled &&
+            order.watchdogs.partialFillQuietArmed &&
+            event.now >= order.watchdogs.partialFillQuietDeadline) {
+            beginReconciliation("partial_fill_quiet_timeout");
+            continue;
+        }
+
+        if (order.localState == LocalOrderState::NeedsReconciliation &&
+            order.watchdogs.brokerEchoArmed &&
+            event.now >= order.watchdogs.brokerEchoDeadline) {
+            if (order.watchdogs.reconciliationAttempts >= kMaxReconciliationAttempts) {
+                requireManualReview("reconciliation_retry_exhausted");
+            } else {
+                beginReconciliation("reconciliation_retry_timeout");
+            }
+        }
+    }
+    return result;
+}
+
+struct ManualReconciliationRequestedEvent {
+    std::vector<OrderId> orderIds;
+    std::string reason;
+    std::chrono::steady_clock::time_point requestTime{};
+};
+
+OrderWatchdogSweepResult reduce(SharedData& state, const ManualReconciliationRequestedEvent& event) {
+    OrderWatchdogSweepResult result;
+    std::lock_guard<std::recursive_mutex> lock(state.mutex);
+    for (const OrderId orderId : event.orderIds) {
+        auto it = state.orders.find(orderId);
+        if (it == state.orders.end() || it->second.isTerminal()) {
+            continue;
+        }
+
+        const int attempts = beginOrderReconciliation(it->second, event.reason, event.requestTime, true);
+        result.reconciliationOrders.push_back({orderId, event.reason, attempts});
+    }
+    return result;
+}
+
+struct ManualReviewAcknowledgedEvent {
+    std::vector<OrderId> orderIds;
+    std::chrono::steady_clock::time_point acknowledgeTime{};
+};
+
+std::vector<OrderId> reduce(SharedData& state, const ManualReviewAcknowledgedEvent& event) {
+    std::vector<OrderId> acknowledged;
+    std::lock_guard<std::recursive_mutex> lock(state.mutex);
+    for (const OrderId orderId : event.orderIds) {
+        auto it = state.orders.find(orderId);
+        if (it == state.orders.end() || it->second.localState != LocalOrderState::NeedsManualReview) {
+            continue;
+        }
+        it->second.manualReviewAcknowledged = true;
+        it->second.manualReviewAcknowledgedTime = event.acknowledgeTime;
+        acknowledged.push_back(orderId);
+    }
+    return acknowledged;
 }
 
 } // namespace trading_engine
@@ -1528,6 +1942,25 @@ std::string runtimeSessionStateToString(RuntimeSessionState state) {
         case RuntimeSessionState::SocketConnected: return "Socket connected";
         case RuntimeSessionState::Reconciling: return "Reconciling";
         case RuntimeSessionState::SessionReady: return "Ready";
+        default: return "Unknown";
+    }
+}
+
+std::string localOrderStateToString(LocalOrderState state) {
+    switch (state) {
+        case LocalOrderState::IntentAccepted: return "Intent accepted";
+        case LocalOrderState::SentToBroker: return "Sent to broker";
+        case LocalOrderState::AwaitingBrokerEcho: return "Awaiting broker echo";
+        case LocalOrderState::Working: return "Working";
+        case LocalOrderState::PartiallyFilled: return "Partially filled";
+        case LocalOrderState::CancelRequested: return "Cancel requested";
+        case LocalOrderState::AwaitingCancelAck: return "Awaiting cancel ack";
+        case LocalOrderState::Filled: return "Filled";
+        case LocalOrderState::Cancelled: return "Cancelled";
+        case LocalOrderState::Rejected: return "Rejected";
+        case LocalOrderState::Inactive: return "Inactive";
+        case LocalOrderState::NeedsReconciliation: return "Reconciling";
+        case LocalOrderState::NeedsManualReview: return "Manual review";
         default: return "Unknown";
     }
 }
@@ -2201,6 +2634,49 @@ std::vector<OrderId> markAllPendingOrdersForCancel() {
     });
 }
 
+void noteCancelRequestsSent(const std::vector<OrderId>& orderIds,
+                            std::chrono::steady_clock::time_point requestTime) {
+    if (orderIds.empty()) {
+        return;
+    }
+    invokeSharedDataMutation([&]() {
+        trading_engine::reduce(appState(), trading_engine::CancelRequestsSentEvent{orderIds, requestTime});
+    });
+}
+
+OrderWatchdogSweepResult requestOrderReconciliation(const std::vector<OrderId>& orderIds,
+                                                    const std::string& reason,
+                                                    std::chrono::steady_clock::time_point requestTime) {
+    if (orderIds.empty()) {
+        return {};
+    }
+    return invokeSharedDataMutation([&]() {
+        return trading_engine::reduce(appState(),
+                                      trading_engine::ManualReconciliationRequestedEvent{orderIds, reason, requestTime});
+    });
+}
+
+std::vector<OrderId> acknowledgeManualReviewOrders(const std::vector<OrderId>& orderIds,
+                                                   std::chrono::steady_clock::time_point acknowledgeTime) {
+    if (orderIds.empty()) {
+        return {};
+    }
+    return invokeSharedDataMutation([&]() {
+        return trading_engine::reduce(appState(),
+                                      trading_engine::ManualReviewAcknowledgedEvent{orderIds, acknowledgeTime});
+    });
+}
+
+OrderWatchdogSweepResult sweepOrderWatchdogs(std::chrono::steady_clock::time_point now) {
+    return invokeSharedDataMutation([&]() {
+        return trading_engine::reduce(appState(), trading_engine::OrderWatchdogSweepEvent{now});
+    });
+}
+
+OrderWatchdogSweepResult sweepOrderWatchdogsOnReducerThread(std::chrono::steady_clock::time_point now) {
+    return trading_engine::reduce(appState(), trading_engine::OrderWatchdogSweepEvent{now});
+}
+
 std::vector<bool> sendCancelRequests(EClientSocket* client, const std::vector<OrderId>& orderIds) {
     std::vector<bool> sent(orderIds.size(), false);
     if (orderIds.empty()) return sent;
@@ -2222,12 +2698,16 @@ std::vector<bool> sendCancelRequests(EClientSocket* client, const std::vector<Or
         }
     }
 
+    std::vector<OrderId> sentOrderIds;
+    sentOrderIds.reserve(orderIds.size());
     for (size_t i = 0; i < orderIds.size(); ++i) {
         if (sent[i]) {
+            sentOrderIds.push_back(orderIds[i]);
             recordTraceCancelRequest(orderIds[i]);
             appendRuntimeJournalEvent("cancel_request_sent", {{"orderId", static_cast<long long>(orderIds[i])}});
         }
     }
+    noteCancelRequestsSent(sentOrderIds, std::chrono::steady_clock::now());
 
     return sent;
 }
@@ -3246,6 +3726,13 @@ TraceMutationResult reduce(SharedData& state, const TraceExecutionRecordedEvent&
     }
     if (!hasTime(trace.firstExecMono)) {
         trace.firstExecMono = std::chrono::steady_clock::now();
+    }
+
+    if (!eventRequest.execution.execId.empty()) {
+        const auto existing = state.traceIdByExecId.find(eventRequest.execution.execId);
+        if (existing != state.traceIdByExecId.end() && existing->second == traceId) {
+            return {};
+        }
     }
 
     FillSlice fill;

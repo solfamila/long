@@ -22,6 +22,7 @@
 namespace {
 
 constexpr auto kControllerPollInterval = std::chrono::milliseconds(16);
+constexpr auto kOrderWatchdogPollInterval = std::chrono::milliseconds(250);
 thread_local void* tlsActionLoopOwner = nullptr;
 
 std::string makeSessionIdentifier(const char* prefix) {
@@ -62,6 +63,83 @@ struct TradingRuntime::Impl {
     ControllerActionCallback controllerActionCallback;
     ControllerState controllerState;
     bool started = false;
+
+    void issueReconciliationRefreshes(const OrderWatchdogSweepResult& sweep) {
+        if (sweep.reconciliationOrders.empty() && sweep.manualReviewOrders.empty()) {
+            return;
+        }
+
+        for (const auto& item : sweep.reconciliationOrders) {
+            appendRuntimeJournalEvent(item.reason, {
+                {"orderId", static_cast<long long>(item.orderId)},
+                {"reconciliationAttempts", item.reconciliationAttempts}
+            });
+            appendRuntimeJournalEvent("reconcile_begin", {
+                {"orderId", static_cast<long long>(item.orderId)},
+                {"reason", item.reason},
+                {"reconciliationAttempts", item.reconciliationAttempts}
+            });
+            appendTraceEventByOrderId(item.orderId,
+                                      TradeEventType::Note,
+                                      "Watchdog",
+                                      "Reconciliation started: " + item.reason);
+            appendSharedMessage("Order " + std::to_string(static_cast<long long>(item.orderId)) +
+                                " reconciling after " + item.reason +
+                                " (attempt " + std::to_string(item.reconciliationAttempts) + ")");
+        }
+
+        for (const auto& item : sweep.manualReviewOrders) {
+            appendRuntimeJournalEvent("manual_review_required", {
+                {"orderId", static_cast<long long>(item.orderId)},
+                {"reason", item.reason},
+                {"reconciliationAttempts", item.reconciliationAttempts}
+            });
+            appendTraceEventByOrderId(item.orderId,
+                                      TradeEventType::Note,
+                                      "ManualReview",
+                                      "Manual review required: " + item.reason);
+            appendSharedMessage("Order " + std::to_string(static_cast<long long>(item.orderId)) +
+                                " requires manual review (" + item.reason + ")");
+        }
+
+        if (!sweep.reconciliationOrders.empty() && client) {
+            SharedData& state = appState();
+            std::lock_guard<std::recursive_mutex> clientLock(state.clientMutex);
+            if (client->isConnected()) {
+                client->reqOpenOrders();
+                appendRuntimeJournalEvent("reconcile_open_orders_requested", {
+                    {"orderCount", static_cast<int>(sweep.reconciliationOrders.size())}
+                });
+
+                ExecutionFilter executionFilter;
+                client->reqExecutions(allocateReqId(), executionFilter);
+                appendRuntimeJournalEvent("reconcile_executions_requested", {
+                    {"orderCount", static_cast<int>(sweep.reconciliationOrders.size())}
+                });
+
+                client->reqIds(-1);
+                appendRuntimeJournalEvent("reconcile_order_ids_requested", {
+                    {"orderCount", static_cast<int>(sweep.reconciliationOrders.size())}
+                });
+            } else {
+                appendRuntimeJournalEvent("reconcile_refresh_skipped", {
+                    {"reason", "socket_not_connected"},
+                    {"orderCount", static_cast<int>(sweep.reconciliationOrders.size())}
+                });
+            }
+        }
+
+        requestUiInvalidation();
+    }
+
+    void checkOrderWatchdogs() {
+        const OrderWatchdogSweepResult sweep =
+            sweepOrderWatchdogsOnReducerThread(std::chrono::steady_clock::now());
+        if (!sweep.reconciliationOrders.empty() || !sweep.manualReviewOrders.empty()) {
+            publishSharedDataSnapshot();
+            issueReconciliationRefreshes(sweep);
+        }
+    }
 
     void installUiInvalidationCallback() {
         UiInvalidationCallback callback;
@@ -119,19 +197,26 @@ struct TradingRuntime::Impl {
 
         while (true) {
             std::function<void()> action;
+            bool ranAction = false;
             {
                 std::unique_lock<std::mutex> lock(actionMutex);
-                actionCv.wait(lock, [&] {
+                actionCv.wait_for(lock, kOrderWatchdogPollInterval, [&] {
                     return stopActionThread || !actionQueue.empty();
                 });
                 if (stopActionThread && actionQueue.empty()) {
                     break;
                 }
-                action = std::move(actionQueue.front());
-                actionQueue.pop_front();
+                if (!actionQueue.empty()) {
+                    action = std::move(actionQueue.front());
+                    actionQueue.pop_front();
+                    ranAction = true;
+                }
             }
-            action();
-            publishSharedDataSnapshot();
+            if (ranAction && action) {
+                action();
+                publishSharedDataSnapshot();
+            }
+            checkOrderWatchdogs();
         }
 
         tlsActionLoopOwner = nullptr;
@@ -598,6 +683,62 @@ std::vector<OrderId> TradingRuntime::markAllPendingOrdersForCancel() {
     }
     return impl_->invokeOnActionThread([]() {
         return ::markAllPendingOrdersForCancel();
+    });
+}
+
+std::vector<OrderId> TradingRuntime::acknowledgeManualReviewOrders(const std::vector<OrderId>& orderIds) {
+    if (!impl_ || !impl_->started) {
+        const auto acknowledged = ::acknowledgeManualReviewOrders(orderIds);
+        if (!acknowledged.empty()) {
+            requestUiInvalidation();
+        }
+        return acknowledged;
+    }
+    return impl_->invokeOnActionThread([orderIds]() {
+        const auto acknowledged = ::acknowledgeManualReviewOrders(orderIds);
+        for (const OrderId orderId : acknowledged) {
+            appendRuntimeJournalEvent("manual_review_acknowledged", {
+                {"orderId", static_cast<long long>(orderId)}
+            });
+            appendTraceEventByOrderId(orderId,
+                                      TradeEventType::Note,
+                                      "ManualReview",
+                                      "Manual review acknowledged");
+            appendSharedMessage("Manual review acknowledged for order " +
+                                std::to_string(static_cast<long long>(orderId)));
+        }
+        return acknowledged;
+    });
+}
+
+std::vector<OrderId> TradingRuntime::requestOrderReconciliation(const std::vector<OrderId>& orderIds,
+                                                                const std::string& reason) {
+    if (orderIds.empty()) {
+        return {};
+    }
+    if (!impl_ || !impl_->started) {
+        const auto sweep = ::requestOrderReconciliation(orderIds, reason);
+        if (!sweep.reconciliationOrders.empty()) {
+            requestUiInvalidation();
+        }
+        std::vector<OrderId> accepted;
+        accepted.reserve(sweep.reconciliationOrders.size());
+        for (const auto& item : sweep.reconciliationOrders) {
+            accepted.push_back(item.orderId);
+        }
+        return accepted;
+    }
+    return impl_->invokeOnActionThread([this, orderIds, reason]() {
+        const auto sweep = ::requestOrderReconciliation(orderIds, reason);
+        publishSharedDataSnapshot();
+        impl_->issueReconciliationRefreshes(sweep);
+
+        std::vector<OrderId> accepted;
+        accepted.reserve(sweep.reconciliationOrders.size());
+        for (const auto& item : sweep.reconciliationOrders) {
+            accepted.push_back(item.orderId);
+        }
+        return accepted;
     });
 }
 

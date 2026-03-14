@@ -50,6 +50,9 @@ public:
     void appendMessage(const std::string& message);
     std::vector<OrderId> markOrdersPendingCancel(const std::vector<OrderId>& orderIds);
     std::vector<OrderId> markAllPendingOrdersForCancel();
+    std::vector<OrderId> acknowledgeManualReviewOrders(const std::vector<OrderId>& orderIds);
+    std::vector<OrderId> requestOrderReconciliation(const std::vector<OrderId>& orderIds,
+                                                    const std::string& reason = "manual_reconcile");
     bool requestWebSocketSubscription(const std::string& symbol,
                                       std::string* error = nullptr,
                                       bool* duplicateIgnored = nullptr,

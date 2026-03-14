@@ -113,6 +113,35 @@ void setSharedDataMutationDispatcher(SharedDataMutationDispatcher dispatcher);
 void clearSharedDataMutationDispatcher();
 void publishSharedDataSnapshot();
 
+enum class LocalOrderState {
+    IntentAccepted = 0,
+    SentToBroker,
+    AwaitingBrokerEcho,
+    Working,
+    PartiallyFilled,
+    CancelRequested,
+    AwaitingCancelAck,
+    Filled,
+    Cancelled,
+    Rejected,
+    Inactive,
+    NeedsReconciliation,
+    NeedsManualReview
+};
+
+struct OrderWatchdogs {
+    std::chrono::steady_clock::time_point brokerEchoDeadline{};
+    std::chrono::steady_clock::time_point cancelAckDeadline{};
+    std::chrono::steady_clock::time_point partialFillQuietDeadline{};
+
+    bool brokerEchoArmed = false;
+    bool cancelAckArmed = false;
+    bool partialFillQuietArmed = false;
+
+    int reconciliationAttempts = 0;
+    std::chrono::steady_clock::time_point lastBrokerCallback{};
+};
+
 struct OrderInfo {
     OrderId orderId = 0;
     std::string account;
@@ -124,7 +153,14 @@ struct OrderInfo {
     double filledQty = 0.0;
     double remainingQty = 0.0;
     double avgFillPrice = 0.0;
+    LocalOrderState localState = LocalOrderState::NeedsReconciliation;
     bool cancelPending = false;
+    OrderWatchdogs watchdogs;
+    std::string lastReconciliationReason;
+    std::chrono::steady_clock::time_point lastReconciliationTime{};
+    bool manualReviewAcknowledged = false;
+    std::chrono::steady_clock::time_point manualReviewAcknowledgedTime{};
+    std::set<std::string> seenExecIds;
 
     std::chrono::steady_clock::time_point submitTime{};
     double firstFillDurationMs = -1.0;
@@ -134,6 +170,17 @@ struct OrderInfo {
         return (status == "Filled" || status == "Cancelled" || status == "ApiCancelled" ||
                 status == "Rejected" || status == "Inactive");
     }
+};
+
+struct OrderWatchdogAction {
+    OrderId orderId = 0;
+    std::string reason;
+    int reconciliationAttempts = 0;
+};
+
+struct OrderWatchdogSweepResult {
+    std::vector<OrderWatchdogAction> reconciliationOrders;
+    std::vector<OrderWatchdogAction> manualReviewOrders;
 };
 
 struct PositionInfo {
@@ -661,6 +708,7 @@ void reduce(SharedData& state, const BrokerPositionsLoadedEvent& event);
 std::string chooseConfiguredAccount(const std::string& accountsCsv);
 std::string makePositionKey(const std::string& account, const std::string& symbol);
 std::string runtimeSessionStateToString(RuntimeSessionState state);
+std::string localOrderStateToString(LocalOrderState state);
 std::string appDataDirectory();
 std::string tradeTraceLogPath();
 std::string runtimeJournalLogPath();
@@ -699,6 +747,15 @@ double calculatePositionMarketValueUnlocked(const std::string& account, const st
 std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot();
 std::vector<OrderId> markOrdersPendingCancel(const std::vector<OrderId>& orderIds);
 std::vector<OrderId> markAllPendingOrdersForCancel();
+void noteCancelRequestsSent(const std::vector<OrderId>& orderIds,
+                            std::chrono::steady_clock::time_point requestTime = std::chrono::steady_clock::now());
+OrderWatchdogSweepResult requestOrderReconciliation(const std::vector<OrderId>& orderIds,
+                                                    const std::string& reason,
+                                                    std::chrono::steady_clock::time_point requestTime = std::chrono::steady_clock::now());
+std::vector<OrderId> acknowledgeManualReviewOrders(const std::vector<OrderId>& orderIds,
+                                                   std::chrono::steady_clock::time_point acknowledgeTime = std::chrono::steady_clock::now());
+OrderWatchdogSweepResult sweepOrderWatchdogs(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+OrderWatchdogSweepResult sweepOrderWatchdogsOnReducerThread(std::chrono::steady_clock::time_point now);
 std::vector<bool> sendCancelRequests(EClientSocket* client, const std::vector<OrderId>& orderIds);
 int computeMaxQuantityFromAsk(double currentAsk, double maxPositionDollars);
 void cancelActiveSubscription(EClientSocket* client);

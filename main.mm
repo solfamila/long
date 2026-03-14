@@ -228,8 +228,9 @@ enum {
     OrderColumnSide,
     OrderColumnQty,
     OrderColumnPrice,
+    OrderColumnLocalState,
     OrderColumnStatus,
-    OrderColumnTime
+    OrderColumnWatchdog
 };
 
 void StylePanel(NSView* view) {
@@ -289,6 +290,8 @@ void StylePanel(NSView* view) {
     NSButton* _buyButton;
     NSButton* _closeButton;
     NSButton* _cancelSelectedButton;
+    NSButton* _reconcileSelectedButton;
+    NSButton* _acknowledgeSelectedButton;
     NSButton* _cancelAllButton;
     NSButton* _armControllerButton;
     NSButton* _killSwitchButton;
@@ -323,6 +326,7 @@ void StylePanel(NSView* view) {
 - (PendingUiSyncUpdate)consumeCurrentPendingUiSyncUpdate;
 - (TradingPanelState)currentPanelState;
 - (void)appendAppMessage:(const std::string&)message;
+- (std::vector<OrderId>)selectedOrderIds;
 
 @end
 
@@ -652,8 +656,9 @@ void StylePanel(NSView* view) {
         @{@"id": @"side", @"title": @"Side", @"width": @60, @"tag": @(OrderColumnSide)},
         @{@"id": @"qty", @"title": @"Qty", @"width": @70, @"tag": @(OrderColumnQty)},
         @{@"id": @"price", @"title": @"Price", @"width": @90, @"tag": @(OrderColumnPrice)},
-        @{@"id": @"status", @"title": @"Status", @"width": @110, @"tag": @(OrderColumnStatus)},
-        @{@"id": @"time", @"title": @"Time", @"width": @100, @"tag": @(OrderColumnTime)},
+        @{@"id": @"local", @"title": @"Local", @"width": @150, @"tag": @(OrderColumnLocalState)},
+        @{@"id": @"status", @"title": @"Broker", @"width": @110, @"tag": @(OrderColumnStatus)},
+        @{@"id": @"watchdog", @"title": @"Watchdog", @"width": @180, @"tag": @(OrderColumnWatchdog)},
     ];
     for (NSDictionary* info in columns) {
         NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:info[@"id"]];
@@ -672,8 +677,20 @@ void StylePanel(NSView* view) {
     NSStackView* orderButtons = MakeRowStack();
     _cancelSelectedButton = MakeButton(@"Cancel Selected", self, @selector(cancelSelectedAction:));
     StyleTintedButton(_cancelSelectedButton, [NSColor colorWithCalibratedRed:0.90 green:0.27 blue:0.22 alpha:1.0], [NSColor whiteColor]);
-    [_cancelSelectedButton.widthAnchor constraintEqualToConstant:160.0].active = YES;
+    [_cancelSelectedButton.widthAnchor constraintEqualToConstant:150.0].active = YES;
+    _reconcileSelectedButton = MakeButton(@"Reconcile Selected", self, @selector(reconcileSelectedAction:));
+    StyleTintedButton(_reconcileSelectedButton,
+                      [NSColor colorWithCalibratedRed:0.22 green:0.52 blue:0.92 alpha:1.0],
+                      [NSColor whiteColor]);
+    [_reconcileSelectedButton.widthAnchor constraintEqualToConstant:170.0].active = YES;
+    _acknowledgeSelectedButton = MakeButton(@"Acknowledge", self, @selector(acknowledgeSelectedAction:));
+    StyleTintedButton(_acknowledgeSelectedButton,
+                      [NSColor colorWithCalibratedRed:0.78 green:0.45 blue:0.15 alpha:1.0],
+                      [NSColor whiteColor]);
+    [_acknowledgeSelectedButton.widthAnchor constraintEqualToConstant:150.0].active = YES;
     [orderButtons addArrangedSubview:_cancelSelectedButton];
+    [orderButtons addArrangedSubview:_reconcileSelectedButton];
+    [orderButtons addArrangedSubview:_acknowledgeSelectedButton];
     [leftStack addArrangedSubview:orderButtons];
     [orderButtons.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
@@ -995,26 +1012,30 @@ void StylePanel(NSView* view) {
     [self scheduleRefresh];
 }
 
+- (std::vector<OrderId>)selectedOrderIds {
+    __block std::vector<OrderId> orderIds;
+    NSIndexSet* selectedRows = _ordersTable.selectedRowIndexes;
+    [selectedRows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL* stop) {
+        (void)stop;
+        if (idx < _ordersSnapshot.size()) {
+            orderIds.push_back(_ordersSnapshot[idx].first);
+        }
+    }];
+    return orderIds;
+}
+
 - (void)cancelSelectedAction:(id)sender {
     (void)sender;
     if (!_runtimeHost || !_runtimeHost->runtime()) {
         return;
     }
 
-    NSIndexSet* selectedRows = _ordersTable.selectedRowIndexes;
-    if (selectedRows.count == 0) {
+    const std::vector<OrderId> selectedOrderIds = [self selectedOrderIds];
+    if (selectedOrderIds.empty()) {
         [self appendAppMessage:"No orders selected for cancellation"];
         [self scheduleRefresh];
         return;
     }
-
-    __block std::vector<OrderId> selectedOrderIds;
-    [selectedRows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL* stop) {
-        (void)stop;
-        if (idx < _ordersSnapshot.size()) {
-            selectedOrderIds.push_back(_ordersSnapshot[idx].first);
-        }
-    }];
 
     const TradingCancelResult result = cancelSelectedOrdersAction(_runtimeHost->runtime(), selectedOrderIds);
     for (std::size_t i = 0; i < result.orderIds.size(); ++i) {
@@ -1023,6 +1044,50 @@ void StylePanel(NSView* view) {
         } else {
             [self appendAppMessage:"Cancel failed (not connected) for order " + std::to_string(result.orderIds[i])];
         }
+    }
+    [self scheduleRefresh];
+}
+
+- (void)reconcileSelectedAction:(id)sender {
+    (void)sender;
+    if (!_runtimeHost || !_runtimeHost->runtime()) {
+        return;
+    }
+
+    const std::vector<OrderId> selectedOrderIds = [self selectedOrderIds];
+    if (selectedOrderIds.empty()) {
+        [self appendAppMessage:"No orders selected for reconciliation"];
+        [self scheduleRefresh];
+        return;
+    }
+
+    const std::vector<OrderId> accepted = _runtimeHost->runtime()->requestOrderReconciliation(selectedOrderIds);
+    if (accepted.empty()) {
+        [self appendAppMessage:"Selected orders do not need reconciliation right now"];
+    } else {
+        for (const OrderId orderId : accepted) {
+            [self appendAppMessage:"Manual reconcile requested for order " + std::to_string(static_cast<long long>(orderId))];
+        }
+    }
+    [self scheduleRefresh];
+}
+
+- (void)acknowledgeSelectedAction:(id)sender {
+    (void)sender;
+    if (!_runtimeHost || !_runtimeHost->runtime()) {
+        return;
+    }
+
+    const std::vector<OrderId> selectedOrderIds = [self selectedOrderIds];
+    if (selectedOrderIds.empty()) {
+        [self appendAppMessage:"No orders selected for acknowledgement"];
+        [self scheduleRefresh];
+        return;
+    }
+
+    const std::vector<OrderId> acknowledged = _runtimeHost->runtime()->acknowledgeManualReviewOrders(selectedOrderIds);
+    if (acknowledged.empty()) {
+        [self appendAppMessage:"Selected orders do not require manual review acknowledgement"];
     }
     [self scheduleRefresh];
 }
@@ -1379,9 +1444,36 @@ void StylePanel(NSView* view) {
 
 - (void)refreshOrders {
     [_ordersTable reloadData];
+    __block bool hasSelectedOrders = false;
+    __block bool hasSelectedActiveOrders = false;
+    __block bool hasSelectedManualReviewOrders = false;
+    NSIndexSet* selectedRows = _ordersTable.selectedRowIndexes;
+    [selectedRows enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL* stop) {
+        (void)stop;
+        if (idx >= _ordersSnapshot.size()) {
+            return;
+        }
+        hasSelectedOrders = true;
+        const OrderInfo& order = _ordersSnapshot[idx].second;
+        if (!order.isTerminal()) {
+            hasSelectedActiveOrders = true;
+        }
+        if (order.localState == LocalOrderState::NeedsManualReview && !order.manualReviewAcknowledged) {
+            hasSelectedManualReviewOrders = true;
+        }
+    }];
+
     SetButtonEnabledTint(_cancelSelectedButton,
-                         (_ordersTable.numberOfSelectedRows > 0),
+                         hasSelectedOrders,
                          [NSColor colorWithCalibratedRed:0.90 green:0.27 blue:0.22 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+    SetButtonEnabledTint(_reconcileSelectedButton,
+                         hasSelectedActiveOrders,
+                         [NSColor colorWithCalibratedRed:0.22 green:0.52 blue:0.92 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+    SetButtonEnabledTint(_acknowledgeSelectedButton,
+                         hasSelectedManualReviewOrders,
+                         [NSColor colorWithCalibratedRed:0.78 green:0.45 blue:0.15 alpha:1.0],
                          [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
 }
 
@@ -1456,14 +1548,45 @@ void StylePanel(NSView* view) {
             label.stringValue = [NSString stringWithFormat:@"$%.2f", order.avgFillPrice > 0.0 ? order.avgFillPrice : order.limitPrice];
             label.textColor = (order.avgFillPrice > 0.0) ? [NSColor systemOrangeColor] : [NSColor labelColor];
             break;
+        case OrderColumnLocalState:
+            label.stringValue = ToNSString(formatOrderLocalStateText(order));
+            switch (order.localState) {
+                case LocalOrderState::AwaitingBrokerEcho:
+                case LocalOrderState::AwaitingCancelAck:
+                case LocalOrderState::NeedsReconciliation:
+                    label.textColor = [NSColor systemOrangeColor];
+                    break;
+                case LocalOrderState::NeedsManualReview:
+                    label.textColor = [NSColor systemRedColor];
+                    break;
+                case LocalOrderState::Filled:
+                    label.textColor = [NSColor systemGreenColor];
+                    break;
+                case LocalOrderState::Cancelled:
+                case LocalOrderState::Rejected:
+                case LocalOrderState::Inactive:
+                    label.textColor = [NSColor secondaryLabelColor];
+                    break;
+                default:
+                    label.textColor = [NSColor labelColor];
+                    break;
+            }
+            break;
         case OrderColumnStatus:
             label.stringValue = ToNSString(order.status);
             label.textColor = [NSColor labelColor];
             break;
-        case OrderColumnTime:
-            label.stringValue = ToNSString(formatOrderTimingText(order));
-            label.textColor = order.fillDurationMs >= 0.0 ? [NSColor systemGreenColor]
-                                                          : (!order.isTerminal() ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor]);
+        case OrderColumnWatchdog:
+            label.stringValue = ToNSString(formatOrderWatchdogText(order));
+            label.textColor = order.localState == LocalOrderState::NeedsManualReview
+                ? [NSColor systemRedColor]
+                : ((order.localState == LocalOrderState::NeedsReconciliation ||
+                    order.localState == LocalOrderState::AwaitingBrokerEcho ||
+                    order.localState == LocalOrderState::AwaitingCancelAck ||
+                    order.localState == LocalOrderState::PartiallyFilled)
+                       ? [NSColor systemOrangeColor]
+                       : (order.fillDurationMs >= 0.0 ? [NSColor systemGreenColor]
+                                                      : [NSColor secondaryLabelColor]));
             break;
         default:
             label.stringValue = @"";
@@ -1479,7 +1602,7 @@ void StylePanel(NSView* view) {
         return;
     }
 
-    _cancelSelectedButton.enabled = (_ordersTable.numberOfSelectedRows > 0);
+    [self refreshOrders];
 
     NSInteger selectedRow = _ordersTable.selectedRow;
     if (selectedRow >= 0 && static_cast<std::size_t>(selectedRow) < _ordersSnapshot.size()) {

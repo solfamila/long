@@ -20,7 +20,79 @@ void appendLatencyLine(std::ostringstream& oss, const char* label, double valueM
     oss << '\n';
 }
 
+std::string formatDurationFromNow(std::chrono::steady_clock::time_point start) {
+    if (start.time_since_epoch().count() == 0) {
+        return "--";
+    }
+    const double elapsedMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    std::ostringstream oss;
+    if (elapsedMs >= 1000.0) {
+        oss << std::fixed << std::setprecision(1) << (elapsedMs / 1000.0) << " s";
+    } else {
+        oss << std::fixed << std::setprecision(0) << elapsedMs << " ms";
+    }
+    return oss.str();
+}
+
 } // namespace
+
+std::string formatOrderLocalStateText(const OrderInfo& order) {
+    std::ostringstream oss;
+    oss << localOrderStateToString(order.localState);
+    const bool showAttempts =
+        order.watchdogs.reconciliationAttempts > 0 &&
+        (order.localState == LocalOrderState::NeedsReconciliation ||
+         order.localState == LocalOrderState::NeedsManualReview);
+    if ((order.localState == LocalOrderState::NeedsManualReview && order.manualReviewAcknowledged) || showAttempts) {
+        oss << " (";
+        bool wroteDetail = false;
+        if (order.localState == LocalOrderState::NeedsManualReview && order.manualReviewAcknowledged) {
+            oss << "ack";
+            wroteDetail = true;
+        }
+        if (showAttempts) {
+            if (wroteDetail) {
+                oss << ", ";
+            }
+            oss << order.watchdogs.reconciliationAttempts;
+        }
+        oss << ')';
+    }
+    return oss.str();
+}
+
+std::string formatOrderWatchdogText(const OrderInfo& order) {
+    std::ostringstream oss;
+    if (order.localState == LocalOrderState::AwaitingBrokerEcho && order.watchdogs.brokerEchoArmed) {
+        oss << "echo " << formatDurationFromNow(order.submitTime);
+    } else if (order.localState == LocalOrderState::AwaitingCancelAck && order.watchdogs.cancelAckArmed) {
+        const auto startedAt = order.watchdogs.lastBrokerCallback.time_since_epoch().count() != 0
+            ? order.watchdogs.lastBrokerCallback
+            : order.submitTime;
+        oss << "cancel " << formatDurationFromNow(startedAt);
+    } else if (order.localState == LocalOrderState::PartiallyFilled && order.watchdogs.partialFillQuietArmed) {
+        oss << "quiet " << formatDurationFromNow(order.watchdogs.lastBrokerCallback);
+    } else if (order.localState == LocalOrderState::NeedsReconciliation) {
+        oss << "retry " << order.watchdogs.reconciliationAttempts;
+    } else if (order.localState == LocalOrderState::NeedsManualReview) {
+        oss << "manual review";
+        if (order.manualReviewAcknowledged) {
+            oss << " ack";
+        }
+    } else if (order.watchdogs.lastBrokerCallback.time_since_epoch().count() != 0 && !order.isTerminal()) {
+        oss << "callback " << formatDurationFromNow(order.watchdogs.lastBrokerCallback) << " ago";
+    } else {
+        return formatOrderTimingText(order);
+    }
+
+    if (!order.lastReconciliationReason.empty() &&
+        (order.localState == LocalOrderState::NeedsReconciliation ||
+         order.localState == LocalOrderState::NeedsManualReview)) {
+        oss << " · " << order.lastReconciliationReason;
+    }
+    return oss.str();
+}
 
 std::string formatOrderTimingText(const OrderInfo& order) {
     std::ostringstream oss;
