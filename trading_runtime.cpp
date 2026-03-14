@@ -19,6 +19,14 @@
 #include <utility>
 #include <vector>
 
+#ifndef TWS_GUI_IBAPI_MODE
+#define TWS_GUI_IBAPI_MODE "unknown"
+#endif
+
+#ifndef TWS_GUI_IBAPI_SOURCE
+#define TWS_GUI_IBAPI_SOURCE "unknown"
+#endif
+
 namespace {
 
 constexpr auto kControllerPollInterval = std::chrono::milliseconds(16);
@@ -362,11 +370,14 @@ bool TradingRuntime::start() {
     std::cout << "Connecting to TWS at " << connectionConfig.host << ":" << connectionConfig.port << std::endl;
     std::cout << "Configured account: " << HARDCODED_ACCOUNT << std::endl;
     std::cout << "Using platform: AppKit native views" << std::endl;
+    std::cout << "IB API mode: " << TWS_GUI_IBAPI_MODE << " (" << TWS_GUI_IBAPI_SOURCE << ")" << std::endl;
     macLogInfo("runtime", "Starting runtime for " + connectionConfig.host + ":" + std::to_string(connectionConfig.port));
     appendRuntimeJournalEvent("runtime_start", {
         {"twsHost", connectionConfig.host},
         {"twsPort", connectionConfig.port},
         {"twsClientId", connectionConfig.clientId},
+        {"ibApiMode", TWS_GUI_IBAPI_MODE},
+        {"ibApiSource", TWS_GUI_IBAPI_SOURCE},
         {"websocketEnabled", connectionConfig.websocketEnabled},
         {"controllerEnabled", connectionConfig.controllerEnabled}
     });
@@ -398,6 +409,10 @@ bool TradingRuntime::start() {
     }
 
     if (twsConnected) {
+#ifndef TWS_GUI_MOCK_IBAPI
+        impl_->client->reqMarketDataType(2); // Request frozen data when the market is closed.
+        appendRuntimeJournalEvent("market_data_type_requested", {{"type", 2}, {"label", "frozen"}});
+#endif
         impl_->reader = std::make_unique<EReader>(impl_->client.get(), impl_->osSignal.get());
         impl_->readerRunning.store(true, std::memory_order_relaxed);
         impl_->reader->start();
