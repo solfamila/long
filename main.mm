@@ -311,6 +311,18 @@ void StylePanel(NSView* view) {
 - (void)loadPreferences;
 - (void)persistPreferences;
 - (BOOL)isEditingField:(NSTextField*)field;
+- (void)syncGuiInputsToRuntime;
+- (RuntimeConnectionConfig)currentConnectionConfig;
+- (RiskControlsSnapshot)currentRiskControls;
+- (void)applyConnectionConfig:(const RuntimeConnectionConfig&)config;
+- (void)applyRiskControls:(const RiskControlsSnapshot&)risk;
+- (std::string)ensureCurrentWebSocketToken;
+- (void)setControllerArmedEnabled:(BOOL)armed;
+- (void)setTradingKillSwitchEnabled:(BOOL)enabled;
+- (RuntimePresentationSnapshot)currentPresentationSnapshot;
+- (PendingUiSyncUpdate)consumeCurrentPendingUiSyncUpdate;
+- (TradingPanelState)currentPanelState;
+- (void)appendAppMessage:(const std::string&)message;
 
 @end
 
@@ -382,7 +394,7 @@ void StylePanel(NSView* view) {
         _maxPositionDollars = std::max(1000.0, [defaults doubleForKey:@"maxPositionDollars"]);
     }
 
-    RuntimeConnectionConfig connection = captureRuntimeConnectionConfig();
+    RuntimeConnectionConfig connection = [self currentConnectionConfig];
     if (NSString* host = [defaults stringForKey:@"twsHost"]) {
         connection.host = ToStdString(host);
     }
@@ -396,7 +408,7 @@ void StylePanel(NSView* view) {
         connection.websocketAuthToken = ToStdString(token);
     }
     if (connection.websocketAuthToken.empty()) {
-        connection.websocketAuthToken = ensureWebSocketAuthToken();
+        connection.websocketAuthToken = [self ensureCurrentWebSocketToken];
     }
     if ([defaults objectForKey:@"websocketEnabled"] != nil) {
         connection.websocketEnabled = [defaults boolForKey:@"websocketEnabled"];
@@ -404,9 +416,9 @@ void StylePanel(NSView* view) {
     if ([defaults objectForKey:@"controllerEnabled"] != nil) {
         connection.controllerEnabled = [defaults boolForKey:@"controllerEnabled"];
     }
-    updateRuntimeConnectionConfig(connection);
+    [self applyConnectionConfig:connection];
 
-    RiskControlsSnapshot risk = captureRiskControlsSnapshot();
+    RiskControlsSnapshot risk = [self currentRiskControls];
     if ([defaults objectForKey:@"staleQuoteThresholdMs"] != nil) {
         risk.staleQuoteThresholdMs = std::max(250, static_cast<int>([defaults integerForKey:@"staleQuoteThresholdMs"]));
     }
@@ -419,10 +431,7 @@ void StylePanel(NSView* view) {
     if ([defaults objectForKey:@"controllerArmMode"] != nil) {
         risk.controllerArmMode = ControllerArmModeFromPopupIndex([defaults integerForKey:@"controllerArmMode"]);
     }
-    updateRiskControls(risk.staleQuoteThresholdMs,
-                       risk.maxOrderNotional,
-                       risk.maxOpenNotional,
-                       risk.controllerArmMode);
+    [self applyRiskControls:risk];
     [defaults setObject:ToNSString(connection.websocketAuthToken) forKey:kWebSocketTokenDefaultsKey];
 }
 
@@ -433,7 +442,7 @@ void StylePanel(NSView* view) {
     [defaults setDouble:_priceBuffer forKey:@"priceBuffer"];
     [defaults setDouble:_maxPositionDollars forKey:@"maxPositionDollars"];
 
-    const RuntimeConnectionConfig connection = captureRuntimeConnectionConfig();
+    const RuntimeConnectionConfig connection = [self currentConnectionConfig];
     [defaults setObject:ToNSString(connection.host) forKey:@"twsHost"];
     [defaults setInteger:connection.port forKey:@"twsPort"];
     [defaults setInteger:connection.clientId forKey:@"twsClientId"];
@@ -441,7 +450,7 @@ void StylePanel(NSView* view) {
     [defaults setBool:connection.websocketEnabled forKey:@"websocketEnabled"];
     [defaults setBool:connection.controllerEnabled forKey:@"controllerEnabled"];
 
-    const RiskControlsSnapshot risk = captureRiskControlsSnapshot();
+    const RiskControlsSnapshot risk = [self currentRiskControls];
     [defaults setInteger:risk.staleQuoteThresholdMs forKey:@"staleQuoteThresholdMs"];
     [defaults setDouble:risk.maxOrderNotional forKey:@"maxOrderNotional"];
     [defaults setDouble:risk.maxOpenNotional forKey:@"maxOpenNotional"];
@@ -711,7 +720,7 @@ void StylePanel(NSView* view) {
         return;
     }
 
-    syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
+    [self syncGuiInputsToRuntime];
     _runtimeHost = std::make_unique<TradingRuntimeHost>();
 
     __weak TradingWindowController* weakSelf = self;
@@ -807,9 +816,107 @@ void StylePanel(NSView* view) {
     _quantityInput = std::max(1, parsedQuantity);
     _priceBuffer = std::max(0.0, _bufferField.doubleValue);
     _maxPositionDollars = std::max(1000.0, _maxPositionField.doubleValue);
-    syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
+    [self syncGuiInputsToRuntime];
     [self persistPreferences];
     [self updateInputFieldsFromState];
+}
+
+- (void)syncGuiInputsToRuntime {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        _runtimeHost->runtime()->syncGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
+    } else {
+        syncSharedGuiInputs(_quantityInput, _priceBuffer, _maxPositionDollars);
+    }
+}
+
+- (RuntimeConnectionConfig)currentConnectionConfig {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        return _runtimeHost->runtime()->captureConnectionConfig();
+    }
+    return captureRuntimeConnectionConfig();
+}
+
+- (RiskControlsSnapshot)currentRiskControls {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        return _runtimeHost->runtime()->captureRiskControls();
+    }
+    return captureRiskControlsSnapshot();
+}
+
+- (void)applyConnectionConfig:(const RuntimeConnectionConfig&)config {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        _runtimeHost->runtime()->updateConnectionConfig(config);
+    } else {
+        updateRuntimeConnectionConfig(config);
+    }
+}
+
+- (void)applyRiskControls:(const RiskControlsSnapshot&)risk {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        _runtimeHost->runtime()->updateRiskControls(risk);
+    } else {
+        updateRiskControls(risk.staleQuoteThresholdMs,
+                           risk.maxOrderNotional,
+                           risk.maxOpenNotional,
+                           risk.controllerArmMode);
+    }
+}
+
+- (std::string)ensureCurrentWebSocketToken {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        return _runtimeHost->runtime()->ensureWebSocketAuthToken();
+    }
+    return ensureWebSocketAuthToken();
+}
+
+- (void)setControllerArmedEnabled:(BOOL)armed {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        _runtimeHost->runtime()->setControllerArmed(armed);
+    } else {
+        setControllerArmed(armed);
+    }
+}
+
+- (void)setTradingKillSwitchEnabled:(BOOL)enabled {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        _runtimeHost->runtime()->setTradingKillSwitch(enabled);
+    } else {
+        setTradingKillSwitch(enabled);
+    }
+}
+
+- (RuntimePresentationSnapshot)currentPresentationSnapshot {
+    const std::string activeSymbol = _subscribed ? _subscribedSymbol : std::string();
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        return _runtimeHost->runtime()->capturePresentationSnapshot(activeSymbol, 150);
+    }
+    return captureRuntimePresentationSnapshot(activeSymbol, 150);
+}
+
+- (PendingUiSyncUpdate)consumeCurrentPendingUiSyncUpdate {
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        return _runtimeHost->runtime()->consumePendingUiSyncUpdate();
+    }
+    return consumePendingUiSyncUpdate();
+}
+
+- (TradingPanelState)currentPanelState {
+    return buildTradingPanelState([self currentPresentationSnapshot],
+                                  _subscribed,
+                                  _quantityInput,
+                                  _priceBuffer,
+                                  _maxPositionDollars);
+}
+
+- (void)appendAppMessage:(const std::string&)message {
+    if (message.empty()) {
+        return;
+    }
+    if (_runtimeHost && _runtimeHost->runtime()) {
+        _runtimeHost->runtime()->appendMessage(message);
+    } else {
+        appendSharedMessage(message);
+    }
 }
 
 - (void)updateInputFieldsFromState {
@@ -837,7 +944,7 @@ void StylePanel(NSView* view) {
                                    false,
                                    &requestedSymbol,
                                    &error)) {
-        g_data.addMessage("Subscribe failed: " + error);
+        [self appendAppMessage:"Subscribe failed: " + error];
         [self scheduleRefresh];
         return;
     }
@@ -852,7 +959,7 @@ void StylePanel(NSView* view) {
 - (void)buyAction:(id)sender {
     (void)sender;
     [self syncInputsFromFields];
-    const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
+    const TradingPanelState state = [self currentPanelState];
     const TradingSubmitResult result = submitBuyAction(_runtimeHost ? _runtimeHost->runtime() : nullptr,
                                                        state,
                                                        _subscribedSymbol,
@@ -861,7 +968,7 @@ void StylePanel(NSView* view) {
                                                        "GUI Button",
                                                        "Buy Limit button pressed");
     if (!result.submitted && !result.error.empty()) {
-        g_data.addMessage("Buy failed: " + result.error);
+        [self appendAppMessage:"Buy failed: " + result.error];
     }
     if (result.traceId != 0) {
         _selectedTraceId = result.traceId;
@@ -872,7 +979,7 @@ void StylePanel(NSView* view) {
 - (void)closeAction:(id)sender {
     (void)sender;
     [self syncInputsFromFields];
-    const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
+    const TradingPanelState state = [self currentPanelState];
     const TradingSubmitResult result = submitCloseAction(_runtimeHost ? _runtimeHost->runtime() : nullptr,
                                                          state,
                                                          _subscribedSymbol,
@@ -880,7 +987,7 @@ void StylePanel(NSView* view) {
                                                          "GUI Button",
                                                          "Close Long button pressed");
     if (!result.submitted && !result.error.empty()) {
-        g_data.addMessage("Close failed: " + result.error);
+        [self appendAppMessage:"Close failed: " + result.error];
     }
     if (result.traceId != 0) {
         _selectedTraceId = result.traceId;
@@ -896,7 +1003,7 @@ void StylePanel(NSView* view) {
 
     NSIndexSet* selectedRows = _ordersTable.selectedRowIndexes;
     if (selectedRows.count == 0) {
-        g_data.addMessage("No orders selected for cancellation");
+        [self appendAppMessage:"No orders selected for cancellation"];
         [self scheduleRefresh];
         return;
     }
@@ -912,9 +1019,9 @@ void StylePanel(NSView* view) {
     const TradingCancelResult result = cancelSelectedOrdersAction(_runtimeHost->runtime(), selectedOrderIds);
     for (std::size_t i = 0; i < result.orderIds.size(); ++i) {
         if (i < result.sent.size() && result.sent[i]) {
-            g_data.addMessage("Cancel request sent for order " + std::to_string(result.orderIds[i]));
+            [self appendAppMessage:"Cancel request sent for order " + std::to_string(result.orderIds[i])];
         } else {
-            g_data.addMessage("Cancel failed (not connected) for order " + std::to_string(result.orderIds[i]));
+            [self appendAppMessage:"Cancel failed (not connected) for order " + std::to_string(result.orderIds[i])];
         }
     }
     [self scheduleRefresh];
@@ -938,67 +1045,63 @@ void StylePanel(NSView* view) {
 
     const TradingCancelResult result = cancelAllOrdersAction(_runtimeHost->runtime());
     if (result.orderIds.empty()) {
-        g_data.addMessage("No pending orders to cancel");
+        [self appendAppMessage:"No pending orders to cancel"];
         [self scheduleRefresh];
         return;
     }
 
     const int sentCount = static_cast<int>(std::count(result.sent.begin(), result.sent.end(), true));
     if (sentCount != static_cast<int>(result.orderIds.size())) {
-        g_data.addMessage("Some cancel requests could not be sent");
+        [self appendAppMessage:"Some cancel requests could not be sent"];
     }
-    g_data.addMessage("Cancel requested for " + std::to_string(sentCount) + " order(s)");
+    [self appendAppMessage:"Cancel requested for " + std::to_string(sentCount) + " order(s)"];
     [self scheduleRefresh];
 }
 
 - (void)toggleControllerArmed:(id)sender {
     (void)sender;
-    const bool armed = !captureRiskControlsSnapshot().controllerArmed;
-    setControllerArmed(armed);
-    g_data.addMessage(armed ? "Controller trading armed" : "Controller trading disarmed");
+    const bool armed = ![self currentRiskControls].controllerArmed;
+    [self setControllerArmedEnabled:armed];
+    [self appendAppMessage:(armed ? "Controller trading armed" : "Controller trading disarmed")];
     [self scheduleRefresh];
 }
 
 - (void)toggleKillSwitch:(id)sender {
     (void)sender;
-    const bool enabled = !captureRiskControlsSnapshot().tradingKillSwitch;
-    setTradingKillSwitch(enabled);
+    const bool enabled = ![self currentRiskControls].tradingKillSwitch;
+    [self setTradingKillSwitchEnabled:enabled];
     if (enabled) {
-        setControllerArmed(false);
+        [self setControllerArmedEnabled:NO];
     }
-    g_data.addMessage(enabled ? "Kill switch enabled: trading halted" : "Kill switch disabled: trading may resume");
+    [self appendAppMessage:(enabled ? "Kill switch enabled: trading halted" : "Kill switch disabled: trading may resume")];
     [self scheduleRefresh];
 }
 
 - (void)openSettings:(id)sender {
     (void)sender;
 
-    const RuntimeConnectionConfig currentConnection = captureRuntimeConnectionConfig();
-    const RiskControlsSnapshot currentRisk = captureRiskControlsSnapshot();
+    const RuntimeConnectionConfig currentConnection = [self currentConnectionConfig];
+    const RiskControlsSnapshot currentRisk = [self currentRiskControls];
     RuntimeConnectionConfig updatedConnection = currentConnection;
     RiskControlsSnapshot updatedRisk = currentRisk;
     if (!RunTradingSettingsSheet(self.window, currentConnection, currentRisk, &updatedConnection, &updatedRisk)) {
         return;
     }
 
-    updateRuntimeConnectionConfig(updatedConnection);
-    const std::string ensuredToken = ensureWebSocketAuthToken();
+    [self applyConnectionConfig:updatedConnection];
+    const std::string ensuredToken = [self ensureCurrentWebSocketToken];
     updatedConnection.websocketAuthToken = ensuredToken;
-    updateRuntimeConnectionConfig(updatedConnection);
-
-    updateRiskControls(updatedRisk.staleQuoteThresholdMs,
-                       updatedRisk.maxOrderNotional,
-                       updatedRisk.maxOpenNotional,
-                       updatedRisk.controllerArmMode);
+    [self applyConnectionConfig:updatedConnection];
+    [self applyRiskControls:updatedRisk];
 
     [self persistPreferences];
-    g_data.addMessage("Settings saved");
+    [self appendAppMessage:"Settings saved"];
     if (updatedConnection.host != currentConnection.host ||
         updatedConnection.port != currentConnection.port ||
         updatedConnection.clientId != currentConnection.clientId ||
         updatedConnection.websocketEnabled != currentConnection.websocketEnabled ||
         updatedConnection.controllerEnabled != currentConnection.controllerEnabled) {
-        g_data.addMessage("Restart the app to apply new connection/device settings");
+        [self appendAppMessage:"Restart the app to apply new connection/device settings"];
     }
     [self scheduleRefresh];
 }
@@ -1007,7 +1110,7 @@ void StylePanel(NSView* view) {
     (void)sender;
     std::string successMessage;
     if (RunSelectedTraceExportPanel(self.window, _selectedTraceId, &successMessage)) {
-        g_data.addMessage(successMessage);
+        [self appendAppMessage:successMessage];
         [self scheduleRefresh];
     }
 }
@@ -1016,7 +1119,7 @@ void StylePanel(NSView* view) {
     (void)sender;
     std::string successMessage;
     if (RunAllTradesSummaryExportPanel(self.window, &successMessage)) {
-        g_data.addMessage(successMessage);
+        [self appendAppMessage:successMessage];
         [self scheduleRefresh];
     }
 }
@@ -1034,7 +1137,7 @@ void StylePanel(NSView* view) {
         return;
     }
 
-    const TradingPanelState state = buildTradingPanelState(_subscribedSymbol, _subscribed, _quantityInput, _priceBuffer, _maxPositionDollars);
+    const TradingPanelState state = [self currentPanelState];
     const TradingControllerActionResult result = handleControllerActionIntent(_runtimeHost ? _runtimeHost->runtime() : nullptr,
                                                                               action,
                                                                               state,
@@ -1050,7 +1153,7 @@ void StylePanel(NSView* view) {
         _selectedTraceId = result.traceId;
     }
     for (const auto& message : result.messages) {
-        g_data.addMessage(message);
+        [self appendAppMessage:message];
     }
 
     [self scheduleRefresh];
@@ -1076,13 +1179,13 @@ void StylePanel(NSView* view) {
     }
 
     if (thermalState == NSProcessInfoThermalStateSerious) {
-        g_data.addMessage("macOS thermal state is serious: slowing UI refresh");
+        [self appendAppMessage:"macOS thermal state is serious: slowing UI refresh"];
     } else if (thermalState == NSProcessInfoThermalStateCritical) {
-        g_data.addMessage("macOS thermal state is critical: strongly throttling UI refresh");
+        [self appendAppMessage:"macOS thermal state is critical: strongly throttling UI refresh"];
     } else if ((previousState == NSProcessInfoThermalStateSerious ||
                 previousState == NSProcessInfoThermalStateCritical) &&
                thermalState == NSProcessInfoThermalStateNominal) {
-        g_data.addMessage("macOS thermal state returned to nominal");
+        [self appendAppMessage:"macOS thermal state returned to nominal"];
     }
 
     [self scheduleRefresh];
@@ -1097,8 +1200,8 @@ void StylePanel(NSView* view) {
     input.priceBuffer = _priceBuffer;
     input.maxPositionDollars = _maxPositionDollars;
     input.selectedTraceId = _selectedTraceId;
-    input.messagesVersionSeen = _messagesVersionSeen;
-    input.messagesText = _messagesText;
+    input.pendingUiSync = [self consumeCurrentPendingUiSyncUpdate];
+    input.presentation = [self currentPresentationSnapshot];
     const TradingViewModel model = buildTradingViewModel(input);
 
     _symbolInput = model.symbolInput;
@@ -1310,7 +1413,6 @@ void StylePanel(NSView* view) {
 }
 
 - (void)refreshMessages {
-    g_data.copyMessagesTextIfChanged(_messagesText, _messagesVersionSeen);
     _messagesTextView.string = ToNSString(_messagesText);
 }
 
@@ -1382,7 +1484,9 @@ void StylePanel(NSView* view) {
     NSInteger selectedRow = _ordersTable.selectedRow;
     if (selectedRow >= 0 && static_cast<std::size_t>(selectedRow) < _ordersSnapshot.size()) {
         const OrderId orderId = _ordersSnapshot[static_cast<std::size_t>(selectedRow)].first;
-        const std::uint64_t traceId = findTraceIdByOrderId(orderId);
+        const std::uint64_t traceId = (_runtimeHost && _runtimeHost->runtime())
+            ? _runtimeHost->runtime()->findTradeTraceIdByOrderId(orderId)
+            : findTraceIdByOrderId(orderId);
         if (traceId != 0) {
             _selectedTraceId = traceId;
             [self scheduleRefresh];

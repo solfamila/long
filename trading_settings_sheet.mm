@@ -47,6 +47,12 @@ NSTextField* MakeWrappingLabel(NSString* text, NSFont* font, NSColor* color) {
     return label;
 }
 
+NSTextField* MakeSectionLabel(NSString* text) {
+    return MakeLabel(text,
+                     [NSFont systemFontOfSize:13.0 weight:NSFontWeightBold],
+                     [NSColor colorWithCalibratedRed:0.22 green:0.33 blue:0.52 alpha:1.0]);
+}
+
 NSTextField* MakeInputField(NSString* text, CGFloat width) {
     NSTextField* field = [[NSTextField alloc] initWithFrame:NSZeroRect];
     field.stringValue = text ?: @"";
@@ -121,7 +127,7 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
         return false;
     }
 
-    NSWindow* sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0.0, 0.0, 620.0, 480.0)
+    NSWindow* sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0.0, 0.0, 640.0, 540.0)
                                                   styleMask:NSWindowStyleMaskTitled
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
@@ -148,12 +154,6 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
     [rootStack addArrangedSubview:infoLabel];
     [infoLabel.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
 
-    NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:2 rows:8];
-    grid.rowSpacing = 10.0;
-    grid.columnSpacing = 14.0;
-    grid.xPlacement = NSGridCellPlacementLeading;
-    grid.yPlacement = NSGridCellPlacementCenter;
-
     NSTextField* hostField = MakeInputField(ToNSString(currentConnection.host), 300.0);
     NSTextField* portField = MakeInputField([NSString stringWithFormat:@"%d", currentConnection.port], 120.0);
     NSTextField* clientIdField = MakeInputField([NSString stringWithFormat:@"%d", currentConnection.clientId], 120.0);
@@ -169,37 +169,53 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
     [controllerArmModePopup selectItemAtIndex:ControllerArmModePopupIndex(currentRisk.controllerArmMode)];
     [controllerArmModePopup.widthAnchor constraintEqualToConstant:280.0].active = YES;
 
-    NSArray<NSString*>* labels = @[
+    hostField.placeholderString = @"127.0.0.1";
+    tokenField.placeholderString = @"Auto-generated if left blank";
+
+    NSArray<NSString*>* connectionLabels = @[
         @"TWS Host",
         @"TWS Port",
         @"TWS Client ID",
         @"WebSocket Token",
+    ];
+    NSArray<NSView*>* connectionFields = @[
+        hostField,
+        portField,
+        clientIdField,
+        tokenField,
+    ];
+
+    NSArray<NSString*>* riskLabels = @[
         @"Stale Quote (ms)",
         @"Max Order Notional",
         @"Max Open Notional",
         @"Controller Arming",
     ];
-    NSArray<NSView*>* fields = @[
-        hostField,
-        portField,
-        clientIdField,
-        tokenField,
+    NSArray<NSView*>* riskFields = @[
         staleQuoteField,
         maxOrderField,
         maxOpenField,
         controllerArmModePopup,
     ];
 
-    for (NSInteger i = 0; i < labels.count; ++i) {
-        NSTextField* label = MakeLabel(labels[i],
+    [rootStack addArrangedSubview:MakeSectionLabel(@"Connection")];
+
+    NSGridView* connectionGrid = [NSGridView gridViewWithNumberOfColumns:2 rows:4];
+    connectionGrid.rowSpacing = 10.0;
+    connectionGrid.columnSpacing = 14.0;
+    connectionGrid.xPlacement = NSGridCellPlacementLeading;
+    connectionGrid.yPlacement = NSGridCellPlacementCenter;
+
+    for (NSInteger i = 0; i < connectionLabels.count; ++i) {
+        NSTextField* label = MakeLabel(connectionLabels[i],
                                        [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold],
                                        [NSColor secondaryLabelColor]);
         [label.widthAnchor constraintEqualToConstant:170.0].active = YES;
-        [grid cellAtColumnIndex:0 rowIndex:i].contentView = label;
-        [grid cellAtColumnIndex:1 rowIndex:i].contentView = fields[static_cast<std::size_t>(i)];
+        [connectionGrid cellAtColumnIndex:0 rowIndex:i].contentView = label;
+        [connectionGrid cellAtColumnIndex:1 rowIndex:i].contentView = connectionFields[static_cast<std::size_t>(i)];
     }
-    [rootStack addArrangedSubview:grid];
-    [grid.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
+    [rootStack addArrangedSubview:connectionGrid];
+    [connectionGrid.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
 
     NSButton* websocketCheckbox = [NSButton checkboxWithTitle:@"Enable localhost WebSocket automation" target:nil action:nil];
     websocketCheckbox.state = currentConnection.websocketEnabled ? NSControlStateValueOn : NSControlStateValueOff;
@@ -207,6 +223,25 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
     controllerCheckbox.state = currentConnection.controllerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [rootStack addArrangedSubview:websocketCheckbox];
     [rootStack addArrangedSubview:controllerCheckbox];
+
+    [rootStack addArrangedSubview:MakeSectionLabel(@"Risk & Safety")];
+
+    NSGridView* riskGrid = [NSGridView gridViewWithNumberOfColumns:2 rows:4];
+    riskGrid.rowSpacing = 10.0;
+    riskGrid.columnSpacing = 14.0;
+    riskGrid.xPlacement = NSGridCellPlacementLeading;
+    riskGrid.yPlacement = NSGridCellPlacementCenter;
+
+    for (NSInteger i = 0; i < riskLabels.count; ++i) {
+        NSTextField* label = MakeLabel(riskLabels[i],
+                                       [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold],
+                                       [NSColor secondaryLabelColor]);
+        [label.widthAnchor constraintEqualToConstant:170.0].active = YES;
+        [riskGrid cellAtColumnIndex:0 rowIndex:i].contentView = label;
+        [riskGrid cellAtColumnIndex:1 rowIndex:i].contentView = riskFields[static_cast<std::size_t>(i)];
+    }
+    [rootStack addArrangedSubview:riskGrid];
+    [riskGrid.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
 
     NSStackView* buttonRow = MakeRowStack();
     buttonRow.spacing = 12.0;
@@ -221,6 +256,7 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
     [buttonRow addArrangedSubview:saveButton];
     [rootStack addArrangedSubview:buttonRow];
     [buttonRow.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
+    sheet.defaultButtonCell = saveButton.cell;
 
     __block NSInteger modalResponse = NSModalResponseCancel;
     TradingSettingsActionTarget* saveTarget = [[TradingSettingsActionTarget alloc] init];

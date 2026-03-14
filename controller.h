@@ -55,7 +55,7 @@ inline bool controllerInitialize(ControllerState& cs) {
     if (!macControllerInitialize(&cs.nativeHandle, &error)) {
         if (!error.empty()) {
             const std::string message = "Controller initialization failed: " + error;
-            g_data.addMessage(message);
+            appendSharedMessage(message);
             std::cout << "[" << message << "]" << std::endl;
         }
         return false;
@@ -89,7 +89,7 @@ inline void controllerSetVibration(ControllerState& cs, bool enable) {
 
 inline void controllerCleanup(ControllerState& cs) {
     if (cs.connected) {
-        g_data.addMessage("Controller: Disconnected");
+        appendSharedMessage("Controller: Disconnected");
         std::cout << "[Controller: Disconnected]" << std::endl;
     }
     cs.connected = false;

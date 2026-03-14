@@ -15,8 +15,8 @@ struct TradingViewModelInput {
     double priceBuffer = 0.01;
     double maxPositionDollars = 40000.0;
     std::uint64_t selectedTraceId = 0;
-    std::uint64_t messagesVersionSeen = 0;
-    std::string messagesText;
+    PendingUiSyncUpdate pendingUiSync;
+    RuntimePresentationSnapshot presentation;
 };
 
 struct TradingViewModel {

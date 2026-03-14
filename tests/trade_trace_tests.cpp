@@ -10,6 +10,8 @@
 #include <string>
 #include <unistd.h>
 
+#define g_data appState()
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -149,6 +151,7 @@ void testReplayPrefersRichLiveTrace() {
         g_data.traceIdByPermId[recovered.permId] = recovered.traceId;
         g_data.traceIdByExecId["E1"] = recovered.traceId;
     }
+    publishSharedDataSnapshot();
 
     TradeTraceSnapshot replayed;
     expect(replayTradeTraceSnapshotByIdentityFromLog(113, 5001, "E1", &replayed),
@@ -352,6 +355,188 @@ void testTradingWrapperIgnoresDuplicateOrderStatus() {
     resetSharedDataForTesting();
 }
 
+void testRuntimePresentationSnapshotCapturesConsistentState() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.connected = true;
+        g_data.sessionReady = true;
+        g_data.sessionState = RuntimeSessionState::SessionReady;
+        g_data.selectedAccount = "U23154741";
+        g_data.twsHost = "127.0.0.1";
+        g_data.twsPort = 7496;
+        g_data.twsClientId = 7;
+        g_data.websocketAuthToken = "token-123";
+        g_data.websocketEnabled = true;
+        g_data.controllerEnabled = true;
+        g_data.wsServerRunning.store(true, std::memory_order_relaxed);
+        g_data.wsConnectedClients.store(2, std::memory_order_relaxed);
+        g_data.controllerConnected.store(true, std::memory_order_relaxed);
+        g_data.controllerDeviceName = "DualSense";
+        g_data.controllerLockedDeviceName = "DualSense";
+        g_data.currentSymbol = "INTC";
+        g_data.activeMktDataReqId = 101;
+        g_data.activeDepthReqId = 202;
+        g_data.currentQuantity = 9;
+        g_data.priceBuffer = 0.05;
+        g_data.maxPositionDollars = 42000.0;
+        g_data.bidPrice = 45.64;
+        g_data.askPrice = 45.65;
+        g_data.lastPrice = 45.645;
+        g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
+        g_data.maxOrderNotional = 25000.0;
+        g_data.maxOpenNotional = 60000.0;
+        g_data.staleQuoteThresholdMs = 1500;
+        g_data.controllerArmMode = ControllerArmMode::Manual;
+        g_data.controllerArmed = true;
+        g_data.tradingKillSwitch = false;
+
+        OrderInfo order;
+        order.orderId = 200;
+        order.account = "U23154741";
+        order.symbol = "INTC";
+        order.side = "BUY";
+        order.quantity = 2.0;
+        order.remainingQty = 2.0;
+        order.limitPrice = 45.65;
+        order.status = "Submitted";
+        g_data.orders[200] = order;
+
+        PositionInfo position;
+        position.account = "U23154741";
+        position.symbol = "INTC";
+        position.quantity = 5.0;
+        position.avgCost = 45.10;
+        g_data.positions[makePositionKey("U23154741", "INTC")] = position;
+
+        TradeTrace trace;
+        trace.traceId = 44;
+        trace.orderId = 200;
+        trace.source = "Controller";
+        trace.symbol = "INTC";
+        trace.side = "BUY";
+        trace.requestedQty = 2;
+        trace.limitPrice = 45.65;
+        trace.latestStatus = "Submitted";
+        g_data.traces[44] = trace;
+        g_data.traceRecency.push_back(44);
+        g_data.latestTraceId = 44;
+
+        g_data.messages.push_back("hello snapshot");
+        ++g_data.messagesVersion;
+    }
+    publishSharedDataSnapshot();
+
+    const RuntimePresentationSnapshot snapshot = captureRuntimePresentationSnapshot("INTC", 10);
+    expect(snapshot.status.connected, "presentation snapshot should include connection status");
+    expect(snapshot.status.accountText == "U23154741", "presentation snapshot should include selected account");
+    expect(snapshot.connection.clientId == 7, "presentation snapshot should include runtime connection");
+    expect(snapshot.activeSymbol == "INTC", "presentation snapshot should include active symbol");
+    expect(snapshot.subscriptionActive, "presentation snapshot should include subscription state");
+    expect(snapshot.currentQuantity == 9, "presentation snapshot should include current quantity");
+    expect(snapshot.priceBuffer == 0.05, "presentation snapshot should include price buffer");
+    expect(snapshot.maxPositionDollars == 42000.0, "presentation snapshot should include max position");
+    expect(snapshot.symbol.hasPosition, "presentation snapshot should include current position");
+    expect(snapshot.symbol.availableLongToClose == 5.0, "presentation snapshot should compute closeable shares");
+    expect(snapshot.risk.controllerArmed, "presentation snapshot should include risk state");
+    expect(snapshot.orders.size() == 1, "presentation snapshot should include orders");
+    expect(snapshot.traceItems.size() == 1, "presentation snapshot should include trace list");
+    expect(snapshot.latestTraceId == 44, "presentation snapshot should include latest trace id");
+    expectContains(snapshot.messagesText, "hello snapshot", "presentation snapshot should include cached messages");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testPendingUiSyncUpdateConsumesFlags() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.hasPendingSubscribe = true;
+        g_data.pendingSubscribeSymbol = "QBTS";
+        g_data.wsQuantityUpdated = true;
+        g_data.currentQuantity = 17;
+    }
+    publishSharedDataSnapshot();
+
+    const PendingUiSyncUpdate update = consumePendingUiSyncUpdate();
+    expect(update.hasPendingSubscribe, "pending subscribe should be surfaced");
+    expect(update.quantityUpdated, "pending quantity update should be surfaced");
+    expect(update.pendingSubscribeSymbol == "QBTS", "pending subscribe symbol should be preserved");
+    expect(update.quantityInput == 17, "pending quantity should be preserved");
+
+    const PendingUiSyncUpdate secondUpdate = consumePendingUiSyncUpdate();
+    expect(!secondUpdate.hasPendingSubscribe, "pending subscribe should be consumed");
+    expect(!secondUpdate.quantityUpdated, "pending quantity update should be consumed");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.connected = true;
+        g_data.sessionReady = true;
+        g_data.selectedAccount = "U23154741";
+        g_data.currentSymbol = "INTC";
+        g_data.askPrice = 45.65;
+        g_data.bidPrice = 45.64;
+        g_data.lastPrice = 45.645;
+        g_data.staleQuoteThresholdMs = 500;
+        g_data.lastQuoteUpdate = std::chrono::steady_clock::now() - std::chrono::milliseconds(1200);
+
+        OrderInfo order;
+        order.orderId = 200;
+        order.account = "U23154741";
+        order.symbol = "INTC";
+        order.side = "BUY";
+        order.quantity = 1.0;
+        order.remainingQty = 1.0;
+        order.limitPrice = 45.65;
+        order.status = "Submitted";
+        g_data.orders[200] = order;
+    }
+    publishSharedDataSnapshot();
+
+    RuntimePresentationSnapshot staleSnapshot = captureRuntimePresentationSnapshot("INTC", 10);
+    expect(!staleSnapshot.symbol.hasFreshQuote, "old quote should be marked stale in presentation snapshot");
+    expect(staleSnapshot.orders.size() == 1, "working order should appear in presentation snapshot");
+    expect(!staleSnapshot.orders.front().second.cancelPending, "working order should not start as cancel-pending");
+
+    const auto marked = markAllPendingOrdersForCancel();
+    expect(marked.size() == 1 && marked.front() == 200, "markAllPendingOrdersForCancel should mark the working order");
+
+    RuntimePresentationSnapshot pendingCancelSnapshot = captureRuntimePresentationSnapshot("INTC", 10);
+    expect(pendingCancelSnapshot.orders.size() == 1, "presentation snapshot should still include cancel-pending order");
+    expect(pendingCancelSnapshot.orders.front().second.cancelPending, "presentation snapshot should preserve cancel-pending state");
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
+    }
+    publishSharedDataSnapshot();
+
+    RuntimePresentationSnapshot freshSnapshot = captureRuntimePresentationSnapshot("INTC", 10);
+    expect(freshSnapshot.symbol.hasFreshQuote, "recent quote should be marked fresh in presentation snapshot");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 } // namespace
 
 int main() {
@@ -364,6 +549,9 @@ int main() {
         testRecoverySnapshotReportsAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();
+        testRuntimePresentationSnapshotCapturesConsistentState();
+        testPendingUiSyncUpdateConsumesFlags();
+        testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking();
         std::cout << "All trace tests passed\n";
         return 0;
     } catch (const std::exception& error) {

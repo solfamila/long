@@ -4,7 +4,7 @@
 
 namespace {
 
-bool authorizeWebSocketRequest(const json& request, ix::WebSocket& webSocket) {
+bool authorizeWebSocketRequest(const json& request, ix::WebSocket& webSocket, TradingRuntime* runtime) {
     if (!request.contains("token") || !request["token"].is_string()) {
         appendRuntimeJournalEvent("ws_auth_failed", {{"reason", "missing_token"}});
         macLogError("ipc", "WebSocket auth failed: missing token");
@@ -13,7 +13,9 @@ bool authorizeWebSocketRequest(const json& request, ix::WebSocket& webSocket) {
     }
 
     const std::string providedToken = request["token"].get<std::string>();
-    const std::string expectedToken = ensureWebSocketAuthToken();
+    const std::string expectedToken = runtime != nullptr
+        ? runtime->ensureWebSocketAuthToken()
+        : ensureWebSocketAuthToken();
     if (providedToken != expectedToken) {
         appendRuntimeJournalEvent("ws_auth_failed", {{"reason", "token_mismatch"}});
         macLogError("ipc", "WebSocket auth failed: token mismatch");
@@ -29,12 +31,12 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
     try {
         json orderRequest = json::parse(jsonMessage);
 
-        if (!authorizeWebSocketRequest(orderRequest, webSocket)) {
+        if (runtime == nullptr || !runtime->isStarted()) {
+            webSocket.send(json({{"success", false}, {"error", "Trading runtime is not started"}}).dump());
             return;
         }
 
-        if (runtime == nullptr || !runtime->isStarted()) {
-            webSocket.send(json({{"success", false}, {"error", "Trading runtime is not started"}}).dump());
+        if (!authorizeWebSocketRequest(orderRequest, webSocket, runtime)) {
             return;
         }
 
@@ -50,13 +52,13 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
         }
 
         const bool allowOpenShort = orderRequest.value("allowOpenShort", false);
+        const RuntimePresentationSnapshot runtimeSnapshot = runtime->capturePresentationSnapshot(std::string(), 0);
 
         std::string symbol;
         if (orderRequest.contains("symbol")) {
             symbol = toUpperCase(orderRequest["symbol"].get<std::string>());
         } else {
-            std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-            symbol = g_data.currentSymbol;
+            symbol = runtimeSnapshot.activeSymbol;
         }
 
         if (symbol.empty()) {
@@ -64,15 +66,15 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
             return;
         }
 
+        const RuntimePresentationSnapshot symbolSnapshot = runtime->capturePresentationSnapshot(symbol, 0);
         double quantity = 0.0;
         if (orderRequest.contains("quantity")) {
             quantity = static_cast<double>(orderRequest["quantity"].get<int>());
         } else {
-            std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
             if (action == "SELL" && !allowOpenShort) {
-                quantity = availableLongToCloseUnlocked(g_data.selectedAccount, symbol);
+                quantity = symbolSnapshot.symbol.availableLongToClose;
             } else {
-                quantity = static_cast<double>(g_data.currentQuantity);
+                quantity = static_cast<double>(symbolSnapshot.currentQuantity);
             }
         }
 
@@ -112,50 +114,33 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
             limitPrice = orderRequest["limitPrice"].get<double>();
             explicitLimitPrice = true;
         } else {
-            std::string currentSymbolSnap;
-            double askPrice = 0.0;
-            double bidPrice = 0.0;
-            std::vector<BookLevel> askBookSnap;
-            std::vector<BookLevel> bidBookSnap;
-
-            {
-                std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-                currentSymbolSnap = g_data.currentSymbol;
-                buffer = g_data.priceBuffer;
-                askPrice = g_data.askPrice;
-                bidPrice = g_data.bidPrice;
-                if (currentSymbolSnap == symbol) {
-                    askBookSnap = g_data.askBook;
-                    bidBookSnap = g_data.bidBook;
-                }
-            }
-
-            if (currentSymbolSnap != symbol) {
+            buffer = symbolSnapshot.priceBuffer;
+            if (symbolSnapshot.activeSymbol != symbol || !symbolSnapshot.subscriptionActive) {
                 webSocket.send(json({{"success", false}, {"error", "No market data for requested symbol; provide limitPrice explicitly"}}).dump());
                 return;
             }
 
             if (action == "BUY") {
-                if (!askBookSnap.empty()) {
-                    sweepEstimate = calculateSweepPrice(askBookSnap, qtyShares, buffer, true);
+                if (!symbolSnapshot.symbol.askBook.empty()) {
+                    sweepEstimate = calculateSweepPrice(symbolSnapshot.symbol.askBook, qtyShares, buffer, true);
                     limitPrice = sweepEstimate;
                 }
-                if (limitPrice <= 0.0 && askPrice > 0.0) {
-                    limitPrice = askPrice + buffer;
+                if (limitPrice <= 0.0 && symbolSnapshot.symbol.askPrice > 0.0) {
+                    limitPrice = symbolSnapshot.symbol.askPrice + buffer;
                 }
-                if (limitPrice > 0.0 && askPrice > 0.0) {
-                    limitPrice = std::max(limitPrice, askPrice + buffer);
+                if (limitPrice > 0.0 && symbolSnapshot.symbol.askPrice > 0.0) {
+                    limitPrice = std::max(limitPrice, symbolSnapshot.symbol.askPrice + buffer);
                 }
             } else {
-                if (!bidBookSnap.empty()) {
-                    sweepEstimate = calculateSweepPrice(bidBookSnap, qtyShares, buffer, false);
+                if (!symbolSnapshot.symbol.bidBook.empty()) {
+                    sweepEstimate = calculateSweepPrice(symbolSnapshot.symbol.bidBook, qtyShares, buffer, false);
                     limitPrice = sweepEstimate;
                 }
-                if (limitPrice <= 0.0 && bidPrice > 0.0) {
-                    limitPrice = std::max(0.01, bidPrice - buffer);
+                if (limitPrice <= 0.0 && symbolSnapshot.symbol.bidPrice > 0.0) {
+                    limitPrice = std::max(0.01, symbolSnapshot.symbol.bidPrice - buffer);
                 }
-                if (limitPrice > 0.0 && bidPrice > 0.0) {
-                    limitPrice = std::min(limitPrice, std::max(0.01, bidPrice - buffer));
+                if (limitPrice > 0.0 && symbolSnapshot.symbol.bidPrice > 0.0) {
+                    limitPrice = std::min(limitPrice, std::max(0.01, symbolSnapshot.symbol.bidPrice - buffer));
                 }
             }
             derivedLimitPrice = true;
@@ -224,12 +209,12 @@ void handleWebSocketSubscribe(const std::string& jsonMessage, ix::WebSocket& web
     try {
         json request = json::parse(jsonMessage);
 
-        if (!authorizeWebSocketRequest(request, webSocket)) {
+        if (runtime == nullptr || !runtime->isStarted()) {
+            webSocket.send(json({{"success", false}, {"error", "Trading runtime is not started"}}).dump());
             return;
         }
 
-        if (runtime == nullptr || !runtime->isStarted()) {
-            webSocket.send(json({{"success", false}, {"error", "Trading runtime is not started"}}).dump());
+        if (!authorizeWebSocketRequest(request, webSocket, runtime)) {
             return;
         }
 
@@ -244,40 +229,24 @@ void handleWebSocketSubscribe(const std::string& jsonMessage, ix::WebSocket& web
             return;
         }
 
-        const auto now = std::chrono::steady_clock::now();
-        {
-            std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-
-            if (!(g_data.connected && g_data.sessionReady)) {
-                webSocket.send(json({{"success", false}, {"error", "TWS session not ready"}}).dump());
-                return;
-            }
-
-            if (g_data.lastWsRequestedSymbol == symbol &&
-                (now - g_data.lastWsSubscribeRequest) < std::chrono::milliseconds(300)) {
-                webSocket.send(json({{"success", true}, {"subscribed", symbol}, {"duplicateIgnored", true}}).dump());
-                return;
-            }
-
-            g_data.lastWsRequestedSymbol = symbol;
-            g_data.lastWsSubscribeRequest = now;
-
-            if (g_data.currentSymbol == symbol &&
-                g_data.activeMktDataReqId != 0 &&
-                g_data.activeDepthReqId != 0) {
-                webSocket.send(json({{"success", true}, {"subscribed", symbol}, {"alreadySubscribed", true}}).dump());
-                return;
-            }
-        }
-
         std::string error;
-        if (!runtime->requestSymbolSubscription(symbol, true, &error)) {
+        bool duplicateIgnored = false;
+        bool alreadySubscribed = false;
+        if (!runtime->requestWebSocketSubscription(symbol, &error, &duplicateIgnored, &alreadySubscribed)) {
             webSocket.send(json({{"success", false}, {"error", error}}).dump());
             return;
         }
 
-        webSocket.send(json({{"success", true}, {"subscribed", symbol}, {"requestSent", true}}).dump());
-        appendRuntimeJournalEvent("ws_subscribe_accepted", {{"symbol", symbol}});
+        webSocket.send(json({
+            {"success", true},
+            {"subscribed", symbol},
+            {"duplicateIgnored", duplicateIgnored},
+            {"alreadySubscribed", alreadySubscribed},
+            {"requestSent", !duplicateIgnored && !alreadySubscribed}
+        }).dump());
+        if (!duplicateIgnored && !alreadySubscribed) {
+            appendRuntimeJournalEvent("ws_subscribe_accepted", {{"symbol", symbol}});
+        }
 
     } catch (const json::exception& e) {
         webSocket.send(json({{"success", false}, {"error", std::string("JSON parse error: ") + e.what()}}).dump());

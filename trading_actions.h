@@ -50,6 +50,11 @@ TradingPanelState buildTradingPanelState(const std::string& subscribedSymbol,
                                          int quantityInput,
                                          double priceBuffer,
                                          double maxPositionDollars);
+TradingPanelState buildTradingPanelState(const RuntimePresentationSnapshot& snapshot,
+                                         bool subscribed,
+                                         int quantityInput,
+                                         double priceBuffer,
+                                         double maxPositionDollars);
 
 bool requestSubscriptionAction(TradingRuntime* runtime,
                                const std::string& rawSymbol,

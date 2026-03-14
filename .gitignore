@@ -36,3 +36,8 @@ Thumbs.db
 npm-debug.log*
 trade_trace_events.jsonl
 trade_runtime_journal.jsonl
+
+# Local trade exports
+/all-trades-summary.csv
+/trace-*.csv
+/trace-*.txt

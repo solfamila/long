@@ -34,6 +34,26 @@ public:
 
     bool isStarted() const;
     void setControllerVibration(bool enable);
+    void syncGuiInputs(int quantityInput, double priceBuffer, double maxPositionDollars);
+    RuntimePresentationSnapshot capturePresentationSnapshot(const std::string& subscribedSymbol,
+                                                            std::size_t maxTraceItems = 150) const;
+    PendingUiSyncUpdate consumePendingUiSyncUpdate();
+    RuntimeConnectionConfig captureConnectionConfig() const;
+    void updateConnectionConfig(const RuntimeConnectionConfig& config);
+    RiskControlsSnapshot captureRiskControls() const;
+    void updateRiskControls(const RiskControlsSnapshot& risk);
+    void setControllerArmed(bool armed);
+    void setTradingKillSwitch(bool enabled);
+    std::string ensureWebSocketAuthToken();
+    TradeTraceSnapshot captureTradeTraceSnapshot(std::uint64_t traceId) const;
+    std::uint64_t findTradeTraceIdByOrderId(OrderId orderId) const;
+    void appendMessage(const std::string& message);
+    std::vector<OrderId> markOrdersPendingCancel(const std::vector<OrderId>& orderIds);
+    std::vector<OrderId> markAllPendingOrdersForCancel();
+    bool requestWebSocketSubscription(const std::string& symbol,
+                                      std::string* error = nullptr,
+                                      bool* duplicateIgnored = nullptr,
+                                      bool* alreadySubscribed = nullptr);
     bool requestSymbolSubscription(const std::string& symbol, bool recalcQtyFromFirstAsk, std::string* error = nullptr);
     bool submitOrderIntent(const SubmitIntent& intent,
                            double quantity,

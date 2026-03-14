@@ -111,6 +111,7 @@ void clearUiInvalidationCallback();
 void requestUiInvalidation();
 void setSharedDataMutationDispatcher(SharedDataMutationDispatcher dispatcher);
 void clearSharedDataMutationDispatcher();
+void publishSharedDataSnapshot();
 
 struct OrderInfo {
     OrderId orderId = 0;
@@ -380,8 +381,6 @@ SharedData& appState();
 void bindSharedDataOwner(SharedData* owner);
 void unbindSharedDataOwner(SharedData* owner);
 
-#define g_data appState()
-
 struct UiStatusSnapshot {
     bool connected = false;
     bool sessionReady = false;
@@ -447,6 +446,30 @@ struct TradeTraceSnapshot {
     TradeTrace trace;
 };
 
+struct PendingUiSyncUpdate {
+    bool hasPendingSubscribe = false;
+    bool quantityUpdated = false;
+    std::string pendingSubscribeSymbol;
+    int quantityInput = 1;
+};
+
+struct RuntimePresentationSnapshot {
+    UiStatusSnapshot status;
+    SymbolUiSnapshot symbol;
+    RiskControlsSnapshot risk;
+    RuntimeConnectionConfig connection;
+    std::string activeSymbol;
+    int currentQuantity = 1;
+    double priceBuffer = 0.01;
+    double maxPositionDollars = 40000.0;
+    bool subscriptionActive = false;
+    std::vector<std::pair<OrderId, OrderInfo>> orders;
+    std::vector<TradeTraceListItem> traceItems;
+    std::uint64_t latestTraceId = 0;
+    std::uint64_t messagesVersion = 0;
+    std::string messagesText;
+};
+
 struct RuntimeRecoverySnapshot {
     bool priorSessionAbnormal = false;
     std::string priorAppSessionId;
@@ -455,6 +478,185 @@ struct RuntimeRecoverySnapshot {
     std::vector<std::string> unfinishedTraceSummaries;
     std::string bannerText;
 };
+
+namespace trading_engine {
+
+struct RuntimeBootstrapEvent {
+    std::string appSessionId;
+    std::string runtimeSessionId;
+    std::string startupRecoveryBanner;
+};
+
+struct RuntimeMessageEvent {
+    std::string message;
+};
+
+struct GuiInputsSyncedEvent {
+    int quantityInput = 1;
+    double priceBuffer = 0.01;
+    double maxPositionDollars = 40000.0;
+};
+
+struct ConnectionConfigUpdatedEvent {
+    RuntimeConnectionConfig config;
+};
+
+struct RiskControlsUpdatedEvent {
+    int staleQuoteThresholdMs = 1500;
+    double maxOrderNotional = 15000.0;
+    double maxOpenNotional = 50000.0;
+    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
+};
+
+struct ControllerArmedChangedEvent {
+    bool armed = false;
+};
+
+struct TradingKillSwitchChangedEvent {
+    bool enabled = false;
+};
+
+struct ControllerConnectionStateUpdatedEvent {
+    bool connected = false;
+    std::string deviceName;
+};
+
+struct ControllerLockedDeviceUpdatedEvent {
+    std::string deviceName;
+};
+
+struct WebSocketServerRunningChangedEvent {
+    bool running = false;
+};
+
+struct WebSocketClientDeltaEvent {
+    int delta = 0;
+};
+
+enum class WebSocketSubscribeDecision {
+    Proceed,
+    DuplicateIgnored,
+    AlreadySubscribed,
+    SessionNotReady,
+};
+
+struct WebSocketSubscribeRequestedEvent {
+    std::string symbol;
+    std::chrono::steady_clock::time_point requestTime{};
+};
+
+struct MarketSubscriptionClearedEvent {
+    int marketDataRequestId = 0;
+    int depthRequestId = 0;
+};
+
+struct MarketSubscriptionStartedEvent {
+    std::string symbol;
+    int marketDataRequestId = 0;
+    int depthRequestId = 0;
+    bool recalcQtyFromFirstAsk = false;
+};
+
+struct BrokerConnectAckEvent {};
+struct BrokerConnectionClosedEvent {};
+
+struct BrokerNextValidIdEvent {
+    OrderId orderId = 0;
+};
+
+struct BrokerManagedAccountsEvent {
+    std::string accountsList;
+};
+
+struct BrokerTickPriceEvent {
+    TickerId tickerId = 0;
+    TickType field = static_cast<TickType>(0);
+    double price = 0.0;
+};
+
+struct BrokerMarketDepthEvent {
+    TickerId requestId = 0;
+    int position = 0;
+    int operation = 0;
+    int side = 0;
+    double price = 0.0;
+    double size = 0.0;
+};
+
+struct BrokerOrderStatusEvent {
+    OrderId orderId = 0;
+    std::string status;
+    double filled = 0.0;
+    double remaining = 0.0;
+    double avgFillPrice = 0.0;
+    long long permId = 0;
+    double lastFillPrice = 0.0;
+    double mktCapPrice = 0.0;
+};
+
+struct BrokerOpenOrderEvent {
+    OrderId orderId = 0;
+    Contract contract;
+    Order order;
+    OrderState orderState;
+};
+
+struct BrokerExecutionEvent {
+    Contract contract;
+    Execution execution;
+};
+
+struct BrokerExecutionsLoadedEvent {};
+
+struct BrokerCommissionEvent {
+    CommissionReport commissionReport;
+};
+
+struct BrokerErrorEvent {
+    int id = 0;
+    int errorCode = 0;
+    std::string errorString;
+};
+
+struct BrokerPositionEvent {
+    std::string account;
+    Contract contract;
+    double quantity = 0.0;
+    double avgCost = 0.0;
+};
+
+struct BrokerPositionsLoadedEvent {};
+
+void reduce(SharedData& state, const RuntimeBootstrapEvent& event);
+void reduce(SharedData& state, const RuntimeMessageEvent& event);
+void reduce(SharedData& state, const GuiInputsSyncedEvent& event);
+void reduce(SharedData& state, const ConnectionConfigUpdatedEvent& event);
+void reduce(SharedData& state, const RiskControlsUpdatedEvent& event);
+bool reduce(SharedData& state, const ControllerArmedChangedEvent& event);
+bool reduce(SharedData& state, const TradingKillSwitchChangedEvent& event);
+bool reduce(SharedData& state, const ControllerConnectionStateUpdatedEvent& event);
+bool reduce(SharedData& state, const ControllerLockedDeviceUpdatedEvent& event);
+bool reduce(SharedData& state, const WebSocketServerRunningChangedEvent& event);
+int reduce(SharedData& state, const WebSocketClientDeltaEvent& event);
+WebSocketSubscribeDecision reduce(SharedData& state, const WebSocketSubscribeRequestedEvent& event);
+void reduce(SharedData& state, const MarketSubscriptionClearedEvent& event);
+void reduce(SharedData& state, const MarketSubscriptionStartedEvent& event);
+void reduce(SharedData& state, const BrokerConnectAckEvent& event);
+void reduce(SharedData& state, const BrokerConnectionClosedEvent& event);
+void reduce(SharedData& state, const BrokerNextValidIdEvent& event);
+void reduce(SharedData& state, const BrokerManagedAccountsEvent& event);
+void reduce(SharedData& state, const BrokerTickPriceEvent& event);
+void reduce(SharedData& state, const BrokerMarketDepthEvent& event);
+void reduce(SharedData& state, const BrokerOrderStatusEvent& event);
+void reduce(SharedData& state, const BrokerOpenOrderEvent& event);
+void reduce(SharedData& state, const BrokerExecutionEvent& event);
+void reduce(SharedData& state, const BrokerExecutionsLoadedEvent& event);
+void reduce(SharedData& state, const BrokerCommissionEvent& event);
+void reduce(SharedData& state, const BrokerErrorEvent& event);
+void reduce(SharedData& state, const BrokerPositionEvent& event);
+void reduce(SharedData& state, const BrokerPositionsLoadedEvent& event);
+
+} // namespace trading_engine
 
 std::string chooseConfiguredAccount(const std::string& accountsCsv);
 std::string makePositionKey(const std::string& account, const std::string& symbol);
@@ -469,9 +671,12 @@ bool isTerminalStatus(const std::string& status);
 double outstandingOrderQty(const OrderInfo& order);
 double availableLongToCloseUnlocked(const std::string& account, const std::string& symbol);
 UiStatusSnapshot captureUiStatusSnapshot();
+PendingUiSyncUpdate consumePendingUiSyncUpdate();
 void consumeGuiSyncUpdates(std::string& symbolInput, std::string& subscribedSymbol, bool& subscribed, int& quantityInput);
 void syncSharedGuiInputs(int quantityInput, double priceBuffer, double maxPositionDollars);
 SymbolUiSnapshot captureSymbolUiSnapshot(const std::string& subscribedSymbol);
+RuntimePresentationSnapshot captureRuntimePresentationSnapshot(const std::string& subscribedSymbol, std::size_t maxTraceItems = 100);
+void appendSharedMessage(const std::string& message);
 RuntimeConnectionConfig captureRuntimeConnectionConfig();
 void updateRuntimeConnectionConfig(const RuntimeConnectionConfig& config);
 RiskControlsSnapshot captureRiskControlsSnapshot();

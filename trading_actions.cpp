@@ -2,15 +2,17 @@
 
 #include <algorithm>
 
-TradingPanelState buildTradingPanelState(const std::string& subscribedSymbol,
-                                         bool subscribed,
-                                         int quantityInput,
-                                         double priceBuffer,
-                                         double maxPositionDollars) {
+namespace {
+
+TradingPanelState buildTradingPanelStateFromSnapshot(const RuntimePresentationSnapshot& snapshot,
+                                                     bool subscribed,
+                                                     int quantityInput,
+                                                     double priceBuffer,
+                                                     double maxPositionDollars) {
     TradingPanelState state;
-    state.status = captureUiStatusSnapshot();
-    state.symbol = captureSymbolUiSnapshot(subscribed ? subscribedSymbol : std::string());
-    state.risk = captureRiskControlsSnapshot();
+    state.status = snapshot.status;
+    state.symbol = snapshot.symbol;
+    state.risk = snapshot.risk;
     state.canTrade = state.symbol.canTrade;
     state.askLevels = static_cast<int>(state.symbol.askBook.size());
     state.bidLevels = static_cast<int>(state.symbol.bidBook.size());
@@ -70,8 +72,7 @@ TradingPanelState buildTradingPanelState(const std::string& subscribedSymbol,
         state.canBuy = false;
     }
 
-    const auto orders = captureOrdersSnapshot();
-    for (const auto& [id, order] : orders) {
+    for (const auto& [id, order] : snapshot.orders) {
         (void)id;
         if (!order.isTerminal() && !order.cancelPending) {
             state.hasCancelableOrders = true;
@@ -80,6 +81,26 @@ TradingPanelState buildTradingPanelState(const std::string& subscribedSymbol,
     }
 
     return state;
+}
+
+} // namespace
+
+TradingPanelState buildTradingPanelState(const std::string& subscribedSymbol,
+                                         bool subscribed,
+                                         int quantityInput,
+                                         double priceBuffer,
+                                         double maxPositionDollars) {
+    const RuntimePresentationSnapshot snapshot =
+        captureRuntimePresentationSnapshot(subscribed ? subscribedSymbol : std::string(), 0);
+    return buildTradingPanelStateFromSnapshot(snapshot, subscribed, quantityInput, priceBuffer, maxPositionDollars);
+}
+
+TradingPanelState buildTradingPanelState(const RuntimePresentationSnapshot& snapshot,
+                                         bool subscribed,
+                                         int quantityInput,
+                                         double priceBuffer,
+                                         double maxPositionDollars) {
+    return buildTradingPanelStateFromSnapshot(snapshot, subscribed, quantityInput, priceBuffer, maxPositionDollars);
 }
 
 bool requestSubscriptionAction(TradingRuntime* runtime,
@@ -185,7 +206,7 @@ TradingCancelResult cancelSelectedOrdersAction(TradingRuntime* runtime,
     if (runtime == nullptr) {
         return result;
     }
-    result.orderIds = markOrdersPendingCancel(selectedOrderIds);
+    result.orderIds = runtime->markOrdersPendingCancel(selectedOrderIds);
     result.sent = runtime->requestCancelOrders(result.orderIds);
     return result;
 }
@@ -196,7 +217,7 @@ TradingCancelResult cancelAllOrdersAction(TradingRuntime* runtime) {
     if (runtime == nullptr) {
         return result;
     }
-    result.orderIds = markAllPendingOrdersForCancel();
+    result.orderIds = runtime->markAllPendingOrdersForCancel();
     result.sent = runtime->requestCancelOrders(result.orderIds);
     return result;
 }
@@ -253,7 +274,11 @@ TradingControllerActionResult handleControllerActionIntent(TradingRuntime* runti
                 }
                 result.messages.push_back("[Controller] Cancel requested for " + std::to_string(sentCount) + " order(s)");
                 if (state.risk.controllerArmMode == ControllerArmMode::OneShot) {
-                    setControllerArmed(false);
+                    if (runtime != nullptr) {
+                        runtime->setControllerArmed(false);
+                    } else {
+                        setControllerArmed(false);
+                    }
                 }
             } else {
                 result.messages.push_back("[Controller] No pending orders to cancel");
@@ -265,7 +290,11 @@ TradingControllerActionResult handleControllerActionIntent(TradingRuntime* runti
                 result.quantityInput = (quantityInput == 1) ? std::max(1, state.maxToggleQuantity) : 1;
                 result.quantityChanged = (result.quantityInput != quantityInput);
                 if (result.quantityChanged) {
-                    syncSharedGuiInputs(result.quantityInput, priceBuffer, maxPositionDollars);
+                    if (runtime != nullptr) {
+                        runtime->syncGuiInputs(result.quantityInput, priceBuffer, maxPositionDollars);
+                    } else {
+                        syncSharedGuiInputs(result.quantityInput, priceBuffer, maxPositionDollars);
+                    }
                     result.messages.push_back("[Controller] Quantity toggled to " +
                                               std::to_string(result.quantityInput) + " shares");
                 }

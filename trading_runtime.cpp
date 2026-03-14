@@ -131,6 +131,7 @@ struct TradingRuntime::Impl {
                 actionQueue.pop_front();
             }
             action();
+            publishSharedDataSnapshot();
         }
 
         tlsActionLoopOwner = nullptr;
@@ -265,12 +266,11 @@ bool TradingRuntime::start() {
     const auto unfinishedTraces = recoverUnfinishedTraceSummariesFromLog(5);
     const RuntimeRecoverySnapshot recovery = recoverRuntimeRecoverySnapshot(5);
     impl_->invokeOnActionThread([&]() {
-        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        g_data.appSessionId = makeSessionIdentifier("app");
-        g_data.runtimeSessionId = makeSessionIdentifier("runtime");
-        g_data.startupRecoveryBanner = recovery.bannerText;
-        g_data.wsServerRunning.store(false, std::memory_order_relaxed);
-        g_data.wsConnectedClients.store(0, std::memory_order_relaxed);
+        trading_engine::reduce(appState(), trading_engine::RuntimeBootstrapEvent{
+            makeSessionIdentifier("app"),
+            makeSessionIdentifier("runtime"),
+            recovery.bannerText
+        });
     });
 
     std::cout << "=== TWS Trading GUI ===" << std::endl;
@@ -299,7 +299,7 @@ bool TradingRuntime::start() {
                                                       connectionConfig.clientId);
     if (!twsConnected) {
         std::cerr << "Failed to connect to TWS" << std::endl;
-        g_data.addMessage("Failed to connect to TWS");
+        appendSharedMessage("Failed to connect to TWS");
         macLogError("runtime", "Failed to connect to TWS at " + connectionConfig.host + ":" + std::to_string(connectionConfig.port));
         appendRuntimeJournalEvent("runtime_connect_failed", {
             {"twsHost", connectionConfig.host},
@@ -339,19 +339,19 @@ bool TradingRuntime::start() {
                 } else if (msg->type == ix::WebSocketMessageType::Open) {
                     impl->postOnActionThread([]() {
                         const int total = adjustWebSocketConnectedClients(1);
-                        g_data.addMessage("WebSocket client connected (total: " + std::to_string(total) + ")");
+                        appendSharedMessage("WebSocket client connected (total: " + std::to_string(total) + ")");
                         std::cout << "[WebSocket client connected]" << std::endl;
                     });
                 } else if (msg->type == ix::WebSocketMessageType::Close) {
                     impl->postOnActionThread([]() {
                         const int total = adjustWebSocketConnectedClients(-1);
-                        g_data.addMessage("WebSocket client disconnected (total: " + std::to_string(total) + ")");
+                        appendSharedMessage("WebSocket client disconnected (total: " + std::to_string(total) + ")");
                         std::cout << "[WebSocket client disconnected]" << std::endl;
                     });
                 } else if (msg->type == ix::WebSocketMessageType::Error) {
                     const std::string reason = msg->errorInfo.reason;
                     impl->postOnActionThread([reason]() {
-                        g_data.addMessage("WebSocket error: " + reason);
+                        appendSharedMessage("WebSocket error: " + reason);
                         std::cout << "[WebSocket error: " << reason << "]" << std::endl;
                     });
                 }
@@ -359,8 +359,8 @@ bool TradingRuntime::start() {
 
         if (impl_->wsServer->listenAndStart()) {
             setWebSocketServerRunning(true);
-            g_data.addMessage("WebSocket server started on localhost port " + std::to_string(WEBSOCKET_PORT));
-            g_data.addMessage("WebSocket token: " + websocketToken);
+            appendSharedMessage("WebSocket server started on localhost port " + std::to_string(WEBSOCKET_PORT));
+            appendSharedMessage("WebSocket token: " + websocketToken);
             std::cout << "[WebSocket server started on localhost port " << WEBSOCKET_PORT << "]" << std::endl;
             macLogInfo("ipc", "WebSocket server started on localhost:" + std::to_string(WEBSOCKET_PORT));
             appendRuntimeJournalEvent("ws_server_started", {
@@ -368,13 +368,13 @@ bool TradingRuntime::start() {
                 {"port", WEBSOCKET_PORT}
             });
         } else {
-            g_data.addMessage("Failed to start WebSocket server on port " + std::to_string(WEBSOCKET_PORT));
+            appendSharedMessage("Failed to start WebSocket server on port " + std::to_string(WEBSOCKET_PORT));
             std::cerr << "Failed to start WebSocket server on port " << WEBSOCKET_PORT << std::endl;
             macLogError("ipc", "Failed to start WebSocket server on localhost:" + std::to_string(WEBSOCKET_PORT));
             appendRuntimeJournalEvent("ws_server_failed", {{"port", WEBSOCKET_PORT}});
         }
     } else {
-        g_data.addMessage("WebSocket server is disabled in settings");
+        appendSharedMessage("WebSocket server is disabled in settings");
         appendRuntimeJournalEvent("ws_server_disabled");
     }
 
@@ -383,17 +383,17 @@ bool TradingRuntime::start() {
         impl_->controllerRunning.store(true, std::memory_order_relaxed);
         impl_->controllerThread = std::thread(&Impl::controllerLoop, impl_.get());
     } else {
-        g_data.controllerConnected.store(false);
-        g_data.addMessage("Controller input is disabled in settings");
+        updateControllerConnectionState(false, "");
+        appendSharedMessage("Controller input is disabled in settings");
         appendRuntimeJournalEvent("controller_disabled");
     }
 
     impl_->started = true;
     if (recovery.priorSessionAbnormal) {
-        g_data.addMessage(recovery.bannerText);
+        appendSharedMessage(recovery.bannerText);
     }
     for (const auto& summary : unfinishedTraces) {
-        g_data.addMessage("Recovered unfinished trace from prior run: " + summary);
+        appendSharedMessage("Recovered unfinished trace from prior run: " + summary);
     }
     requestUiInvalidation();
     return twsConnected;
@@ -405,6 +405,7 @@ void TradingRuntime::shutdown() {
     }
 
     impl_->started = false;
+    SharedData& state = appState();
 
     impl_->controllerRunning.store(false, std::memory_order_relaxed);
     if (impl_->controllerThread.joinable()) {
@@ -413,7 +414,7 @@ void TradingRuntime::shutdown() {
     controllerCleanup(impl_->controllerState);
 
     if (impl_->wsServer) {
-        if (g_data.wsServerRunning.load()) {
+        if (state.wsServerRunning.load()) {
             std::cout << "Stopping WebSocket server..." << std::endl;
             impl_->wsServer->stop();
             setWebSocketServerRunning(false);
@@ -472,6 +473,193 @@ void TradingRuntime::setControllerVibration(bool enable) {
         return;
     }
     controllerSetVibration(impl_->controllerState, enable);
+}
+
+void TradingRuntime::syncGuiInputs(int quantityInput, double priceBuffer, double maxPositionDollars) {
+    if (!impl_ || !impl_->started) {
+        ::syncSharedGuiInputs(quantityInput, priceBuffer, maxPositionDollars);
+        return;
+    }
+    impl_->invokeOnActionThread([quantityInput, priceBuffer, maxPositionDollars]() {
+        ::syncSharedGuiInputs(quantityInput, priceBuffer, maxPositionDollars);
+    });
+}
+
+RuntimePresentationSnapshot TradingRuntime::capturePresentationSnapshot(const std::string& subscribedSymbol,
+                                                                        std::size_t maxTraceItems) const {
+    return ::captureRuntimePresentationSnapshot(subscribedSymbol, maxTraceItems);
+}
+
+PendingUiSyncUpdate TradingRuntime::consumePendingUiSyncUpdate() {
+    if (!impl_ || !impl_->started) {
+        return ::consumePendingUiSyncUpdate();
+    }
+    return impl_->invokeOnActionThread([]() {
+        return ::consumePendingUiSyncUpdate();
+    });
+}
+
+RuntimeConnectionConfig TradingRuntime::captureConnectionConfig() const {
+    return ::captureRuntimeConnectionConfig();
+}
+
+void TradingRuntime::updateConnectionConfig(const RuntimeConnectionConfig& config) {
+    if (!impl_ || !impl_->started) {
+        ::updateRuntimeConnectionConfig(config);
+        return;
+    }
+    impl_->invokeOnActionThread([config]() {
+        ::updateRuntimeConnectionConfig(config);
+    });
+}
+
+RiskControlsSnapshot TradingRuntime::captureRiskControls() const {
+    return ::captureRiskControlsSnapshot();
+}
+
+void TradingRuntime::updateRiskControls(const RiskControlsSnapshot& risk) {
+    if (!impl_ || !impl_->started) {
+        ::updateRiskControls(risk.staleQuoteThresholdMs,
+                             risk.maxOrderNotional,
+                             risk.maxOpenNotional,
+                             risk.controllerArmMode);
+        return;
+    }
+    impl_->invokeOnActionThread([risk]() {
+        ::updateRiskControls(risk.staleQuoteThresholdMs,
+                             risk.maxOrderNotional,
+                             risk.maxOpenNotional,
+                             risk.controllerArmMode);
+    });
+}
+
+void TradingRuntime::setControllerArmed(bool armed) {
+    if (!impl_ || !impl_->started) {
+        ::setControllerArmed(armed);
+        return;
+    }
+    impl_->invokeOnActionThread([armed]() {
+        ::setControllerArmed(armed);
+    });
+}
+
+void TradingRuntime::setTradingKillSwitch(bool enabled) {
+    if (!impl_ || !impl_->started) {
+        ::setTradingKillSwitch(enabled);
+        return;
+    }
+    impl_->invokeOnActionThread([enabled]() {
+        ::setTradingKillSwitch(enabled);
+    });
+}
+
+std::string TradingRuntime::ensureWebSocketAuthToken() {
+    if (!impl_ || !impl_->started) {
+        return ::ensureWebSocketAuthToken();
+    }
+    return impl_->invokeOnActionThread([]() {
+        return ::ensureWebSocketAuthToken();
+    });
+}
+
+TradeTraceSnapshot TradingRuntime::captureTradeTraceSnapshot(std::uint64_t traceId) const {
+    return ::captureTradeTraceSnapshot(traceId);
+}
+
+std::uint64_t TradingRuntime::findTradeTraceIdByOrderId(OrderId orderId) const {
+    return ::findTraceIdByOrderId(orderId);
+}
+
+void TradingRuntime::appendMessage(const std::string& message) {
+    if (message.empty()) {
+        return;
+    }
+    if (!impl_ || !impl_->started) {
+        ::appendSharedMessage(message);
+        return;
+    }
+    impl_->postOnActionThread([message]() {
+        ::appendSharedMessage(message);
+    });
+}
+
+std::vector<OrderId> TradingRuntime::markOrdersPendingCancel(const std::vector<OrderId>& orderIds) {
+    if (!impl_ || !impl_->started) {
+        return ::markOrdersPendingCancel(orderIds);
+    }
+    return impl_->invokeOnActionThread([orderIds]() {
+        return ::markOrdersPendingCancel(orderIds);
+    });
+}
+
+std::vector<OrderId> TradingRuntime::markAllPendingOrdersForCancel() {
+    if (!impl_ || !impl_->started) {
+        return ::markAllPendingOrdersForCancel();
+    }
+    return impl_->invokeOnActionThread([]() {
+        return ::markAllPendingOrdersForCancel();
+    });
+}
+
+bool TradingRuntime::requestWebSocketSubscription(const std::string& symbol,
+                                                  std::string* error,
+                                                  bool* duplicateIgnored,
+                                                  bool* alreadySubscribed) {
+    if (duplicateIgnored) {
+        *duplicateIgnored = false;
+    }
+    if (alreadySubscribed) {
+        *alreadySubscribed = false;
+    }
+    if (!impl_ || !impl_->started) {
+        if (error) {
+            *error = "Trading runtime is not started";
+        }
+        return false;
+    }
+
+    return impl_->invokeOnActionThread([this, symbol, error, duplicateIgnored, alreadySubscribed]() {
+        if (!impl_ || !impl_->client) {
+            if (error) {
+                *error = "Trading runtime is not started";
+            }
+            return false;
+        }
+
+        const std::string normalizedSymbol = toUpperCase(symbol);
+        if (normalizedSymbol.empty()) {
+            if (error) {
+                *error = "Symbol cannot be empty";
+            }
+            return false;
+        }
+
+        SharedData& state = appState();
+        switch (trading_engine::reduce(state, trading_engine::WebSocketSubscribeRequestedEvent{
+            normalizedSymbol,
+            std::chrono::steady_clock::now()
+        })) {
+            case trading_engine::WebSocketSubscribeDecision::SessionNotReady:
+                if (error) {
+                    *error = "TWS session not ready";
+                }
+                return false;
+            case trading_engine::WebSocketSubscribeDecision::DuplicateIgnored:
+                if (duplicateIgnored) {
+                    *duplicateIgnored = true;
+                }
+                return true;
+            case trading_engine::WebSocketSubscribeDecision::AlreadySubscribed:
+                if (alreadySubscribed) {
+                    *alreadySubscribed = true;
+                }
+                return true;
+            case trading_engine::WebSocketSubscribeDecision::Proceed:
+                break;
+        }
+
+        return ::requestSymbolSubscription(impl_->client.get(), normalizedSymbol, true, error);
+    });
 }
 
 bool TradingRuntime::requestSymbolSubscription(const std::string& symbol, bool recalcQtyFromFirstAsk, std::string* error) {

@@ -74,7 +74,7 @@ void postControllerMessage(const std::string& message) {
         return;
     }
 
-    g_data.addMessage(message);
+    appendSharedMessage(message);
     std::cout << "[" << message << "]" << std::endl;
 }
 

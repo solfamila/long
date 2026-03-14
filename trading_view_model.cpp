@@ -12,25 +12,30 @@ TradingViewModel buildTradingViewModel(const TradingViewModelInput& input) {
     model.subscribed = input.subscribed;
     model.quantityInput = input.quantityInput;
     model.selectedTraceId = input.selectedTraceId;
-    model.messagesVersionSeen = input.messagesVersionSeen;
-    model.messagesText = input.messagesText;
+    model.messagesVersionSeen = input.presentation.messagesVersion;
+    model.messagesText = input.presentation.messagesText;
 
-    consumeGuiSyncUpdates(model.symbolInput,
-                          model.subscribedSymbol,
-                          model.subscribed,
-                          model.quantityInput);
-
-    if (model.selectedTraceId == 0) {
-        model.selectedTraceId = latestTradeTraceId();
+    if (input.pendingUiSync.hasPendingSubscribe) {
+        model.symbolInput = input.pendingUiSync.pendingSubscribeSymbol;
+        model.subscribedSymbol = input.pendingUiSync.pendingSubscribeSymbol;
+        model.subscribed = true;
+        model.quantityInput = input.pendingUiSync.quantityInput;
+    }
+    if (input.pendingUiSync.quantityUpdated) {
+        model.quantityInput = input.pendingUiSync.quantityInput;
     }
 
-    model.panel = buildTradingPanelState(model.subscribedSymbol,
+    if (model.selectedTraceId == 0) {
+        model.selectedTraceId = input.presentation.latestTraceId;
+    }
+
+    model.panel = buildTradingPanelState(input.presentation,
                                          model.subscribed,
                                          model.quantityInput,
                                          input.priceBuffer,
                                          input.maxPositionDollars);
-    model.orders = captureOrdersSnapshot();
-    model.traceItems = captureTradeTraceListItems(150);
+    model.orders = input.presentation.orders;
+    model.traceItems = input.presentation.traceItems;
     if (model.traceItems.empty()) {
         model.traceItems = buildTradeTraceListItemsFromLog(150);
         model.traceItemsFromReplayLog = !model.traceItems.empty();
@@ -66,7 +71,6 @@ TradingViewModel buildTradingViewModel(const TradingViewModelInput& input) {
 
     model.canExportSelectedTrace = (model.selectedTraceId != 0 && !model.traceItems.empty());
     model.canExportAllTraces = !model.traceItems.empty();
-    g_data.copyMessagesTextIfChanged(model.messagesText, model.messagesVersionSeen);
     model.shouldVibrate = model.panel.symbol.hasPosition && model.panel.symbol.currentPositionQty != 0.0;
     return model;
 }
