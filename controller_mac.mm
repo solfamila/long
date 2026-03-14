@@ -13,6 +13,12 @@
 
 namespace {
 
+constexpr float kLockedControllerRed = 1.0f;
+constexpr float kLockedControllerGreen = 0.0f;
+// DualSense hardware rendered pure red as orange during manual verification.
+// A small blue bias keeps the short app's lock light reading as red on-device.
+constexpr float kLockedControllerBlue = 0.12f;
+
 std::string nsStringToStd(NSString* value) {
     if (value == nil) {
         return {};
@@ -312,7 +318,10 @@ void postControllerMessage(const std::string& message) {
         };
     }
 
-    const bool lightUpdated = setControllerLightColor(controller, 1.0f, 0.0f, 0.0f);
+    const bool lightUpdated = setControllerLightColor(controller,
+                                                      kLockedControllerRed,
+                                                      kLockedControllerGreen,
+                                                      kLockedControllerBlue);
     updateControllerSharedState(true, deviceName);
 
     if (announce) {
