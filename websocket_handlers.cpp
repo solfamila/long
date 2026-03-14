@@ -53,6 +53,7 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
 
         const bool allowOpenShort = orderRequest.value("allowOpenShort", false);
         const RuntimePresentationSnapshot runtimeSnapshot = runtime->capturePresentationSnapshot(std::string(), 0);
+        const bool closeOnly = (action == "BUY" && !allowOpenShort);
 
         std::string symbol;
         if (orderRequest.contains("symbol")) {
@@ -71,15 +72,20 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
         if (orderRequest.contains("quantity")) {
             quantity = static_cast<double>(orderRequest["quantity"].get<int>());
         } else {
-            if (action == "SELL" && !allowOpenShort) {
-                quantity = symbolSnapshot.symbol.availableLongToClose;
+            if (closeOnly) {
+                quantity = symbolSnapshot.symbol.currentPositionQty < 0.0
+                    ? -symbolSnapshot.symbol.currentPositionQty
+                    : 0.0;
             } else {
                 quantity = static_cast<double>(symbolSnapshot.currentQuantity);
             }
         }
 
         if (quantity <= 0.0) {
-            webSocket.send(json({{"success", false}, {"error", "Quantity must be positive"}}).dump());
+            const char* reason = closeOnly
+                ? "No short shares are available to cover"
+                : "Quantity must be positive";
+            webSocket.send(json({{"success", false}, {"error", reason}}).dump());
             return;
         }
 
@@ -120,18 +126,7 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
                 return;
             }
 
-            if (action == "BUY") {
-                if (!symbolSnapshot.symbol.askBook.empty()) {
-                    sweepEstimate = calculateSweepPrice(symbolSnapshot.symbol.askBook, qtyShares, buffer, true);
-                    limitPrice = sweepEstimate;
-                }
-                if (limitPrice <= 0.0 && symbolSnapshot.symbol.askPrice > 0.0) {
-                    limitPrice = symbolSnapshot.symbol.askPrice + buffer;
-                }
-                if (limitPrice > 0.0 && symbolSnapshot.symbol.askPrice > 0.0) {
-                    limitPrice = std::max(limitPrice, symbolSnapshot.symbol.askPrice + buffer);
-                }
-            } else {
+            if (action == "SELL") {
                 if (!symbolSnapshot.symbol.bidBook.empty()) {
                     sweepEstimate = calculateSweepPrice(symbolSnapshot.symbol.bidBook, qtyShares, buffer, false);
                     limitPrice = sweepEstimate;
@@ -142,6 +137,17 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
                 if (limitPrice > 0.0 && symbolSnapshot.symbol.bidPrice > 0.0) {
                     limitPrice = std::min(limitPrice, std::max(0.01, symbolSnapshot.symbol.bidPrice - buffer));
                 }
+            } else {
+                if (!symbolSnapshot.symbol.askBook.empty()) {
+                    sweepEstimate = calculateSweepPrice(symbolSnapshot.symbol.askBook, qtyShares, buffer, true);
+                    limitPrice = sweepEstimate;
+                }
+                if (limitPrice <= 0.0 && symbolSnapshot.symbol.askPrice > 0.0) {
+                    limitPrice = symbolSnapshot.symbol.askPrice + buffer;
+                }
+                if (limitPrice > 0.0 && symbolSnapshot.symbol.askPrice > 0.0) {
+                    limitPrice = std::max(limitPrice, symbolSnapshot.symbol.askPrice + buffer);
+                }
             }
             derivedLimitPrice = true;
         }
@@ -151,10 +157,9 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
             return;
         }
 
-        const bool closeOnly = (action == "SELL" && !allowOpenShort);
         const std::string notes = explicitLimitPrice
             ? "WebSocket order with explicit limitPrice"
-            : (derivedLimitPrice ? "WebSocket order using derived market-based limitPrice" : "WebSocket order");
+            : (derivedLimitPrice ? "WebSocket order using derived short/cover limitPrice" : "WebSocket order");
         SubmitIntent intent = captureSubmitIntent("WebSocket", symbol, action, qtyShares, limitPrice,
                                                   closeOnly, buffer, sweepEstimate, notes);
 
@@ -271,7 +276,7 @@ void handleWebSocketMessage(const std::string& jsonMessage, ix::WebSocket& webSo
         } else {
             webSocket.send(json({
                 {"success", false},
-                {"error", "Unknown message. Use {\"subscribe\":\"AAPL\"} or {\"action\":\"BUY\"}"}
+                {"error", "Unknown message. Use {\"subscribe\":\"AAPL\"}, {\"action\":\"SELL\"} to open shorts, or {\"action\":\"BUY\"} to cover"}
             }).dump());
         }
     } catch (const json::exception& e) {

@@ -138,7 +138,7 @@ std::string formatTradeTraceDetailsText(const TradeTraceSnapshot& snapshot) {
     oss << "Symbol: " << (trace.symbol.empty() ? "<none>" : trace.symbol) << '\n';
     oss << "Side: " << (trace.side.empty() ? "<none>" : trace.side) << '\n';
     oss << "Requested: " << trace.requestedQty << " @ " << std::fixed << std::setprecision(2) << trace.limitPrice << '\n';
-    oss << "Close-only: " << (trace.closeOnly ? "yes" : "no") << '\n';
+    oss << "Cover-only: " << (trace.closeOnly ? "yes" : "no") << '\n';
     if (!trace.latestStatus.empty()) {
         oss << "Latest status: " << trace.latestStatus << '\n';
     }

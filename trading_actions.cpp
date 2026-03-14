@@ -50,15 +50,18 @@ TradingPanelState buildTradingPanelStateFromSnapshot(const RuntimePresentationSn
         }
     }
 
-    state.canBuy = state.canTrade && subscribed && quantityInput > 0 && state.buyPrice > 0.0;
+    const double shortPositionToCover = std::max(0.0, -state.symbol.currentPositionQty);
+    state.canBuy = state.canTrade && subscribed &&
+                   quantityInput > 0 &&
+                   state.sellPrice > 0.0 &&
+                   state.symbol.borrowAvailability == BorrowAvailability::Borrowable;
     state.canClosePosition = state.canTrade && subscribed &&
-                             state.symbol.availableLongToClose > 0.0 &&
-                             state.sellPrice > 0.0;
-    state.orderNotional = static_cast<double>(quantityInput) * state.buyPrice;
+                             shortPositionToCover > 0.0 &&
+                             state.buyPrice > 0.0;
+    state.orderNotional = static_cast<double>(quantityInput) * state.sellPrice;
     const double currentPositionBasis = std::max(state.symbol.lastPrice,
         std::max(state.symbol.askPrice, std::max(state.symbol.bidPrice, state.symbol.currentPositionAvgCost)));
-    state.projectedOpenNotional = state.symbol.openBuyExposure +
-                                  std::max(0.0, state.symbol.currentPositionQty) * currentPositionBasis +
+    state.projectedOpenNotional = shortPositionToCover * currentPositionBasis +
                                   state.orderNotional;
 
     if (state.risk.tradingKillSwitch || !state.symbol.hasFreshQuote) {
@@ -143,22 +146,28 @@ TradingSubmitResult submitBuyAction(TradingRuntime* runtime,
         return result;
     }
     if (!state.canBuy) {
-        result.error = "Buy action is not currently available";
+        if (state.symbol.borrowAvailability == BorrowAvailability::Unknown) {
+            result.error = "Borrow availability is still pending";
+        } else if (state.symbol.borrowAvailability == BorrowAvailability::NoSharesToBorrow) {
+            result.error = "No shares are available to borrow";
+        } else {
+            result.error = "Short action is not currently available";
+        }
         return result;
     }
 
     SubmitIntent intent = captureSubmitIntent(source,
                                               subscribedSymbol,
-                                              "BUY",
+                                              "SELL",
                                               quantityInput,
-                                              state.buyPrice,
+                                              state.sellPrice,
                                               false,
                                               priceBuffer,
-                                              state.buySweepAvailable ? state.buyPrice : 0.0,
+                                              state.sellSweepAvailable ? state.sellPrice : 0.0,
                                               note);
     result.submitted = runtime->submitOrderIntent(intent,
                                                   static_cast<double>(quantityInput),
-                                                  state.buyPrice,
+                                                  state.sellPrice,
                                                   false,
                                                   &result.error,
                                                   &result.traceId);
@@ -177,22 +186,27 @@ TradingSubmitResult submitCloseAction(TradingRuntime* runtime,
         return result;
     }
     if (!state.canClosePosition) {
-        result.error = "Close action is not currently available";
+        result.error = "Cover action is not currently available";
+        return result;
+    }
+    const double shortPositionToCover = std::max(0.0, -state.symbol.currentPositionQty);
+    if (shortPositionToCover <= 0.0) {
+        result.error = "No short shares available to cover";
         return result;
     }
 
     SubmitIntent intent = captureSubmitIntent(source,
                                               subscribedSymbol,
-                                              "SELL",
-                                              toShareCount(state.symbol.availableLongToClose),
-                                              state.sellPrice,
+                                              "BUY",
+                                              toShareCount(shortPositionToCover),
+                                              state.buyPrice,
                                               true,
                                               priceBuffer,
-                                              state.sellSweepAvailable ? state.sellPrice : 0.0,
+                                              state.buySweepAvailable ? state.buyPrice : 0.0,
                                               note);
     result.submitted = runtime->submitOrderIntent(intent,
-                                                  state.symbol.availableLongToClose,
-                                                  state.sellPrice,
+                                                  shortPositionToCover,
+                                                  state.buyPrice,
                                                   true,
                                                   &result.error,
                                                   &result.traceId);
@@ -245,10 +259,10 @@ TradingControllerActionResult handleControllerActionIntent(TradingRuntime* runti
                                                                quantityInput,
                                                                priceBuffer,
                                                                "Controller",
-                                                               "Controller Square button");
+                                                               "Controller Square button (open short)");
             result.traceId = submit.traceId;
             if (!submit.submitted && !submit.error.empty()) {
-                result.messages.push_back("[Controller] Buy failed: " + submit.error);
+                result.messages.push_back("[Controller] Short failed: " + submit.error);
             }
             break;
         }
@@ -258,10 +272,10 @@ TradingControllerActionResult handleControllerActionIntent(TradingRuntime* runti
                                                                  subscribedSymbol,
                                                                  priceBuffer,
                                                                  "Controller",
-                                                                 "Controller Circle button");
+                                                                 "Controller Circle button (buy to cover)");
             result.traceId = submit.traceId;
             if (!submit.submitted && !submit.error.empty()) {
-                result.messages.push_back("[Controller] Close failed: " + submit.error);
+                result.messages.push_back("[Controller] Cover failed: " + submit.error);
             }
             break;
         }

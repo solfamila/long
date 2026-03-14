@@ -197,13 +197,19 @@ NSString* BuyUnavailableReason(const TradingPanelState& state, bool subscribed) 
     if (!subscribed) return @"Subscribe to a symbol first.";
     if (!state.symbol.hasFreshQuote) return @"Waiting for a fresh quote.";
     if (state.status.tradingKillSwitch) return @"Kill switch is enabled.";
+    if (state.symbol.borrowAvailability == BorrowAvailability::Unknown) {
+        return @"Borrow availability is still pending.";
+    }
+    if (state.symbol.borrowAvailability == BorrowAvailability::NoSharesToBorrow) {
+        return @"No shares are available to borrow.";
+    }
     if (state.risk.maxOrderNotional > 0.0 && state.orderNotional > state.risk.maxOrderNotional) {
         return @"Order exceeds the max order notional limit.";
     }
     if (state.risk.maxOpenNotional > 0.0 && state.projectedOpenNotional > state.risk.maxOpenNotional) {
         return @"Projected exposure exceeds the max open notional limit.";
     }
-    return @"Buy is not currently available.";
+    return @"Short sell is not currently available.";
 }
 
 NSString* CloseUnavailableReason(const TradingPanelState& state, bool subscribed) {
@@ -212,8 +218,8 @@ NSString* CloseUnavailableReason(const TradingPanelState& state, bool subscribed
     if (!subscribed) return @"Subscribe to a symbol first.";
     if (!state.symbol.hasFreshQuote) return @"Waiting for a fresh quote.";
     if (state.status.tradingKillSwitch) return @"Kill switch is enabled.";
-    if (state.symbol.availableLongToClose <= 0.0) return @"There is no long position to close.";
-    return @"Close is not currently available.";
+    if (std::max(0.0, -state.symbol.currentPositionQty) <= 0.0) return @"There is no short position to cover.";
+    return @"Buy-to-cover is not currently available.";
 }
 
 NSString* CancelUnavailableReason(const TradingPanelState& state) {
@@ -623,7 +629,7 @@ void StylePanel(NSView* view) {
     [leftStack addArrangedSubview:inputRow];
     [inputRow.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
-    _pricePreviewLabel = MakeLabel(@"Prices: buy --  |  sell --", [NSFont monospacedSystemFontOfSize:13.0 weight:NSFontWeightMedium], [NSColor labelColor]);
+    _pricePreviewLabel = MakeLabel(@"Prices: short --  |  cover --", [NSFont monospacedSystemFontOfSize:13.0 weight:NSFontWeightMedium], [NSColor labelColor]);
     [leftStack addArrangedSubview:_pricePreviewLabel];
     [_pricePreviewLabel.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
@@ -634,10 +640,10 @@ void StylePanel(NSView* view) {
     [_safetyStatusLabel.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
     NSStackView* actionRow = MakeRowStack();
-    _buyButton = MakeButton(@"Buy Limit", self, @selector(buyAction:));
+    _buyButton = MakeButton(@"Short Limit", self, @selector(buyAction:));
     StyleTintedButton(_buyButton, [NSColor colorWithCalibratedRed:0.13 green:0.64 blue:0.32 alpha:1.0], [NSColor whiteColor]);
     [_buyButton.widthAnchor constraintEqualToConstant:170.0].active = YES;
-    _closeButton = MakeButton(@"Close Long", self, @selector(closeAction:));
+    _closeButton = MakeButton(@"Buy to Cover", self, @selector(closeAction:));
     StyleTintedButton(_closeButton, [NSColor colorWithCalibratedRed:0.96 green:0.60 blue:0.18 alpha:1.0], [NSColor whiteColor]);
     [_closeButton.widthAnchor constraintEqualToConstant:210.0].active = YES;
     _cancelAllButton = MakeButton(@"Cancel All", self, @selector(cancelAllAction:));
@@ -649,7 +655,7 @@ void StylePanel(NSView* view) {
     [leftStack addArrangedSubview:actionRow];
     [actionRow.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
-    _controllerHintLabel = MakeLabel(@"Controller: Square buy  |  Circle close  |  Triangle cancel all  |  Cross toggle qty", [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium], [NSColor secondaryLabelColor]);
+    _controllerHintLabel = MakeLabel(@"Controller: Square short  |  Circle cover  |  Triangle cancel all  |  Cross toggle qty", [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium], [NSColor secondaryLabelColor]);
     [leftStack addArrangedSubview:_controllerHintLabel];
     [_controllerHintLabel.widthAnchor constraintEqualToAnchor:leftStack.widthAnchor].active = YES;
 
@@ -998,9 +1004,9 @@ void StylePanel(NSView* view) {
                                                        _quantityInput,
                                                        _priceBuffer,
                                                        "GUI Button",
-                                                       "Buy Limit button pressed");
+                                                       "Short Limit button pressed");
     if (!result.submitted && !result.error.empty()) {
-        [self appendAppMessage:"Buy failed: " + result.error];
+        [self appendAppMessage:"Short open failed: " + result.error];
     }
     if (result.traceId != 0) {
         _selectedTraceId = result.traceId;
@@ -1017,9 +1023,9 @@ void StylePanel(NSView* view) {
                                                          _subscribedSymbol,
                                                          _priceBuffer,
                                                          "GUI Button",
-                                                         "Close Long button pressed");
+                                                         "Buy to Cover button pressed");
     if (!result.submitted && !result.error.empty()) {
-        [self appendAppMessage:"Close failed: " + result.error];
+        [self appendAppMessage:"Cover failed: " + result.error];
     }
     if (result.traceId != 0) {
         _selectedTraceId = result.traceId;
@@ -1397,13 +1403,13 @@ void StylePanel(NSView* view) {
         _pnlLabel.textColor = [NSColor secondaryLabelColor];
     }
 
-    const NSString* buySegment = state.buySweepAvailable
-        ? [NSString stringWithFormat:@"buy %@ (sweep+%.2f)", FormatPrice(state.buyPrice), _priceBuffer]
-        : [NSString stringWithFormat:@"buy %@ (ask+%.2f)", FormatPrice(state.buyPrice), _priceBuffer];
-    const NSString* sellSegment = state.sellSweepAvailable
-        ? [NSString stringWithFormat:@"sell %@ (sweep-%.2f)", FormatPrice(state.sellPrice), _priceBuffer]
-        : [NSString stringWithFormat:@"sell %@ (bid-%.2f)", FormatPrice(state.sellPrice), _priceBuffer];
-    _pricePreviewLabel.stringValue = [NSString stringWithFormat:@"Prices: %@  |  %@", buySegment, sellSegment];
+    const NSString* shortSegment = state.sellSweepAvailable
+        ? [NSString stringWithFormat:@"short %@ (sweep-%.2f)", FormatPrice(state.sellPrice), _priceBuffer]
+        : [NSString stringWithFormat:@"short %@ (bid-%.2f)", FormatPrice(state.sellPrice), _priceBuffer];
+    const NSString* coverSegment = state.buySweepAvailable
+        ? [NSString stringWithFormat:@"cover %@ (sweep+%.2f)", FormatPrice(state.buyPrice), _priceBuffer]
+        : [NSString stringWithFormat:@"cover %@ (ask+%.2f)", FormatPrice(state.buyPrice), _priceBuffer];
+    _pricePreviewLabel.stringValue = [NSString stringWithFormat:@"Prices: %@  |  %@", shortSegment, coverSegment];
     NSString* quoteSegment = state.symbol.quoteAgeMs >= 0.0
         ? [NSString stringWithFormat:@"quote %.0f ms", state.symbol.quoteAgeMs]
         : @"quote waiting";
@@ -1435,25 +1441,26 @@ void StylePanel(NSView* view) {
                                 [NSColor colorWithCalibratedRed:0.90 green:0.27 blue:0.22 alpha:1.0],
                                 CancelUnavailableReason(state));
 
-    if (state.buyPrice > 0.0) {
-        _buyButton.title = [NSString stringWithFormat:@"Buy Limit @ %.2f", state.buyPrice];
+    if (state.sellPrice > 0.0) {
+        _buyButton.title = [NSString stringWithFormat:@"Short Limit @ %.2f", state.sellPrice];
     } else {
-        _buyButton.title = @"Buy Limit";
+        _buyButton.title = @"Short Limit";
     }
 
-    if (state.symbol.availableLongToClose > 0.0 && state.sellPrice > 0.0) {
-        _closeButton.title = [NSString stringWithFormat:@"Close Long (%.0f) @ %.2f",
-                              state.symbol.availableLongToClose, state.sellPrice];
-    } else if (state.symbol.availableLongToClose > 0.0) {
-        _closeButton.title = [NSString stringWithFormat:@"Close Long (%.0f)", state.symbol.availableLongToClose];
+    const double shortPositionToCover = std::max(0.0, -state.symbol.currentPositionQty);
+    if (shortPositionToCover > 0.0 && state.buyPrice > 0.0) {
+        _closeButton.title = [NSString stringWithFormat:@"Buy to Cover (%.0f) @ %.2f",
+                              shortPositionToCover, state.buyPrice];
+    } else if (shortPositionToCover > 0.0) {
+        _closeButton.title = [NSString stringWithFormat:@"Buy to Cover (%.0f)", shortPositionToCover];
     } else {
-        _closeButton.title = @"Close Long";
+        _closeButton.title = @"Buy to Cover";
     }
 
     if (!state.status.controllerEnabled) {
         _controllerHintLabel.stringValue = @"Controller input is disabled in Settings.";
     } else {
-        _controllerHintLabel.stringValue = @"Controller: Square buy  |  Circle close  |  Triangle cancel all  |  Cross toggle qty";
+        _controllerHintLabel.stringValue = @"Controller: Square short  |  Circle cover  |  Triangle cancel all  |  Cross toggle qty";
     }
 }
 

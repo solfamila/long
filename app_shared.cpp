@@ -2293,6 +2293,27 @@ double availableLongToCloseUnlocked(const SharedData& state, const std::string& 
     return available > 0.0 ? available : 0.0;
 }
 
+double availableShortToCoverUnlocked(const SharedData& state, const std::string& account, const std::string& symbol) {
+    double shortPos = 0.0;
+    auto posIt = state.positions.find(makePositionKey(account, symbol));
+    if (posIt != state.positions.end()) {
+        shortPos = std::max(0.0, -posIt->second.quantity);
+    }
+
+    double workingBuyQty = 0.0;
+    for (const auto& [id, ord] : state.orders) {
+        (void)id;
+        if (ord.symbol != symbol) continue;
+        if (ord.side != "BUY") continue;
+        if (ord.isTerminal()) continue;
+        if (!ord.account.empty() && ord.account != account) continue;
+        workingBuyQty += outstandingOrderQty(ord);
+    }
+
+    const double available = shortPos - workingBuyQty;
+    return available > 0.0 ? available : 0.0;
+}
+
 double calculateOpenBuyExposureUnlocked(const SharedData& state, const std::string& account) {
     double exposure = 0.0;
     for (const auto& [id, ord] : state.orders) {
@@ -2379,6 +2400,29 @@ double availableLongToCloseUnlocked(const ImmutableSharedDataSnapshot& state,
     }
 
     const double available = longPos - workingSellQty;
+    return available > 0.0 ? available : 0.0;
+}
+
+double availableShortToCoverUnlocked(const ImmutableSharedDataSnapshot& state,
+                                     const std::string& account,
+                                     const std::string& symbol) {
+    double shortPos = 0.0;
+    auto posIt = state.positions.find(makePositionKey(account, symbol));
+    if (posIt != state.positions.end()) {
+        shortPos = std::max(0.0, -posIt->second.quantity);
+    }
+
+    double workingBuyQty = 0.0;
+    for (const auto& [id, ord] : state.orders) {
+        (void)id;
+        if (ord.symbol != symbol) continue;
+        if (ord.side != "BUY") continue;
+        if (ord.isTerminal()) continue;
+        if (!ord.account.empty() && ord.account != account) continue;
+        workingBuyQty += outstandingOrderQty(ord);
+    }
+
+    const double available = shortPos - workingBuyQty;
     return available > 0.0 ? available : 0.0;
 }
 
@@ -3205,6 +3249,7 @@ bool submitLimitOrder(EClientSocket* client,
     std::string account;
     bool ready = false;
     double availableToClose = 0.0;
+    BorrowAvailability borrowAvailability = BorrowAvailability::Unknown;
     double quoteAgeMs = -1.0;
     bool quoteMatchesCurrentSymbol = false;
     int staleQuoteThresholdMs = 0;
@@ -3227,6 +3272,7 @@ bool submitLimitOrder(EClientSocket* client,
         controllerArmMode = published->controllerArmMode;
         controllerArmed = published->controllerArmed;
         tradingKillSwitch = published->tradingKillSwitch;
+        borrowAvailability = published->borrowAvailability;
         openBuyExposure = calculateOpenBuyExposureUnlocked(*published, account);
         currentPositionValue = calculatePositionMarketValueUnlocked(*published, account, symbol);
         quoteMatchesCurrentSymbol = (symbol == published->currentSymbol);
@@ -3235,7 +3281,7 @@ bool submitLimitOrder(EClientSocket* client,
                 std::chrono::steady_clock::now() - published->lastQuoteUpdate).count();
         }
         if (closeOnly) {
-            availableToClose = availableLongToCloseUnlocked(*published, account, symbol);
+            availableToClose = availableShortToCoverUnlocked(*published, account, symbol);
         }
     }
 
@@ -3252,13 +3298,25 @@ bool submitLimitOrder(EClientSocket* client,
         return failValidation("Controller trading is not armed");
     }
     if (closeOnly) {
+        if (action != "BUY") {
+            return failValidation("Close-only short cover orders must use BUY action");
+        }
         if (availableToClose <= 0.0) {
-            return failValidation("No long shares available to close");
+            return failValidation("No short shares available to cover");
         }
         if (quantity > availableToClose + 1e-9) {
-            return failValidation("Requested sell quantity exceeds available long shares");
+            return failValidation("Requested buy quantity exceeds available short shares");
         }
     } else {
+        if (action != "SELL") {
+            return failValidation("Open short orders must use SELL action");
+        }
+        if (borrowAvailability == BorrowAvailability::Unknown) {
+            return failValidation("Borrow availability is pending for this symbol");
+        }
+        if (borrowAvailability == BorrowAvailability::NoSharesToBorrow) {
+            return failValidation("No shares available to borrow for shorting");
+        }
         const double orderNotional = quantity * limitPrice;
         if (maxOrderNotional > 0.0 && orderNotional > maxOrderNotional + 1e-9) {
             std::ostringstream oss;
