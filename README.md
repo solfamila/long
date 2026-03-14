@@ -47,6 +47,30 @@ Dependency paths:
 - nlohmann/json is expected at `./nlohmann_json`
 - The build auto-detects a downloaded IB API under `~/Downloads/twsapi_macunix/...` when present
 
+External dependency paths also work. If you keep `ixwebsocket` and `nlohmann_json`
+outside this workspace, pass them explicitly:
+
+```bash
+cmake -S . -B build \
+  -DIXWEBSOCKET_DIR=/absolute/path/to/ixwebsocket \
+  -DNLOHMANN_JSON_DIR=/absolute/path/to/nlohmann_json
+cmake --build build -j4
+```
+
+Phase-0 mock bridge validation:
+
+- If no vendored IB API is available, the workspace falls back to the local mock IB API.
+- The bridge and recovery semantics are covered by `tws_gui_tests`.
+
+```bash
+cmake -S . -B build-phase0 \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DIXWEBSOCKET_DIR=/absolute/path/to/ixwebsocket \
+  -DNLOHMANN_JSON_DIR=/absolute/path/to/nlohmann_json
+cmake --build build-phase0 --target tws_gui_tests -j4
+ctest --test-dir build-phase0 --output-on-failure
+```
+
 Packaging notes:
 - The app is built as a real macOS `.app` bundle.
 - Non-system protobuf/abseil dylibs are embedded into `Contents/Frameworks`.
