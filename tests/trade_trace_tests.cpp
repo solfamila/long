@@ -387,11 +387,17 @@ void testSymbolSubscriptionRequestsBorrowTicks() {
                    "symbol subscription should request shortability generic tick list");
 
     const RuntimePresentationSnapshot snapshot = captureRuntimePresentationSnapshot("INTC", 0);
-    expect(snapshot.symbol.borrowAvailability == BorrowAvailability::Unknown,
-           "borrow status should remain pending until borrow ticks arrive for the active request id");
+    expect(snapshot.symbol.borrowAvailability == BorrowAvailability::Borrowable,
+           "borrow status should resolve immediately when subscribe-time borrow ticks arrive");
+    expect(snapshot.symbol.borrowRateKnown,
+           "subscribe-time borrow ticks should populate borrow-rate state");
+    expect(std::abs(snapshot.symbol.borrowRate - 0.0125) < 1e-9,
+           "subscribe-time borrow ticks should preserve the borrow rate");
     expectContains(snapshot.messagesText,
-                   "borrow status pending",
-                   "subscription status message should call out pending borrow state");
+                   "INTC: Borrowable",
+                   "subscription status messaging should surface the resolved borrowable state");
+    expect(snapshot.messagesText.find("borrow status pending") == std::string::npos,
+           "subscription status message should not stay pending once borrow ticks resolved inline");
 
     unbindSharedDataOwner(&owner);
     resetSharedDataForTesting();

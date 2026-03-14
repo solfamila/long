@@ -3091,20 +3091,30 @@ bool requestSymbolSubscription(EClientSocket* client,
             if (error) *error = "TWS socket not connected";
             return false;
         }
+
+        invokeSharedDataMutation([&]() {
+            trading_engine::reduce(appState(), trading_engine::MarketSubscriptionStartedEvent{
+                symbol,
+                mktDataReqId,
+                depthReqId,
+                recalcQtyFromFirstAsk
+            });
+        });
+
         client->reqMktData(mktDataReqId, contract, kBorrowGenericTickList, false, false, TagValueListSPtr());
         client->reqMktDepth(depthReqId, contract, MARKET_DEPTH_NUM_ROWS, true, TagValueListSPtr());
     }
 
-    invokeSharedDataMutation([&]() {
-        trading_engine::reduce(appState(), trading_engine::MarketSubscriptionStartedEvent{
-            symbol,
-            mktDataReqId,
-            depthReqId,
-            recalcQtyFromFirstAsk
-        });
-    });
+    std::string subscribeMessage = "Subscription request sent for " + symbol;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        if (g_data.currentSymbol == symbol &&
+            g_data.borrowAvailability == BorrowAvailability::Unknown) {
+            subscribeMessage += " (borrow status pending)";
+        }
+    }
 
-    appendSharedMessage("Subscription request sent for " + symbol + " (borrow status pending)");
+    appendSharedMessage(subscribeMessage);
     appendRuntimeJournalEvent("subscribe_request_sent", {
         {"symbol", symbol},
         {"recalculateQuantity", recalcQtyFromFirstAsk}

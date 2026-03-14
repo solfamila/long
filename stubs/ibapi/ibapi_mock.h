@@ -68,10 +68,13 @@ struct OrderState {
 
 struct OrderCancel {};
 
+struct ExecutionFilter {};
+
 struct Execution {
     int orderId = 0;
     long long permId = 0;
     std::string execId;
+    std::string side;
     Decimal shares = 0.0;
     double price = 0.0;
     std::string exchange;
@@ -116,6 +119,7 @@ public:
     virtual void execDetails(int, const Contract&, const Execution&) {}
     virtual void execDetailsEnd(int) {}
     virtual void commissionReport(const CommissionReport&) {}
+    virtual void error(int, int, const std::string&, const std::string&) {}
     virtual void error(int, std::time_t, int, const std::string&, const std::string&) {}
     virtual void position(const std::string&, const Contract&, Decimal, double) {}
     virtual void positionEnd() {}
@@ -213,6 +217,12 @@ public:
     }
 
     void reqOpenOrders() {}
+
+    void reqExecutions(int reqId, const ExecutionFilter&) {
+        if (wrapper_) {
+            wrapper_->execDetailsEnd(reqId);
+        }
+    }
 
     void reqMktData(TickerId tickerId,
                     const Contract&,
