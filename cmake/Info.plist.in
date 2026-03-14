@@ -27,6 +27,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>TWS Trading GUI</string>
+    <string>${APP_BUNDLE_NAME}</string>
 </dict>
 </plist>

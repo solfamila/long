@@ -31,14 +31,17 @@ const std::string& resolvedAppDataDirectory() {
         namespace fs = std::filesystem;
 
         fs::path basePath;
-        if (const char* overridePath = std::getenv("TWS_GUI_DATA_DIR");
+        if (const char* overridePath = std::getenv("TWS_SHORT_GUI_DATA_DIR");
             overridePath != nullptr && *overridePath != '\0') {
+            basePath = fs::path(overridePath);
+        } else if (const char* overridePath = std::getenv("TWS_GUI_DATA_DIR");
+                   overridePath != nullptr && *overridePath != '\0') {
             basePath = fs::path(overridePath);
         } else if (const char* home = std::getenv("HOME");
                    home != nullptr && *home != '\0') {
-            basePath = fs::path(home) / "Library" / "Application Support" / "TWS Trading GUI";
+            basePath = fs::path(home) / "Library" / "Application Support" / "TWS Short Trading GUI";
         } else {
-            basePath = fs::current_path() / "tws_gui_data";
+            basePath = fs::current_path() / "tws_short_gui_data";
         }
 
         std::error_code ec;

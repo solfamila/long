@@ -358,7 +358,7 @@ bool TradingRuntime::start() {
         });
     });
 
-    std::cout << "=== TWS Trading GUI ===" << std::endl;
+    std::cout << "=== TWS Short Trading GUI ===" << std::endl;
     std::cout << "Connecting to TWS at " << connectionConfig.host << ":" << connectionConfig.port << std::endl;
     std::cout << "Configured account: " << HARDCODED_ACCOUNT << std::endl;
     std::cout << "Using platform: AppKit native views" << std::endl;

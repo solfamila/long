@@ -312,7 +312,7 @@ void postControllerMessage(const std::string& message) {
         };
     }
 
-    const bool lightUpdated = setControllerLightColor(controller, 0.0f, 1.0f, 0.0f);
+    const bool lightUpdated = setControllerLightColor(controller, 1.0f, 0.0f, 0.0f);
     updateControllerSharedState(true, deviceName);
 
     if (announce) {
@@ -322,7 +322,7 @@ void postControllerMessage(const std::string& message) {
         }
         postControllerMessage(message);
         if (lightUpdated) {
-            postControllerMessage("Controller: " + deviceName + " lock light set to green");
+            postControllerMessage("Controller: " + deviceName + " lock light set to red");
         }
     }
 }

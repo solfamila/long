@@ -10,17 +10,17 @@
 namespace {
 
 os_log_t runtimeLog() {
-    static os_log_t log = os_log_create("com.foxy.twstradinggui", "runtime");
+    static os_log_t log = os_log_create("com.foxy.twstradinggui.short", "runtime");
     return log;
 }
 
 os_log_t orderLog() {
-    static os_log_t log = os_log_create("com.foxy.twstradinggui", "orders");
+    static os_log_t log = os_log_create("com.foxy.twstradinggui.short", "orders");
     return log;
 }
 
 os_log_t ipcLog() {
-    static os_log_t log = os_log_create("com.foxy.twstradinggui", "ipc");
+    static os_log_t log = os_log_create("com.foxy.twstradinggui.short", "ipc");
     return log;
 }
 

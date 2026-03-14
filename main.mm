@@ -341,7 +341,7 @@ void StylePanel(NSView* view) {
                                                               NSWindowStyleMaskMiniaturizable)
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
-    window.title = @"TWS Trading GUI";
+    window.title = @"TWS Short Trading GUI";
     window.releasedWhenClosed = NO;
     [window center];
 
@@ -1647,7 +1647,7 @@ void StylePanel(NSView* view) {
     NSMenuItem* appMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     [mainMenu addItem:appMenuItem];
 
-    NSMenu* appMenu = [[NSMenu alloc] initWithTitle:@"TWS Trading GUI"];
+    NSMenu* appMenu = [[NSMenu alloc] initWithTitle:@"TWS Short Trading GUI"];
     NSString* appName = NSProcessInfo.processInfo.processName;
     NSMenuItem* quitItem = [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Quit %@", appName]
                                                       action:@selector(terminate:)
