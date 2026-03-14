@@ -103,6 +103,13 @@ NSView* MakeFlexibleSpacer() {
     return spacer;
 }
 
+void ApplyTooltip(NSView* view, NSString* tooltip) {
+    if (view == nil) {
+        return;
+    }
+    view.toolTip = tooltip;
+}
+
 void StyleTintedButton(NSButton* button, NSColor* bezelColor, NSColor* tintColor) {
     button.bezelColor = bezelColor;
     button.contentTintColor = tintColor;
@@ -181,6 +188,12 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
         @"TWS Client ID",
         @"WebSocket Token",
     ];
+    NSArray<NSString*>* connectionTooltips = @[
+        @"Hostname or IP address for Trader Workstation or IB Gateway. Usually 127.0.0.1 on this Mac.",
+        @"IB API port. Typical values are 7496 for live TWS and 7497 for paper TWS, depending on your setup.",
+        @"Client ID used for the IB API session. Keep it unique so this app does not collide with another API client.",
+        @"Shared secret for localhost WebSocket automation. Leave blank to let the app generate one automatically.",
+    ];
     NSArray<NSView*>* connectionFields = @[
         hostField,
         portField,
@@ -196,6 +209,15 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
         @"Max Order Notional",
         @"Max Open Notional",
         @"Controller Arming",
+    ];
+    NSArray<NSString*>* riskTooltips = @[
+        @"Maximum quote age allowed for trading decisions. If the quote is older than this, the app blocks order entry.",
+        @"How long to wait after placing an order before the broker should echo it back through openOrder, orderStatus, or execution callbacks.",
+        @"How long to wait after sending a cancel request before the broker should acknowledge it. After this, the app starts reconciliation.",
+        @"How long a partially filled order can stay quiet with no new broker callback before the app rechecks it.",
+        @"Per-order dollar cap. Orders above this estimated notional are rejected locally before they are sent.",
+        @"Total open buy exposure cap across working orders. New orders that would push exposure above this are blocked.",
+        @"One-shot disarms the controller after each controller-originated trade. Manual stays armed until you explicitly disarm it.",
     ];
     NSArray<NSView*>* riskFields = @[
         staleQuoteField,
@@ -220,6 +242,8 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
                                        [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold],
                                        [NSColor secondaryLabelColor]);
         [label.widthAnchor constraintEqualToConstant:170.0].active = YES;
+        ApplyTooltip(label, connectionTooltips[static_cast<std::size_t>(i)]);
+        ApplyTooltip(connectionFields[static_cast<std::size_t>(i)], connectionTooltips[static_cast<std::size_t>(i)]);
         [connectionGrid cellAtColumnIndex:0 rowIndex:i].contentView = label;
         [connectionGrid cellAtColumnIndex:1 rowIndex:i].contentView = connectionFields[static_cast<std::size_t>(i)];
     }
@@ -228,8 +252,10 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
 
     NSButton* websocketCheckbox = [NSButton checkboxWithTitle:@"Enable localhost WebSocket automation" target:nil action:nil];
     websocketCheckbox.state = currentConnection.websocketEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    ApplyTooltip(websocketCheckbox, @"Turns the localhost WebSocket control server on or off. Disable it if you do not need automation.");
     NSButton* controllerCheckbox = [NSButton checkboxWithTitle:@"Enable controller input" target:nil action:nil];
     controllerCheckbox.state = currentConnection.controllerEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    ApplyTooltip(controllerCheckbox, @"Enables or disables game-controller input for order entry and app actions.");
     [rootStack addArrangedSubview:websocketCheckbox];
     [rootStack addArrangedSubview:controllerCheckbox];
 
@@ -246,6 +272,8 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
                                        [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold],
                                        [NSColor secondaryLabelColor]);
         [label.widthAnchor constraintEqualToConstant:170.0].active = YES;
+        ApplyTooltip(label, riskTooltips[static_cast<std::size_t>(i)]);
+        ApplyTooltip(riskFields[static_cast<std::size_t>(i)], riskTooltips[static_cast<std::size_t>(i)]);
         [riskGrid cellAtColumnIndex:0 rowIndex:i].contentView = label;
         [riskGrid cellAtColumnIndex:1 rowIndex:i].contentView = riskFields[static_cast<std::size_t>(i)];
     }
