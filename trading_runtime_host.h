@@ -2,6 +2,7 @@
 
 #include "trading_runtime.h"
 
+#include <cstddef>
 #include <memory>
 
 class TradingRuntimeHost {
@@ -14,6 +15,7 @@ public:
     TradingRuntime* runtime();
     const TradingRuntime* runtime() const;
     void setControllerVibration(bool enable);
+    BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems = 100) const;
 
 private:
     std::unique_ptr<TradingRuntime> runtime_;

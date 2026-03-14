@@ -370,6 +370,13 @@ bool TradingRuntime::start() {
         {"websocketEnabled", connectionConfig.websocketEnabled},
         {"controllerEnabled", connectionConfig.controllerEnabled}
     });
+    if (recovery.bridgeRecoveryRequired) {
+        appendRuntimeJournalEvent("bridge_recovery_pending", {
+            {"pendingCount", recovery.pendingOutboxCount},
+            {"lossCount", recovery.outboxLossCount},
+            {"lastSourceSeq", static_cast<unsigned long long>(recovery.lastOutboxSourceSeq)}
+        });
+    }
     setRuntimeSessionState(RuntimeSessionState::Connecting);
 
     impl_->osSignal = std::make_unique<EReaderOSSignal>(2000);
@@ -474,7 +481,7 @@ bool TradingRuntime::start() {
     }
 
     impl_->started = true;
-    if (recovery.priorSessionAbnormal) {
+    if (!recovery.bannerText.empty()) {
         appendSharedMessage(recovery.bannerText);
     }
     for (const auto& summary : unfinishedTraces) {
@@ -657,6 +664,10 @@ TradeTraceSnapshot TradingRuntime::captureTradeTraceSnapshot(std::uint64_t trace
     return ::captureTradeTraceSnapshot(traceId);
 }
 
+BridgeOutboxSnapshot TradingRuntime::captureBridgeOutboxSnapshot(std::size_t maxItems) const {
+    return ::captureBridgeOutboxSnapshot(maxItems);
+}
+
 std::uint64_t TradingRuntime::findTradeTraceIdByOrderId(OrderId orderId) const {
     return ::findTraceIdByOrderId(orderId);
 }
@@ -833,30 +844,71 @@ bool TradingRuntime::submitOrderIntent(const SubmitIntent& intent,
                                        bool closeOnly,
                                        std::string* error,
                                        std::uint64_t* outTraceId,
-                                       OrderId* outOrderId) {
+                                       OrderId* outOrderId,
+                                       BridgeOutboxEnqueueResult* outBridgeOutbox) {
     if (!impl_ || !impl_->started) {
         if (error) {
             *error = "Trading runtime is not started";
         }
         return false;
     }
-    return impl_->invokeOnActionThread([this, intent, quantity, limitPrice, closeOnly, error, outTraceId, outOrderId]() {
+    return impl_->invokeOnActionThread([this, intent, quantity, limitPrice, closeOnly, error, outTraceId, outOrderId, outBridgeOutbox]() {
         if (!impl_ || !impl_->client) {
             if (error) {
                 *error = "Trading runtime is not started";
             }
             return false;
         }
-        return submitLimitOrder(impl_->client.get(),
-                                intent.symbol,
-                                intent.side,
-                                quantity,
-                                limitPrice,
-                                closeOnly,
-                                &intent,
-                                error,
-                                outOrderId,
-                                outTraceId);
+
+        OrderId orderId = 0;
+        std::uint64_t traceId = 0;
+        const bool submitted = submitLimitOrder(impl_->client.get(),
+                                                intent.symbol,
+                                                intent.side,
+                                                quantity,
+                                                limitPrice,
+                                                closeOnly,
+                                                &intent,
+                                                error,
+                                                &orderId,
+                                                &traceId);
+        if (outOrderId) {
+            *outOrderId = orderId;
+        }
+        if (outTraceId) {
+            *outTraceId = traceId;
+        }
+        if (!submitted) {
+            if (outBridgeOutbox) {
+                *outBridgeOutbox = {};
+            }
+            return false;
+        }
+
+        BridgeOutboxRecordInput bridgeRecord;
+        bridgeRecord.recordType = "order_intent";
+        bridgeRecord.source = intent.source;
+        bridgeRecord.symbol = intent.symbol;
+        bridgeRecord.side = intent.side;
+        bridgeRecord.traceId = traceId;
+        bridgeRecord.orderId = orderId;
+        bridgeRecord.note = intent.notes;
+        const BridgeOutboxEnqueueResult bridgeResult = enqueueBridgeOutboxRecord(bridgeRecord);
+        if (outBridgeOutbox) {
+            *outBridgeOutbox = bridgeResult;
+        }
+        if (traceId != 0) {
+            std::ostringstream details;
+            details << "Queued bridge outbox source_seq="
+                    << static_cast<unsigned long long>(bridgeResult.sourceSeq)
+                    << " state=" << bridgeResult.fallbackState
+                    << " reason=" << bridgeResult.fallbackReason;
+            appendTraceEventByTraceId(traceId,
+                                      TradeEventType::Note,
+                                      "BridgeOutbox",
+                                      details.str());
+        }
+        return true;
     });
 }
 

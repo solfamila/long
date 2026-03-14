@@ -315,6 +315,57 @@ struct TradeTrace {
     std::string commissionCurrency;
 };
 
+struct BridgeAnchorIdentity {
+    std::uint64_t traceId = 0;
+    OrderId orderId = 0;
+    long long permId = 0;
+    std::string execId;
+};
+
+struct BridgeOutboxRecord {
+    std::uint64_t sourceSeq = 0;
+    std::string recordType;
+    std::string source;
+    std::string symbol;
+    std::string side;
+    BridgeAnchorIdentity anchor;
+    std::string fallbackState;
+    std::string fallbackReason;
+    std::string note;
+    std::string wallTime;
+};
+
+struct BridgeOutboxRecordInput {
+    std::string recordType;
+    std::string source;
+    std::string symbol;
+    std::string side;
+    std::uint64_t traceId = 0;
+    OrderId orderId = 0;
+    long long permId = 0;
+    std::string execId;
+    std::string note;
+};
+
+struct BridgeOutboxEnqueueResult {
+    std::uint64_t sourceSeq = 0;
+    bool queued = false;
+    bool lossMarked = false;
+    std::string fallbackState;
+    std::string fallbackReason;
+    bool recoveryRequired = false;
+};
+
+struct BridgeOutboxSnapshot {
+    std::string fallbackState;
+    std::string fallbackReason;
+    bool recoveryRequired = false;
+    int pendingCount = 0;
+    int lossCount = 0;
+    std::uint64_t lastSourceSeq = 0;
+    std::vector<BridgeOutboxRecord> records;
+};
+
 struct SharedData {
     std::recursive_mutex mutex;
     std::recursive_mutex clientMutex;
@@ -402,6 +453,13 @@ struct SharedData {
     std::map<long long, std::uint64_t> traceIdByPermId;
     std::map<std::string, std::uint64_t> traceIdByExecId;
     std::uint64_t latestTraceId = 0;
+    std::atomic<std::uint64_t> nextBridgeSourceSeq{1};
+    std::deque<BridgeOutboxRecord> bridgeOutbox;
+    std::uint64_t bridgeOutboxLossCount = 0;
+    std::uint64_t lastBridgeSourceSeq = 0;
+    std::string bridgeFallbackState = "queued_for_recovery";
+    std::string bridgeFallbackReason = "engine_unavailable";
+    bool bridgeRecoveryRequired = false;
 
     void addMessage(const std::string& msg);
 
@@ -528,6 +586,10 @@ struct RuntimeRecoverySnapshot {
     std::string priorAppSessionId;
     std::string priorRuntimeSessionId;
     int unfinishedTraceCount = 0;
+    int pendingOutboxCount = 0;
+    int outboxLossCount = 0;
+    std::uint64_t lastOutboxSourceSeq = 0;
+    bool bridgeRecoveryRequired = false;
     std::vector<std::string> unfinishedTraceSummaries;
     std::string bannerText;
 };
@@ -759,6 +821,8 @@ int adjustWebSocketConnectedClients(int delta);
 std::string ensureWebSocketAuthToken();
 bool consumeWebSocketOrderRateLimit(std::string* error = nullptr);
 bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error = nullptr);
+BridgeOutboxEnqueueResult enqueueBridgeOutboxRecord(const BridgeOutboxRecordInput& input);
+BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems = 100);
 double calculateOpenBuyExposureUnlocked(const std::string& account);
 double calculatePositionMarketValueUnlocked(const std::string& account, const std::string& symbol);
 std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot();

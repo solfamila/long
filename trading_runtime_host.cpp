@@ -39,3 +39,10 @@ void TradingRuntimeHost::setControllerVibration(bool enable) {
         runtime_->setControllerVibration(enable);
     }
 }
+
+BridgeOutboxSnapshot TradingRuntimeHost::captureBridgeOutboxSnapshot(std::size_t maxItems) const {
+    if (!runtime_) {
+        return {};
+    }
+    return runtime_->captureBridgeOutboxSnapshot(maxItems);
+}

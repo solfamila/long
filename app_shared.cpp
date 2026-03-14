@@ -15,6 +15,7 @@
 namespace {
 constexpr std::size_t kMaxTraceEvents = 512;
 constexpr std::size_t kMaxTraceFills = 256;
+constexpr std::size_t kMaxBridgeOutboxRecords = 512;
 constexpr auto kRecentSubmitWindow = std::chrono::milliseconds(750);
 constexpr auto kRecentWebSocketOrderWindow = std::chrono::seconds(2);
 constexpr int kMaxWebSocketOrdersPerWindow = 5;
@@ -76,6 +77,32 @@ std::uint64_t recoverHighestTraceIdFromLog(const std::string& logPath) {
         highestTraceId = std::max(highestTraceId, parsed.value("traceId", 0ULL));
     }
     return highestTraceId;
+}
+
+std::uint64_t recoverHighestBridgeSourceSeqFromJournal(const std::string& logPath) {
+    std::ifstream in(logPath);
+    if (!in.is_open()) {
+        return 0;
+    }
+
+    std::uint64_t highestSourceSeq = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        const json parsed = json::parse(line, nullptr, false);
+        if (parsed.is_discarded()) {
+            continue;
+        }
+        if (!parsed.contains("details") || !parsed["details"].is_object()) {
+            continue;
+        }
+        const json& details = parsed["details"];
+        highestSourceSeq = std::max(highestSourceSeq, details.value("sourceSeq", 0ULL));
+        highestSourceSeq = std::max(highestSourceSeq, details.value("droppedSourceSeq", 0ULL));
+    }
+    return highestSourceSeq;
 }
 
 SharedData& bootstrapSharedData() {
@@ -171,6 +198,13 @@ void copySharedDataState(const SharedData& src, SharedData& dst) {
     dst.traceIdByPermId = src.traceIdByPermId;
     dst.traceIdByExecId = src.traceIdByExecId;
     dst.latestTraceId = src.latestTraceId;
+    dst.nextBridgeSourceSeq.store(src.nextBridgeSourceSeq.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    dst.bridgeOutbox = src.bridgeOutbox;
+    dst.bridgeOutboxLossCount = src.bridgeOutboxLossCount;
+    dst.lastBridgeSourceSeq = src.lastBridgeSourceSeq;
+    dst.bridgeFallbackState = src.bridgeFallbackState;
+    dst.bridgeFallbackReason = src.bridgeFallbackReason;
+    dst.bridgeRecoveryRequired = src.bridgeRecoveryRequired;
 }
 
 std::mutex& uiInvalidationCallbackMutex() {
@@ -268,6 +302,12 @@ struct ImmutableSharedDataSnapshot {
     std::deque<std::uint64_t> traceRecency;
     std::map<OrderId, std::uint64_t> traceIdByOrderId;
     std::uint64_t latestTraceId = 0;
+    std::deque<BridgeOutboxRecord> bridgeOutbox;
+    std::uint64_t bridgeOutboxLossCount = 0;
+    std::uint64_t lastBridgeSourceSeq = 0;
+    std::string bridgeFallbackState;
+    std::string bridgeFallbackReason;
+    bool bridgeRecoveryRequired = false;
 };
 
 std::shared_ptr<const ImmutableSharedDataSnapshot>& publishedSharedDataSnapshotSlot() {
@@ -797,6 +837,7 @@ void bindSharedDataOwner(SharedData* owner) {
         copySharedDataState(*current, *owner);
     }
     reserveTraceIdFloor(owner->nextTraceId, recoverHighestTraceIdFromLog(tradeTraceLogPath()));
+    reserveTraceIdFloor(owner->nextBridgeSourceSeq, recoverHighestBridgeSourceSeqFromJournal(runtimeJournalLogPath()));
     activeSharedDataSlot().store(owner, std::memory_order_release);
     publishSharedDataSnapshot();
 }
@@ -2216,6 +2257,12 @@ std::shared_ptr<const ImmutableSharedDataSnapshot> buildImmutableSharedDataSnaps
     snapshot->traceRecency = state.traceRecency;
     snapshot->traceIdByOrderId = state.traceIdByOrderId;
     snapshot->latestTraceId = state.latestTraceId;
+    snapshot->bridgeOutbox = state.bridgeOutbox;
+    snapshot->bridgeOutboxLossCount = state.bridgeOutboxLossCount;
+    snapshot->lastBridgeSourceSeq = state.lastBridgeSourceSeq;
+    snapshot->bridgeFallbackState = state.bridgeFallbackState;
+    snapshot->bridgeFallbackReason = state.bridgeFallbackReason;
+    snapshot->bridgeRecoveryRequired = state.bridgeRecoveryRequired;
     return snapshot;
 }
 
@@ -2648,6 +2695,122 @@ bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error) 
         *error = result.error;
     }
     return result.reserved;
+}
+
+BridgeOutboxEnqueueResult enqueueBridgeOutboxRecord(const BridgeOutboxRecordInput& input) {
+    return invokeSharedDataMutation([&]() {
+        BridgeOutboxEnqueueResult result;
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+
+        BridgeOutboxRecord record;
+        record.sourceSeq = state.nextBridgeSourceSeq.fetch_add(1, std::memory_order_relaxed);
+        record.recordType = input.recordType;
+        record.source = input.source;
+        record.symbol = toUpperCase(input.symbol);
+        record.side = input.side;
+        record.anchor.traceId = input.traceId;
+        record.anchor.orderId = input.orderId;
+        record.anchor.permId = input.permId;
+        record.anchor.execId = input.execId;
+        record.note = input.note;
+        record.wallTime = formatWallTime(std::chrono::system_clock::now());
+
+        state.lastBridgeSourceSeq = record.sourceSeq;
+        state.bridgeFallbackState = "queued_for_recovery";
+        state.bridgeFallbackReason = "engine_unavailable";
+        record.fallbackState = state.bridgeFallbackState;
+        record.fallbackReason = state.bridgeFallbackReason;
+        state.bridgeOutbox.push_back(record);
+
+        result.sourceSeq = record.sourceSeq;
+        result.queued = true;
+        result.fallbackState = record.fallbackState;
+        result.fallbackReason = record.fallbackReason;
+
+        json queuedDetails = {
+            {"sourceSeq", static_cast<unsigned long long>(record.sourceSeq)},
+            {"recordType", record.recordType},
+            {"fallbackState", record.fallbackState},
+            {"fallbackReason", record.fallbackReason}
+        };
+        if (!record.source.empty()) {
+            queuedDetails["source"] = record.source;
+        }
+        if (!record.symbol.empty()) {
+            queuedDetails["symbol"] = record.symbol;
+        }
+        if (!record.side.empty()) {
+            queuedDetails["side"] = record.side;
+        }
+        if (record.anchor.traceId > 0) {
+            queuedDetails["traceId"] = static_cast<unsigned long long>(record.anchor.traceId);
+        }
+        if (record.anchor.orderId > 0) {
+            queuedDetails["orderId"] = static_cast<long long>(record.anchor.orderId);
+        }
+        if (record.anchor.permId > 0) {
+            queuedDetails["permId"] = record.anchor.permId;
+        }
+        if (!record.anchor.execId.empty()) {
+            queuedDetails["execId"] = record.anchor.execId;
+        }
+        if (!record.note.empty()) {
+            queuedDetails["note"] = record.note;
+        }
+        appendRuntimeJournalEvent("bridge_outbox_queued", queuedDetails);
+
+        if (state.bridgeOutbox.size() > kMaxBridgeOutboxRecords) {
+            const BridgeOutboxRecord dropped = state.bridgeOutbox.front();
+            state.bridgeOutbox.pop_front();
+            ++state.bridgeOutboxLossCount;
+            result.lossMarked = true;
+
+            json lossDetails = {
+                {"reason", "queue_overflow"},
+                {"recordType", dropped.recordType},
+                {"droppedSourceSeq", static_cast<unsigned long long>(dropped.sourceSeq)}
+            };
+            if (dropped.anchor.traceId > 0) {
+                lossDetails["traceId"] = static_cast<unsigned long long>(dropped.anchor.traceId);
+            }
+            if (dropped.anchor.orderId > 0) {
+                lossDetails["orderId"] = static_cast<long long>(dropped.anchor.orderId);
+            }
+            if (dropped.anchor.permId > 0) {
+                lossDetails["permId"] = dropped.anchor.permId;
+            }
+            if (!dropped.anchor.execId.empty()) {
+                lossDetails["execId"] = dropped.anchor.execId;
+            }
+            appendRuntimeJournalEvent("bridge_outbox_loss", lossDetails);
+        }
+
+        state.bridgeRecoveryRequired = !state.bridgeOutbox.empty() || state.bridgeOutboxLossCount > 0;
+        result.recoveryRequired = state.bridgeRecoveryRequired;
+        return result;
+    });
+}
+
+BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems) {
+    BridgeOutboxSnapshot snapshot;
+    const auto published = ensurePublishedSharedDataSnapshot();
+    snapshot.fallbackState = published->bridgeFallbackState;
+    snapshot.fallbackReason = published->bridgeFallbackReason;
+    snapshot.recoveryRequired = published->bridgeRecoveryRequired;
+    snapshot.pendingCount = static_cast<int>(published->bridgeOutbox.size());
+    snapshot.lossCount = static_cast<int>(published->bridgeOutboxLossCount);
+    snapshot.lastSourceSeq = published->lastBridgeSourceSeq;
+
+    if (maxItems > 0) {
+        snapshot.records.reserve(std::min(maxItems, published->bridgeOutbox.size()));
+        for (auto it = published->bridgeOutbox.rbegin();
+             it != published->bridgeOutbox.rend() && snapshot.records.size() < maxItems;
+             ++it) {
+            snapshot.records.push_back(*it);
+        }
+    }
+    return snapshot;
 }
 
 std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot() {
@@ -3238,6 +3401,10 @@ RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems
         bool cleanShutdown = false;
         std::string appSessionId;
         std::string runtimeSessionId;
+        int outboxQueued = 0;
+        int outboxDelivered = 0;
+        int outboxLoss = 0;
+        std::uint64_t lastOutboxSourceSeq = 0;
     };
 
     std::map<std::string, SessionInfo> sessions;
@@ -3262,10 +3429,25 @@ RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems
         lastAppSessionId = appSessionId;
 
         const std::string event = parsed.value("event", std::string());
+        const json details = parsed.contains("details") && parsed["details"].is_object()
+            ? parsed["details"]
+            : json::object();
         if (event == "runtime_start") {
             info.started = true;
         } else if (event == "runtime_shutdown") {
             info.cleanShutdown = true;
+        } else if (event == "bridge_outbox_queued") {
+            ++info.outboxQueued;
+            info.lastOutboxSourceSeq = std::max(info.lastOutboxSourceSeq,
+                                                details.value("sourceSeq", 0ULL));
+        } else if (event == "bridge_outbox_delivered") {
+            ++info.outboxDelivered;
+            info.lastOutboxSourceSeq = std::max(info.lastOutboxSourceSeq,
+                                                details.value("sourceSeq", 0ULL));
+        } else if (event == "bridge_outbox_loss") {
+            ++info.outboxLoss;
+            info.lastOutboxSourceSeq = std::max(info.lastOutboxSourceSeq,
+                                                details.value("droppedSourceSeq", 0ULL));
         }
     }
 
@@ -3281,6 +3463,10 @@ RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems
     snapshot.priorAppSessionId = it->second.appSessionId;
     snapshot.priorRuntimeSessionId = it->second.runtimeSessionId;
     snapshot.priorSessionAbnormal = it->second.started && !it->second.cleanShutdown;
+    snapshot.pendingOutboxCount = std::max(0, it->second.outboxQueued - it->second.outboxDelivered);
+    snapshot.outboxLossCount = it->second.outboxLoss;
+    snapshot.lastOutboxSourceSeq = it->second.lastOutboxSourceSeq;
+    snapshot.bridgeRecoveryRequired = snapshot.pendingOutboxCount > 0 || snapshot.outboxLossCount > 0;
     if (snapshot.priorSessionAbnormal) {
         std::ostringstream oss;
         oss << "Previous session ended unexpectedly";
@@ -3291,6 +3477,28 @@ RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems
             }
         }
         snapshot.bannerText = oss.str();
+    }
+    if (snapshot.bridgeRecoveryRequired) {
+        std::ostringstream bridge;
+        bridge << "Bridge recovery pending: " << snapshot.pendingOutboxCount << " queued intent";
+        if (snapshot.pendingOutboxCount != 1) {
+            bridge << 's';
+        }
+        if (snapshot.outboxLossCount > 0) {
+            bridge << ", " << snapshot.outboxLossCount << " loss marker";
+            if (snapshot.outboxLossCount != 1) {
+                bridge << 's';
+            }
+        }
+        if (snapshot.lastOutboxSourceSeq > 0) {
+            bridge << " (last source_seq=" << snapshot.lastOutboxSourceSeq << ")";
+        }
+        if (!snapshot.bannerText.empty()) {
+            snapshot.bannerText += ". ";
+            snapshot.bannerText += bridge.str();
+        } else {
+            snapshot.bannerText = bridge.str();
+        }
     }
     return snapshot;
 }
@@ -4056,6 +4264,19 @@ void recordTraceExecution(const Contract& contract, const Execution& execution) 
         return trading_engine::reduce(appState(), trading_engine::TraceExecutionRecordedEvent{contract, execution});
     });
     flushTraceMutationResult(result);
+    if (result.traceId != 0) {
+        BridgeOutboxRecordInput bridgeRecord;
+        bridgeRecord.recordType = "fill_execution";
+        bridgeRecord.source = "BrokerExecution";
+        bridgeRecord.symbol = contract.symbol;
+        bridgeRecord.side = execution.side;
+        bridgeRecord.traceId = result.traceId;
+        bridgeRecord.orderId = static_cast<OrderId>(execution.orderId);
+        bridgeRecord.permId = static_cast<long long>(execution.permId);
+        bridgeRecord.execId = execution.execId;
+        bridgeRecord.note = "execution details observed";
+        enqueueBridgeOutboxRecord(bridgeRecord);
+    }
 }
 
 void recordTraceCommission(const CommissionReport& commissionReport) {

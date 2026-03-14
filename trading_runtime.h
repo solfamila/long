@@ -46,6 +46,7 @@ public:
     void setTradingKillSwitch(bool enabled);
     std::string ensureWebSocketAuthToken();
     TradeTraceSnapshot captureTradeTraceSnapshot(std::uint64_t traceId) const;
+    BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems = 100) const;
     std::uint64_t findTradeTraceIdByOrderId(OrderId orderId) const;
     void appendMessage(const std::string& message);
     std::vector<OrderId> markOrdersPendingCancel(const std::vector<OrderId>& orderIds);
@@ -64,7 +65,8 @@ public:
                            bool closeOnly,
                            std::string* error = nullptr,
                            std::uint64_t* outTraceId = nullptr,
-                           OrderId* outOrderId = nullptr);
+                           OrderId* outOrderId = nullptr,
+                           BridgeOutboxEnqueueResult* outBridgeOutbox = nullptr);
     std::vector<bool> requestCancelOrders(const std::vector<OrderId>& orderIds);
 
 private:

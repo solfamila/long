@@ -161,13 +161,15 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
         std::string submitError;
         OrderId orderId = 0;
         std::uint64_t traceId = 0;
+        BridgeOutboxEnqueueResult bridgeOutbox;
         if (!runtime->submitOrderIntent(intent,
                                         static_cast<double>(qtyShares),
                                         limitPrice,
                                         closeOnly,
                                         &submitError,
                                         &traceId,
-                                        &orderId)) {
+                                        &orderId,
+                                        &bridgeOutbox)) {
             macLogError("ipc", "WebSocket order rejected: " + submitError);
             appendRuntimeJournalEvent("ws_order_rejected", {
                 {"reason", submitError},
@@ -182,20 +184,30 @@ void handleWebSocketOrder(const std::string& jsonMessage, ix::WebSocket& webSock
         appendRuntimeJournalEvent("ws_order_accepted", {
             {"orderId", static_cast<long long>(orderId)},
             {"traceId", static_cast<unsigned long long>(traceId)},
+            {"sourceSeq", static_cast<unsigned long long>(bridgeOutbox.sourceSeq)},
             {"symbol", symbol},
             {"action", action},
-            {"idempotencyKey", idempotencyKey}
+            {"idempotencyKey", idempotencyKey},
+            {"bridgeFallbackState", bridgeOutbox.fallbackState},
+            {"bridgeFallbackReason", bridgeOutbox.fallbackReason}
         });
         macLogInfo("ipc", "WebSocket order accepted for " + symbol + " trace " + std::to_string(static_cast<unsigned long long>(traceId)));
+        const BridgeOutboxSnapshot bridgeSnapshot = runtime->captureBridgeOutboxSnapshot(0);
         webSocket.send(json({
             {"success", true},
             {"orderId", static_cast<long long>(orderId)},
             {"traceId", static_cast<unsigned long long>(traceId)},
+            {"sourceSeq", static_cast<unsigned long long>(bridgeOutbox.sourceSeq)},
             {"symbol", symbol},
             {"action", action},
             {"quantity", qtyShares},
             {"limitPrice", limitPrice},
-            {"closeOnly", closeOnly}
+            {"closeOnly", closeOnly},
+            {"bridgeFallbackState", bridgeOutbox.fallbackState},
+            {"bridgeFallbackReason", bridgeOutbox.fallbackReason},
+            {"bridgeRecoveryRequired", bridgeSnapshot.recoveryRequired},
+            {"bridgePendingCount", bridgeSnapshot.pendingCount},
+            {"bridgeLossCount", bridgeSnapshot.lossCount}
         }).dump());
 
     } catch (const json::exception& e) {
