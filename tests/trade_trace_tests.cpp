@@ -639,6 +639,66 @@ void testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking() {
     resetSharedDataForTesting();
 }
 
+void testShortOpenValidationUsesShortExposureForMaxOpenNotional() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.connected = true;
+        g_data.sessionReady = true;
+        g_data.selectedAccount = "U23154741";
+        g_data.currentSymbol = "INTC";
+        g_data.maxOrderNotional = 20000.0;
+        g_data.maxOpenNotional = 1000.0;
+        g_data.borrowAvailability = BorrowAvailability::Borrowable;
+
+        PositionInfo position;
+        position.account = "U23154741";
+        position.symbol = "INTC";
+        position.quantity = -5.0;
+        position.avgCost = 100.0;
+        g_data.positions[makePositionKey("U23154741", "INTC")] = position;
+
+        OrderInfo workingShort;
+        workingShort.orderId = 701;
+        workingShort.account = "U23154741";
+        workingShort.symbol = "INTC";
+        workingShort.side = "SELL";
+        workingShort.quantity = 3.0;
+        workingShort.remainingQty = 3.0;
+        workingShort.limitPrice = 100.0;
+        workingShort.status = "Submitted";
+        g_data.orders[701] = workingShort;
+    }
+    publishSharedDataSnapshot();
+
+    EReaderOSSignal signal(1000);
+    EClientSocket client(nullptr, &signal);
+    (void)client.eConnect("127.0.0.1", 7496, 77);
+
+    std::string error;
+    const bool submitted = submitLimitOrder(&client,
+                                            "INTC",
+                                            "SELL",
+                                            3.0,
+                                            100.0,
+                                            false,
+                                            nullptr,
+                                            &error,
+                                            nullptr,
+                                            nullptr);
+    expect(!submitted, "open short should fail when projected short exposure exceeds max open notional");
+    expectContains(error,
+                   "Projected open notional $1100.00 exceeds max open notional $1000.00",
+                   "max-open validation should include existing short position and working short-open exposure");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 void testOrderWatchdogEscalatesToManualReview() {
     clearTestFiles();
 
@@ -950,6 +1010,7 @@ int main() {
         testRuntimePresentationSnapshotCapturesConsistentState();
         testPendingUiSyncUpdateConsumesFlags();
         testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking();
+        testShortOpenValidationUsesShortExposureForMaxOpenNotional();
         testOrderWatchdogEscalatesToManualReview();
         testCancelAndPartialFillWatchdogs();
         testOpenOrderResolvesReconcilingStateAndFloorsOrderIds();

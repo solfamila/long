@@ -61,7 +61,8 @@ TradingPanelState buildTradingPanelStateFromSnapshot(const RuntimePresentationSn
     state.orderNotional = static_cast<double>(quantityInput) * state.sellPrice;
     const double currentPositionBasis = std::max(state.symbol.lastPrice,
         std::max(state.symbol.askPrice, std::max(state.symbol.bidPrice, state.symbol.currentPositionAvgCost)));
-    state.projectedOpenNotional = shortPositionToCover * currentPositionBasis +
+    state.projectedOpenNotional = state.symbol.openBuyExposure +
+                                  shortPositionToCover * currentPositionBasis +
                                   state.orderNotional;
 
     if (state.risk.tradingKillSwitch || !state.symbol.hasFreshQuote) {

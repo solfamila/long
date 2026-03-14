@@ -2319,7 +2319,7 @@ double calculateOpenBuyExposureUnlocked(const SharedData& state, const std::stri
     for (const auto& [id, ord] : state.orders) {
         (void)id;
         if (!ord.account.empty() && ord.account != account) continue;
-        if (ord.side != "BUY") continue;
+        if (ord.side != "SELL") continue;
         if (ord.isTerminal()) continue;
         exposure += outstandingOrderQty(ord) * ord.limitPrice;
     }
@@ -2331,7 +2331,7 @@ double calculatePositionMarketValueUnlocked(const SharedData& state, const std::
     if (posIt == state.positions.end()) {
         return 0.0;
     }
-    const double qty = std::max(0.0, posIt->second.quantity);
+    const double qty = std::max(0.0, -posIt->second.quantity);
     if (qty <= 0.0) {
         return 0.0;
     }
@@ -2359,7 +2359,7 @@ double calculatePositionMarketValueUnlocked(const ImmutableSharedDataSnapshot& s
     if (posIt == state.positions.end()) {
         return 0.0;
     }
-    const double qty = std::max(0.0, posIt->second.quantity);
+    const double qty = std::max(0.0, -posIt->second.quantity);
     if (qty <= 0.0) {
         return 0.0;
     }
@@ -2431,7 +2431,7 @@ double calculateOpenBuyExposureUnlocked(const ImmutableSharedDataSnapshot& state
     for (const auto& [id, ord] : state.orders) {
         (void)id;
         if (!ord.account.empty() && ord.account != account) continue;
-        if (ord.side != "BUY") continue;
+        if (ord.side != "SELL") continue;
         if (ord.isTerminal()) continue;
         exposure += outstandingOrderQty(ord) * ord.limitPrice;
     }
@@ -3255,7 +3255,7 @@ bool submitLimitOrder(EClientSocket* client,
     int staleQuoteThresholdMs = 0;
     double maxOrderNotional = 0.0;
     double maxOpenNotional = 0.0;
-    double openBuyExposure = 0.0;
+    double openShortExposure = 0.0;
     double currentPositionValue = 0.0;
     ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
@@ -3273,7 +3273,7 @@ bool submitLimitOrder(EClientSocket* client,
         controllerArmed = published->controllerArmed;
         tradingKillSwitch = published->tradingKillSwitch;
         borrowAvailability = published->borrowAvailability;
-        openBuyExposure = calculateOpenBuyExposureUnlocked(*published, account);
+        openShortExposure = calculateOpenBuyExposureUnlocked(*published, account);
         currentPositionValue = calculatePositionMarketValueUnlocked(*published, account, symbol);
         quoteMatchesCurrentSymbol = (symbol == published->currentSymbol);
         if (hasTime(published->lastQuoteUpdate) && quoteMatchesCurrentSymbol) {
@@ -3324,7 +3324,7 @@ bool submitLimitOrder(EClientSocket* client,
                 << " exceeds max order notional $" << maxOrderNotional;
             return failValidation(oss.str());
         }
-        const double projectedNotional = openBuyExposure + currentPositionValue + orderNotional;
+        const double projectedNotional = openShortExposure + currentPositionValue + orderNotional;
         if (maxOpenNotional > 0.0 && projectedNotional > maxOpenNotional + 1e-9) {
             std::ostringstream oss;
             oss << "Projected open notional $" << std::fixed << std::setprecision(2) << projectedNotional
