@@ -101,6 +101,23 @@ void appendJournalLine(const json& line) {
     out << line.dump() << '\n';
 }
 
+std::vector<json> readJsonLines(const std::string& path) {
+    std::ifstream in(path);
+    expect(in.is_open(), "failed to open json log at " + path);
+
+    std::vector<json> lines;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        json parsed = json::parse(line, nullptr, false);
+        expect(!parsed.is_discarded(), "failed to parse json log line from " + path);
+        lines.push_back(std::move(parsed));
+    }
+    return lines;
+}
+
 void testReplayPrefersRichLiveTrace() {
     clearTestFiles();
 
@@ -264,6 +281,197 @@ void testRecoverySnapshotReportsAbnormalShutdown() {
     expect(snapshot.unfinishedTraceCount == 1, "recovery snapshot should count unfinished traces");
     expectContains(snapshot.bannerText, "Previous session ended unexpectedly", "recovery banner should mention abnormal shutdown");
     expectContains(snapshot.bannerText, "1 unfinished trace", "recovery banner should mention unfinished trace count");
+}
+
+void testBridgeOutboxSourceSeqPreservesAcceptanceOrderingAndAnchors() {
+    clearTestFiles();
+
+    appendJournalLine(json{
+        {"event", "runtime_start"},
+        {"wallTime", "2026-03-13T09:30:00.000"},
+        {"appSessionId", "app-ordering-session"},
+        {"runtimeSessionId", "runtime-ordering-session"}
+    });
+    appendJournalLine(json{
+        {"event", "bridge_outbox_queued"},
+        {"wallTime", "2026-03-13T09:30:02.000"},
+        {"appSessionId", "app-ordering-session"},
+        {"runtimeSessionId", "runtime-ordering-session"},
+        {"details", json{{"sourceSeq", 9ULL}}}
+    });
+    appendJournalLine(json{
+        {"event", "bridge_outbox_queued"},
+        {"wallTime", "2026-03-13T09:29:59.000"},
+        {"appSessionId", "app-ordering-session"},
+        {"runtimeSessionId", "runtime-ordering-session"},
+        {"details", json{{"sourceSeq", 12ULL}}}
+    });
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    BridgeOutboxRecordInput intentRecord;
+    intentRecord.recordType = "order_intent";
+    intentRecord.source = "WebSocket";
+    intentRecord.symbol = "intc";
+    intentRecord.side = "BUY";
+    intentRecord.traceId = 71;
+    intentRecord.orderId = 501;
+    intentRecord.note = "accepted order intent";
+    const BridgeOutboxEnqueueResult accepted = enqueueBridgeOutboxRecord(intentRecord);
+
+    BridgeOutboxRecordInput fillRecord;
+    fillRecord.recordType = "fill_execution";
+    fillRecord.source = "BrokerExecution";
+    fillRecord.symbol = "intc";
+    fillRecord.side = "BOT";
+    fillRecord.traceId = 71;
+    fillRecord.orderId = 501;
+    fillRecord.permId = 9501;
+    fillRecord.execId = "EXEC-71";
+    fillRecord.note = "execution details observed";
+    const BridgeOutboxEnqueueResult filled = enqueueBridgeOutboxRecord(fillRecord);
+
+    const BridgeOutboxSnapshot snapshot = captureBridgeOutboxSnapshot(10);
+    expect(accepted.queued, "accepted intent should be queued for bridge recovery");
+    expect(filled.queued, "fill execution should be queued for bridge recovery");
+    expect(accepted.sourceSeq == 13, "source_seq should continue from the highest recovered journal sequence");
+    expect(filled.sourceSeq == 14, "source_seq should advance in acceptance order");
+    expect(snapshot.pendingCount == 2, "bridge snapshot should report queued records");
+    expect(snapshot.lossCount == 0, "bridge snapshot should not invent loss markers");
+    expect(snapshot.recoveryRequired, "bridge snapshot should require recovery while records are pending");
+    expect(snapshot.lastSourceSeq == filled.sourceSeq, "bridge snapshot should track the highest accepted source_seq");
+    expect(snapshot.records.size() == 2, "bridge snapshot should include both queued records");
+
+    const BridgeOutboxRecord& newest = snapshot.records.front();
+    const BridgeOutboxRecord& oldest = snapshot.records.back();
+    expect(newest.sourceSeq == filled.sourceSeq, "bridge snapshot should expose the newest accepted record first");
+    expect(oldest.sourceSeq == accepted.sourceSeq, "older accepted records should retain lower source_seq values");
+    expect(oldest.anchor.traceId == 71, "accepted order intent should preserve traceId");
+    expect(oldest.anchor.orderId == 501, "accepted order intent should preserve orderId");
+    expect(newest.anchor.traceId == 71, "fill execution should preserve traceId");
+    expect(newest.anchor.orderId == 501, "fill execution should preserve orderId");
+    expect(newest.anchor.permId == 9501, "fill execution should preserve permId");
+    expect(newest.anchor.execId == "EXEC-71", "fill execution should preserve execId");
+    expect(newest.symbol == "INTC", "bridge snapshot should normalize symbols without changing acceptance order");
+    expect(newest.fallbackState == "queued_for_recovery", "bridge snapshot should surface explicit fallback state");
+    expect(newest.fallbackReason == "engine_unavailable", "bridge snapshot should surface explicit fallback reason");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testBridgeOutboxOverflowWritesExplicitLossMarker() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    BridgeOutboxRecordInput firstRecord;
+    firstRecord.recordType = "fill_execution";
+    firstRecord.source = "BrokerExecution";
+    firstRecord.symbol = "INTC";
+    firstRecord.side = "BOT";
+    firstRecord.traceId = 301;
+    firstRecord.orderId = 901;
+    firstRecord.permId = 9901;
+    firstRecord.execId = "EXEC-DROP";
+    firstRecord.note = "first record should become the explicit loss marker";
+    const BridgeOutboxEnqueueResult first = enqueueBridgeOutboxRecord(firstRecord);
+
+    BridgeOutboxSnapshot snapshot = captureBridgeOutboxSnapshot(1);
+    int enqueued = 1;
+    while (snapshot.lossCount == 0 && enqueued < 2000) {
+        BridgeOutboxRecordInput record;
+        record.recordType = "fill_execution";
+        record.source = "BrokerExecution";
+        record.symbol = "INTC";
+        record.side = "BOT";
+        record.traceId = 301 + enqueued;
+        record.orderId = 901 + enqueued;
+        record.permId = 9901 + enqueued;
+        record.execId = "EXEC-" + std::to_string(enqueued);
+        record.note = "overflow probe";
+        enqueueBridgeOutboxRecord(record);
+        ++enqueued;
+        snapshot = captureBridgeOutboxSnapshot(1);
+    }
+
+    expect(snapshot.lossCount > 0, "bridge overflow should surface an explicit continuity-loss count");
+    expect(snapshot.recoveryRequired, "bridge overflow should keep recovery explicitly required");
+    expect(snapshot.pendingCount < enqueued, "bridge overflow should not silently pretend all queued records are still present");
+
+    const std::vector<json> journalLines = readJsonLines(runtimeJournalLogPath());
+    const auto lossIt = std::find_if(journalLines.begin(),
+                                     journalLines.end(),
+                                     [](const json& line) {
+                                         return line.value("event", std::string()) == "bridge_outbox_loss";
+                                     });
+    expect(lossIt != journalLines.end(), "bridge overflow should write a bridge_outbox_loss journal event");
+    const json details = lossIt->contains("details") && (*lossIt)["details"].is_object()
+        ? (*lossIt)["details"]
+        : json::object();
+    expect(details.value("reason", std::string()) == "queue_overflow", "loss marker should explain the continuity break");
+    expect(details.value("droppedSourceSeq", 0ULL) == first.sourceSeq, "loss marker should identify the dropped source_seq");
+    expect(details.value("traceId", 0ULL) == firstRecord.traceId, "loss marker should preserve dropped traceId");
+    expect(details.value("orderId", 0LL) == static_cast<long long>(firstRecord.orderId), "loss marker should preserve dropped orderId");
+    expect(details.value("permId", 0LL) == firstRecord.permId, "loss marker should preserve dropped permId");
+    expect(details.value("execId", std::string()) == firstRecord.execId, "loss marker should preserve dropped execId");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown() {
+    clearTestFiles();
+
+    appendJournalLine(json{
+        {"event", "runtime_start"},
+        {"wallTime", "2026-03-13T09:30:00.000"},
+        {"appSessionId", "app-bridge-recovery"},
+        {"runtimeSessionId", "runtime-bridge-recovery"}
+    });
+    appendJournalLine(json{
+        {"event", "bridge_outbox_queued"},
+        {"wallTime", "2026-03-13T09:30:01.000"},
+        {"appSessionId", "app-bridge-recovery"},
+        {"runtimeSessionId", "runtime-bridge-recovery"},
+        {"details", json{{"sourceSeq", 41ULL}, {"traceId", 81ULL}, {"orderId", 601LL}}}
+    });
+    appendJournalLine(json{
+        {"event", "bridge_outbox_queued"},
+        {"wallTime", "2026-03-13T09:30:02.000"},
+        {"appSessionId", "app-bridge-recovery"},
+        {"runtimeSessionId", "runtime-bridge-recovery"},
+        {"details", json{{"sourceSeq", 42ULL}, {"traceId", 81ULL}, {"orderId", 601LL}, {"permId", 9601LL}, {"execId", "EXEC-81"}}}
+    });
+    appendJournalLine(json{
+        {"event", "bridge_outbox_delivered"},
+        {"wallTime", "2026-03-13T09:30:03.000"},
+        {"appSessionId", "app-bridge-recovery"},
+        {"runtimeSessionId", "runtime-bridge-recovery"},
+        {"details", json{{"sourceSeq", 41ULL}}}
+    });
+    appendJournalLine(json{
+        {"event", "bridge_outbox_loss"},
+        {"wallTime", "2026-03-13T09:30:04.000"},
+        {"appSessionId", "app-bridge-recovery"},
+        {"runtimeSessionId", "runtime-bridge-recovery"},
+        {"details", json{{"reason", "queue_overflow"}, {"droppedSourceSeq", 40ULL}, {"traceId", 80ULL}, {"orderId", 600LL}, {"permId", 9600LL}, {"execId", "EXEC-80"}}}
+    });
+
+    const RuntimeRecoverySnapshot snapshot = recoverRuntimeRecoverySnapshot(5);
+    expect(snapshot.priorSessionAbnormal, "bridge recovery snapshot should flag abnormal prior shutdown");
+    expect(snapshot.priorAppSessionId == "app-bridge-recovery", "bridge recovery snapshot should preserve prior app session id");
+    expect(snapshot.priorRuntimeSessionId == "runtime-bridge-recovery", "bridge recovery snapshot should preserve prior runtime session id");
+    expect(snapshot.pendingOutboxCount == 1, "bridge recovery snapshot should count queued records that were not delivered");
+    expect(snapshot.outboxLossCount == 1, "bridge recovery snapshot should count explicit continuity-loss markers");
+    expect(snapshot.lastOutboxSourceSeq == 42, "bridge recovery snapshot should preserve the highest accepted source_seq");
+    expect(snapshot.bridgeRecoveryRequired, "bridge recovery snapshot should require recovery when continuity was lost");
+    expectContains(snapshot.bannerText, "Previous session ended unexpectedly", "bridge recovery banner should mention abnormal shutdown");
+    expectContains(snapshot.bannerText, "Bridge recovery pending: 1 queued intent", "bridge recovery banner should mention pending bridge work");
+    expectContains(snapshot.bannerText, "1 loss marker", "bridge recovery banner should mention explicit continuity loss");
+    expectContains(snapshot.bannerText, "last source_seq=42", "bridge recovery banner should report the last accepted source_seq");
 }
 
 void testTradingWrapperSessionReadyAndReconnect() {
@@ -843,6 +1051,9 @@ int main() {
         testReplayHandlesPartialFillsAndCommission();
         testWebSocketRuntimeGuards();
         testRecoverySnapshotReportsAbnormalShutdown();
+        testBridgeOutboxSourceSeqPreservesAcceptanceOrderingAndAnchors();
+        testBridgeOutboxOverflowWritesExplicitLossMarker();
+        testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();
         testRuntimePresentationSnapshotCapturesConsistentState();
