@@ -446,6 +446,13 @@ void testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown() {
         {"details", json{{"sourceSeq", 42ULL}, {"traceId", 81ULL}, {"orderId", 601LL}, {"permId", 9601LL}, {"execId", "EXEC-81"}}}
     });
     appendJournalLine(json{
+        {"event", "bridge_outbox_queued"},
+        {"wallTime", "2026-03-13T09:30:02.500"},
+        {"appSessionId", "app-bridge-recovery"},
+        {"runtimeSessionId", "runtime-bridge-recovery"},
+        {"details", json{{"sourceSeq", 43ULL}, {"traceId", 82ULL}, {"orderId", 602LL}, {"permId", 9602LL}, {"execId", "EXEC-82"}}}
+    });
+    appendJournalLine(json{
         {"event", "bridge_outbox_delivered"},
         {"wallTime", "2026-03-13T09:30:03.000"},
         {"appSessionId", "app-bridge-recovery"},
@@ -457,21 +464,21 @@ void testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown() {
         {"wallTime", "2026-03-13T09:30:04.000"},
         {"appSessionId", "app-bridge-recovery"},
         {"runtimeSessionId", "runtime-bridge-recovery"},
-        {"details", json{{"reason", "queue_overflow"}, {"droppedSourceSeq", 40ULL}, {"traceId", 80ULL}, {"orderId", 600LL}, {"permId", 9600LL}, {"execId", "EXEC-80"}}}
+        {"details", json{{"reason", "queue_overflow"}, {"droppedSourceSeq", 42ULL}, {"traceId", 81ULL}, {"orderId", 601LL}, {"permId", 9601LL}, {"execId", "EXEC-81"}}}
     });
 
     const RuntimeRecoverySnapshot snapshot = recoverRuntimeRecoverySnapshot(5);
     expect(snapshot.priorSessionAbnormal, "bridge recovery snapshot should flag abnormal prior shutdown");
     expect(snapshot.priorAppSessionId == "app-bridge-recovery", "bridge recovery snapshot should preserve prior app session id");
     expect(snapshot.priorRuntimeSessionId == "runtime-bridge-recovery", "bridge recovery snapshot should preserve prior runtime session id");
-    expect(snapshot.pendingOutboxCount == 1, "bridge recovery snapshot should count queued records that were not delivered");
+    expect(snapshot.pendingOutboxCount == 1, "bridge recovery snapshot should exclude explicitly lost queued records from pending recovery work");
     expect(snapshot.outboxLossCount == 1, "bridge recovery snapshot should count explicit continuity-loss markers");
-    expect(snapshot.lastOutboxSourceSeq == 42, "bridge recovery snapshot should preserve the highest accepted source_seq");
+    expect(snapshot.lastOutboxSourceSeq == 43, "bridge recovery snapshot should preserve the highest accepted source_seq");
     expect(snapshot.bridgeRecoveryRequired, "bridge recovery snapshot should require recovery when continuity was lost");
     expectContains(snapshot.bannerText, "Previous session ended unexpectedly", "bridge recovery banner should mention abnormal shutdown");
     expectContains(snapshot.bannerText, "Bridge recovery pending: 1 queued intent", "bridge recovery banner should mention pending bridge work");
     expectContains(snapshot.bannerText, "1 loss marker", "bridge recovery banner should mention explicit continuity loss");
-    expectContains(snapshot.bannerText, "last source_seq=42", "bridge recovery banner should report the last accepted source_seq");
+    expectContains(snapshot.bannerText, "last source_seq=43", "bridge recovery banner should report the last accepted source_seq");
 }
 
 void testTradingWrapperSessionReadyAndReconnect() {
