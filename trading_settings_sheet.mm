@@ -127,7 +127,7 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
         return false;
     }
 
-    NSWindow* sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0.0, 0.0, 640.0, 540.0)
+    NSWindow* sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0.0, 0.0, 640.0, 620.0)
                                                   styleMask:NSWindowStyleMaskTitled
                                                     backing:NSBackingStoreBuffered
                                                       defer:NO];
@@ -148,7 +148,7 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
         [rootStack.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor],
     ]];
 
-    NSTextField* infoLabel = MakeWrappingLabel(@"Connection and device changes apply on next launch. Risk limits, controller arming mode, and the WebSocket token apply immediately.",
+    NSTextField* infoLabel = MakeWrappingLabel(@"Connection and device changes apply on next launch. Risk limits, watchdog timers, controller arming mode, and the WebSocket token apply immediately.",
                                                [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
                                                [NSColor secondaryLabelColor]);
     [rootStack addArrangedSubview:infoLabel];
@@ -159,6 +159,9 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
     NSTextField* clientIdField = MakeInputField([NSString stringWithFormat:@"%d", currentConnection.clientId], 120.0);
     NSTextField* tokenField = MakeInputField(ToNSString(currentConnection.websocketAuthToken), 300.0);
     NSTextField* staleQuoteField = MakeInputField([NSString stringWithFormat:@"%d", currentRisk.staleQuoteThresholdMs], 120.0);
+    NSTextField* brokerEchoField = MakeInputField([NSString stringWithFormat:@"%d", currentRisk.brokerEchoTimeoutMs], 120.0);
+    NSTextField* cancelAckField = MakeInputField([NSString stringWithFormat:@"%d", currentRisk.cancelAckTimeoutMs], 120.0);
+    NSTextField* partialFillQuietField = MakeInputField([NSString stringWithFormat:@"%d", currentRisk.partialFillQuietTimeoutMs], 120.0);
     NSTextField* maxOrderField = MakeInputField([NSString stringWithFormat:@"%.0f", currentRisk.maxOrderNotional], 140.0);
     NSTextField* maxOpenField = MakeInputField([NSString stringWithFormat:@"%.0f", currentRisk.maxOpenNotional], 140.0);
     NSPopUpButton* controllerArmModePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
@@ -187,12 +190,18 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
 
     NSArray<NSString*>* riskLabels = @[
         @"Stale Quote (ms)",
+        @"Broker Echo Timeout (ms)",
+        @"Cancel Ack Timeout (ms)",
+        @"Partial Fill Quiet (ms)",
         @"Max Order Notional",
         @"Max Open Notional",
         @"Controller Arming",
     ];
     NSArray<NSView*>* riskFields = @[
         staleQuoteField,
+        brokerEchoField,
+        cancelAckField,
+        partialFillQuietField,
         maxOrderField,
         maxOpenField,
         controllerArmModePopup,
@@ -226,7 +235,7 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
 
     [rootStack addArrangedSubview:MakeSectionLabel(@"Risk & Safety")];
 
-    NSGridView* riskGrid = [NSGridView gridViewWithNumberOfColumns:2 rows:4];
+    NSGridView* riskGrid = [NSGridView gridViewWithNumberOfColumns:2 rows:7];
     riskGrid.rowSpacing = 10.0;
     riskGrid.columnSpacing = 14.0;
     riskGrid.xPlacement = NSGridCellPlacementLeading;
@@ -295,6 +304,9 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
 
     RiskControlsSnapshot updatedRisk = currentRisk;
     updatedRisk.staleQuoteThresholdMs = std::max(250, staleQuoteField.intValue);
+    updatedRisk.brokerEchoTimeoutMs = std::max(250, brokerEchoField.intValue);
+    updatedRisk.cancelAckTimeoutMs = std::max(500, cancelAckField.intValue);
+    updatedRisk.partialFillQuietTimeoutMs = std::max(1000, partialFillQuietField.intValue);
     updatedRisk.maxOrderNotional = std::max(100.0, maxOrderField.doubleValue);
     updatedRisk.maxOpenNotional = std::max(updatedRisk.maxOrderNotional, maxOpenField.doubleValue);
     updatedRisk.controllerArmMode = ControllerArmModeFromPopupIndex(controllerArmModePopup.indexOfSelectedItem);

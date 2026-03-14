@@ -426,6 +426,15 @@ void StylePanel(NSView* view) {
     if ([defaults objectForKey:@"staleQuoteThresholdMs"] != nil) {
         risk.staleQuoteThresholdMs = std::max(250, static_cast<int>([defaults integerForKey:@"staleQuoteThresholdMs"]));
     }
+    if ([defaults objectForKey:@"brokerEchoTimeoutMs"] != nil) {
+        risk.brokerEchoTimeoutMs = std::max(250, static_cast<int>([defaults integerForKey:@"brokerEchoTimeoutMs"]));
+    }
+    if ([defaults objectForKey:@"cancelAckTimeoutMs"] != nil) {
+        risk.cancelAckTimeoutMs = std::max(500, static_cast<int>([defaults integerForKey:@"cancelAckTimeoutMs"]));
+    }
+    if ([defaults objectForKey:@"partialFillQuietTimeoutMs"] != nil) {
+        risk.partialFillQuietTimeoutMs = std::max(1000, static_cast<int>([defaults integerForKey:@"partialFillQuietTimeoutMs"]));
+    }
     if ([defaults objectForKey:@"maxOrderNotional"] != nil) {
         risk.maxOrderNotional = std::max(100.0, [defaults doubleForKey:@"maxOrderNotional"]);
     }
@@ -456,6 +465,9 @@ void StylePanel(NSView* view) {
 
     const RiskControlsSnapshot risk = [self currentRiskControls];
     [defaults setInteger:risk.staleQuoteThresholdMs forKey:@"staleQuoteThresholdMs"];
+    [defaults setInteger:risk.brokerEchoTimeoutMs forKey:@"brokerEchoTimeoutMs"];
+    [defaults setInteger:risk.cancelAckTimeoutMs forKey:@"cancelAckTimeoutMs"];
+    [defaults setInteger:risk.partialFillQuietTimeoutMs forKey:@"partialFillQuietTimeoutMs"];
     [defaults setDouble:risk.maxOrderNotional forKey:@"maxOrderNotional"];
     [defaults setDouble:risk.maxOpenNotional forKey:@"maxOpenNotional"];
     [defaults setInteger:ControllerArmModePopupIndex(risk.controllerArmMode) forKey:@"controllerArmMode"];
@@ -873,6 +885,9 @@ void StylePanel(NSView* view) {
         _runtimeHost->runtime()->updateRiskControls(risk);
     } else {
         updateRiskControls(risk.staleQuoteThresholdMs,
+                           risk.brokerEchoTimeoutMs,
+                           risk.cancelAckTimeoutMs,
+                           risk.partialFillQuietTimeoutMs,
                            risk.maxOrderNotional,
                            risk.maxOpenNotional,
                            risk.controllerArmMode);

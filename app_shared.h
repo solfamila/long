@@ -345,6 +345,9 @@ struct SharedData {
     double maxOrderNotional = 15000.0;
     double maxOpenNotional = 50000.0;
     int staleQuoteThresholdMs = 1500;
+    int brokerEchoTimeoutMs = 2000;
+    int cancelAckTimeoutMs = 5000;
+    int partialFillQuietTimeoutMs = 15000;
     ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
@@ -473,6 +476,9 @@ struct RuntimeConnectionConfig {
 
 struct RiskControlsSnapshot {
     int staleQuoteThresholdMs = 1500;
+    int brokerEchoTimeoutMs = 2000;
+    int cancelAckTimeoutMs = 5000;
+    int partialFillQuietTimeoutMs = 15000;
     double maxOrderNotional = 15000.0;
     double maxOpenNotional = 50000.0;
     ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
@@ -550,6 +556,9 @@ struct ConnectionConfigUpdatedEvent {
 
 struct RiskControlsUpdatedEvent {
     int staleQuoteThresholdMs = 1500;
+    int brokerEchoTimeoutMs = 2000;
+    int cancelAckTimeoutMs = 5000;
+    int partialFillQuietTimeoutMs = 15000;
     double maxOrderNotional = 15000.0;
     double maxOpenNotional = 50000.0;
     ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
@@ -728,8 +737,16 @@ void appendSharedMessage(const std::string& message);
 RuntimeConnectionConfig captureRuntimeConnectionConfig();
 void updateRuntimeConnectionConfig(const RuntimeConnectionConfig& config);
 RiskControlsSnapshot captureRiskControlsSnapshot();
-void updateRiskControls(int staleQuoteThresholdMs, double maxOrderNotional, double maxOpenNotional);
 void updateRiskControls(int staleQuoteThresholdMs,
+                        int brokerEchoTimeoutMs,
+                        int cancelAckTimeoutMs,
+                        int partialFillQuietTimeoutMs,
+                        double maxOrderNotional,
+                        double maxOpenNotional);
+void updateRiskControls(int staleQuoteThresholdMs,
+                        int brokerEchoTimeoutMs,
+                        int cancelAckTimeoutMs,
+                        int partialFillQuietTimeoutMs,
                         double maxOrderNotional,
                         double maxOpenNotional,
                         ControllerArmMode controllerArmMode);

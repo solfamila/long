@@ -1,8 +1,10 @@
 #include "trace_exporter.h"
+#include "trading_ui_format.h"
 
 #include <fstream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 
 namespace {
@@ -234,6 +236,19 @@ TradeTraceListItem makeTraceListItem(const TradeTrace& trace) {
 
 std::string resolvedTraceLogPath(const std::string& logPath) {
     return logPath.empty() ? tradeTraceLogPath() : logPath;
+}
+
+std::optional<OrderInfo> findOrderInfo(OrderId orderId) {
+    if (orderId <= 0) {
+        return std::nullopt;
+    }
+    const auto orders = captureOrdersSnapshot();
+    for (const auto& entry : orders) {
+        if (entry.first == orderId) {
+            return entry.second;
+        }
+    }
+    return std::nullopt;
 }
 
 bool traceContainsExecId(const TradeTrace& trace, const std::string& execId) {
@@ -591,6 +606,7 @@ bool buildTraceExportBundle(std::uint64_t traceId, TraceExportBundle* outBundle,
     }
 
     const TradeTrace& trace = snapshot.trace;
+    const std::optional<OrderInfo> orderInfo = findOrderInfo(trace.orderId);
     outBundle->baseName = sanitizeBaseName(trace);
 
     std::ostringstream report;
@@ -604,6 +620,11 @@ bool buildTraceExportBundle(std::uint64_t traceId, TraceExportBundle* outBundle,
     report << "Latest Status," << trace.latestStatus << "\n";
     report << "Terminal Status," << trace.terminalStatus << "\n";
     report << "Latest Error," << trace.latestError << "\n";
+    if (orderInfo.has_value()) {
+        report << "Local Order State," << formatOrderLocalStateText(*orderInfo) << "\n";
+        report << "Watchdog Status," << formatOrderWatchdogText(*orderInfo) << "\n";
+        report << "Reconciliation Reason," << orderInfo->lastReconciliationReason << "\n";
+    }
     report << "Total Commission," << std::fixed << std::setprecision(4) << trace.totalCommission << "\n";
     report << "Commission Currency," << trace.commissionCurrency << "\n\n";
     report << "Latency Breakdown\n";
@@ -618,6 +639,7 @@ bool buildTraceExportBundle(std::uint64_t traceId, TraceExportBundle* outBundle,
     std::ostringstream summaryCsv;
     summaryCsv << "trace_id,order_id,perm_id,source,symbol,side,requested_qty,limit_price,close_only,"
                   "latest_status,terminal_status,latest_error,total_commission,commission_currency,"
+                  "local_order_state,watchdog_status,reconciliation_attempts,last_reconciliation_reason,"
                   "validation_ms,trigger_to_place_return_ms,first_exec_ms,full_fill_ms\n";
     summaryCsv << trace.traceId << ','
                << static_cast<long long>(trace.orderId) << ','
@@ -633,6 +655,10 @@ bool buildTraceExportBundle(std::uint64_t traceId, TraceExportBundle* outBundle,
                << csvEscape(trace.latestError) << ','
                << std::fixed << std::setprecision(4) << trace.totalCommission << ','
                << csvEscape(trace.commissionCurrency) << ','
+               << csvEscape(orderInfo ? formatOrderLocalStateText(*orderInfo) : "") << ','
+               << csvEscape(orderInfo ? formatOrderWatchdogText(*orderInfo) : "") << ','
+               << (orderInfo ? orderInfo->watchdogs.reconciliationAttempts : 0) << ','
+               << csvEscape(orderInfo ? orderInfo->lastReconciliationReason : "") << ','
                << durationMs(trace.validationStartMono, trace.validationEndMono) << ','
                << durationMs(trace.triggerMono, trace.placeCallEndMono) << ','
                << durationMs(trace.triggerMono, trace.firstExecMono) << ','
@@ -678,7 +704,8 @@ bool buildTraceExportBundle(std::uint64_t traceId, TraceExportBundle* outBundle,
 std::string buildAllTradesSummaryCsv(std::size_t maxItems) {
     std::ostringstream out;
     out << "trace_id,order_id,source,symbol,side,requested_qty,limit_price,latest_status,terminal_status,"
-           "latest_error,total_commission,trigger_to_fill_ms\n";
+           "latest_error,total_commission,local_order_state,watchdog_status,reconciliation_attempts,"
+           "last_reconciliation_reason,trigger_to_fill_ms\n";
     std::vector<TradeTraceListItem> items = captureTradeTraceListItems(maxItems);
     if (items.empty()) {
         items = buildTradeTraceListItemsFromLog(maxItems);
@@ -694,6 +721,7 @@ std::string buildAllTradesSummaryCsv(std::size_t maxItems) {
             continue;
         }
         const TradeTrace& trace = snapshot.trace;
+        const std::optional<OrderInfo> orderInfo = findOrderInfo(trace.orderId);
         out << trace.traceId << ','
             << static_cast<long long>(trace.orderId) << ','
             << csvEscape(trace.source) << ','
@@ -705,6 +733,10 @@ std::string buildAllTradesSummaryCsv(std::size_t maxItems) {
             << csvEscape(trace.terminalStatus) << ','
             << csvEscape(trace.latestError) << ','
             << std::fixed << std::setprecision(4) << trace.totalCommission << ','
+            << csvEscape(orderInfo ? formatOrderLocalStateText(*orderInfo) : "") << ','
+            << csvEscape(orderInfo ? formatOrderWatchdogText(*orderInfo) : "") << ','
+            << (orderInfo ? orderInfo->watchdogs.reconciliationAttempts : 0) << ','
+            << csvEscape(orderInfo ? orderInfo->lastReconciliationReason : "") << ','
             << durationMs(trace.triggerMono, trace.fullFillMono) << '\n';
     }
     return out.str();

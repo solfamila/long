@@ -605,6 +605,9 @@ RiskControlsSnapshot TradingRuntime::captureRiskControls() const {
 void TradingRuntime::updateRiskControls(const RiskControlsSnapshot& risk) {
     if (!impl_ || !impl_->started) {
         ::updateRiskControls(risk.staleQuoteThresholdMs,
+                             risk.brokerEchoTimeoutMs,
+                             risk.cancelAckTimeoutMs,
+                             risk.partialFillQuietTimeoutMs,
                              risk.maxOrderNotional,
                              risk.maxOpenNotional,
                              risk.controllerArmMode);
@@ -612,6 +615,9 @@ void TradingRuntime::updateRiskControls(const RiskControlsSnapshot& risk) {
     }
     impl_->invokeOnActionThread([risk]() {
         ::updateRiskControls(risk.staleQuoteThresholdMs,
+                             risk.brokerEchoTimeoutMs,
+                             risk.cancelAckTimeoutMs,
+                             risk.partialFillQuietTimeoutMs,
                              risk.maxOrderNotional,
                              risk.maxOpenNotional,
                              risk.controllerArmMode);

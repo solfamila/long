@@ -19,9 +19,9 @@ constexpr auto kRecentSubmitWindow = std::chrono::milliseconds(750);
 constexpr auto kRecentWebSocketOrderWindow = std::chrono::seconds(2);
 constexpr int kMaxWebSocketOrdersPerWindow = 5;
 constexpr auto kWebSocketIdempotencyWindow = std::chrono::minutes(10);
-constexpr auto kBrokerEchoTimeout = std::chrono::seconds(2);
-constexpr auto kCancelAckTimeout = std::chrono::seconds(5);
-constexpr auto kPartialFillQuietTimeout = std::chrono::seconds(15);
+constexpr int kDefaultBrokerEchoTimeoutMs = 2000;
+constexpr int kDefaultCancelAckTimeoutMs = 5000;
+constexpr int kDefaultPartialFillQuietTimeoutMs = 15000;
 constexpr auto kReconciliationRetryDelayShort = std::chrono::seconds(2);
 constexpr auto kReconciliationRetryDelayLong = std::chrono::seconds(5);
 constexpr int kMaxReconciliationAttempts = 3;
@@ -115,6 +115,9 @@ void copySharedDataState(const SharedData& src, SharedData& dst) {
     dst.maxOrderNotional = src.maxOrderNotional;
     dst.maxOpenNotional = src.maxOpenNotional;
     dst.staleQuoteThresholdMs = src.staleQuoteThresholdMs;
+    dst.brokerEchoTimeoutMs = src.brokerEchoTimeoutMs;
+    dst.cancelAckTimeoutMs = src.cancelAckTimeoutMs;
+    dst.partialFillQuietTimeoutMs = src.partialFillQuietTimeoutMs;
     dst.controllerArmMode = src.controllerArmMode;
     dst.controllerArmed = src.controllerArmed;
     dst.tradingKillSwitch = src.tradingKillSwitch;
@@ -224,6 +227,9 @@ struct ImmutableSharedDataSnapshot {
     double maxOrderNotional = 15000.0;
     double maxOpenNotional = 50000.0;
     int staleQuoteThresholdMs = 1500;
+    int brokerEchoTimeoutMs = 2000;
+    int cancelAckTimeoutMs = 5000;
+    int partialFillQuietTimeoutMs = 15000;
     ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
@@ -448,27 +454,33 @@ void noteOrderBrokerCallback(OrderInfo& order, std::chrono::steady_clock::time_p
     order.watchdogs.brokerEchoArmed = false;
 }
 
-void armBrokerEchoWatchdog(OrderInfo& order, std::chrono::steady_clock::time_point now) {
+void armBrokerEchoWatchdog(OrderInfo& order,
+                           std::chrono::steady_clock::time_point now,
+                           int timeoutMs) {
     order.localState = LocalOrderState::AwaitingBrokerEcho;
     order.watchdogs.brokerEchoArmed = true;
-    order.watchdogs.brokerEchoDeadline = now + kBrokerEchoTimeout;
+    order.watchdogs.brokerEchoDeadline = now + std::chrono::milliseconds(std::max(250, timeoutMs));
     order.watchdogs.cancelAckArmed = false;
     order.watchdogs.partialFillQuietArmed = false;
 }
 
-void armCancelAckWatchdog(OrderInfo& order, std::chrono::steady_clock::time_point now) {
+void armCancelAckWatchdog(OrderInfo& order,
+                          std::chrono::steady_clock::time_point now,
+                          int timeoutMs) {
     order.localState = LocalOrderState::AwaitingCancelAck;
     order.cancelPending = true;
     order.watchdogs.cancelAckArmed = true;
-    order.watchdogs.cancelAckDeadline = now + kCancelAckTimeout;
+    order.watchdogs.cancelAckDeadline = now + std::chrono::milliseconds(std::max(500, timeoutMs));
     order.watchdogs.brokerEchoArmed = false;
     order.watchdogs.partialFillQuietArmed = false;
 }
 
-void armPartialFillQuietWatchdog(OrderInfo& order, std::chrono::steady_clock::time_point now) {
+void armPartialFillQuietWatchdog(OrderInfo& order,
+                                 std::chrono::steady_clock::time_point now,
+                                 int timeoutMs) {
     order.localState = LocalOrderState::PartiallyFilled;
     order.watchdogs.partialFillQuietArmed = true;
-    order.watchdogs.partialFillQuietDeadline = now + kPartialFillQuietTimeout;
+    order.watchdogs.partialFillQuietDeadline = now + std::chrono::milliseconds(std::max(1000, timeoutMs));
     order.watchdogs.brokerEchoArmed = false;
     order.watchdogs.cancelAckArmed = false;
 }
@@ -877,6 +889,9 @@ void reduce(SharedData& state, const ConnectionConfigUpdatedEvent& event) {
 void reduce(SharedData& state, const RiskControlsUpdatedEvent& event) {
     std::lock_guard<std::recursive_mutex> lock(state.mutex);
     state.staleQuoteThresholdMs = std::max(250, event.staleQuoteThresholdMs);
+    state.brokerEchoTimeoutMs = std::max(250, event.brokerEchoTimeoutMs);
+    state.cancelAckTimeoutMs = std::max(500, event.cancelAckTimeoutMs);
+    state.partialFillQuietTimeoutMs = std::max(1000, event.partialFillQuietTimeoutMs);
     state.maxOrderNotional = std::max(100.0, event.maxOrderNotional);
     state.maxOpenNotional = std::max(state.maxOrderNotional, event.maxOpenNotional);
     state.controllerArmMode = event.controllerArmMode;
@@ -1224,9 +1239,9 @@ void reduce(SharedData& state, const BrokerOrderStatusEvent& event) {
             transitionOrderToResolvedState(ord, LocalOrderState::Filled, now);
         } else if (ord.cancelPending || previousLocalState == LocalOrderState::CancelRequested ||
                    previousLocalState == LocalOrderState::AwaitingCancelAck) {
-            armCancelAckWatchdog(ord, now);
+            armCancelAckWatchdog(ord, now, state.cancelAckTimeoutMs);
         } else if (event.filled > 0.0 && event.remaining > 0.0) {
-            armPartialFillQuietWatchdog(ord, now);
+            armPartialFillQuietWatchdog(ord, now, state.partialFillQuietTimeoutMs);
         } else {
             transitionOrderToResolvedState(ord, LocalOrderState::Working, now);
         }
@@ -1330,9 +1345,9 @@ void reduce(SharedData& state, const BrokerOpenOrderEvent& event) {
             noteOrderBrokerCallback(ord, now);
             if (ord.cancelPending || previousLocalState == LocalOrderState::CancelRequested ||
                 previousLocalState == LocalOrderState::AwaitingCancelAck) {
-                armCancelAckWatchdog(ord, now);
+                armCancelAckWatchdog(ord, now, state.cancelAckTimeoutMs);
             } else if (ord.filledQty > 0.0 && ord.remainingQty > 0.0) {
-                armPartialFillQuietWatchdog(ord, now);
+                armPartialFillQuietWatchdog(ord, now, state.partialFillQuietTimeoutMs);
             } else {
                 transitionOrderToResolvedState(ord, LocalOrderState::Working, now);
             }
@@ -1415,10 +1430,10 @@ void reduce(SharedData& state, const BrokerExecutionEvent& event) {
             ord.firstFillDurationMs = std::chrono::duration<double, std::milli>(now - ord.submitTime).count();
         }
         if (ord.cancelPending) {
-            armCancelAckWatchdog(ord, now);
+            armCancelAckWatchdog(ord, now, state.cancelAckTimeoutMs);
         } else if (ord.remainingQty > 0.0) {
             ord.status = "PartiallyFilled";
-            armPartialFillQuietWatchdog(ord, now);
+            armPartialFillQuietWatchdog(ord, now, state.partialFillQuietTimeoutMs);
         } else {
             ord.status = "Filled";
             if (ord.fillDurationMs < 0.0 && ord.submitTime.time_since_epoch().count() > 0) {
@@ -1736,7 +1751,7 @@ void reduce(SharedData& state, const CancelRequestsSentEvent& event) {
         if (it == state.orders.end() || it->second.isTerminal()) {
             continue;
         }
-        armCancelAckWatchdog(it->second, event.requestTime);
+        armCancelAckWatchdog(it->second, event.requestTime, state.cancelAckTimeoutMs);
     }
 }
 
@@ -1798,7 +1813,7 @@ void reduce(SharedData& state, const LocalOrderStoredEvent& event) {
     info.filledQty = 0.0;
     info.remainingQty = event.quantity;
     info.localState = LocalOrderState::AwaitingBrokerEcho;
-    armBrokerEchoWatchdog(info, event.submitTime);
+    armBrokerEchoWatchdog(info, event.submitTime, state.brokerEchoTimeoutMs);
     state.orders[event.orderId] = info;
 }
 
@@ -2162,6 +2177,9 @@ std::shared_ptr<const ImmutableSharedDataSnapshot> buildImmutableSharedDataSnaps
     snapshot->maxOrderNotional = state.maxOrderNotional;
     snapshot->maxOpenNotional = state.maxOpenNotional;
     snapshot->staleQuoteThresholdMs = state.staleQuoteThresholdMs;
+    snapshot->brokerEchoTimeoutMs = state.brokerEchoTimeoutMs;
+    snapshot->cancelAckTimeoutMs = state.cancelAckTimeoutMs;
+    snapshot->partialFillQuietTimeoutMs = state.partialFillQuietTimeoutMs;
     snapshot->controllerArmMode = state.controllerArmMode;
     snapshot->controllerArmed = state.controllerArmed;
     snapshot->tradingKillSwitch = state.tradingKillSwitch;
@@ -2424,6 +2442,9 @@ RuntimePresentationSnapshot captureRuntimePresentationSnapshot(const std::string
     }
 
     snapshot.risk.staleQuoteThresholdMs = published->staleQuoteThresholdMs;
+    snapshot.risk.brokerEchoTimeoutMs = published->brokerEchoTimeoutMs;
+    snapshot.risk.cancelAckTimeoutMs = published->cancelAckTimeoutMs;
+    snapshot.risk.partialFillQuietTimeoutMs = published->partialFillQuietTimeoutMs;
     snapshot.risk.maxOrderNotional = published->maxOrderNotional;
     snapshot.risk.maxOpenNotional = published->maxOpenNotional;
     snapshot.risk.controllerArmMode = published->controllerArmMode;
@@ -2496,6 +2517,9 @@ RiskControlsSnapshot captureRiskControlsSnapshot() {
     RiskControlsSnapshot snapshot;
     const auto published = ensurePublishedSharedDataSnapshot();
     snapshot.staleQuoteThresholdMs = published->staleQuoteThresholdMs;
+    snapshot.brokerEchoTimeoutMs = published->brokerEchoTimeoutMs;
+    snapshot.cancelAckTimeoutMs = published->cancelAckTimeoutMs;
+    snapshot.partialFillQuietTimeoutMs = published->partialFillQuietTimeoutMs;
     snapshot.maxOrderNotional = published->maxOrderNotional;
     snapshot.maxOpenNotional = published->maxOpenNotional;
     snapshot.controllerArmMode = published->controllerArmMode;
@@ -2504,20 +2528,34 @@ RiskControlsSnapshot captureRiskControlsSnapshot() {
     return snapshot;
 }
 
-void updateRiskControls(int staleQuoteThresholdMs, double maxOrderNotional, double maxOpenNotional) {
+void updateRiskControls(int staleQuoteThresholdMs,
+                        int brokerEchoTimeoutMs,
+                        int cancelAckTimeoutMs,
+                        int partialFillQuietTimeoutMs,
+                        double maxOrderNotional,
+                        double maxOpenNotional) {
     updateRiskControls(staleQuoteThresholdMs,
+                       brokerEchoTimeoutMs,
+                       cancelAckTimeoutMs,
+                       partialFillQuietTimeoutMs,
                        maxOrderNotional,
                        maxOpenNotional,
                        captureRiskControlsSnapshot().controllerArmMode);
 }
 
 void updateRiskControls(int staleQuoteThresholdMs,
+                        int brokerEchoTimeoutMs,
+                        int cancelAckTimeoutMs,
+                        int partialFillQuietTimeoutMs,
                         double maxOrderNotional,
                         double maxOpenNotional,
                         ControllerArmMode controllerArmMode) {
     invokeSharedDataMutation([&]() {
         trading_engine::reduce(appState(), trading_engine::RiskControlsUpdatedEvent{
             staleQuoteThresholdMs,
+            brokerEchoTimeoutMs,
+            cancelAckTimeoutMs,
+            partialFillQuietTimeoutMs,
             maxOrderNotional,
             maxOpenNotional,
             controllerArmMode
