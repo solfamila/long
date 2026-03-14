@@ -224,6 +224,12 @@ public:
         }
     }
 
+    void reqIds(int) {
+        if (wrapper_) {
+            wrapper_->nextValidId(nextOrderId_.load());
+        }
+    }
+
     void reqMktData(TickerId tickerId,
                     const Contract&,
                     const std::string& genericTickList,

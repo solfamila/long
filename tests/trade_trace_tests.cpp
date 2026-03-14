@@ -101,6 +101,13 @@ void appendJournalLine(const json& line) {
     out << line.dump() << '\n';
 }
 
+void connectReadyMockSession(TradingWrapper& wrapper, EClientSocket& client, int clientId = 11) {
+    wrapper.setClient(&client);
+    expect(client.eConnect("127.0.0.1", 7496, clientId), "mock socket connect should succeed");
+    wrapper.positionEnd();
+    wrapper.execDetailsEnd(1);
+}
+
 void testReplayPrefersRichLiveTrace() {
     clearTestFiles();
 
@@ -639,6 +646,302 @@ void testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking() {
     resetSharedDataForTesting();
 }
 
+void testRuntimePresentationSnapshotCapturesShortPositionState() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.connected = true;
+        g_data.sessionReady = true;
+        g_data.sessionState = RuntimeSessionState::SessionReady;
+        g_data.selectedAccount = "U23154741";
+        g_data.currentSymbol = "INTC";
+        g_data.askPrice = 45.30;
+        g_data.bidPrice = 45.20;
+        g_data.lastPrice = 45.25;
+        g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
+        g_data.borrowAvailability = BorrowAvailability::Borrowable;
+        g_data.borrowRateKnown = true;
+        g_data.borrowRate = 0.0175;
+
+        PositionInfo shortPosition;
+        shortPosition.account = "U23154741";
+        shortPosition.symbol = "INTC";
+        shortPosition.quantity = -5.0;
+        shortPosition.avgCost = 44.80;
+        g_data.positions[makePositionKey("U23154741", "INTC")] = shortPosition;
+
+        OrderInfo workingShort;
+        workingShort.orderId = 801;
+        workingShort.account = "U23154741";
+        workingShort.symbol = "INTC";
+        workingShort.side = "SELL";
+        workingShort.quantity = 2.0;
+        workingShort.remainingQty = 2.0;
+        workingShort.limitPrice = 45.10;
+        workingShort.status = "Submitted";
+        g_data.orders[801] = workingShort;
+    }
+    publishSharedDataSnapshot();
+
+    const RuntimePresentationSnapshot snapshot = captureRuntimePresentationSnapshot("INTC", 10);
+    expect(snapshot.status.accountText == "U23154741", "short-position snapshot should preserve the selected account");
+    expect(snapshot.symbol.hasPosition, "short-position snapshot should report the current short position");
+    expect(snapshot.symbol.currentPositionQty == -5.0, "short-position snapshot should preserve the negative quantity");
+    expect(snapshot.symbol.availableLongToClose == 0.0, "short-position snapshot should not report long shares available to close");
+    expect(std::abs(snapshot.symbol.openBuyExposure - 90.20) < 1e-9,
+           "short-position snapshot should include open short exposure from working sell orders");
+    expect(snapshot.symbol.borrowAvailability == BorrowAvailability::Borrowable,
+           "short-position snapshot should preserve borrow availability");
+    expect(snapshot.symbol.borrowRateKnown, "short-position snapshot should preserve borrow-rate state");
+    expect(std::abs(snapshot.symbol.borrowRate - 0.0175) < 1e-9,
+           "short-position snapshot should preserve the borrow rate");
+    expectContains(snapshot.symbol.borrowStatusText,
+                   "Borrowable (1.75%)",
+                   "short-position snapshot should render borrow status text with the borrow rate");
+    expect(snapshot.symbol.hasFreshQuote, "short-position snapshot should preserve fresh-quote state");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testShortOpenSubmitSucceeds() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    TradingWrapper wrapper;
+    EReaderOSSignal signal(50);
+    EClientSocket client(&wrapper, &signal);
+    connectReadyMockSession(wrapper, client, 21);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.currentSymbol = "INTC";
+        g_data.askPrice = 100.05;
+        g_data.bidPrice = 99.95;
+        g_data.lastPrice = 100.00;
+        g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
+        g_data.borrowAvailability = BorrowAvailability::Borrowable;
+        g_data.borrowRateKnown = true;
+        g_data.borrowRate = 0.0125;
+    }
+    publishSharedDataSnapshot();
+
+    std::string error;
+    OrderId orderId = 0;
+    std::uint64_t traceId = 0;
+    const bool submitted = submitLimitOrder(&client,
+                                            "INTC",
+                                            "SELL",
+                                            3.0,
+                                            100.00,
+                                            false,
+                                            nullptr,
+                                            &error,
+                                            &orderId,
+                                            &traceId);
+    expect(submitted, "open short should succeed when borrow is available");
+    expect(error.empty(), "open short success should not populate an error");
+    expect(orderId > 0, "open short success should allocate an order id");
+    expect(traceId > 0, "open short success should allocate a trace id");
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        const auto orderIt = g_data.orders.find(orderId);
+        expect(orderIt != g_data.orders.end(), "open short success should store the order");
+        expect(orderIt->second.account == "U23154741", "open short should use the configured short account");
+        expect(orderIt->second.symbol == "INTC", "open short should preserve the submitted symbol");
+        expect(orderIt->second.side == "SELL", "open short should store a sell order");
+        expect(orderIt->second.quantity == 3.0, "open short should preserve the submitted quantity");
+        expect(orderIt->second.remainingQty == 3.0, "open short should preserve the remaining quantity");
+        expect(orderIt->second.status == "Submitted", "open short should record submitted status");
+
+        const auto traceIt = g_data.traces.find(traceId);
+        expect(traceIt != g_data.traces.end(), "open short success should record a trade trace");
+        expect(traceIt->second.orderId == orderId, "open short trace should bind to the submitted order");
+        expect(traceIt->second.account == "U23154741", "open short trace should record the configured short account");
+        expect(traceIt->second.side == "SELL", "open short trace should record a sell side");
+        expect(!traceIt->second.closeOnly, "open short trace should not be marked close-only");
+        expect(traceIt->second.latestStatus == "Submitted", "open short trace should record the submitted broker status");
+    }
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testBuyToCoverSubmitSucceedsWhenBorrowUnavailable() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    TradingWrapper wrapper;
+    EReaderOSSignal signal(50);
+    EClientSocket client(&wrapper, &signal);
+    connectReadyMockSession(wrapper, client, 22);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.currentSymbol = "INTC";
+        g_data.askPrice = 100.10;
+        g_data.bidPrice = 100.00;
+        g_data.lastPrice = 100.05;
+        g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
+        g_data.borrowAvailability = BorrowAvailability::NoSharesToBorrow;
+
+        PositionInfo shortPosition;
+        shortPosition.account = "U23154741";
+        shortPosition.symbol = "INTC";
+        shortPosition.quantity = -5.0;
+        shortPosition.avgCost = 99.50;
+        g_data.positions[makePositionKey("U23154741", "INTC")] = shortPosition;
+
+        OrderInfo existingCover;
+        existingCover.orderId = 910;
+        existingCover.account = "U23154741";
+        existingCover.symbol = "INTC";
+        existingCover.side = "BUY";
+        existingCover.quantity = 2.0;
+        existingCover.remainingQty = 2.0;
+        existingCover.limitPrice = 100.20;
+        existingCover.status = "Submitted";
+        g_data.orders[910] = existingCover;
+    }
+    publishSharedDataSnapshot();
+
+    std::string error;
+    OrderId orderId = 0;
+    std::uint64_t traceId = 0;
+    const bool submitted = submitLimitOrder(&client,
+                                            "INTC",
+                                            "BUY",
+                                            3.0,
+                                            100.10,
+                                            true,
+                                            nullptr,
+                                            &error,
+                                            &orderId,
+                                            &traceId);
+    expect(submitted, "buy to cover should succeed for the remaining short quantity even when new borrow is unavailable");
+    expect(error.empty(), "buy-to-cover success should not populate an error");
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        const auto orderIt = g_data.orders.find(orderId);
+        expect(orderIt != g_data.orders.end(), "buy-to-cover success should store the order");
+        expect(orderIt->second.account == "U23154741", "buy-to-cover should use the configured short account");
+        expect(orderIt->second.side == "BUY", "buy-to-cover should store a buy order");
+        expect(orderIt->second.quantity == 3.0, "buy-to-cover should preserve the remaining cover quantity");
+
+        const auto traceIt = g_data.traces.find(traceId);
+        expect(traceIt != g_data.traces.end(), "buy-to-cover success should record a trade trace");
+        expect(traceIt->second.account == "U23154741", "buy-to-cover trace should record the configured short account");
+        expect(traceIt->second.side == "BUY", "buy-to-cover trace should record a buy side");
+        expect(traceIt->second.closeOnly, "buy-to-cover trace should be marked close-only");
+        expect(traceIt->second.latestStatus == "Submitted", "buy-to-cover trace should record the submitted broker status");
+    }
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testShortOpenRejectsWhenBorrowIsUnavailable() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    TradingWrapper wrapper;
+    EReaderOSSignal signal(50);
+    EClientSocket client(&wrapper, &signal);
+    connectReadyMockSession(wrapper, client, 23);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.currentSymbol = "INTC";
+        g_data.askPrice = 100.05;
+        g_data.bidPrice = 99.95;
+        g_data.lastPrice = 100.00;
+        g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
+    }
+    publishSharedDataSnapshot();
+
+    std::string error;
+    std::uint64_t traceId = 0;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.borrowAvailability = BorrowAvailability::Unknown;
+    }
+    publishSharedDataSnapshot();
+
+    expect(!submitLimitOrder(&client,
+                             "INTC",
+                             "SELL",
+                             1.0,
+                             100.00,
+                             false,
+                             nullptr,
+                             &error,
+                             nullptr,
+                             &traceId),
+           "open short should fail while borrow availability is still pending");
+    expectContains(error,
+                   "Borrow availability is pending for this symbol",
+                   "pending borrow state should block opening a short");
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        expect(g_data.orders.empty(), "rejected short-open should not store an order");
+        const auto traceIt = g_data.traces.find(traceId);
+        expect(traceIt != g_data.traces.end(), "pending-borrow rejection should still record a trace");
+        expect(traceIt->second.failedBeforeSubmit, "pending-borrow rejection should mark the trace as failed before submit");
+        expect(traceIt->second.terminalStatus == "FailedBeforeSubmit",
+               "pending-borrow rejection should end the trace before broker submit");
+    }
+
+    error.clear();
+    traceId = 0;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.borrowAvailability = BorrowAvailability::NoSharesToBorrow;
+    }
+    publishSharedDataSnapshot();
+
+    expect(!submitLimitOrder(&client,
+                             "INTC",
+                             "SELL",
+                             1.0,
+                             100.00,
+                             false,
+                             nullptr,
+                             &error,
+                             nullptr,
+                             &traceId),
+           "open short should fail when there are no shares available to borrow");
+    expectContains(error,
+                   "No shares available to borrow for shorting",
+                   "no-shares borrow state should block opening a short");
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        expect(g_data.orders.empty(), "no-shares rejection should still avoid storing an order");
+        const auto traceIt = g_data.traces.find(traceId);
+        expect(traceIt != g_data.traces.end(), "no-shares rejection should still record a trace");
+        expect(traceIt->second.failedBeforeSubmit, "no-shares rejection should mark the trace as failed before submit");
+        expect(traceIt->second.terminalStatus == "FailedBeforeSubmit",
+               "no-shares rejection should end the trace before broker submit");
+    }
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 void testShortOpenValidationUsesShortExposureForMaxOpenNotional() {
     clearTestFiles();
 
@@ -1010,6 +1313,10 @@ int main() {
         testRuntimePresentationSnapshotCapturesConsistentState();
         testPendingUiSyncUpdateConsumesFlags();
         testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking();
+        testRuntimePresentationSnapshotCapturesShortPositionState();
+        testShortOpenSubmitSucceeds();
+        testBuyToCoverSubmitSucceedsWhenBorrowUnavailable();
+        testShortOpenRejectsWhenBorrowIsUnavailable();
         testShortOpenValidationUsesShortExposureForMaxOpenNotional();
         testOrderWatchdogEscalatesToManualReview();
         testCancelAndPartialFillWatchdogs();
