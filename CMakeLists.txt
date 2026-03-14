@@ -392,26 +392,13 @@ if(BUILD_TESTING)
         ${APP_KIT_LIBRARY}
     )
 
-    if(TARGET twsapi)
-        target_link_libraries(tws_gui_tests PRIVATE twsapi)
-        target_include_directories(tws_gui_tests PRIVATE
-            "${VENDORED_IB_API_DIR}"
-            ${IB_API_EXTRA_INCLUDE_DIRS}
-        )
-    elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
-        target_include_directories(tws_gui_tests PRIVATE "${IB_API_INCLUDE_DIR}")
-    else()
-        target_include_directories(tws_gui_tests PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
-        target_compile_definitions(tws_gui_tests PRIVATE
-            TWS_GUI_MOCK_IBAPI=1
-            TWS_HAS_PROTOBUF_API=1
-            TWS_HAS_ORDER_CANCEL_OBJECT=1
-        )
-    endif()
-
+    target_include_directories(tws_gui_tests PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_compile_definitions(tws_gui_tests PRIVATE
-        TWS_GUI_IBAPI_MODE="${IB_API_MODE}"
-        TWS_GUI_IBAPI_SOURCE="${IB_API_SOURCE_LABEL}"
+        TWS_GUI_MOCK_IBAPI=1
+        TWS_HAS_PROTOBUF_API=1
+        TWS_HAS_ORDER_CANCEL_OBJECT=1
+        TWS_GUI_IBAPI_MODE="mock"
+        TWS_GUI_IBAPI_SOURCE="${LOCAL_IBAPI_STUB_DIR}"
     )
 
     add_test(NAME tws_gui_trace_tests COMMAND tws_gui_tests)
