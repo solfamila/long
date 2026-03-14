@@ -1,27 +1,39 @@
 version: 1
 
-registry:
-  subsystem: com.foxy.twstradinggui
+qos_aliases:
+  ui: userInteractive
+  hot: userInitiated
+  work: utility
+  maintenance: background
 
-  categories:
-    runtime:
-      description: Runtime lifecycle and session events.
-    orders:
-      description: Trade trace and order lifecycle events.
-    ipc:
-      description: WebSocket bridge and IPC coordination events.
+processes:
+  long:
+    subsystem: com.foxy.long.bridge
+    units:
+      bridge_capture:
+        label: com.foxy.long.bridge.capture
+        primitive: callback_path
+        qos: inherited
+        concurrency: 0
+        category: bridge
 
-  signposts:
-    trade_stage:
-      category: orders
-      description: Phase-0 trade lifecycle stage intervals and events.
+      bridge_sender:
+        label: com.foxy.long.bridge.sender
+        primitive: dedicated_thread
+        qos: hot
+        concurrency: 1
+        category: bridge
 
-  queues:
-    main_thread:
-      label: com.apple.main-thread
-      qos: user_interactive
-      description: AppKit/UI thread affinity.
-    runtime_refresh_scheduler:
-      label: com.foxy.twstradinggui.runtime.refresh_scheduler
-      qos: user_interactive
-      description: Coalesced UI refresh scheduling and thermal/app-state throttling.
+      outbox_journal:
+        label: com.foxy.long.bridge.outbox-journal
+        primitive: dedicated_thread
+        qos: work
+        concurrency: 1
+        category: bridge
+
+      outbox_drain:
+        label: com.foxy.long.bridge.outbox-drain
+        primitive: dedicated_thread
+        qos: work
+        concurrency: 1
+        category: bridge
