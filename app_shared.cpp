@@ -1210,6 +1210,11 @@ void reduce(SharedData& state, const BrokerManagedAccountsEvent& event) {
 
 void reduce(SharedData& state, const BrokerTickPriceEvent& event) {
     std::string autoQtyMsg;
+    bool emitLastPriceJournal = false;
+    std::string quoteSymbol;
+    double bidPrice = 0.0;
+    double askPrice = 0.0;
+    double lastPrice = 0.0;
     {
         std::lock_guard<std::recursive_mutex> lock(state.mutex);
         if (event.tickerId != state.activeMktDataReqId) {
@@ -1243,10 +1248,25 @@ void reduce(SharedData& state, const BrokerTickPriceEvent& event) {
             case kTickTypeLast:
                 state.lastPrice = event.price;
                 state.lastQuoteUpdate = std::chrono::steady_clock::now();
+                if (event.price > 0.0 && !state.currentSymbol.empty()) {
+                    emitLastPriceJournal = true;
+                    quoteSymbol = state.currentSymbol;
+                    bidPrice = state.bidPrice;
+                    askPrice = state.askPrice;
+                    lastPrice = state.lastPrice;
+                }
                 break;
             default:
                 break;
         }
+    }
+    if (emitLastPriceJournal) {
+        appendRuntimeJournalEvent("market_quote_last", {
+            {"symbol", quoteSymbol},
+            {"bid", bidPrice},
+            {"ask", askPrice},
+            {"last", lastPrice}
+        });
     }
     if (!autoQtyMsg.empty()) {
         state.addMessage(autoQtyMsg);
