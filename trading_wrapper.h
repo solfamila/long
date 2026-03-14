@@ -102,6 +102,34 @@ public:
         });
     }
 
+    void tickSize(TickerId tickerId, TickType field, Decimal size) override {
+        dispatchBrokerEvent([this, tickerId, field, size]() {
+            SharedData& state = appState();
+            trading_engine::reduce(state, trading_engine::BrokerTickSizeEvent{
+                tickerId,
+                field,
+                DecimalFunctions::decimalToDouble(size)
+            });
+            requestUiInvalidation();
+        });
+    }
+
+    void tickGeneric(TickerId tickerId, TickType field, double value) override {
+        dispatchBrokerEvent([this, tickerId, field, value]() {
+            SharedData& state = appState();
+            trading_engine::reduce(state, trading_engine::BrokerTickGenericEvent{tickerId, field, value});
+            requestUiInvalidation();
+        });
+    }
+
+    void tickString(TickerId tickerId, TickType field, const std::string& value) override {
+        dispatchBrokerEvent([this, tickerId, field, value]() {
+            SharedData& state = appState();
+            trading_engine::reduce(state, trading_engine::BrokerTickStringEvent{tickerId, field, value});
+            requestUiInvalidation();
+        });
+    }
+
     void updateMktDepthL2(TickerId id, int position, const std::string& marketMaker, int operation,
                           int side, double price, Decimal size, bool isSmartDepth) override {
         (void)marketMaker;

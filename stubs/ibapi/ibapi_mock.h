@@ -96,6 +96,9 @@ public:
     virtual void nextValidId(OrderId) {}
     virtual void managedAccounts(const std::string&) {}
     virtual void tickPrice(TickerId, TickType, double, const TickAttrib&) {}
+    virtual void tickSize(TickerId, TickType, Decimal) {}
+    virtual void tickGeneric(TickerId, TickType, double) {}
+    virtual void tickString(TickerId, TickType, const std::string&) {}
     virtual void updateMktDepthL2(TickerId, int, const std::string&, int, int, double, Decimal, bool) {}
     virtual void updateMktDepth(TickerId, int, int, int, double, Decimal) {}
     virtual void orderStatus(OrderId,
@@ -195,6 +198,14 @@ public:
         return connected_;
     }
 
+    const std::string& lastReqMktDataGenericTickList() const {
+        return lastReqMktDataGenericTickList_;
+    }
+
+    TickerId lastReqMktDataTickerId() const {
+        return lastReqMktDataTickerId_;
+    }
+
     void reqPositions() {
         if (wrapper_) {
             wrapper_->positionEnd();
@@ -205,10 +216,13 @@ public:
 
     void reqMktData(TickerId tickerId,
                     const Contract&,
-                    const std::string&,
+                    const std::string& genericTickList,
                     bool,
                     bool,
                     const TagValueListSPtr&) {
+        lastReqMktDataTickerId_ = tickerId;
+        lastReqMktDataGenericTickList_ = genericTickList;
+
         if (!wrapper_) {
             return;
         }
@@ -216,6 +230,12 @@ public:
         wrapper_->tickPrice(tickerId, 1, 99.95, attrib);
         wrapper_->tickPrice(tickerId, 2, 100.05, attrib);
         wrapper_->tickPrice(tickerId, 4, 100.00, attrib);
+
+        if (genericTickList.find("236") != std::string::npos) {
+            wrapper_->tickGeneric(tickerId, 46, 2.0);
+            wrapper_->tickSize(tickerId, 89, 25000.0);
+            wrapper_->tickString(tickerId, 87, "0.0125");
+        }
     }
 
     void reqMktDepth(TickerId tickerId,
@@ -272,6 +292,8 @@ private:
     EReaderOSSignal* signal_ = nullptr;
     bool connected_ = false;
     std::map<OrderId, long long> orderPermIds_;
+    std::string lastReqMktDataGenericTickList_;
+    TickerId lastReqMktDataTickerId_ = 0;
 
     inline static std::atomic<OrderId> nextOrderId_{1};
     inline static std::atomic<long long> nextPermId_{1000};

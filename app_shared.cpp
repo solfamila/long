@@ -111,6 +111,13 @@ void copySharedDataState(const SharedData& src, SharedData& dst) {
     dst.activeDepthReqId = src.activeDepthReqId;
     dst.suppressedMktDataCancelIds = src.suppressedMktDataCancelIds;
     dst.suppressedMktDepthCancelIds = src.suppressedMktDepthCancelIds;
+    dst.borrowAvailability = src.borrowAvailability;
+    dst.borrowShortableMetricKnown = src.borrowShortableMetricKnown;
+    dst.borrowShortableMetric = src.borrowShortableMetric;
+    dst.borrowSharesKnown = src.borrowSharesKnown;
+    dst.borrowSharesAvailable = src.borrowSharesAvailable;
+    dst.borrowRateKnown = src.borrowRateKnown;
+    dst.borrowRate = src.borrowRate;
 
     dst.currentQuantity = src.currentQuantity;
     dst.priceBuffer = src.priceBuffer;
@@ -223,6 +230,9 @@ struct ImmutableSharedDataSnapshot {
 
     int activeMktDataReqId = 0;
     int activeDepthReqId = 0;
+    BorrowAvailability borrowAvailability = BorrowAvailability::Unknown;
+    bool borrowRateKnown = false;
+    double borrowRate = 0.0;
 
     int currentQuantity = 1;
     double priceBuffer = 0.01;
@@ -362,6 +372,85 @@ std::vector<std::string> splitCsv(const std::string& csv) {
     std::string tail = trimCopy(current);
     if (!tail.empty()) out.push_back(tail);
     return out;
+}
+
+constexpr TickType kTickTypeBid = static_cast<TickType>(1);
+constexpr TickType kTickTypeAsk = static_cast<TickType>(2);
+constexpr TickType kTickTypeLast = static_cast<TickType>(4);
+constexpr TickType kTickTypeShortable = static_cast<TickType>(46);
+constexpr TickType kTickTypeBorrowFeeRate = static_cast<TickType>(87);
+constexpr TickType kTickTypeShortableShares = static_cast<TickType>(89);
+
+BorrowAvailability computeBorrowAvailability(bool shortableMetricKnown,
+                                             double shortableMetric,
+                                             bool borrowSharesKnown,
+                                             double borrowSharesAvailable) {
+    if (borrowSharesKnown) {
+        return borrowSharesAvailable > 0.0
+            ? BorrowAvailability::Borrowable
+            : BorrowAvailability::NoSharesToBorrow;
+    }
+    if (shortableMetricKnown) {
+        return shortableMetric > 1.5
+            ? BorrowAvailability::Borrowable
+            : BorrowAvailability::NoSharesToBorrow;
+    }
+    return BorrowAvailability::Unknown;
+}
+
+std::string formatBorrowStatusText(BorrowAvailability availability,
+                                   bool borrowRateKnown,
+                                   double borrowRate) {
+    switch (availability) {
+        case BorrowAvailability::Borrowable: {
+            if (borrowRateKnown) {
+                std::ostringstream oss;
+                oss << "Borrowable (" << std::fixed << std::setprecision(2) << (borrowRate * 100.0) << "%)";
+                return oss.str();
+            }
+            return "Borrowable (rate unavailable)";
+        }
+        case BorrowAvailability::NoSharesToBorrow:
+            return "No shares to borrow";
+        case BorrowAvailability::Unknown:
+        default:
+            return "Borrow status pending";
+    }
+}
+
+bool tryParseLeadingDouble(const std::string& text, double* outValue) {
+    if (!outValue) {
+        return false;
+    }
+    try {
+        std::size_t parsedChars = 0;
+        const double parsed = std::stod(text, &parsedChars);
+        if (parsedChars == 0) {
+            return false;
+        }
+        *outValue = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+void maybeAppendBorrowStateMessage(SharedData& state,
+                                   BorrowAvailability previousAvailability,
+                                   bool previousBorrowRateKnown,
+                                   double previousBorrowRate) {
+    if (state.currentSymbol.empty()) {
+        return;
+    }
+    if (state.borrowAvailability == previousAvailability &&
+        state.borrowRateKnown == previousBorrowRateKnown &&
+        (!state.borrowRateKnown || std::abs(state.borrowRate - previousBorrowRate) < 1e-9)) {
+        return;
+    }
+
+    std::string message = state.currentSymbol + ": " +
+                          formatBorrowStatusText(state.borrowAvailability, state.borrowRateKnown, state.borrowRate);
+    state.addMessage(message);
 }
 
 std::string summarizeBookSide(const std::vector<BookLevel>& book, std::size_t maxLevels, const char* label) {
@@ -996,6 +1085,13 @@ void reduce(SharedData& state, const MarketSubscriptionClearedEvent& event) {
     state.lastPrice = 0.0;
     state.askBook.clear();
     state.bidBook.clear();
+    state.borrowAvailability = BorrowAvailability::Unknown;
+    state.borrowShortableMetricKnown = false;
+    state.borrowShortableMetric = 0.0;
+    state.borrowSharesKnown = false;
+    state.borrowSharesAvailable = 0.0;
+    state.borrowRateKnown = false;
+    state.borrowRate = 0.0;
 }
 
 void reduce(SharedData& state, const MarketSubscriptionStartedEvent& event) {
@@ -1009,6 +1105,13 @@ void reduce(SharedData& state, const MarketSubscriptionStartedEvent& event) {
     state.lastPrice = 0.0;
     state.askBook.clear();
     state.bidBook.clear();
+    state.borrowAvailability = BorrowAvailability::Unknown;
+    state.borrowShortableMetricKnown = false;
+    state.borrowShortableMetric = 0.0;
+    state.borrowSharesKnown = false;
+    state.borrowSharesAvailable = 0.0;
+    state.borrowRateKnown = false;
+    state.borrowRate = 0.0;
     state.pendingSubscribeSymbol = event.symbol;
     state.hasPendingSubscribe = true;
     state.pendingWSQuantityCalc = event.recalcQtyFromFirstAsk;
@@ -1050,6 +1153,13 @@ void reduce(SharedData& state, const BrokerConnectionClosedEvent&) {
         state.lastPrice = 0.0;
         state.askBook.clear();
         state.bidBook.clear();
+        state.borrowAvailability = BorrowAvailability::Unknown;
+        state.borrowShortableMetricKnown = false;
+        state.borrowShortableMetric = 0.0;
+        state.borrowSharesKnown = false;
+        state.borrowSharesAvailable = 0.0;
+        state.borrowRateKnown = false;
+        state.borrowRate = 0.0;
         state.pendingWSQuantityCalc = false;
         state.wsQuantityUpdated = false;
         for (auto& [orderId, order] : state.orders) {
@@ -1107,11 +1217,11 @@ void reduce(SharedData& state, const BrokerTickPriceEvent& event) {
         }
 
         switch (event.field) {
-            case 1:
+            case kTickTypeBid:
                 state.bidPrice = event.price;
                 state.lastQuoteUpdate = std::chrono::steady_clock::now();
                 break;
-            case 2: {
+            case kTickTypeAsk: {
                 state.askPrice = event.price;
                 state.lastQuoteUpdate = std::chrono::steady_clock::now();
                 if (state.pendingWSQuantityCalc && event.price > 0.0) {
@@ -1130,7 +1240,7 @@ void reduce(SharedData& state, const BrokerTickPriceEvent& event) {
                 }
                 break;
             }
-            case 4:
+            case kTickTypeLast:
                 state.lastPrice = event.price;
                 state.lastQuoteUpdate = std::chrono::steady_clock::now();
                 break;
@@ -1140,6 +1250,136 @@ void reduce(SharedData& state, const BrokerTickPriceEvent& event) {
     }
     if (!autoQtyMsg.empty()) {
         state.addMessage(autoQtyMsg);
+    }
+}
+
+void reduce(SharedData& state, const BrokerTickSizeEvent& event) {
+    bool borrowStateChanged = false;
+    BorrowAvailability previousAvailability = BorrowAvailability::Unknown;
+    bool previousBorrowRateKnown = false;
+    double previousBorrowRate = 0.0;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        if (event.tickerId != state.activeMktDataReqId) {
+            return;
+        }
+        if (event.field != kTickTypeShortableShares) {
+            return;
+        }
+
+        previousAvailability = state.borrowAvailability;
+        previousBorrowRateKnown = state.borrowRateKnown;
+        previousBorrowRate = state.borrowRate;
+
+        state.borrowSharesKnown = true;
+        state.borrowSharesAvailable = std::max(0.0, event.size);
+        state.borrowAvailability = computeBorrowAvailability(state.borrowShortableMetricKnown,
+                                                             state.borrowShortableMetric,
+                                                             state.borrowSharesKnown,
+                                                             state.borrowSharesAvailable);
+        borrowStateChanged = true;
+    }
+
+    if (borrowStateChanged) {
+        maybeAppendBorrowStateMessage(state, previousAvailability, previousBorrowRateKnown, previousBorrowRate);
+    }
+}
+
+void reduce(SharedData& state, const BrokerTickGenericEvent& event) {
+    bool borrowStateChanged = false;
+    BorrowAvailability previousAvailability = BorrowAvailability::Unknown;
+    bool previousBorrowRateKnown = false;
+    double previousBorrowRate = 0.0;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        if (event.tickerId != state.activeMktDataReqId) {
+            return;
+        }
+
+        previousAvailability = state.borrowAvailability;
+        previousBorrowRateKnown = state.borrowRateKnown;
+        previousBorrowRate = state.borrowRate;
+
+        if (event.field == kTickTypeShortable) {
+            state.borrowShortableMetricKnown = true;
+            state.borrowShortableMetric = event.value;
+            state.borrowAvailability = computeBorrowAvailability(state.borrowShortableMetricKnown,
+                                                                 state.borrowShortableMetric,
+                                                                 state.borrowSharesKnown,
+                                                                 state.borrowSharesAvailable);
+            borrowStateChanged = true;
+        } else if (event.field == kTickTypeBorrowFeeRate && event.value >= 0.0) {
+            state.borrowRateKnown = true;
+            state.borrowRate = event.value;
+            borrowStateChanged = true;
+        } else {
+            return;
+        }
+    }
+
+    if (borrowStateChanged) {
+        maybeAppendBorrowStateMessage(state, previousAvailability, previousBorrowRateKnown, previousBorrowRate);
+    }
+}
+
+void reduce(SharedData& state, const BrokerTickStringEvent& event) {
+    bool borrowStateChanged = false;
+    BorrowAvailability previousAvailability = BorrowAvailability::Unknown;
+    bool previousBorrowRateKnown = false;
+    double previousBorrowRate = 0.0;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        if (event.tickerId != state.activeMktDataReqId) {
+            return;
+        }
+
+        previousAvailability = state.borrowAvailability;
+        previousBorrowRateKnown = state.borrowRateKnown;
+        previousBorrowRate = state.borrowRate;
+
+        const std::string trimmedValue = trimCopy(event.value);
+        double parsed = 0.0;
+        if (event.field == kTickTypeBorrowFeeRate) {
+            if (tryParseLeadingDouble(trimmedValue, &parsed) && parsed >= 0.0) {
+                state.borrowRateKnown = true;
+                state.borrowRate = parsed;
+                borrowStateChanged = true;
+            }
+        } else if (event.field == kTickTypeShortable || event.field == kTickTypeShortableShares) {
+            const std::size_t separator = trimmedValue.find(';');
+            const std::string first = separator == std::string::npos
+                ? trimmedValue
+                : trimmedValue.substr(0, separator);
+            if (tryParseLeadingDouble(first, &parsed)) {
+                if (event.field == kTickTypeShortableShares) {
+                    state.borrowSharesKnown = true;
+                    state.borrowSharesAvailable = std::max(0.0, parsed);
+                } else {
+                    state.borrowShortableMetricKnown = true;
+                    state.borrowShortableMetric = parsed;
+                }
+                state.borrowAvailability = computeBorrowAvailability(state.borrowShortableMetricKnown,
+                                                                     state.borrowShortableMetric,
+                                                                     state.borrowSharesKnown,
+                                                                     state.borrowSharesAvailable);
+                borrowStateChanged = true;
+            }
+            if (separator != std::string::npos) {
+                const std::string ratePart = trimmedValue.substr(separator + 1);
+                if (tryParseLeadingDouble(ratePart, &parsed) && parsed >= 0.0) {
+                    state.borrowRateKnown = true;
+                    state.borrowRate = parsed;
+                    borrowStateChanged = true;
+                }
+            }
+        }
+    }
+
+    if (borrowStateChanged) {
+        maybeAppendBorrowStateMessage(state, previousAvailability, previousBorrowRateKnown, previousBorrowRate);
     }
 }
 
@@ -1546,6 +1786,13 @@ void reduce(SharedData& state, const BrokerErrorEvent& event) {
                 state.bidPrice = 0.0;
                 state.askPrice = 0.0;
                 state.lastPrice = 0.0;
+                state.borrowAvailability = BorrowAvailability::Unknown;
+                state.borrowShortableMetricKnown = false;
+                state.borrowShortableMetric = 0.0;
+                state.borrowSharesKnown = false;
+                state.borrowSharesAvailable = 0.0;
+                state.borrowRateKnown = false;
+                state.borrowRate = 0.0;
             }
             if (event.id == state.activeDepthReqId) {
                 state.activeDepthReqId = 0;
@@ -1964,6 +2211,18 @@ std::string runtimeSessionStateToString(RuntimeSessionState state) {
     }
 }
 
+std::string borrowAvailabilityToString(BorrowAvailability availability) {
+    switch (availability) {
+        case BorrowAvailability::Borrowable:
+            return "Borrowable";
+        case BorrowAvailability::NoSharesToBorrow:
+            return "No shares to borrow";
+        case BorrowAvailability::Unknown:
+        default:
+            return "Borrow status pending";
+    }
+}
+
 std::string localOrderStateToString(LocalOrderState state) {
     switch (state) {
         case LocalOrderState::IntentAccepted: return "Intent accepted";
@@ -2173,6 +2432,9 @@ std::shared_ptr<const ImmutableSharedDataSnapshot> buildImmutableSharedDataSnaps
 
     snapshot->activeMktDataReqId = state.activeMktDataReqId;
     snapshot->activeDepthReqId = state.activeDepthReqId;
+    snapshot->borrowAvailability = state.borrowAvailability;
+    snapshot->borrowRateKnown = state.borrowRateKnown;
+    snapshot->borrowRate = state.borrowRate;
 
     snapshot->currentQuantity = state.currentQuantity;
     snapshot->priceBuffer = state.priceBuffer;
@@ -2377,6 +2639,12 @@ SymbolUiSnapshot captureSymbolUiSnapshot(const std::string& subscribedSymbol) {
     snapshot.askBook = published->askBook;
     snapshot.bidBook = published->bidBook;
     snapshot.openBuyExposure = calculateOpenBuyExposureUnlocked(*published, published->selectedAccount);
+    snapshot.borrowAvailability = published->borrowAvailability;
+    snapshot.borrowRateKnown = published->borrowRateKnown;
+    snapshot.borrowRate = published->borrowRate;
+    snapshot.borrowStatusText = formatBorrowStatusText(published->borrowAvailability,
+                                                       published->borrowRateKnown,
+                                                       published->borrowRate);
     if (hasTime(published->lastQuoteUpdate)) {
         snapshot.quoteAgeMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - published->lastQuoteUpdate).count();
@@ -2429,6 +2697,12 @@ RuntimePresentationSnapshot captureRuntimePresentationSnapshot(const std::string
     snapshot.symbol.askBook = published->askBook;
     snapshot.symbol.bidBook = published->bidBook;
     snapshot.symbol.openBuyExposure = calculateOpenBuyExposureUnlocked(*published, published->selectedAccount);
+    snapshot.symbol.borrowAvailability = published->borrowAvailability;
+    snapshot.symbol.borrowRateKnown = published->borrowRateKnown;
+    snapshot.symbol.borrowRate = published->borrowRate;
+    snapshot.symbol.borrowStatusText = formatBorrowStatusText(published->borrowAvailability,
+                                                              published->borrowRateKnown,
+                                                              published->borrowRate);
     if (hasTime(published->lastQuoteUpdate)) {
         snapshot.symbol.quoteAgeMs = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - published->lastQuoteUpdate).count();
@@ -2781,6 +3055,8 @@ bool requestSymbolSubscription(EClientSocket* client,
                                const std::string& rawSymbol,
                                bool recalcQtyFromFirstAsk,
                                std::string* error) {
+    static constexpr const char* kBorrowGenericTickList = "236";
+
     const std::string symbol = toUpperCase(rawSymbol);
     if (symbol.empty()) {
         if (error) *error = "Symbol cannot be empty";
@@ -2815,7 +3091,7 @@ bool requestSymbolSubscription(EClientSocket* client,
             if (error) *error = "TWS socket not connected";
             return false;
         }
-        client->reqMktData(mktDataReqId, contract, "", false, false, TagValueListSPtr());
+        client->reqMktData(mktDataReqId, contract, kBorrowGenericTickList, false, false, TagValueListSPtr());
         client->reqMktDepth(depthReqId, contract, MARKET_DEPTH_NUM_ROWS, true, TagValueListSPtr());
     }
 
@@ -2828,7 +3104,7 @@ bool requestSymbolSubscription(EClientSocket* client,
         });
     });
 
-    appendSharedMessage("Subscription request sent for " + symbol);
+    appendSharedMessage("Subscription request sent for " + symbol + " (borrow status pending)");
     appendRuntimeJournalEvent("subscribe_request_sent", {
         {"symbol", symbol},
         {"recalculateQuantity", recalcQtyFromFirstAsk}

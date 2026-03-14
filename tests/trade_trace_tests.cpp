@@ -357,6 +357,100 @@ void testTradingWrapperIgnoresDuplicateOrderStatus() {
     resetSharedDataForTesting();
 }
 
+void testSymbolSubscriptionRequestsBorrowTicks() {
+#if !defined(TWS_GUI_MOCK_IBAPI)
+    return;
+#else
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    TradingWrapper wrapper;
+    EReaderOSSignal signal(50);
+    EClientSocket client(&wrapper, &signal);
+    wrapper.setClient(&client);
+    expect(client.eConnect("127.0.0.1", 7496, 11), "mock socket connect should succeed");
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.connected = true;
+        g_data.sessionReady = true;
+    }
+    publishSharedDataSnapshot();
+
+    std::string error;
+    expect(requestSymbolSubscription(&client, "INTC", false, &error),
+           "symbol subscription should succeed: " + error);
+    expectContains(client.lastReqMktDataGenericTickList(),
+                   "236",
+                   "symbol subscription should request shortability generic tick list");
+
+    const RuntimePresentationSnapshot snapshot = captureRuntimePresentationSnapshot("INTC", 0);
+    expect(snapshot.symbol.borrowAvailability == BorrowAvailability::Unknown,
+           "borrow status should remain pending until borrow ticks arrive for the active request id");
+    expectContains(snapshot.messagesText,
+                   "borrow status pending",
+                   "subscription status message should call out pending borrow state");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+#endif
+}
+
+void testBorrowTickCallbacksUpdateSnapshotState() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.connected = true;
+        g_data.sessionReady = true;
+        g_data.selectedAccount = "U23154741";
+        g_data.currentSymbol = "INTC";
+        g_data.activeMktDataReqId = 7001;
+    }
+    publishSharedDataSnapshot();
+
+    TradingWrapper wrapper;
+    wrapper.tickGeneric(7001, static_cast<TickType>(46), 1.0);
+    publishSharedDataSnapshot();
+
+    RuntimePresentationSnapshot noShares = captureRuntimePresentationSnapshot("INTC", 0);
+    expect(noShares.symbol.borrowAvailability == BorrowAvailability::NoSharesToBorrow,
+           "shortability metric should surface a no-shares-to-borrow state");
+    expectContains(noShares.symbol.borrowStatusText,
+                   "No shares to borrow",
+                   "symbol snapshot should expose a clear no-shares state");
+
+    wrapper.tickString(7001, static_cast<TickType>(87), "0.0175");
+    wrapper.tickSize(7001, static_cast<TickType>(89), 15000.0);
+    publishSharedDataSnapshot();
+
+    const RuntimePresentationSnapshot borrowable = captureRuntimePresentationSnapshot("INTC", 0);
+    expect(borrowable.symbol.borrowAvailability == BorrowAvailability::Borrowable,
+           "positive shortable shares should mark symbol borrowable");
+    expect(borrowable.symbol.borrowRateKnown,
+           "borrow-rate callback should mark borrow rate as known");
+    expect(std::abs(borrowable.symbol.borrowRate - 0.0175) < 1e-9,
+           "borrow-rate callback should populate borrow rate");
+    expectContains(borrowable.symbol.borrowStatusText,
+                   "Borrowable",
+                   "borrowable snapshot should include borrowable status text");
+
+    expectContains(borrowable.messagesText,
+                   "INTC: No shares to borrow",
+                   "status messaging should include no-shares state");
+    expectContains(borrowable.messagesText,
+                   "INTC: Borrowable",
+                   "status messaging should include borrowable state");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 void testRuntimePresentationSnapshotCapturesConsistentState() {
     clearTestFiles();
 
@@ -845,6 +939,8 @@ int main() {
         testRecoverySnapshotReportsAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();
+        testSymbolSubscriptionRequestsBorrowTicks();
+        testBorrowTickCallbacksUpdateSnapshotState();
         testRuntimePresentationSnapshotCapturesConsistentState();
         testPendingUiSyncUpdateConsumesFlags();
         testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking();

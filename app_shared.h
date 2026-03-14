@@ -248,6 +248,12 @@ enum class RuntimeSessionState {
     SessionReady
 };
 
+enum class BorrowAvailability {
+    Unknown,
+    Borrowable,
+    NoSharesToBorrow
+};
+
 struct SubmitIntent {
     std::string source;
     std::string symbol;
@@ -338,6 +344,13 @@ struct SharedData {
     int activeDepthReqId = 0;
     std::set<int> suppressedMktDataCancelIds;
     std::set<int> suppressedMktDepthCancelIds;
+    BorrowAvailability borrowAvailability = BorrowAvailability::Unknown;
+    bool borrowShortableMetricKnown = false;
+    double borrowShortableMetric = 0.0;
+    bool borrowSharesKnown = false;
+    double borrowSharesAvailable = 0.0;
+    bool borrowRateKnown = false;
+    double borrowRate = 0.0;
 
     int currentQuantity = 1;
     double priceBuffer = 0.01;
@@ -461,6 +474,10 @@ struct SymbolUiSnapshot {
     double availableLongToClose = 0.0;
     double quoteAgeMs = -1.0;
     double openBuyExposure = 0.0;
+    BorrowAvailability borrowAvailability = BorrowAvailability::Unknown;
+    bool borrowRateKnown = false;
+    double borrowRate = 0.0;
+    std::string borrowStatusText;
     std::vector<BookLevel> askBook;
     std::vector<BookLevel> bidBook;
 };
@@ -630,6 +647,24 @@ struct BrokerTickPriceEvent {
     double price = 0.0;
 };
 
+struct BrokerTickSizeEvent {
+    TickerId tickerId = 0;
+    TickType field = static_cast<TickType>(0);
+    double size = 0.0;
+};
+
+struct BrokerTickGenericEvent {
+    TickerId tickerId = 0;
+    TickType field = static_cast<TickType>(0);
+    double value = 0.0;
+};
+
+struct BrokerTickStringEvent {
+    TickerId tickerId = 0;
+    TickType field = static_cast<TickType>(0);
+    std::string value;
+};
+
 struct BrokerMarketDepthEvent {
     TickerId requestId = 0;
     int position = 0;
@@ -702,6 +737,9 @@ void reduce(SharedData& state, const BrokerConnectionClosedEvent& event);
 void reduce(SharedData& state, const BrokerNextValidIdEvent& event);
 void reduce(SharedData& state, const BrokerManagedAccountsEvent& event);
 void reduce(SharedData& state, const BrokerTickPriceEvent& event);
+void reduce(SharedData& state, const BrokerTickSizeEvent& event);
+void reduce(SharedData& state, const BrokerTickGenericEvent& event);
+void reduce(SharedData& state, const BrokerTickStringEvent& event);
 void reduce(SharedData& state, const BrokerMarketDepthEvent& event);
 void reduce(SharedData& state, const BrokerOrderStatusEvent& event);
 void reduce(SharedData& state, const BrokerOpenOrderEvent& event);
@@ -717,6 +755,7 @@ void reduce(SharedData& state, const BrokerPositionsLoadedEvent& event);
 std::string chooseConfiguredAccount(const std::string& accountsCsv);
 std::string makePositionKey(const std::string& account, const std::string& symbol);
 std::string runtimeSessionStateToString(RuntimeSessionState state);
+std::string borrowAvailabilityToString(BorrowAvailability availability);
 std::string localOrderStateToString(LocalOrderState state);
 std::string appDataDirectory();
 std::string tradeTraceLogPath();
