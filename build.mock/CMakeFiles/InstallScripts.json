@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/foxy/intent/workspaces/short-task/repo/build.mock/cmake_install.cmake",
-		"/Users/foxy/intent/workspaces/short-task/repo/build.mock/ixwebsocket/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
