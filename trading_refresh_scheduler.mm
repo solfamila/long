@@ -1,5 +1,7 @@
 #import "trading_refresh_scheduler.h"
 
+#include "runtime_registry.h"
+
 #include <cmath>
 #include <mutex>
 #include <utility>
@@ -18,6 +20,33 @@ double refreshDelaySeconds(bool appActive, NSProcessInfoThermalState thermalStat
         default:
             return appActive ? 0.0 : 0.12;
     }
+}
+
+dispatch_qos_class_t dispatchQosClassForName(std::string_view qosName) {
+    if (qosName == "user_interactive") {
+        return QOS_CLASS_USER_INTERACTIVE;
+    }
+    if (qosName == "user_initiated") {
+        return QOS_CLASS_USER_INITIATED;
+    }
+    if (qosName == "utility") {
+        return QOS_CLASS_UTILITY;
+    }
+    if (qosName == "background") {
+        return QOS_CLASS_BACKGROUND;
+    }
+    return QOS_CLASS_DEFAULT;
+}
+
+dispatch_queue_t refreshSchedulerQueue() {
+    static dispatch_queue_t queue = [] {
+        const auto spec = runtime_registry::queueSpec(runtime_registry::QueueId::RuntimeRefreshScheduler);
+        dispatch_queue_attr_t attrs = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
+                                                                              dispatchQosClassForName(spec.qosName),
+                                                                              0);
+        return dispatch_queue_create(spec.label.data(), attrs);
+    }();
+    return queue;
 }
 
 } // namespace
@@ -44,17 +73,19 @@ struct TradingRefreshScheduler::Impl {
                 callbackCopy = self->callback;
             }
             if (callbackCopy) {
-                callbackCopy();
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    callbackCopy();
+                });
             }
         };
 
         if (delaySeconds <= 0.0) {
-            dispatch_async(dispatch_get_main_queue(), block);
+            dispatch_async(refreshSchedulerQueue(), block);
             return;
         }
 
         const auto nanos = static_cast<int64_t>(std::llround(delaySeconds * static_cast<double>(NSEC_PER_SEC)));
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, nanos), dispatch_get_main_queue(), block);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, nanos), refreshSchedulerQueue(), block);
     }
 
     void scheduleLocked(std::shared_ptr<Impl> self) {

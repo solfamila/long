@@ -2,6 +2,7 @@
 #import <os/signpost.h>
 
 #include "mac_observability.h"
+#include "runtime_registry.h"
 
 #include <mutex>
 #include <string>
@@ -10,28 +11,33 @@
 namespace {
 
 os_log_t runtimeLog() {
-    static os_log_t log = os_log_create("com.foxy.twstradinggui", "runtime");
+    static os_log_t log = os_log_create(runtime_registry::kObservabilitySubsystem.data(),
+                                        runtime_registry::logCategoryName(runtime_registry::LogCategory::Runtime).data());
     return log;
 }
 
 os_log_t orderLog() {
-    static os_log_t log = os_log_create("com.foxy.twstradinggui", "orders");
+    static os_log_t log = os_log_create(runtime_registry::kObservabilitySubsystem.data(),
+                                        runtime_registry::logCategoryName(runtime_registry::LogCategory::Orders).data());
     return log;
 }
 
 os_log_t ipcLog() {
-    static os_log_t log = os_log_create("com.foxy.twstradinggui", "ipc");
+    static os_log_t log = os_log_create(runtime_registry::kObservabilitySubsystem.data(),
+                                        runtime_registry::logCategoryName(runtime_registry::LogCategory::Ipc).data());
     return log;
 }
 
 os_log_t logForCategory(const std::string& category) {
-    if (category == "orders") {
-        return orderLog();
+    switch (runtime_registry::parseLogCategory(category)) {
+        case runtime_registry::LogCategory::Orders:
+            return orderLog();
+        case runtime_registry::LogCategory::Ipc:
+            return ipcLog();
+        case runtime_registry::LogCategory::Runtime:
+        default:
+            return runtimeLog();
     }
-    if (category == "ipc") {
-        return ipcLog();
-    }
-    return runtimeLog();
 }
 
 std::mutex& signpostMutex() {
@@ -84,7 +90,7 @@ void macTraceBegin(std::uint64_t traceId, const std::string& stage, const std::s
     const os_signpost_id_t id = signpostIdFor(log, traceId, stage, true);
     os_signpost_interval_begin(log,
                                id,
-                               "TradeStage",
+                               RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE,
                                "trace=%{public}llu stage=%{public}s %{public}s",
                                static_cast<unsigned long long>(traceId),
                                stage.c_str(),
@@ -97,7 +103,7 @@ void macTraceEnd(std::uint64_t traceId, const std::string& stage, const std::str
     if (id != OS_SIGNPOST_ID_NULL) {
         os_signpost_interval_end(log,
                                  id,
-                                 "TradeStage",
+                                 RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE,
                                  "trace=%{public}llu stage=%{public}s %{public}s",
                                  static_cast<unsigned long long>(traceId),
                                  stage.c_str(),
@@ -106,7 +112,7 @@ void macTraceEnd(std::uint64_t traceId, const std::string& stage, const std::str
     } else {
         os_signpost_event_emit(log,
                                OS_SIGNPOST_ID_EXCLUSIVE,
-                               "TradeStage",
+                               RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE,
                                "trace=%{public}llu stage=%{public}s %{public}s",
                                static_cast<unsigned long long>(traceId),
                                stage.c_str(),
@@ -118,7 +124,7 @@ void macTraceEvent(std::uint64_t traceId, const std::string& stage, const std::s
     const os_log_t log = orderLog();
     os_signpost_event_emit(log,
                            OS_SIGNPOST_ID_EXCLUSIVE,
-                           "TradeStage",
+                           RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE,
                            "trace=%{public}llu stage=%{public}s %{public}s",
                            static_cast<unsigned long long>(traceId),
                            stage.c_str(),

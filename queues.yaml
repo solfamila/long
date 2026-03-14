@@ -1,0 +1,27 @@
+version: 1
+
+registry:
+  subsystem: com.foxy.twstradinggui
+
+  categories:
+    runtime:
+      description: Runtime lifecycle and session events.
+    orders:
+      description: Trade trace and order lifecycle events.
+    ipc:
+      description: WebSocket bridge and IPC coordination events.
+
+  signposts:
+    trade_stage:
+      category: orders
+      description: Phase-0 trade lifecycle stage intervals and events.
+
+  queues:
+    main_thread:
+      label: com.apple.main-thread
+      qos: user_interactive
+      description: AppKit/UI thread affinity.
+    runtime_refresh_scheduler:
+      label: com.foxy.twstradinggui.runtime.refresh_scheduler
+      qos: user_interactive
+      description: Coalesced UI refresh scheduling and thermal/app-state throttling.
