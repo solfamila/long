@@ -6,42 +6,35 @@
 namespace runtime_registry {
 
 // Keep these constants aligned with queues.yaml (phase-0 subset).
-inline constexpr std::string_view kObservabilitySubsystem = "com.foxy.twstradinggui";
+inline constexpr std::string_view kObservabilitySubsystem = "com.foxy.long.bridge";
 
-#define RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE "trade_stage"
-inline constexpr std::string_view kTradeStageSignpostName = RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE;
+#define RUNTIME_REGISTRY_SIGNPOST_BRIDGE_STAGE "bridge_stage"
+inline constexpr std::string_view kBridgeStageSignpostName = RUNTIME_REGISTRY_SIGNPOST_BRIDGE_STAGE;
 
 enum class LogCategory {
-    Runtime,
-    Orders,
-    Ipc
+    Bridge
 };
 
 constexpr std::string_view logCategoryName(LogCategory category) {
     switch (category) {
-        case LogCategory::Orders:
-            return "orders";
-        case LogCategory::Ipc:
-            return "ipc";
-        case LogCategory::Runtime:
+        case LogCategory::Bridge:
         default:
-            return "runtime";
+            return "bridge";
     }
 }
 
 inline LogCategory parseLogCategory(std::string_view category) {
-    if (category == logCategoryName(LogCategory::Orders)) {
-        return LogCategory::Orders;
+    if (category == "runtime" || category == "orders" || category == "ipc") {
+        return LogCategory::Bridge;
     }
-    if (category == logCategoryName(LogCategory::Ipc)) {
-        return LogCategory::Ipc;
-    }
-    return LogCategory::Runtime;
+    return LogCategory::Bridge;
 }
 
 enum class QueueId {
-    MainThread,
-    RuntimeRefreshScheduler
+    BridgeCapture,
+    BridgeSender,
+    OutboxJournal,
+    OutboxDrain
 };
 
 struct QueueSpec {
@@ -50,18 +43,24 @@ struct QueueSpec {
     std::string_view qosName;
 };
 
-inline constexpr std::array<QueueSpec, 2> kQueueSpecs = {{
-    {QueueId::MainThread, "com.apple.main-thread", "user_interactive"},
-    {QueueId::RuntimeRefreshScheduler, "com.foxy.twstradinggui.runtime.refresh_scheduler", "user_interactive"},
+inline constexpr std::array<QueueSpec, 4> kQueueSpecs = {{
+    {QueueId::BridgeCapture, "com.foxy.long.bridge.capture", "inherited"},
+    {QueueId::BridgeSender, "com.foxy.long.bridge.sender", "user_initiated"},
+    {QueueId::OutboxJournal, "com.foxy.long.bridge.outbox-journal", "utility"},
+    {QueueId::OutboxDrain, "com.foxy.long.bridge.outbox-drain", "utility"},
 }};
 
 constexpr QueueSpec queueSpec(QueueId id) {
     switch (id) {
-        case QueueId::RuntimeRefreshScheduler:
-            return kQueueSpecs[1];
-        case QueueId::MainThread:
-        default:
+        case QueueId::BridgeCapture:
             return kQueueSpecs[0];
+        case QueueId::BridgeSender:
+            return kQueueSpecs[1];
+        case QueueId::OutboxJournal:
+            return kQueueSpecs[2];
+        case QueueId::OutboxDrain:
+        default:
+            return kQueueSpecs[3];
     }
 }
 

@@ -10,34 +10,15 @@
 
 namespace {
 
-os_log_t runtimeLog() {
+os_log_t bridgeLog() {
     static os_log_t log = os_log_create(runtime_registry::kObservabilitySubsystem.data(),
-                                        runtime_registry::logCategoryName(runtime_registry::LogCategory::Runtime).data());
-    return log;
-}
-
-os_log_t orderLog() {
-    static os_log_t log = os_log_create(runtime_registry::kObservabilitySubsystem.data(),
-                                        runtime_registry::logCategoryName(runtime_registry::LogCategory::Orders).data());
-    return log;
-}
-
-os_log_t ipcLog() {
-    static os_log_t log = os_log_create(runtime_registry::kObservabilitySubsystem.data(),
-                                        runtime_registry::logCategoryName(runtime_registry::LogCategory::Ipc).data());
+                                        runtime_registry::logCategoryName(runtime_registry::LogCategory::Bridge).data());
     return log;
 }
 
 os_log_t logForCategory(const std::string& category) {
-    switch (runtime_registry::parseLogCategory(category)) {
-        case runtime_registry::LogCategory::Orders:
-            return orderLog();
-        case runtime_registry::LogCategory::Ipc:
-            return ipcLog();
-        case runtime_registry::LogCategory::Runtime:
-        default:
-            return runtimeLog();
-    }
+    (void)runtime_registry::parseLogCategory(category);
+    return bridgeLog();
 }
 
 std::mutex& signpostMutex() {
@@ -86,11 +67,11 @@ void macLogError(const std::string& category, const std::string& message) {
 }
 
 void macTraceBegin(std::uint64_t traceId, const std::string& stage, const std::string& message) {
-    const os_log_t log = orderLog();
+    const os_log_t log = bridgeLog();
     const os_signpost_id_t id = signpostIdFor(log, traceId, stage, true);
     os_signpost_interval_begin(log,
                                id,
-                               RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE,
+                               RUNTIME_REGISTRY_SIGNPOST_BRIDGE_STAGE,
                                "trace=%{public}llu stage=%{public}s %{public}s",
                                static_cast<unsigned long long>(traceId),
                                stage.c_str(),
@@ -98,12 +79,12 @@ void macTraceBegin(std::uint64_t traceId, const std::string& stage, const std::s
 }
 
 void macTraceEnd(std::uint64_t traceId, const std::string& stage, const std::string& message) {
-    const os_log_t log = orderLog();
+    const os_log_t log = bridgeLog();
     const os_signpost_id_t id = signpostIdFor(log, traceId, stage, false);
     if (id != OS_SIGNPOST_ID_NULL) {
         os_signpost_interval_end(log,
                                  id,
-                                 RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE,
+                                 RUNTIME_REGISTRY_SIGNPOST_BRIDGE_STAGE,
                                  "trace=%{public}llu stage=%{public}s %{public}s",
                                  static_cast<unsigned long long>(traceId),
                                  stage.c_str(),
@@ -112,7 +93,7 @@ void macTraceEnd(std::uint64_t traceId, const std::string& stage, const std::str
     } else {
         os_signpost_event_emit(log,
                                OS_SIGNPOST_ID_EXCLUSIVE,
-                               RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE,
+                               RUNTIME_REGISTRY_SIGNPOST_BRIDGE_STAGE,
                                "trace=%{public}llu stage=%{public}s %{public}s",
                                static_cast<unsigned long long>(traceId),
                                stage.c_str(),
@@ -121,10 +102,10 @@ void macTraceEnd(std::uint64_t traceId, const std::string& stage, const std::str
 }
 
 void macTraceEvent(std::uint64_t traceId, const std::string& stage, const std::string& message) {
-    const os_log_t log = orderLog();
+    const os_log_t log = bridgeLog();
     os_signpost_event_emit(log,
                            OS_SIGNPOST_ID_EXCLUSIVE,
-                           RUNTIME_REGISTRY_SIGNPOST_TRADE_STAGE,
+                           RUNTIME_REGISTRY_SIGNPOST_BRIDGE_STAGE,
                            "trace=%{public}llu stage=%{public}s %{public}s",
                            static_cast<unsigned long long>(traceId),
                            stage.c_str(),
