@@ -350,6 +350,7 @@ bool TradingRuntime::start() {
     const std::string websocketToken = ensureWebSocketAuthToken();
     const auto unfinishedTraces = recoverUnfinishedTraceSummariesFromLog(5);
     const RuntimeRecoverySnapshot recovery = recoverRuntimeRecoverySnapshot(5);
+    seedBridgeOutboxRecoveryState(recovery);
     impl_->invokeOnActionThread([&]() {
         trading_engine::reduce(appState(), trading_engine::RuntimeBootstrapEvent{
             makeSessionIdentifier("app"),
