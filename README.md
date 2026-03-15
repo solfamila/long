@@ -37,6 +37,12 @@ Direct executable inside the bundle:
 ./build/tws_gui.app/Contents/MacOS/tws_gui
 ```
 
+Run the Phase-1 engine daemon:
+
+```bash
+./build/tape_engine
+```
+
 Package a distributable zip:
 
 ```bash
@@ -77,6 +83,8 @@ Phase-1 bridge sender notes:
 - `long` now batches queued bridge records into framed MessagePack batches for `tape-engine`.
 - The sender uses the Unix domain socket path from `LONG_TAPE_ENGINE_SOCKET` when set.
 - If that env var is unset, the sender defaults to `/tmp/tape-engine.sock`.
+- `tape_engine` writes per-batch segments and a hash-linked `manifest.jsonl` under `LONG_TAPE_ENGINE_DATA_DIR`.
+- If `LONG_TAPE_ENGINE_DATA_DIR` is unset, the daemon defaults to `/tmp/tape-engine`.
 
 Packaging notes:
 - The app is built as a real macOS `.app` bundle.

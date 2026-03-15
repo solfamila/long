@@ -1,6 +1,8 @@
 #include "app_shared.h"
 #include "bridge_batch_codec.h"
 #include "bridge_batch_transport.h"
+#include "tape_engine.h"
+#include "tape_engine_protocol.h"
 #include "trace_exporter.h"
 #include "trading_ui_format.h"
 #include "trading_wrapper.h"
@@ -190,6 +192,17 @@ std::vector<std::uint8_t> readAllFromFd(int fd) {
         bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + readCount);
     }
     return bytes;
+}
+
+void writeAllToFd(int fd, const std::vector<std::uint8_t>& bytes) {
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        const ssize_t wrote = ::write(fd, bytes.data() + offset, bytes.size() - offset);
+        if (wrote < 0) {
+            throw std::runtime_error("write failed: " + std::string(std::strerror(errno)));
+        }
+        offset += static_cast<std::size_t>(wrote);
+    }
 }
 
 void testReplayPrefersRichLiveTrace() {
@@ -690,6 +703,21 @@ void testUnixDomainSocketTransportSendsFramedBatch() {
             return;
         }
         received = readAllFromFd(clientFd);
+        tape_engine::IngestAck ack;
+        ack.batchSeq = 21;
+        ack.adapterId = "long";
+        ack.connectionId = "runtime-uds-transport";
+        ack.acceptedRecords = 1;
+        ack.firstSessionSeq = 1;
+        ack.lastSessionSeq = 1;
+        ack.firstSourceSeq = 1001;
+        ack.lastSourceSeq = 1001;
+        const std::vector<std::uint8_t> ackFrame = tape_engine::encodeAckFrame(ack);
+        try {
+            writeAllToFd(clientFd, ackFrame);
+        } catch (const std::exception& error) {
+            serverError = error.what();
+        }
         ::close(clientFd);
     });
 
@@ -717,6 +745,120 @@ void testUnixDomainSocketTransportSendsFramedBatch() {
     expect(decoded.header.batchSeq == 21, "unix-domain transport should preserve the framed batch sequence");
     expect(decoded.records.size() == 1, "unix-domain transport should preserve the framed bridge record count");
     expect(decoded.records.front().sourceSeq == 1001, "unix-domain transport should preserve the framed source sequence");
+}
+
+void testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase1";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase1.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase1";
+    options.runtimeSessionId = "runtime-engine-phase1";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+    options.batchSeq = 31;
+    const bridge_batch::Batch batch = bridge_batch::buildBatch({
+        makeBridgeRecord(1101, "order_intent", "WebSocket", "INTC", "BUY",
+                         71, 501, 0, "", "accepted order intent", "2026-03-14T09:36:00.100"),
+        makeBridgeRecord(1102, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                         71, 501, 9501, "EXEC-71", "execution details observed", "2026-03-14T09:36:00.250")
+    }, options);
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(batch), &error),
+           "tape-engine should accept a real bridge batch: " + error);
+
+    const tape_engine::EngineSnapshot snapshot = server.snapshot();
+    expect(snapshot.nextSessionSeq == 3, "tape-engine should assign contiguous session_seq values to accepted records");
+    expect(snapshot.liveEvents.size() == 2, "tape-engine live ring should retain accepted records");
+    expect(snapshot.liveEvents.front().sessionSeq == 1, "tape-engine should assign the first session_seq");
+    expect(snapshot.liveEvents.back().sessionSeq == 2, "tape-engine should assign the second session_seq");
+    expect(snapshot.liveEvents.back().bridgeRecord.anchor.execId == "EXEC-71", "tape-engine should preserve bridge anchors");
+    expect(snapshot.segments.size() == 1, "tape-engine should emit one segment for the accepted batch");
+    expect(snapshot.segments.front().firstSessionSeq == 1, "tape-engine segment metadata should preserve the first session_seq");
+    expect(snapshot.segments.front().lastSessionSeq == 2, "tape-engine segment metadata should preserve the last session_seq");
+    expect(!snapshot.segments.front().payloadSha256.empty(), "tape-engine segment metadata should include a payload checksum");
+    expect(!snapshot.segments.front().manifestHash.empty(), "tape-engine segment metadata should include a manifest hash");
+
+    const fs::path segmentPath = rootDir / "segments" / snapshot.segments.front().fileName;
+    const fs::path metadataPath = rootDir / "segments" / snapshot.segments.front().metadataFileName;
+    const fs::path manifestPath = rootDir / "manifest.jsonl";
+    expect(fs::exists(segmentPath), "tape-engine should write the segment payload file");
+    expect(fs::exists(metadataPath), "tape-engine should write the segment metadata file");
+    expect(fs::exists(manifestPath), "tape-engine should append the manifest hash chain");
+
+    const std::vector<json> manifestLines = readJsonLines(manifestPath.string());
+    expect(manifestLines.size() == 1, "tape-engine should append one manifest line for the accepted batch");
+    expect(manifestLines.front().value("manifest_hash", std::string()) == snapshot.segments.front().manifestHash,
+           "tape-engine manifest hash should match the in-memory segment metadata");
+
+    server.stop();
+}
+
+void testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq() {
+    const fs::path rootDir = testDataDir() / "tape-engine-gap";
+    const fs::path socketPath = testDataDir() / "tape-engine-gap.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for gap test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-gap";
+    options.runtimeSessionId = "runtime-engine-gap";
+    options.flushReason = bridge_batch::FlushReason::Manual;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    options.batchSeq = 41;
+    const bridge_batch::Batch first = bridge_batch::buildBatch({
+        makeBridgeRecord(2001, "order_intent", "WebSocket", "INTC", "BUY",
+                         71, 501, 0, "", "first", "2026-03-14T09:37:00.100")
+    }, options);
+    expect(transport.sendFrame(bridge_batch::encodeFrame(first), &error),
+           "tape-engine should accept the first batch: " + error);
+
+    options.batchSeq = 42;
+    const bridge_batch::Batch duplicateAndGap = bridge_batch::buildBatch({
+        makeBridgeRecord(2001, "order_intent", "WebSocket", "INTC", "BUY",
+                         71, 501, 0, "", "duplicate", "2026-03-14T09:37:00.200"),
+        makeBridgeRecord(2003, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                         71, 501, 9501, "EXEC-71", "gap after duplicate", "2026-03-14T09:37:00.300")
+    }, options);
+    expect(transport.sendFrame(bridge_batch::encodeFrame(duplicateAndGap), &error),
+           "tape-engine should ignore duplicates across accepted history and still emit a gap marker: " + error);
+
+    const tape_engine::EngineSnapshot snapshot = server.snapshot();
+    expect(snapshot.liveEvents.size() == 3, "tape-engine should retain the original event, gap marker, and later event");
+    expect(snapshot.liveEvents.at(1).eventKind == "gap_marker", "tape-engine should insert an explicit gap_marker event");
+    expect(snapshot.liveEvents.at(1).gapStartSourceSeq == 2002, "gap marker should preserve the missing source_seq start");
+    expect(snapshot.liveEvents.at(1).gapEndSourceSeq == 2002, "gap marker should preserve the missing source_seq end");
+    expect(snapshot.liveEvents.at(2).sourceSeq == 2003, "tape-engine should still accept the later source_seq");
+
+    server.stop();
 }
 
 void testBridgeOutboxOverflowWritesExplicitLossMarker() {
@@ -1423,6 +1565,8 @@ int main() {
         testBridgeDispatchBatchRespectsThresholdsAndImmediateFlush();
         testBridgeDispatchSnapshotAndDeliveryAck();
         testUnixDomainSocketTransportSendsFramedBatch();
+        testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments();
+        testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();

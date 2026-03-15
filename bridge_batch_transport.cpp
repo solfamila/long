@@ -1,4 +1,5 @@
 #include "bridge_batch_transport.h"
+#include "tape_engine_protocol.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -16,6 +17,35 @@ namespace {
 
 std::string makeErrnoMessage(const std::string& action) {
     return action + ": " + std::strerror(errno);
+}
+
+std::vector<std::uint8_t> readExact(int fd, std::size_t bytes) {
+    std::vector<std::uint8_t> buffer(bytes);
+    std::size_t offset = 0;
+    while (offset < bytes) {
+        const ssize_t readCount = ::read(fd, buffer.data() + offset, bytes - offset);
+        if (readCount == 0) {
+            throw std::runtime_error("unexpected EOF while reading tape-engine ack");
+        }
+        if (readCount < 0) {
+            throw std::runtime_error(makeErrnoMessage("read"));
+        }
+        offset += static_cast<std::size_t>(readCount);
+    }
+    return buffer;
+}
+
+std::vector<std::uint8_t> readFramedAck(int fd) {
+    const std::vector<std::uint8_t> prefix = readExact(fd, 4);
+    const std::uint32_t payloadSize =
+        (static_cast<std::uint32_t>(prefix[0]) << 24) |
+        (static_cast<std::uint32_t>(prefix[1]) << 16) |
+        (static_cast<std::uint32_t>(prefix[2]) << 8) |
+        static_cast<std::uint32_t>(prefix[3]);
+    std::vector<std::uint8_t> frame = prefix;
+    const std::vector<std::uint8_t> payload = readExact(fd, payloadSize);
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    return frame;
 }
 
 } // namespace
@@ -106,6 +136,22 @@ bool UnixDomainSocketTransport::sendFrame(const std::vector<std::uint8_t>& frame
     }
 
     ::shutdown(fd, SHUT_WR);
+    try {
+        const tape_engine::IngestAck ack = tape_engine::decodeAckFrame(readFramedAck(fd));
+        if (ack.status != "accepted") {
+            if (error != nullptr) {
+                *error = ack.error.empty() ? "tape-engine rejected batch" : ack.error;
+            }
+            ::close(fd);
+            return false;
+        }
+    } catch (const std::exception& ackError) {
+        if (error != nullptr) {
+            *error = ackError.what();
+        }
+        ::close(fd);
+        return false;
+    }
     ::close(fd);
     return true;
 }

@@ -78,6 +78,7 @@ set(APP_SOURCES
     app_shared.cpp
     bridge_batch_codec.cpp
     bridge_batch_transport.cpp
+    tape_engine_protocol.cpp
     mac_observability.mm
     trading_export_panels.mm
     trading_refresh_scheduler.mm
@@ -92,14 +93,28 @@ set(APP_SOURCES
     controller_mac.mm
 )
 
+set(TAPE_ENGINE_SOURCES
+    tape_engine_main.cpp
+    tape_engine.cpp
+    tape_engine_protocol.cpp
+    bridge_batch_codec.cpp
+)
+
 set(BUILD_DEMO OFF CACHE BOOL "" FORCE)
 set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
 set(USE_TLS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${IXWEBSOCKET_DIR}" "${CMAKE_BINARY_DIR}/third_party/ixwebsocket" EXCLUDE_FROM_ALL)
 
 add_executable(tws_gui MACOSX_BUNDLE ${APP_SOURCES})
+add_executable(tape_engine ${TAPE_ENGINE_SOURCES})
 
 target_include_directories(tws_gui PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${IXWEBSOCKET_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
+target_include_directories(tape_engine PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${IXWEBSOCKET_DIR}"
     "${NLOHMANN_JSON_DIR}/single_include"
@@ -108,6 +123,10 @@ target_include_directories(tws_gui PRIVATE
 target_link_libraries(tws_gui PRIVATE
     Threads::Threads
     ixwebsocket::ixwebsocket
+)
+
+target_link_libraries(tape_engine PRIVATE
+    Threads::Threads
 )
 
 if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
@@ -239,13 +258,25 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
         ${IB_API_EXTRA_INCLUDE_DIRS}
     )
     target_link_libraries(tws_gui PRIVATE twsapi)
+    target_include_directories(tape_engine PRIVATE
+        "${VENDORED_IB_API_DIR}"
+        ${IB_API_EXTRA_INCLUDE_DIRS}
+    )
+    target_compile_definitions(tape_engine PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     message(STATUS "Using vendored Interactive Brokers API sources from ${VENDORED_IB_API_DIR}")
 elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
     target_include_directories(tws_gui PRIVATE "${IB_API_INCLUDE_DIR}")
+    target_include_directories(tape_engine PRIVATE "${IB_API_INCLUDE_DIR}")
     message(STATUS "Using Interactive Brokers API from ${IB_API_INCLUDE_DIR}")
 else()
     target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+    target_include_directories(tape_engine PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_compile_definitions(tws_gui PRIVATE
+        TWS_GUI_MOCK_IBAPI=1
+        TWS_HAS_PROTOBUF_API=1
+        TWS_HAS_ORDER_CANCEL_OBJECT=1
+    )
+    target_compile_definitions(tape_engine PRIVATE
         TWS_GUI_MOCK_IBAPI=1
         TWS_HAS_PROTOBUF_API=1
         TWS_HAS_ORDER_CANCEL_OBJECT=1
@@ -330,6 +361,8 @@ if(BUILD_TESTING)
         app_shared.cpp
         bridge_batch_codec.cpp
         bridge_batch_transport.cpp
+        tape_engine.cpp
+        tape_engine_protocol.cpp
         trace_exporter.cpp
         trading_ui_format.cpp
         mac_observability.mm
