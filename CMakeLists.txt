@@ -139,6 +139,17 @@ set(TAPESCOPE_SOURCES
     tape_engine_protocol.cpp
 )
 
+set(TAPE_MCP_SOURCES
+    tape_mcp_main.cpp
+    tape_mcp_adapter.cpp
+    tape_mcp_engine_rpc.cpp
+    tape_engine_client.cpp
+    tape_engine_protocol.cpp
+    tapescope_client.cpp
+    tapescope_client_payloads.cpp
+    runtime_qos.cpp
+)
+
 set(BUILD_DEMO OFF CACHE BOOL "" FORCE)
 set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
 set(USE_TLS OFF CACHE BOOL "" FORCE)
@@ -152,6 +163,7 @@ add_executable(tape_engine_ctl
     tape_engine_protocol.cpp
 )
 add_executable(TapeScope MACOSX_BUNDLE ${TAPESCOPE_SOURCES})
+add_executable(tape_mcp ${TAPE_MCP_SOURCES})
 
 target_include_directories(tws_gui PRIVATE
     "${CMAKE_SOURCE_DIR}"
@@ -181,10 +193,18 @@ target_include_directories(TapeScope PRIVATE
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
+target_include_directories(tape_mcp PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${RUNTIME_REGISTRY_GENERATED_DIR}"
+    "${IXWEBSOCKET_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
 add_dependencies(tws_gui generate_runtime_registry)
 add_dependencies(tape_engine generate_runtime_registry)
 add_dependencies(tape_engine_ctl generate_runtime_registry)
 add_dependencies(TapeScope generate_runtime_registry)
+add_dependencies(tape_mcp generate_runtime_registry)
 
 target_link_libraries(tws_gui PRIVATE
     Threads::Threads
@@ -200,6 +220,10 @@ target_link_libraries(tape_engine_ctl PRIVATE
 )
 
 target_link_libraries(TapeScope PRIVATE
+    Threads::Threads
+)
+
+target_link_libraries(tape_mcp PRIVATE
     Threads::Threads
 )
 
@@ -340,19 +364,26 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
         "${VENDORED_IB_API_DIR}"
         ${IB_API_EXTRA_INCLUDE_DIRS}
     )
+    target_include_directories(tape_mcp PRIVATE
+        "${VENDORED_IB_API_DIR}"
+        ${IB_API_EXTRA_INCLUDE_DIRS}
+    )
     target_compile_definitions(tape_engine PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(tape_engine_ctl PRIVATE ${IB_API_COMPILE_DEFINITIONS})
+    target_compile_definitions(tape_mcp PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     message(STATUS "Using vendored Interactive Brokers API sources from ${VENDORED_IB_API_DIR}")
 elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
     target_include_directories(tws_gui PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_engine PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_engine_ctl PRIVATE "${IB_API_INCLUDE_DIR}")
+    target_include_directories(tape_mcp PRIVATE "${IB_API_INCLUDE_DIR}")
     message(STATUS "Using Interactive Brokers API from ${IB_API_INCLUDE_DIR}")
 else()
     target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine_ctl PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(TapeScope PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+    target_include_directories(tape_mcp PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_compile_definitions(tws_gui PRIVATE
         TWS_GUI_MOCK_IBAPI=1
         TWS_HAS_PROTOBUF_API=1
@@ -369,6 +400,11 @@ else()
         TWS_HAS_ORDER_CANCEL_OBJECT=1
     )
     target_compile_definitions(TapeScope PRIVATE
+        TWS_GUI_MOCK_IBAPI=1
+        TWS_HAS_PROTOBUF_API=1
+        TWS_HAS_ORDER_CANCEL_OBJECT=1
+    )
+    target_compile_definitions(tape_mcp PRIVATE
         TWS_GUI_MOCK_IBAPI=1
         TWS_HAS_PROTOBUF_API=1
         TWS_HAS_ORDER_CANCEL_OBJECT=1
@@ -513,6 +549,55 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME tws_gui_trace_tests COMMAND tws_gui_tests)
+
+    add_executable(tape_mcp_contract_tests
+        tests/tape_mcp_contract_tests.cpp
+        tape_mcp_adapter.cpp
+        tape_mcp_engine_rpc.cpp
+        tape_engine.cpp
+        tape_engine_client.cpp
+        tape_engine_protocol.cpp
+        tapescope_client.cpp
+        tapescope_client_payloads.cpp
+        phase3_analyzers.cpp
+        bridge_batch_codec.cpp
+        bridge_batch_transport.cpp
+        runtime_qos.cpp
+    )
+
+    target_include_directories(tape_mcp_contract_tests PRIVATE
+        "${CMAKE_SOURCE_DIR}"
+        "${RUNTIME_REGISTRY_GENERATED_DIR}"
+        "${IXWEBSOCKET_DIR}"
+        "${NLOHMANN_JSON_DIR}/single_include"
+    )
+    add_dependencies(tape_mcp_contract_tests generate_runtime_registry tape_mcp)
+    target_compile_definitions(tape_mcp_contract_tests PRIVATE
+        TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        TAPE_MCP_EXECUTABLE_PATH="$<TARGET_FILE:tape_mcp>"
+    )
+    target_link_libraries(tape_mcp_contract_tests PRIVATE
+        Threads::Threads
+    )
+
+    if(TARGET twsapi)
+        target_link_libraries(tape_mcp_contract_tests PRIVATE twsapi)
+        target_include_directories(tape_mcp_contract_tests PRIVATE
+            "${VENDORED_IB_API_DIR}"
+            ${IB_API_EXTRA_INCLUDE_DIRS}
+        )
+    elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
+        target_include_directories(tape_mcp_contract_tests PRIVATE "${IB_API_INCLUDE_DIR}")
+    else()
+        target_include_directories(tape_mcp_contract_tests PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+        target_compile_definitions(tape_mcp_contract_tests PRIVATE
+            TWS_GUI_MOCK_IBAPI=1
+            TWS_HAS_PROTOBUF_API=1
+            TWS_HAS_ORDER_CANCEL_OBJECT=1
+        )
+    endif()
+
+    add_test(NAME tape_mcp_contract_tests COMMAND tape_mcp_contract_tests)
 endif()
 
 set_source_files_properties(

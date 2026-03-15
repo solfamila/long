@@ -1,0 +1,2993 @@
+{
+  "tools_list": [
+    {
+      "input_required": [
+        "artifact_id",
+        "export_format"
+      ],
+      "name": "tapescript_export_artifact",
+      "output_required": [
+        "artifact_id",
+        "format",
+        "served_revision_id",
+        "markdown",
+        "bundle"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_find_order_anchor",
+      "output_required": [
+        "returned_count",
+        "events"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_list_case_reports",
+      "output_required": [
+        "returned_count",
+        "case_reports"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_list_findings",
+      "output_required": [
+        "returned_count",
+        "findings"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_list_incidents",
+      "output_required": [
+        "returned_count",
+        "incidents"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_list_order_anchors",
+      "output_required": [
+        "returned_count",
+        "order_anchors"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_list_protected_windows",
+      "output_required": [
+        "returned_count",
+        "protected_windows"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_list_session_reports",
+      "output_required": [
+        "returned_count",
+        "session_reports"
+      ]
+    },
+    {
+      "input_required": [
+        "artifact_id"
+      ],
+      "name": "tapescript_read_artifact",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "report_id"
+      ],
+      "name": "tapescript_read_case_report",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "finding_id"
+      ],
+      "name": "tapescript_read_finding",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "logical_incident_id"
+      ],
+      "name": "tapescript_read_incident",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_read_live_tail",
+      "output_required": [
+        "returned_count",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "anchor_id"
+      ],
+      "name": "tapescript_read_order_anchor",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_read_order_case",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "window_id"
+      ],
+      "name": "tapescript_read_protected_window",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "first_session_seq",
+        "last_session_seq"
+      ],
+      "name": "tapescript_read_range",
+      "output_required": [
+        "returned_count",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "first_session_seq",
+        "last_session_seq"
+      ],
+      "name": "tapescript_read_session_overview",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "first_session_seq",
+        "last_session_seq"
+      ],
+      "name": "tapescript_read_session_quality",
+      "output_required": [
+        "served_revision_id",
+        "includes_mutable_tail",
+        "first_session_seq",
+        "last_session_seq",
+        "data_quality"
+      ]
+    },
+    {
+      "input_required": [
+        "report_id"
+      ],
+      "name": "tapescript_read_session_report",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "target_session_seq"
+      ],
+      "name": "tapescript_replay_snapshot",
+      "output_required": [
+        "served_revision_id",
+        "includes_mutable_tail",
+        "target_session_seq",
+        "replayed_through_session_seq",
+        "applied_event_count",
+        "gap_markers_encountered",
+        "checkpoint_used",
+        "checkpoint_revision_id",
+        "checkpoint_session_seq",
+        "bid_price",
+        "ask_price",
+        "last_price",
+        "bid_book",
+        "ask_book",
+        "data_quality"
+      ]
+    },
+    {
+      "input_required": [
+        "logical_incident_id"
+      ],
+      "name": "tapescript_scan_incident_report",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_scan_order_case_report",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [
+        "first_session_seq",
+        "last_session_seq"
+      ],
+      "name": "tapescript_scan_session_report",
+      "output_required": [
+        "artifact_id",
+        "artifact_kind",
+        "headline",
+        "detail",
+        "served_revision_id",
+        "includes_mutable_tail",
+        "artifact",
+        "entity",
+        "report",
+        "evidence",
+        "data_quality",
+        "replay_range",
+        "incident_rows",
+        "citation_rows",
+        "events"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_seek_order_anchor",
+      "output_required": [
+        "served_revision_id",
+        "includes_mutable_tail",
+        "replay_target_session_seq",
+        "first_session_seq",
+        "last_session_seq",
+        "last_fill_session_seq",
+        "replay_range"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_status",
+      "output_required": [
+        "socket_path",
+        "data_dir",
+        "instrument_id",
+        "latest_session_seq",
+        "live_event_count",
+        "segment_count",
+        "manifest_hash"
+      ]
+    }
+  ],
+  "prompts_list": [
+    {
+      "name": "export_artifact_for_sharing",
+      "required_args": [
+        "artifact_id"
+      ],
+      "title": "Export Artifact For Sharing"
+    },
+    {
+      "name": "investigate_bad_fill",
+      "required_args": [],
+      "title": "Investigate Bad Fill"
+    },
+    {
+      "name": "investigate_incident",
+      "required_args": [
+        "logical_incident_id"
+      ],
+      "title": "Investigate Incident"
+    },
+    {
+      "name": "investigate_order_case",
+      "required_args": [],
+      "title": "Investigate Order Case"
+    },
+    {
+      "name": "investigate_session_range",
+      "required_args": [
+        "first_session_seq",
+        "last_session_seq"
+      ],
+      "title": "Investigate Session Range"
+    },
+    {
+      "name": "investigate_source_gap",
+      "required_args": [
+        "logical_incident_id"
+      ],
+      "title": "Investigate Source Gap"
+    },
+    {
+      "name": "replay_key_moment",
+      "required_args": [
+        "target_session_seq"
+      ],
+      "title": "Replay Key Moment"
+    },
+    {
+      "name": "summarize_latest_session_incidents",
+      "required_args": [],
+      "title": "Summarize Latest Session Incidents"
+    }
+  ],
+  "prompt_investigate_session_range": {
+    "description": "Guide an agent through summary, quality, durable reporting, and replay for a session_seq window.",
+    "first_role": "user",
+    "message_count": 1,
+    "prompt": "investigate_session_range",
+    "text": "Investigate session range `1-4` pinned to revision `7`. Start with `tapescript_read_session_overview`, then read `tapescript_read_session_quality`. If the summary is worth preserving, call `tapescript_scan_session_report`. For the most important incident rows, drill into `tapescript_read_incident` and `tapescript_read_protected_window`. If you need state at a key moment, use `tapescript_replay_snapshot` on the target `session_seq`. Return: headline, top incidents, evidence trust, replay targets, and next actions."
+  },
+  "prompt_investigate_order_case": {
+    "description": "Guide an agent through order/fill investigation, replay targeting, and durable case reporting.",
+    "first_role": "user",
+    "message_count": 1,
+    "prompt": "investigate_order_case",
+    "text": "Investigate order_id=`7401` pinned to revision `7`. Start with `tapescript_read_order_case`, then use `tapescript_seek_order_anchor` for replay bounds. If you need the raw anchor slice, use `tapescript_find_order_anchor` and `tapescript_read_order_anchor`. For durable output, call `tapescript_scan_order_case_report`. If the case points at an incident or protected window, follow with `tapescript_read_incident` or `tapescript_read_protected_window`. Return: execution summary, adverse selection / fill context, replay target, and evidence-backed next steps."
+  },
+  "prompt_investigate_bad_fill": {
+    "description": "Guide an agent through fill-quality, adverse-selection, and replay analysis around a bad fill.",
+    "first_role": "user",
+    "message_count": 1,
+    "prompt": "investigate_bad_fill",
+    "text": "Investigate a bad fill around exec_id=`EXEC-401` pinned to revision `7`. Start with `tapescript_read_order_case` to get fill context and ranked incidents. Use `tapescript_seek_order_anchor` and `tapescript_replay_snapshot` to inspect the market/book state at the fill and immediately after it. If the evidence should be preserved, call `tapescript_scan_order_case_report`, then `tapescript_export_artifact`. Return: fill-quality summary, adverse-selection evidence, replay target, and whether the issue looks market-driven, feed-driven, or strategy-driven."
+  },
+  "prompt_investigate_source_gap": {
+    "description": "Guide an agent through a source-gap incident using incident, protected-window, and replay reads.",
+    "first_role": "user",
+    "message_count": 1,
+    "prompt": "investigate_source_gap",
+    "text": "Investigate source-gap incident `19` pinned to revision `7`. Start with `tapescript_read_incident`, then reopen the cited protected window with `tapescript_read_protected_window`. Use `tapescript_read_session_quality` to measure evidence trust for the affected range, and `tapescript_replay_snapshot` if you need to verify whether the gap changes the visible state at a key `session_seq`. Return: scope of the gap, evidence trust, what changed first, and whether the incident is safe to use for execution forensics."
+  },
+  "prompt_summarize_latest_session_incidents": {
+    "description": "Guide an agent through a fast incident summary for the latest session range and durable report generation.",
+    "first_role": "user",
+    "message_count": 1,
+    "prompt": "summarize_latest_session_incidents",
+    "text": "Summarize the latest session incidents. Start with `tapescript_status` to discover the latest `session_seq`, then choose a recent investigation window. Pin the work to revision `7`. Use `tapescript_read_session_overview`, `tapescript_list_incidents`, and `tapescript_read_session_quality`, and if the summary should persist, call `tapescript_scan_session_report`. Return: top incidents, confidence/uncertainty, any source-gap or bad-fill evidence, and the best next drilldowns."
+  },
+  "tapescript_status": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "status",
+      "result_schema": "phase5.status.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_status"
+    },
+    "ok": true,
+    "result": {
+      "data_dir": "<tmp>/tape-mcp-phase5-engine",
+      "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+      "latest_session_seq": 4,
+      "live_event_count": 4,
+      "manifest_hash": "<hash>",
+      "segment_count": 7,
+      "socket_path": "<tmp>/tape-mcp-phase5-engine.sock"
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": "<hash>",
+      "served_revision_id": null,
+      "source": "status_snapshot"
+    }
+  },
+  "tapescript_read_live_tail": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_live_tail",
+      "result_schema": "phase5.event-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_live_tail"
+    },
+    "ok": true,
+    "result": {
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "gap_marker",
+        "fill_execution"
+      ],
+      "first_session_seq": 1,
+      "last_session_seq": 4,
+      "returned_count": 4
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": true,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_range": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_range",
+      "result_schema": "phase5.event-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_range"
+    },
+    "ok": true,
+    "result": {
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "gap_marker",
+        "fill_execution"
+      ],
+      "first_session_seq": 1,
+      "last_session_seq": 4,
+      "returned_count": 4
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_find_order_anchor": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "find_order_anchor",
+      "result_schema": "phase5.event-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_find_order_anchor"
+    },
+    "ok": true,
+    "result": {
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "fill_execution"
+      ],
+      "first_session_seq": 1,
+      "last_session_seq": 4,
+      "returned_count": 3
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_list_incidents": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "list_incidents",
+      "result_schema": "phase5.incident-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_incidents"
+    },
+    "ok": true,
+    "result": {
+      "incident_kinds": [
+        "order_fill_context",
+        "order_flow_timeline",
+        "source_gap"
+      ],
+      "returned_count": 3
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_order_anchors": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "list_order_anchors",
+      "result_schema": "phase5.order-anchor-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_order_anchors"
+    },
+    "ok": true,
+    "result": {
+      "order_anchors": [
+        {
+          "anchor_id": "<id>",
+          "artifact_id": "anchor:<id>",
+          "event_kind": "order_intent",
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "revision_id": "<id>",
+          "session_seq": 1
+        },
+        {
+          "anchor_id": "<id>",
+          "artifact_id": "anchor:<id>",
+          "event_kind": "order_status",
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "revision_id": "<id>",
+          "session_seq": 2
+        },
+        {
+          "anchor_id": "<id>",
+          "artifact_id": "anchor:<id>",
+          "event_kind": "fill_execution",
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "revision_id": "<id>",
+          "session_seq": 4
+        }
+      ],
+      "returned_count": 3
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_list_protected_windows": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "list_protected_windows",
+      "result_schema": "phase5.protected-window-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_protected_windows"
+    },
+    "ok": true,
+    "result": {
+      "protected_windows": [
+        {
+          "anchor_session_seq": 4,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "reason": "incident_promotion",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 4,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 4,
+          "logical_incident_id": null,
+          "reason": "fill_execution",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 3,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "reason": "incident_promotion",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 3,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 3,
+          "logical_incident_id": "<id>",
+          "reason": "incident_promotion",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 2,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "reason": "incident_promotion",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 2,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 3,
+          "logical_incident_id": "<id>",
+          "reason": "incident_promotion",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 2,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 4,
+          "logical_incident_id": null,
+          "reason": "order_status",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 2,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 3,
+          "logical_incident_id": null,
+          "reason": "order_status",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 1,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 4,
+          "logical_incident_id": null,
+          "reason": "order_intent",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        },
+        {
+          "anchor_session_seq": 1,
+          "artifact_id": "window:<id>",
+          "first_session_seq": 1,
+          "instrument_id": "ib:conid:9301:STK:SMART:USD:INTC",
+          "last_session_seq": 3,
+          "logical_incident_id": null,
+          "reason": "order_intent",
+          "revision_id": "<id>",
+          "window_id": "<id>"
+        }
+      ],
+      "returned_count": 10
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_list_findings": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "list_findings",
+      "result_schema": "phase5.finding-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_findings"
+    },
+    "ok": true,
+    "result": {
+      "findings": [
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.72,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_flow_timeline",
+          "last_session_seq": 2,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order window captured 2 lifecycle events"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.84,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_fill_context",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order/fill context captured 0 market updates around 1 fills"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.84,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_fill_context",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order/fill context captured 0 market updates around 1 fills"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.84,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_fill_context",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order/fill context captured 0 market updates around 1 fills"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.84,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_fill_context",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order/fill context captured 0 market updates around 1 fills"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.78,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_flow_timeline",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order window captured 2 lifecycle events and 1 fills"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.78,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_flow_timeline",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order window captured 2 lifecycle events and 1 fills"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.78,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_flow_timeline",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order window captured 2 lifecycle events and 1 fills"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.78,
+          "finding_id": "<id>",
+          "first_session_seq": 1,
+          "incident_revision_id": "<id>",
+          "kind": "order_flow_timeline",
+          "last_session_seq": 4,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "info",
+          "title": "Order window captured 2 lifecycle events and 1 fills"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "confidence": 0.95,
+          "finding_id": "<id>",
+          "first_session_seq": 3,
+          "incident_revision_id": "<id>",
+          "kind": "source_gap",
+          "last_session_seq": 3,
+          "logical_incident_id": "<id>",
+          "revision_id": "<id>",
+          "severity": "warning",
+          "title": "Feed gap detected"
+        }
+      ],
+      "returned_count": 10
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_session_overview": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_session_overview",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_session_overview"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "session-overview:<revision>:<from>:<to>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "session_overview",
+        "schema_version": 1
+      },
+      "artifact_id": "session-overview:<revision>:<from>:<to>",
+      "artifact_kind": "session_overview",
+      "citation_rows": [
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        }
+      ],
+      "detail": "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range.",
+      "entity": {
+        "entity_type": "session_range",
+        "schema_version": 1,
+        "type": "session_range"
+      },
+      "event_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Session overview",
+      "incident_kinds": [
+        "order_flow_timeline",
+        "source_gap",
+        "order_fill_context"
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_scan_session_report": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "scan_session_report",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_scan_session_report"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "session-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "session_report",
+        "schema_version": 1
+      },
+      "artifact_id": "session-report:<id>",
+      "artifact_kind": "session_report",
+      "citation_rows": [
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        }
+      ],
+      "detail": "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range.",
+      "entity": {
+        "entity_type": "session_range",
+        "schema_version": 1,
+        "type": "session_range"
+      },
+      "event_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Session overview",
+      "incident_kinds": [
+        "order_flow_timeline",
+        "source_gap",
+        "order_fill_context"
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_session_report": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_session_report",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_session_report"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "session-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "session_report",
+        "schema_version": 1
+      },
+      "artifact_id": "session-report:<id>",
+      "artifact_kind": "session_report",
+      "citation_rows": [
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        }
+      ],
+      "detail": "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range.",
+      "entity": {
+        "entity_type": "session_range",
+        "schema_version": 1,
+        "type": "session_range"
+      },
+      "event_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Session overview",
+      "incident_kinds": [
+        "order_flow_timeline",
+        "source_gap",
+        "order_fill_context"
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_list_session_reports": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "list_session_reports",
+      "result_schema": "phase5.report-inventory.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_session_reports"
+    },
+    "ok": true,
+    "result": {
+      "returned_count": 1,
+      "session_reports": [
+        {
+          "artifact_id": "session-report:<id>",
+          "headline": "Session overview",
+          "report_id": "<id>",
+          "report_type": "",
+          "revision_id": 7
+        }
+      ]
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_read_order_case": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_order_case",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_order_case"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "order-case:order:<id>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "order_case",
+        "schema_version": 1
+      },
+      "artifact_id": "order-case:order:<id>",
+      "artifact_kind": "order_case",
+      "citation_rows": [
+        {
+          "artifact_id": "order-case:order:<id>",
+          "kind": "order_case"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        }
+      ],
+      "detail": "Anchor evidence spans session_seq 1 through 4 with 10 related findings and 3 ranked incidents. Replay target is the latest fill at session_seq 4.",
+      "entity": {
+        "entity_type": "order_case",
+        "schema_version": 1,
+        "type": "order_case"
+      },
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "fill_execution"
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "order-case:order:<id>",
+            "kind": "order_case"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Order case for order 7401",
+      "incident_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Order case for order 7401",
+        "report_type": "order_case",
+        "schema_version": 1,
+        "uncertainty": "The evidence is usable but carries some data-quality caveats.",
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_incident": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_incident",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_incident"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "incident:<id>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "incident",
+        "schema_version": 1
+      },
+      "artifact_id": "incident:<id>",
+      "artifact_kind": "incident",
+      "citation_rows": [
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        }
+      ],
+      "detail": "5 correlated order_flow_timeline findings from session_seq 1 through 4.",
+      "entity": {
+        "entity_type": "incident",
+        "schema_version": 1,
+        "type": "incident"
+      },
+      "event_kinds": [
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Order window captured 2 lifecycle events and 1 fills",
+      "incident_kinds": [
+        "order_flow_timeline",
+        "order_flow_timeline",
+        "order_flow_timeline",
+        "order_flow_timeline",
+        "order_flow_timeline"
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 3
+      },
+      "report": {
+        "headline": "Order window captured 2 lifecycle events and 1 fills",
+        "report_type": "incident",
+        "schema_version": 1,
+        "uncertainty": "The evidence is usable but carries some data-quality caveats.",
+        "what_changed_first": "Order window captured 2 lifecycle events and 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_replay_snapshot": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "replay_snapshot",
+      "result_schema": "phase5.replay-snapshot.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_replay_snapshot"
+    },
+    "ok": true,
+    "result": {
+      "applied_event_count": 0,
+      "ask_book_depth": 0,
+      "ask_price": 0.0,
+      "bid_book_depth": 0,
+      "bid_price": 0.0,
+      "checkpoint_revision_id": 3,
+      "checkpoint_session_seq": 4,
+      "checkpoint_used": true,
+      "data_quality_keys": [
+        "canonical_instrument_identity_count",
+        "first_session_seq",
+        "gap_marker_count",
+        "grade",
+        "heuristic_instrument_identity_count",
+        "identity_policy_override_count",
+        "includes_mutable_tail",
+        "issues",
+        "last_session_seq",
+        "lifecycle_event_count",
+        "market_event_count",
+        "mismatched_instrument_identity_count",
+        "missing_exchange_timestamp_count",
+        "missing_receive_timestamp_count",
+        "missing_vendor_sequence_count",
+        "reset_marker_count",
+        "score",
+        "source_strong_instrument_identity_count",
+        "strong_instrument_identity_count",
+        "total_event_count",
+        "weak_instrument_identity_count"
+      ],
+      "gap_markers_encountered": 1,
+      "includes_mutable_tail": false,
+      "last_price": 0.0,
+      "replayed_through_session_seq": 4,
+      "served_revision_id": 7,
+      "target_session_seq": 4
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_scan_incident_report": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "scan_incident_report",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_scan_incident_report"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "case-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "case_report",
+        "schema_version": 1
+      },
+      "artifact_id": "case-report:<id>",
+      "artifact_kind": "case_report",
+      "citation_rows": [
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        }
+      ],
+      "detail": "5 correlated order_flow_timeline findings from session_seq 1 through 4.",
+      "entity": {
+        "entity_type": "incident",
+        "schema_version": 1,
+        "type": "incident"
+      },
+      "event_kinds": [
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Order window captured 2 lifecycle events and 1 fills",
+      "incident_kinds": [
+        "order_flow_timeline",
+        "order_flow_timeline",
+        "order_flow_timeline",
+        "order_flow_timeline",
+        "order_flow_timeline"
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 3
+      },
+      "report": {
+        "headline": "Order window captured 2 lifecycle events and 1 fills",
+        "report_type": "incident",
+        "schema_version": 1,
+        "uncertainty": "The evidence is usable but carries some data-quality caveats.",
+        "what_changed_first": "Order window captured 2 lifecycle events and 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_scan_order_case_report": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "scan_order_case_report",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_scan_order_case_report"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "case-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "case_report",
+        "schema_version": 1
+      },
+      "artifact_id": "case-report:<id>",
+      "artifact_kind": "case_report",
+      "citation_rows": [
+        {
+          "artifact_id": "order-case:order:<id>",
+          "kind": "order_case"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        }
+      ],
+      "detail": "Anchor evidence spans session_seq 1 through 4 with 10 related findings and 3 ranked incidents. Replay target is the latest fill at session_seq 4.",
+      "entity": {
+        "entity_type": "order_case",
+        "schema_version": 1,
+        "type": "order_case"
+      },
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "fill_execution"
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "order-case:order:<id>",
+            "kind": "order_case"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Order case for order 7401",
+      "incident_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Order case for order 7401",
+        "report_type": "order_case",
+        "schema_version": 1,
+        "uncertainty": "The evidence is usable but carries some data-quality caveats.",
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_case_report": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_case_report",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_case_report"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "case-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "case_report",
+        "schema_version": 1
+      },
+      "artifact_id": "case-report:<id>",
+      "artifact_kind": "case_report",
+      "citation_rows": [
+        {
+          "artifact_id": "order-case:order:<id>",
+          "kind": "order_case"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        }
+      ],
+      "detail": "Anchor evidence spans session_seq 1 through 4 with 10 related findings and 3 ranked incidents. Replay target is the latest fill at session_seq 4.",
+      "entity": {
+        "entity_type": "order_case",
+        "schema_version": 1,
+        "type": "order_case"
+      },
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "fill_execution"
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "order-case:order:<id>",
+            "kind": "order_case"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Order case for order 7401",
+      "incident_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Order case for order 7401",
+        "report_type": "order_case",
+        "schema_version": 1,
+        "uncertainty": "The evidence is usable but carries some data-quality caveats.",
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_list_case_reports": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "list_case_reports",
+      "result_schema": "phase5.report-inventory.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_case_reports"
+    },
+    "ok": true,
+    "result": {
+      "case_reports": [
+        {
+          "artifact_id": "case-report:<id>",
+          "headline": "Order window captured 2 lifecycle events and 1 fills",
+          "report_id": "<id>",
+          "report_type": "incident_case",
+          "revision_id": 7
+        },
+        {
+          "artifact_id": "case-report:<id>",
+          "headline": "Order case for order 7401",
+          "report_id": "<id>",
+          "report_type": "order_case",
+          "revision_id": 7
+        }
+      ],
+      "returned_count": 2
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_seek_order_anchor": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "seek_order_anchor",
+      "result_schema": "phase5.seek-order.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_seek_order_anchor"
+    },
+    "ok": true,
+    "result": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_fill_session_seq": 4,
+      "last_session_seq": 4,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "replay_target_session_seq": 4,
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_finding": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_finding",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_finding"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "finding:<id>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "finding",
+        "schema_version": 1
+      },
+      "artifact_id": "finding:<id>",
+      "artifact_kind": "finding",
+      "citation_rows": [
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        }
+      ],
+      "detail": "Protected order window 1 spans session_seq 1 to 4 with 0 market updates, 1 fills.",
+      "entity": {
+        "entity_type": "finding",
+        "schema_version": 1,
+        "type": "finding"
+      },
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "gap_marker",
+        "fill_execution"
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Order/fill context captured 0 market updates around 1 fills",
+      "incident_kinds": [
+        "",
+        "",
+        "",
+        ""
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Order/fill context captured 0 market updates around 1 fills",
+        "report_type": "finding",
+        "schema_version": 1,
+        "uncertainty": "The evidence is usable but carries some data-quality caveats.",
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_order_anchor": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_order_anchor",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_order_anchor"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "anchor:<id>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "order_anchor",
+        "schema_version": 1
+      },
+      "artifact_id": "anchor:<id>",
+      "artifact_kind": "order_anchor",
+      "citation_rows": [
+        {
+          "artifact_id": "anchor:<id>",
+          "kind": "order_anchor"
+        },
+        {
+          "artifact_id": "order-case:order:<id>",
+          "kind": "order_case"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        }
+      ],
+      "detail": "Anchor event fill_execution at session_seq 4 with related order-case evidence.",
+      "entity": {
+        "entity_type": "order_anchor",
+        "schema_version": 1,
+        "type": "order_anchor"
+      },
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "fill_execution"
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "anchor:<id>",
+            "kind": "order_anchor"
+          },
+          {
+            "artifact_id": "order-case:order:<id>",
+            "kind": "order_case"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Order anchor 3",
+      "incident_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Order anchor 3",
+        "report_type": "order_case",
+        "schema_version": 1,
+        "uncertainty": "The evidence is usable but carries some data-quality caveats.",
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_protected_window": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_protected_window",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_protected_window"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "window:<id>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "protected_window",
+        "schema_version": 1
+      },
+      "artifact_id": "window:<id>",
+      "artifact_kind": "protected_window",
+      "citation_rows": [
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        }
+      ],
+      "detail": "Protected-window evidence slice pinned to the requested forensic window.",
+      "entity": {
+        "entity_type": "protected_window",
+        "schema_version": 1,
+        "type": "protected_window"
+      },
+      "event_kinds": [
+        "order_intent",
+        "order_status",
+        "gap_marker",
+        "fill_execution"
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "incident_promotion",
+      "incident_kinds": [
+        "",
+        "",
+        "",
+        ""
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "incident_promotion",
+        "report_type": "protected_window",
+        "schema_version": 1,
+        "uncertainty": "The evidence is usable but carries some data-quality caveats.",
+        "what_changed_first": "Fill execution"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_artifact": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_artifact",
+      "result_schema": "phase5.investigation.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_artifact"
+    },
+    "ok": true,
+    "result": {
+      "artifact": {
+        "artifact_id": "session-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "session_report",
+        "schema_version": 1
+      },
+      "artifact_id": "session-report:<id>",
+      "artifact_kind": "session_report",
+      "citation_rows": [
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        }
+      ],
+      "detail": "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range.",
+      "entity": {
+        "entity_type": "session_range",
+        "schema_version": 1,
+        "type": "session_range"
+      },
+      "event_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Session overview",
+      "incident_kinds": [
+        "order_flow_timeline",
+        "source_gap",
+        "order_fill_context"
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_export_artifact": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "export_artifact",
+      "result_schema": "phase5.artifact-export.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_export_artifact"
+    },
+    "ok": true,
+    "result": {
+      "artifact_id": "session-report:<id>",
+      "bundle": {
+        "artifact": {
+          "artifact_id": "session-report:<id>",
+          "artifact_scope": "durable",
+          "artifact_type": "session_report",
+          "schema_version": 1
+        },
+        "entity": {
+          "entity_type": "session_range",
+          "schema_version": 1,
+          "type": "session_range"
+        },
+        "report": {
+          "headline": "Session overview",
+          "report_type": "session_overview",
+          "schema_version": 1,
+          "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+        }
+      },
+      "format": "json-bundle",
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "tapescript_read_session_quality": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "read_session_quality",
+      "result_schema": "phase5.session-quality.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_session_quality"
+    },
+    "ok": true,
+    "result": {
+      "data_quality_keys": [
+        "canonical_instrument_identity_count",
+        "first_session_seq",
+        "gap_marker_count",
+        "grade",
+        "heuristic_instrument_identity_count",
+        "identity_policy_override_count",
+        "includes_mutable_tail",
+        "issues",
+        "last_session_seq",
+        "lifecycle_event_count",
+        "market_event_count",
+        "mismatched_instrument_identity_count",
+        "missing_exchange_timestamp_count",
+        "missing_receive_timestamp_count",
+        "missing_vendor_sequence_count",
+        "reset_marker_count",
+        "score",
+        "source_strong_instrument_identity_count",
+        "strong_instrument_identity_count",
+        "total_event_count",
+        "weak_instrument_identity_count"
+      ],
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "served_revision_id": 7
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "engine_payload"
+    }
+  },
+  "resources_list": [
+    {
+      "mime_type": "application/json",
+      "uri": "tape://artifact/case-report/<id>/json-bundle"
+    },
+    {
+      "mime_type": "text/markdown",
+      "uri": "tape://artifact/case-report/<id>/markdown"
+    },
+    {
+      "mime_type": "application/json",
+      "uri": "tape://artifact/case-report/<id>/json-bundle"
+    },
+    {
+      "mime_type": "text/markdown",
+      "uri": "tape://artifact/case-report/<id>/markdown"
+    },
+    {
+      "mime_type": "application/json",
+      "uri": "tape://artifact/session-report/<id>/json-bundle"
+    },
+    {
+      "mime_type": "text/markdown",
+      "uri": "tape://artifact/session-report/<id>/markdown"
+    },
+    {
+      "mime_type": "application/json",
+      "uri": "tape://report/case/<id>"
+    },
+    {
+      "mime_type": "application/json",
+      "uri": "tape://report/case/<id>"
+    },
+    {
+      "mime_type": "application/json",
+      "uri": "tape://report/session/<id>"
+    }
+  ],
+  "resource_read_session_report": {
+    "content_count": 1,
+    "mime_type": "application/json",
+    "ok": true,
+    "payload": {
+      "artifact": {
+        "artifact_id": "session-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "session_report",
+        "schema_version": 1
+      },
+      "artifact_id": "session-report:<id>",
+      "artifact_kind": "session_report",
+      "citation_rows": [
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "kind": "incident"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "kind": "finding"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "kind": "protected_window"
+        }
+      ],
+      "detail": "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range.",
+      "entity": {
+        "entity_type": "session_range",
+        "schema_version": 1,
+        "type": "session_range"
+      },
+      "event_kinds": [
+        "",
+        "",
+        ""
+      ],
+      "evidence": {
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "kind": "incident"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "kind": "finding"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "kind": "protected_window"
+          }
+        ],
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "schema_version": 1
+      },
+      "has_data_quality": true,
+      "headline": "Session overview",
+      "incident_kinds": [
+        "order_flow_timeline",
+        "source_gap",
+        "order_fill_context"
+      ],
+      "includes_mutable_tail": false,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 4
+      },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      },
+      "served_revision_id": 7
+    },
+    "uri": "tape://report/session/<id>"
+  },
+  "resource_read_session_report_bundle": {
+    "content_count": 1,
+    "mime_type": "application/json",
+    "ok": true,
+    "payload": {
+      "artifact": {
+        "artifact_id": "session-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "session_report",
+        "schema_version": 1
+      },
+      "entity": {
+        "entity_type": "session_range",
+        "schema_version": 1,
+        "type": "session_range"
+      },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      }
+    },
+    "uri": "tape://artifact/session-report/<id>/json-bundle"
+  },
+  "resource_read_case_report_markdown": {
+    "contains_order_case": true,
+    "contains_session_overview": false,
+    "content_count": 1,
+    "has_text": true,
+    "mime_type": "text/markdown",
+    "ok": true,
+    "uri": "tape://artifact/case-report/<id>/markdown"
+  }
+}

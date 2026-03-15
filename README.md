@@ -172,6 +172,29 @@ Phase-1 bridge sender notes:
 - `read_artifact` and `export_artifact` now give the engine a stable artifact-facing surface for future MCP/tool clients. The resolver now supports durable report IDs plus selector-style artifacts like `session-overview:<revision>:<from>:<to>`, `order-case:order:<id>`, `finding:<id>`, and `anchor:<id>`.
 - Investigation/report responses now share a versioned envelope with `api`, `artifact`, `entity`, `report`, and `evidence` sections, so session, incident, protected-window, finding, and order-case outputs line up structurally instead of only sharing ad hoc summary fields.
 - `export_artifact` supports Markdown summaries and JSON bundles, which makes durable report artifacts easier to hand to future native UI and MCP clients without rebuilding them from live query code.
+- Phase 5 adds a native `tape_mcp` stdio server on top of the engine query socket. The current tool slice now mirrors the stable engine investigation seam: `status`, `read_live_tail`, `read_range`, `replay_snapshot`, `find_order_anchor`, `list_incidents`, `list_order_anchors`, `list_protected_windows`, `list_findings`, `read_session_overview`, `scan_session_report`, `read_session_report`, `list_session_reports`, `scan_incident_report`, `scan_order_case_report`, `read_case_report`, `list_case_reports`, `seek_order_anchor`, `read_finding`, `read_order_case`, `read_order_anchor`, `read_protected_window`, `read_incident`, `read_artifact`, `export_artifact`, and `read_session_quality`, all backed by typed request/result helpers instead of raw UI-side JSON unpacking.
+- The MCP surface is now golden-tested with both direct adapter projections and a real stdio JSON-RPC harness, so the native MCP layer has a locked contract for live tail, replay, selector lists, report artifacts, and investigation drilldowns before any LLM-facing workflow builds on top of it.
+- The MCP adapter now also exposes prompt ergonomics on top of that tool surface: `prompts/list` advertises investigation workflows, `prompts/get` can scaffold session-range, order-case, incident, replay, and artifact-export investigations, and `tools/list` now carries human-readable titles, read-only/idempotent annotations, and example argument payloads for the highest-value reads.
+- The MCP adapter now also exposes browseable durable report resources: `resources/list` enumerates persisted session/case reports plus their export variants, and `resources/read` reopens those resources as JSON views, Markdown exports, or JSON bundles without going through the tool layer.
+- Prompt coverage is now broader for agent workflows: in addition to the original session/order/incident/export prompts, `prompts/get` now supports `investigate_bad_fill`, `investigate_source_gap`, and `summarize_latest_session_incidents`.
+- Heavy scan/export/replay tools now honor MCP progress tokens. When a client supplies `_meta.progressToken` on eligible `tools/call` requests, `tape_mcp` emits `notifications/progress` before and after the long-running work.
+- The MCP surface is now locked by dedicated golden contract tests in `tape_mcp_contract_tests`, including both direct adapter projections and a real stdio JSON-RPC harness against a live `tape_engine` fixture.
+
+Minimal MCP client wiring example:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"prompts/list","params":{}}
+{"jsonrpc":"2.0","id":4,"method":"resources/list","params":{}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"tapescript_scan_session_report","arguments":{"first_session_seq":1,"last_session_seq":200},"_meta":{"progressToken":"scan-1"}}}
+```
+
+Run the MCP server over stdio:
+
+```bash
+./build/tape_mcp --engine-socket /tmp/tape-engine.sock
+```
 - `TapeScope` Phase 4 work is now more navigable: `LiveEventsPane`, `RangePane`, `OrderLookupPane`, `IncidentPane`, and `ReportInventoryPane` all use structured row selection instead of only text dumps, and `SessionOverviewPane` now exposes top incidents in a table that can jump directly into incident drilldown.
 - Scan operations now promote the persisted durable report artifact to the primary `artifact` envelope and preserve the live source object under `source_artifact`, which keeps later `read_*_report` and `read_artifact` semantics aligned.
 - `read_finding` and `read_order_anchor` now provide direct investigation reads for those artifact IDs instead of forcing clients to back into them through list endpoints or order-case drilldowns.

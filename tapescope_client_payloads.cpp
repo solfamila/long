@@ -203,7 +203,7 @@ QueryResult<InvestigationPayload> packInvestigationPayload(const QueryResult<tap
 
     const json artifact = payload.summary.value("artifact", json::object());
     payload.artifactId = artifact.value("artifact_id", artifact.value("id", std::string()));
-    payload.artifactKind = artifact.value("kind", std::string());
+    payload.artifactKind = artifact.value("kind", artifact.value("artifact_type", std::string()));
 
     const json report = payload.summary.value("report", json::object());
     payload.headline = firstPresentString(report, {"title", "headline"});
