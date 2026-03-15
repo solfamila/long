@@ -22,13 +22,17 @@ void printUsage() {
               << "  tape_engine_ctl read-session-overview [--from N] [--to N] [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl scan-session-report [--from N] [--to N] [--revision N] [--limit N]\n"
               << "  tape_engine_ctl read-session-report <report_id>\n"
+              << "  tape_engine_ctl export-session-bundle <report_id>\n"
               << "  tape_engine_ctl read-artifact <artifact_id> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl export-artifact <artifact_id> <markdown|json-bundle> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-session-reports [--revision N] [--limit N]\n"
               << "  tape_engine_ctl scan-incident-report <logical_incident_id> [--revision N] [--limit N]\n"
               << "  tape_engine_ctl scan-order-case-report [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--limit N]\n"
               << "  tape_engine_ctl read-case-report <report_id>\n"
+              << "  tape_engine_ctl export-case-bundle <report_id>\n"
               << "  tape_engine_ctl list-case-reports [--revision N] [--limit N]\n"
+              << "  tape_engine_ctl import-case-bundle <bundle_path>\n"
+              << "  tape_engine_ctl list-imported-cases [--limit N]\n"
               << "  tape_engine_ctl read-session-quality [--from N] [--to N] [--revision N] [--include-live-tail]\n"
               << "  tape_engine_ctl replay-snapshot <session_seq> [--revision N] [--include-live-tail] [--depth N]\n"
               << "  tape_engine_ctl find-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
@@ -95,6 +99,13 @@ int main(int argc, char** argv) {
         }
     } else if (command == "read_session_report") {
         setOperation(tape_engine::QueryOperation::ReadSessionReport);
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.reportId = std::stoull(argv[2]);
+    } else if (command == "export_session_bundle") {
+        setOperation(tape_engine::QueryOperation::ExportSessionBundle);
         if (argc < 3) {
             printUsage();
             return 1;
@@ -185,6 +196,13 @@ int main(int argc, char** argv) {
             return 1;
         }
         request.reportId = std::stoull(argv[2]);
+    } else if (command == "export_case_bundle") {
+        setOperation(tape_engine::QueryOperation::ExportCaseBundle);
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.reportId = std::stoull(argv[2]);
     } else if (command == "list_case_reports") {
         setOperation(tape_engine::QueryOperation::ListCaseReports);
         for (int i = 2; i < argc; ++i) {
@@ -192,6 +210,21 @@ int main(int argc, char** argv) {
             if (arg == "--revision" && i + 1 < argc) {
                 request.revisionId = std::stoull(argv[++i]);
             } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
+    } else if (command == "import_case_bundle") {
+        setOperation(tape_engine::QueryOperation::ImportCaseBundle);
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.bundlePath = argv[2];
+    } else if (command == "list_imported_cases") {
+        setOperation(tape_engine::QueryOperation::ListImportedCases);
+        for (int i = 2; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--limit" && i + 1 < argc) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }

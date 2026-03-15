@@ -401,6 +401,31 @@ json projectResourceRead(const json& readResult) {
     return projection;
 }
 
+json projectReplayRangeSummary(const json& replayRange) {
+    if (!replayRange.is_object()) {
+        return json(nullptr);
+    }
+
+    json keys = json::array();
+    for (auto it = replayRange.begin(); it != replayRange.end(); ++it) {
+        keys.push_back(it.key());
+    }
+    std::sort(keys.begin(), keys.end());
+
+    json projection{
+        {"keys", std::move(keys)},
+        {"has_last_session_seq",
+         replayRange.contains("last_session_seq") && !replayRange.at("last_session_seq").is_null()}
+    };
+    if (replayRange.contains("first_session_seq") && !replayRange.at("first_session_seq").is_null()) {
+        projection["first_session_seq"] = replayRange.at("first_session_seq");
+    }
+    if (replayRange.contains("target_session_seq") && !replayRange.at("target_session_seq").is_null()) {
+        projection["target_session_seq"] = replayRange.at("target_session_seq");
+    }
+    return projection;
+}
+
 json projectInvestigationResult(const json& result) {
     json eventKinds = json::array();
     for (const auto& event : result.value("events", json::array())) {
@@ -433,7 +458,7 @@ json projectInvestigationResult(const json& result) {
         {"evidence", projectEvidenceSummary(result.value("evidence", json::object()))},
         {"has_data_quality", result.value("data_quality", json::object()).is_object() &&
                                  !result.value("data_quality", json::object()).empty()},
-        {"replay_range", result.value("replay_range", json(nullptr))},
+        {"replay_range", projectReplayRangeSummary(result.value("replay_range", json(nullptr)))},
         {"incident_kinds", std::move(incidentKinds)},
         {"citation_rows", std::move(citations)},
         {"event_kinds", std::move(eventKinds)}
@@ -513,40 +538,27 @@ json projectOrderAnchorListResult(const json& result) {
 }
 
 json projectProtectedWindowListResult(const json& result) {
-    json rows = json::array();
+    std::set<std::string> reasons;
+    std::uint64_t minFirstSessionSeq = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t maxLastSessionSeq = 0;
     for (const auto& row : result.value("protected_windows", json::array())) {
-        rows.push_back({
-            {"artifact_id", normalizeArtifactId(row.value("artifact_id", std::string()))},
-            {"window_id", normalizePositiveId(row.value("window_id", 0ULL))},
-            {"revision_id", normalizePositiveId(row.value("revision_id", 0ULL))},
-            {"logical_incident_id", normalizePositiveId(row.value("logical_incident_id", 0ULL))},
-            {"anchor_session_seq", row.value("anchor_session_seq", 0ULL)},
-            {"first_session_seq", row.value("first_session_seq", 0ULL)},
-            {"last_session_seq", row.value("last_session_seq", 0ULL)},
-            {"reason", row.value("reason", std::string())},
-            {"instrument_id", row.value("instrument_id", std::string())}
-        });
+        reasons.insert(row.value("reason", std::string()));
+        const std::uint64_t firstSessionSeq = row.value("first_session_seq", 0ULL);
+        const std::uint64_t lastSessionSeq = row.value("last_session_seq", 0ULL);
+        if (firstSessionSeq > 0) {
+            minFirstSessionSeq = std::min(minFirstSessionSeq, firstSessionSeq);
+        }
+        maxLastSessionSeq = std::max(maxLastSessionSeq, lastSessionSeq);
     }
-    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
-        if (left.value("anchor_session_seq", 0ULL) != right.value("anchor_session_seq", 0ULL)) {
-            return left.value("anchor_session_seq", 0ULL) > right.value("anchor_session_seq", 0ULL);
-        }
-        const bool leftHasIncident = !left.value("logical_incident_id", json(nullptr)).is_null();
-        const bool rightHasIncident = !right.value("logical_incident_id", json(nullptr)).is_null();
-        if (leftHasIncident != rightHasIncident) {
-            return leftHasIncident && !rightHasIncident;
-        }
-        if (left.value("last_session_seq", 0ULL) != right.value("last_session_seq", 0ULL)) {
-            return left.value("last_session_seq", 0ULL) > right.value("last_session_seq", 0ULL);
-        }
-        if (left.value("reason", std::string()) != right.value("reason", std::string())) {
-            return left.value("reason", std::string()) < right.value("reason", std::string());
-        }
-        return left.value("artifact_id", std::string()) < right.value("artifact_id", std::string());
-    });
+    json normalizedReasons = json::array();
+    for (const auto& reason : reasons) {
+        normalizedReasons.push_back(reason);
+    }
     return {
         {"returned_count", result.value("returned_count", 0ULL)},
-        {"protected_windows", std::move(rows)}
+        {"reasons", std::move(normalizedReasons)},
+        {"min_first_session_seq", minFirstSessionSeq == std::numeric_limits<std::uint64_t>::max() ? 0ULL : minFirstSessionSeq},
+        {"max_last_session_seq", maxLastSessionSeq}
     };
 }
 
@@ -594,7 +606,7 @@ json projectReplaySnapshotResult(const json& result) {
         {"applied_event_count", result.value("applied_event_count", 0ULL)},
         {"gap_markers_encountered", result.value("gap_markers_encountered", 0ULL)},
         {"checkpoint_used", result.value("checkpoint_used", false)},
-        {"checkpoint_revision_id", result.value("checkpoint_revision_id", 0ULL)},
+        {"checkpoint_revision_present", result.value("checkpoint_revision_id", 0ULL) > 0ULL},
         {"checkpoint_session_seq", result.value("checkpoint_session_seq", 0ULL)},
         {"bid_price", result.value("bid_price", json(nullptr))},
         {"ask_price", result.value("ask_price", json(nullptr))},
@@ -666,7 +678,7 @@ json projectSeekResult(const json& result) {
         {"first_session_seq", result.value("first_session_seq", 0ULL)},
         {"last_session_seq", result.value("last_session_seq", 0ULL)},
         {"last_fill_session_seq", result.value("last_fill_session_seq", 0ULL)},
-        {"replay_range", result.value("replay_range", json(nullptr))}
+        {"replay_range", projectReplayRangeSummary(result.value("replay_range", json(nullptr)))}
     };
 }
 
@@ -1330,6 +1342,102 @@ void testTapeMcpPhase5Contracts() {
     server->stop();
 }
 
+void testTapeMcpPhase6BundleTools() {
+    const fs::path rootDir = testDataDir() / "tape-mcp-phase6-engine";
+    const fs::path socketPath = testDataDir() / "tape-mcp-phase6-engine.sock";
+    auto server = startPhase5Engine(rootDir, socketPath);
+    seedPhase5Engine(socketPath);
+
+    waitUntil([&]() {
+        const auto snapshot = server->snapshot();
+        return snapshot.segments.size() >= 2 && snapshot.latestFrozenRevisionId >= 2;
+    }, "phase6 MCP setup should freeze fixture batches");
+
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{socketPath.string()});
+
+    const json sessionReportEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_scan_session_report", json{
+        {"first_session_seq", 1},
+        {"last_session_seq", 4},
+        {"limit", 10}
+    }));
+    const std::uint64_t sessionReportId =
+        parseTrailingNumericId(sessionReportEnvelope.value("result", json::object()).value("artifact_id", std::string()),
+                               "session-report:");
+    expect(sessionReportId > 0, "phase6 session report scan should expose a durable session report id");
+
+    const json orderCaseReportEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_scan_order_case_report", json{
+        {"order_id", 7401},
+        {"limit", 10}
+    }));
+    const std::uint64_t caseReportId =
+        parseTrailingNumericId(orderCaseReportEnvelope.value("result", json::object()).value("artifact_id", std::string()),
+                               "case-report:");
+    expect(caseReportId > 0, "phase6 order-case report scan should expose a durable case report id");
+
+    const json exportSessionBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_export_session_bundle", json{
+        {"report_id", sessionReportId}
+    }));
+    expect(exportSessionBundleEnvelope.value("ok", false),
+           "phase6 export-session-bundle should return ok=true");
+    const std::string sessionBundlePath =
+        exportSessionBundleEnvelope.value("result", json::object()).value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!sessionBundlePath.empty() && fs::exists(sessionBundlePath),
+           "phase6 export-session-bundle should write a portable session bundle");
+
+    const json exportCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_export_case_bundle", json{
+        {"report_id", caseReportId}
+    }));
+    expect(exportCaseBundleEnvelope.value("ok", false),
+           "phase6 export-case-bundle should return ok=true");
+    const std::string caseBundlePath =
+        exportCaseBundleEnvelope.value("result", json::object()).value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
+           "phase6 export-case-bundle should write a portable case bundle");
+
+    const json importCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_import_case_bundle", json{
+        {"bundle_path", caseBundlePath}
+    }));
+    expect(importCaseBundleEnvelope.value("ok", false),
+           "phase6 import-case-bundle should return ok=true");
+    expect(!importCaseBundleEnvelope.value("result", json::object()).value("duplicate_import", true),
+           "phase6 first import-case-bundle call should not be marked duplicate");
+    const std::string importedArtifactId =
+        importCaseBundleEnvelope.value("result", json::object()).value("artifact", json::object()).value("artifact_id", std::string());
+    expect(!importedArtifactId.empty() && importedArtifactId.rfind("imported-case:", 0) == 0,
+           "phase6 import-case-bundle should surface an imported-case artifact id");
+
+    const json listImportedEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_list_imported_cases", json{
+        {"limit", 10}
+    }));
+    expect(listImportedEnvelope.value("ok", false),
+           "phase6 list-imported-cases should return ok=true");
+    const json importedRows = listImportedEnvelope.value("result", json::object()).value("imported_cases", json::array());
+    expect(importedRows.is_array() && !importedRows.empty(),
+           "phase6 list-imported-cases should return the imported bundle inventory");
+    expect(importedRows.front().value("artifact_id", std::string()) == importedArtifactId,
+           "phase6 list-imported-cases should expose the imported-case artifact id");
+
+    const json importedArtifactEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_read_artifact", json{
+        {"artifact_id", importedArtifactId}
+    }));
+    expect(importedArtifactEnvelope.value("ok", false),
+           "phase6 read-artifact for imported-case should return ok=true");
+    expect(importedArtifactEnvelope.value("result", json::object()).value("artifact_id", std::string()) == importedArtifactId,
+           "phase6 imported-case read-artifact should reopen the imported artifact");
+    expect(importedArtifactEnvelope.value("result", json::object()).value("artifact_kind", std::string()) == "imported_case_bundle",
+           "phase6 imported-case read-artifact should expose the imported bundle artifact kind");
+
+    const json duplicateImportEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_import_case_bundle", json{
+        {"bundle_path", caseBundlePath}
+    }));
+    expect(duplicateImportEnvelope.value("ok", false),
+           "phase6 duplicate import-case-bundle should still return ok=true");
+    expect(duplicateImportEnvelope.value("result", json::object()).value("duplicate_import", false),
+           "phase6 duplicate import-case-bundle should be marked duplicate");
+
+    server->stop();
+}
+
 void testTapeMcpStdioHarness() {
     const fs::path rootDir = testDataDir() / "tape-mcp-phase5-stdio-engine";
     const fs::path socketPath = testDataDir() / "tape-mcp-phase5-stdio-engine.sock";
@@ -1372,7 +1480,7 @@ void testTapeMcpStdioHarness() {
     });
     const json listResponse = readJsonRpcMessage(child.readFd);
     const json tools = listResponse.value("result", json::object()).value("tools", json::array());
-    expect(tools.is_array() && tools.size() == 26, "tools/list should expose the expanded phase5 tool slice");
+    expect(tools.is_array() && tools.size() == 30, "tools/list should expose the expanded phase 6 tool slice");
     json overviewTool = json::object();
     for (const auto& tool : tools) {
         if (tool.value("name", std::string()) == "tapescript_read_session_overview") {
@@ -1648,6 +1756,7 @@ void testTapeMcpStdioHarness() {
 int main() {
     try {
         testTapeMcpPhase5Contracts();
+        testTapeMcpPhase6BundleTools();
         testTapeMcpStdioHarness();
     } catch (const std::exception& error) {
         std::cerr << "tape_mcp_contract_tests failed: " << error.what() << '\n';

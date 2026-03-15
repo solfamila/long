@@ -818,6 +818,210 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
     }
 }
 
+void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase6-bundles";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase6-bundles.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    std::uint64_t sessionReportId = 0;
+    std::uint64_t caseReportId = 0;
+    std::uint64_t importedCaseId = 0;
+    std::string caseBundlePath;
+
+    {
+        tape_engine::Server server(config);
+        std::string startError;
+        expect(server.start(&startError), "tape-engine should start for phase 6 bundle test: " + startError);
+
+        bridge_batch::BuildOptions options;
+        options.appSessionId = "app-engine-phase6-bundles";
+        options.runtimeSessionId = "runtime-engine-phase6-bundles";
+        options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+        bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+        std::string error;
+
+        BridgeOutboxRecord orderIntent = makeBridgeRecord(8401, "order_intent", "WebSocket", "INTC", "BUY",
+                                                          611, 2401, 0, "", "phase 6 bundle anchor", "2026-03-14T09:42:40.100");
+        orderIntent.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+        options.batchSeq = 401;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+               "tape-engine should accept the phase 6 order anchor batch: " + error);
+
+        BridgeOutboxRecord bidTick = makeBridgeRecord(8402, "market_tick", "BrokerMarketData", "INTC", "BID",
+                                                      0, 0, 0, "", "phase 6 bid", "2026-03-14T09:42:40.120");
+        bidTick.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+        bidTick.marketField = 1;
+        bidTick.price = 45.30;
+
+        BridgeOutboxRecord askTick = makeBridgeRecord(8403, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                      0, 0, 0, "", "phase 6 ask", "2026-03-14T09:42:40.130");
+        askTick.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+        askTick.marketField = 2;
+        askTick.price = 45.31;
+
+        options.batchSeq = 402;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({bidTick, askTick}, options)), &error),
+               "tape-engine should accept the phase 6 market seed batch: " + error);
+
+        BridgeOutboxRecord widenedAsk = makeBridgeRecord(8404, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                         0, 0, 0, "", "phase 6 widened ask", "2026-03-14T09:42:40.150");
+        widenedAsk.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+        widenedAsk.marketField = 2;
+        widenedAsk.price = 45.35;
+
+        options.batchSeq = 403;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAsk}, options)), &error),
+               "tape-engine should accept the phase 6 widening batch: " + error);
+
+        waitUntil([&]() {
+            const auto snapshot = server.snapshot();
+            return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+        }, "tape-engine should freeze phase 6 bundle batches");
+
+        tape_engine::Client client(socketPath.string());
+        tape_engine::QueryResponse response;
+
+        tape_engine::QueryRequest sessionReportRequest;
+        sessionReportRequest.requestId = "phase6-scan-session-report";
+        sessionReportRequest.operation = "scan_session_report";
+        expect(client.query(sessionReportRequest, &response, &error), "phase 6 session report scan should succeed: " + error);
+        sessionReportId = response.summary.value("session_report", json::object()).value("report_id", 0ULL);
+        expect(sessionReportId > 0, "phase 6 session report scan should persist a durable session report");
+
+        tape_engine::QueryRequest caseReportRequest;
+        caseReportRequest.requestId = "phase6-scan-order-case-report";
+        caseReportRequest.operation = "scan_order_case_report";
+        caseReportRequest.orderId = 2401;
+        expect(client.query(caseReportRequest, &response, &error), "phase 6 order-case report scan should succeed: " + error);
+        caseReportId = response.summary.value("case_report_artifact", json::object()).value("report_id", 0ULL);
+        expect(caseReportId > 0, "phase 6 order-case report scan should persist a durable case report");
+
+        tape_engine::QueryRequest exportSessionBundleRequest;
+        exportSessionBundleRequest.requestId = "phase6-export-session-bundle";
+        exportSessionBundleRequest.operation = "export_session_bundle";
+        exportSessionBundleRequest.reportId = sessionReportId;
+        expect(client.query(exportSessionBundleRequest, &response, &error), "phase 6 session bundle export should succeed: " + error);
+        const std::string sessionBundlePath =
+            response.summary.value("bundle", json::object()).value("bundle_path", std::string());
+        expect(!sessionBundlePath.empty() && fs::exists(sessionBundlePath),
+               "phase 6 session bundle export should write a portable session bundle");
+        const json sessionBundle = readMsgpackFile(sessionBundlePath);
+        expect(sessionBundle.value("schema", std::string()) == tape_engine::kReportBundleSchema,
+               "phase 6 session bundle should use the stable bundle schema");
+        expect(sessionBundle.value("bundle_type", std::string()) == "session_bundle",
+               "phase 6 session bundle should record the session bundle type");
+
+        tape_engine::QueryRequest exportCaseBundleRequest;
+        exportCaseBundleRequest.requestId = "phase6-export-case-bundle";
+        exportCaseBundleRequest.operation = "export_case_bundle";
+        exportCaseBundleRequest.reportId = caseReportId;
+        expect(client.query(exportCaseBundleRequest, &response, &error), "phase 6 case bundle export should succeed: " + error);
+        caseBundlePath = response.summary.value("bundle", json::object()).value("bundle_path", std::string());
+        expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
+               "phase 6 case bundle export should write a portable case bundle");
+        const json caseBundle = readMsgpackFile(caseBundlePath);
+        expect(caseBundle.value("bundle_type", std::string()) == "case_bundle",
+               "phase 6 case bundle should record the case bundle type");
+        expect(caseBundle.value("source_report_id", 0ULL) == caseReportId,
+               "phase 6 case bundle should carry the source case report id");
+
+        tape_engine::QueryRequest importRequest;
+        importRequest.requestId = "phase6-import-case-bundle";
+        importRequest.operation = "import_case_bundle";
+        importRequest.bundlePath = caseBundlePath;
+        expect(client.query(importRequest, &response, &error), "phase 6 case bundle import should succeed: " + error);
+        expect(!response.summary.value("duplicate_import", true),
+               "phase 6 first case bundle import should not be marked duplicate");
+        importedCaseId = response.summary.value("imported_case", json::object()).value("imported_case_id", 0ULL);
+        expect(importedCaseId > 0, "phase 6 case bundle import should assign an imported case id");
+        expect(fs::exists(rootDir / "imported-case-bundles.jsonl"),
+               "phase 6 case bundle import should persist an imported-case manifest");
+
+        tape_engine::QueryRequest listImportedCasesRequest;
+        listImportedCasesRequest.requestId = "phase6-list-imported-cases";
+        listImportedCasesRequest.operation = "list_imported_cases";
+        expect(client.query(listImportedCasesRequest, &response, &error), "phase 6 imported-case listing should succeed: " + error);
+        expect(response.events.is_array() && !response.events.empty(),
+               "phase 6 imported-case listing should return the imported bundle inventory");
+        expect(response.events.at(0).value("imported_case_id", 0ULL) == importedCaseId,
+               "phase 6 imported-case listing should surface the imported bundle record");
+
+        tape_engine::QueryRequest readImportedArtifactRequest;
+        readImportedArtifactRequest.requestId = "phase6-read-imported-artifact";
+        readImportedArtifactRequest.operation = "read_artifact";
+        readImportedArtifactRequest.artifactId = "imported-case:" + std::to_string(importedCaseId);
+        expect(client.query(readImportedArtifactRequest, &response, &error), "phase 6 imported case read_artifact should succeed: " + error);
+        expect(response.summary.value("imported_case", json::object()).value("imported_case_id", 0ULL) == importedCaseId,
+               "phase 6 imported case read_artifact should surface the imported case record");
+        expect(response.summary.value("artifact", json::object()).value("artifact_id", std::string()) ==
+                   "imported-case:" + std::to_string(importedCaseId),
+               "phase 6 imported case read_artifact should promote the imported artifact envelope");
+        expect(response.summary.value("source_artifact", json::object()).value("artifact_id", std::string()) ==
+                   "case-report:" + std::to_string(caseReportId),
+               "phase 6 imported case read_artifact should preserve the source case report artifact id");
+
+        tape_engine::QueryRequest duplicateImportRequest = importRequest;
+        duplicateImportRequest.requestId = "phase6-import-case-bundle-duplicate";
+        expect(client.query(duplicateImportRequest, &response, &error), "phase 6 duplicate case bundle import should succeed: " + error);
+        expect(response.summary.value("duplicate_import", false),
+               "phase 6 duplicate case bundle import should be marked duplicate");
+        expect(response.summary.value("imported_case", json::object()).value("imported_case_id", 0ULL) == importedCaseId,
+               "phase 6 duplicate case bundle import should reuse the existing imported case record");
+
+        {
+            const json lookup = readMsgpackFile(rootDir / "artifact-lookup.msgpack");
+            bool foundImportedCase = false;
+            for (const auto& item : lookup.value("imported_cases", json::array())) {
+                foundImportedCase = foundImportedCase || item.value("imported_case_id", 0ULL) == importedCaseId;
+            }
+            expect(foundImportedCase, "phase 6 artifact lookup index should include imported case records");
+        }
+
+        server.stop();
+    }
+
+    {
+        tape_engine::Server restarted(config);
+        std::string startError;
+        expect(restarted.start(&startError), "tape-engine should restart and restore imported case bundles: " + startError);
+
+        tape_engine::Client client(socketPath.string());
+        tape_engine::QueryResponse response;
+        std::string error;
+
+        tape_engine::QueryRequest listImportedCasesRequest;
+        listImportedCasesRequest.requestId = "phase6-list-imported-cases-restored";
+        listImportedCasesRequest.operation = "list_imported_cases";
+        expect(client.query(listImportedCasesRequest, &response, &error), "phase 6 restored imported-case listing should succeed: " + error);
+        expect(response.events.is_array() && !response.events.empty(),
+               "phase 6 restored imported-case listing should retain the imported inventory");
+        expect(response.events.at(0).value("imported_case_id", 0ULL) == importedCaseId,
+               "phase 6 restored imported-case listing should preserve the imported case id");
+
+        tape_engine::QueryRequest readImportedArtifactRequest;
+        readImportedArtifactRequest.requestId = "phase6-read-imported-artifact-restored";
+        readImportedArtifactRequest.operation = "read_artifact";
+        readImportedArtifactRequest.artifactId = "imported-case:" + std::to_string(importedCaseId);
+        expect(client.query(readImportedArtifactRequest, &response, &error), "phase 6 restored imported case read_artifact should succeed: " + error);
+        expect(response.summary.value("imported_case", json::object()).value("source_bundle_path", std::string()) == caseBundlePath,
+               "phase 6 restored imported case should preserve the original source bundle path");
+        expect(response.summary.value("artifact", json::object()).value("artifact_id", std::string()) ==
+                   "imported-case:" + std::to_string(importedCaseId),
+               "phase 6 restored imported case should preserve the imported artifact id");
+
+        restarted.stop();
+    }
+}
+
 void testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures() {
     const fs::path rootDir = testDataDir() / "tape-engine-phase3-contract-fixtures";
     const fs::path socketPath = testDataDir() / "tape-engine-phase3-contract-fixtures.sock";
@@ -1117,4 +1321,3 @@ void testTapeEngineCanRejectMismatchedStrongInstrumentIdsInStrictMode() {
 
     server.stop();
 }
-

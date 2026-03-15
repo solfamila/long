@@ -179,6 +179,8 @@ Phase-1 bridge sender notes:
 - Prompt coverage is now broader for agent workflows: in addition to the original session/order/incident/export prompts, `prompts/get` now supports `investigate_bad_fill`, `investigate_source_gap`, and `summarize_latest_session_incidents`.
 - Heavy scan/export/replay tools now honor MCP progress tokens. When a client supplies `_meta.progressToken` on eligible `tools/call` requests, `tape_mcp` emits `notifications/progress` before and after the long-running work.
 - The MCP surface is now locked by dedicated golden contract tests in `tape_mcp_contract_tests`, including both direct adapter projections and a real stdio JSON-RPC harness against a live `tape_engine` fixture.
+- Phase 6 adds portable report-bundle workflows on top of that artifact surface. `export_session_bundle` and `export_case_bundle` now freeze revision-pinned MessagePack bundles under the engine data dir with pinned revision metadata, structured report payloads, Markdown export text, evidence citations, and data-quality context; `import_case_bundle` and `list_imported_cases` let the engine inventory those portable case bundles later and reopen them through `read_artifact` as `imported-case:<id>`.
+- The MCP layer mirrors that Phase 6 bundle workflow with `tapescript_export_session_bundle`, `tapescript_export_case_bundle`, `tapescript_import_case_bundle`, and `tapescript_list_imported_cases`, so agent clients can move durable case/session packages across machines without reaching into engine internals.
 
 Minimal MCP client wiring example:
 

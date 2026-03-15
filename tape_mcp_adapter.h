@@ -49,6 +49,10 @@ enum class ToolId {
     ReadIncident,
     ReadArtifact,
     ExportArtifact,
+    ExportSessionBundle,
+    ExportCaseBundle,
+    ImportCaseBundle,
+    ListImportedCases,
     ReadSessionQuality
 };
 
@@ -108,6 +112,10 @@ private:
     [[nodiscard]] json invokeReadIncidentTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadArtifactTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeExportArtifactTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeExportSessionBundleTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeExportCaseBundleTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeImportCaseBundleTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListImportedCasesTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadSessionQualityTool(const ToolSpec& tool, const json& args) const;
 
     [[nodiscard]] json makeToolResult(const json& envelope) const;

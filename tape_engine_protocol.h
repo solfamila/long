@@ -19,6 +19,10 @@ inline constexpr std::uint32_t kInvestigationEnvelopeVersion = 1;
 inline constexpr const char* kInvestigationEnvelopeSchema = "com.foxy.tape-engine.investigation-envelope";
 inline constexpr std::uint32_t kArtifactExportVersion = 1;
 inline constexpr const char* kArtifactExportSchema = "com.foxy.tape-engine.artifact-export";
+inline constexpr std::uint32_t kReportBundleVersion = 1;
+inline constexpr const char* kReportBundleSchema = "com.foxy.tape-engine.report-bundle";
+inline constexpr std::uint32_t kImportedCaseListVersion = 1;
+inline constexpr const char* kImportedCaseListSchema = "com.foxy.tape-engine.imported-case-list";
 
 enum class QueryOperation {
     Unknown = 0,
@@ -48,6 +52,10 @@ enum class QueryOperation {
     ListIncidents,
     ReadArtifact,
     ExportArtifact,
+    ExportSessionBundle,
+    ExportCaseBundle,
+    ImportCaseBundle,
+    ListImportedCases,
 };
 
 const char* queryOperationName(QueryOperation operation);
@@ -104,6 +112,7 @@ struct QueryRequest {
     std::string execId;
     std::string artifactId;
     std::string exportFormat;
+    std::string bundlePath;
 };
 
 QueryRequest makeQueryRequest(QueryOperation operation, std::string requestId = {});

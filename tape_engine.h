@@ -95,6 +95,23 @@ struct CaseReportRecord {
     std::string payloadSha256;
 };
 
+struct ImportedCaseRecord {
+    std::uint64_t importedCaseId = 0;
+    std::uint64_t importedTsEngineNs = 0;
+    std::string bundleId;
+    std::string bundleType;
+    std::string sourceArtifactId;
+    std::uint64_t sourceReportId = 0;
+    std::uint64_t sourceRevisionId = 0;
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    std::string instrumentId;
+    std::string headline;
+    std::string fileName;
+    std::string sourceBundlePath;
+    std::string payloadSha256;
+};
+
 struct EngineSnapshot {
     std::uint64_t nextSessionSeq = 1;
     std::uint64_t nextSegmentId = 1;
@@ -106,6 +123,7 @@ struct EngineSnapshot {
     std::vector<SegmentInfo> segments;
     std::vector<SessionReportRecord> sessionReports;
     std::vector<CaseReportRecord> caseReports;
+    std::vector<ImportedCaseRecord> importedCases;
 };
 
 struct OrderAnchorRecord {
@@ -233,8 +251,10 @@ private:
         std::vector<IncidentRecord> incidents;
         std::vector<SessionReportRecord> sessionReports;
         std::vector<CaseReportRecord> caseReports;
+        std::vector<ImportedCaseRecord> importedCases;
         std::unordered_map<std::uint64_t, SessionReportRecord> sessionReportsById;
         std::unordered_map<std::uint64_t, CaseReportRecord> caseReportsById;
+        std::unordered_map<std::uint64_t, ImportedCaseRecord> importedCasesById;
         std::unordered_map<std::uint64_t, OrderAnchorRecord> orderAnchorsById;
         std::unordered_map<std::uint64_t, ProtectedWindowRecord> protectedWindowsById;
         std::unordered_map<std::uint64_t, FindingRecord> findingsById;
@@ -290,6 +310,7 @@ public:
     struct ArtifactLookupIndex {
         std::unordered_map<std::uint64_t, SessionReportRecord> sessionReportsById;
         std::unordered_map<std::uint64_t, CaseReportRecord> caseReportsById;
+        std::unordered_map<std::uint64_t, ImportedCaseRecord> importedCasesById;
         std::unordered_map<std::uint64_t, OrderAnchorRecord> orderAnchorsById;
         std::unordered_map<std::uint64_t, ProtectedWindowRecord> protectedWindowsById;
         std::unordered_map<std::uint64_t, FindingRecord> findingsById;
@@ -553,10 +574,18 @@ private:
                                        std::uint64_t firstSessionSeq,
                                        std::uint64_t lastSessionSeq,
                                        const QueryResponse& response);
+    bool restoreImportedCasesManifest(const std::filesystem::path& path, std::string* error = nullptr);
+    ImportedCaseRecord persistImportedCaseRecord(const QuerySnapshot& snapshot,
+                                                 const json& bundle,
+                                                 const std::filesystem::path& sourcePath,
+                                                 const std::vector<std::uint8_t>& bytes);
+    std::optional<ImportedCaseRecord> findImportedCaseByPayloadSha(const QuerySnapshot& snapshot,
+                                                                   const std::string& payloadSha256) const;
     ArtifactLookupIndex rebuildArtifactLookupIndexUnlocked() const;
     void upsertArtifactLookupIndexUnlocked(const PendingSegment& segment);
     void upsertArtifactLookupIndexUnlocked(const SessionReportRecord& record);
     void upsertArtifactLookupIndexUnlocked(const CaseReportRecord& record);
+    void upsertArtifactLookupIndexUnlocked(const ImportedCaseRecord& record);
     bool persistArtifactLookupIndex(const ArtifactLookupIndex& index, std::string* error = nullptr) const;
     bool restoreArtifactLookupIndex(const std::filesystem::path& path,
                                     ArtifactLookupIndex* index,
@@ -581,6 +610,7 @@ private:
     std::vector<IncidentRecord> incidents_;
     std::vector<SessionReportRecord> sessionReports_;
     std::vector<CaseReportRecord> caseReports_;
+    std::vector<ImportedCaseRecord> importedCases_;
     ArtifactLookupIndex artifactLookupIndex_;
     std::uint64_t nextOrderAnchorId_ = 1;
     std::uint64_t nextProtectedWindowId_ = 1;
@@ -589,6 +619,7 @@ private:
     std::uint64_t nextIncidentRevisionId_ = 1;
     std::uint64_t nextSessionReportId_ = 1;
     std::uint64_t nextCaseReportId_ = 1;
+    std::uint64_t nextImportedCaseId_ = 1;
     std::unique_ptr<AnalyzerRuntime> analyzerRuntime_;
 
     std::mutex ingestQueueMutex_;

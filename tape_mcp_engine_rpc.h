@@ -98,6 +98,14 @@ struct ArtifactExportQuery {
     bool includeLiveTail = false;
 };
 
+struct BundleExportQuery {
+    std::uint64_t reportId = 0;
+};
+
+struct BundleImportQuery {
+    std::string bundlePath;
+};
+
 class EngineRpcClient {
 public:
     explicit EngineRpcClient(EngineRpcClientConfig config = {});
@@ -152,6 +160,14 @@ public:
         const ArtifactQuery& query) const;
     [[nodiscard]] EngineRpcResult<tapescope::ArtifactExportPayload> exportArtifact(
         const ArtifactExportQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> exportSessionBundle(
+        const BundleExportQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> exportCaseBundle(
+        const BundleExportQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> importCaseBundle(
+        const BundleImportQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listImportedCases(
+        const ListQuery& query) const;
     [[nodiscard]] EngineRpcResult<tapescope::SessionQualityPayload> readSessionQuality(
         const SessionWindowQuery& query) const;
 

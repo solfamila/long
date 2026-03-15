@@ -34,6 +34,7 @@ int main() {
         testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();
         testTapeEnginePhase3ScansSessionIntoDurableReportArtifact();
         testTapeEnginePhase3PersistsIncidentAndOrderCaseReports();
+        testTapeEnginePhase6ExportsAndImportsPortableBundles();
         testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures();
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
         testTapeEnginePhase3DetectsInsideLiquiditySignals();

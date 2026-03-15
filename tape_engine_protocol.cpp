@@ -83,6 +83,14 @@ const char* queryOperationName(QueryOperation operation) {
             return "read_artifact";
         case QueryOperation::ExportArtifact:
             return "export_artifact";
+        case QueryOperation::ExportSessionBundle:
+            return "export_session_bundle";
+        case QueryOperation::ExportCaseBundle:
+            return "export_case_bundle";
+        case QueryOperation::ImportCaseBundle:
+            return "import_case_bundle";
+        case QueryOperation::ListImportedCases:
+            return "list_imported_cases";
         case QueryOperation::Unknown:
             return "unknown";
     }
@@ -172,6 +180,18 @@ QueryOperation queryOperationFromString(std::string_view operationName) {
     }
     if (normalized == "export_artifact") {
         return QueryOperation::ExportArtifact;
+    }
+    if (normalized == "export_session_bundle") {
+        return QueryOperation::ExportSessionBundle;
+    }
+    if (normalized == "export_case_bundle") {
+        return QueryOperation::ExportCaseBundle;
+    }
+    if (normalized == "import_case_bundle") {
+        return QueryOperation::ImportCaseBundle;
+    }
+    if (normalized == "list_imported_cases") {
+        return QueryOperation::ListImportedCases;
     }
     if (normalized == "unknown") {
         return QueryOperation::Unknown;
@@ -307,6 +327,9 @@ json queryRequestToJson(const QueryRequest& request) {
     if (!request.exportFormat.empty()) {
         payload["export_format"] = request.exportFormat;
     }
+    if (!request.bundlePath.empty()) {
+        payload["bundle_path"] = request.bundlePath;
+    }
     return payload;
 }
 
@@ -334,6 +357,7 @@ QueryRequest queryRequestFromJson(const json& payload) {
     request.execId = payload.value("exec_id", std::string());
     request.artifactId = payload.value("artifact_id", std::string());
     request.exportFormat = payload.value("export_format", std::string());
+    request.bundlePath = payload.value("bundle_path", std::string());
     return request;
 }
 

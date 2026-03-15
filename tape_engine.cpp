@@ -28,6 +28,11 @@ namespace tape_engine {
 
 namespace {
 
+constexpr const char* kPhase6BundleSchema = "com.foxy.tape-engine.report-bundle";
+constexpr std::uint32_t kPhase6BundleVersion = 1;
+constexpr const char* kImportedCaseManifestSchema = "com.foxy.tape-engine.imported-case-bundle";
+constexpr std::uint32_t kImportedCaseManifestVersion = 1;
+
 std::string errnoMessage(const std::string& prefix) {
     return prefix + ": " + std::strerror(errno);
 }
@@ -602,6 +607,18 @@ std::string sessionReportArtifactId(std::uint64_t reportId) {
 
 std::string caseReportArtifactId(std::uint64_t reportId) {
     return "case-report:" + std::to_string(reportId);
+}
+
+std::string sessionBundleArtifactId(std::uint64_t reportId) {
+    return "session-bundle:report:" + std::to_string(reportId);
+}
+
+std::string caseBundleArtifactId(std::uint64_t reportId) {
+    return "case-bundle:report:" + std::to_string(reportId);
+}
+
+std::string importedCaseArtifactId(std::uint64_t importedCaseId) {
+    return "imported-case:" + std::to_string(importedCaseId);
 }
 
 std::string incidentArtifactId(std::uint64_t logicalIncidentId) {
@@ -1730,6 +1747,26 @@ json caseReportToJson(const CaseReportRecord& record) {
     };
 }
 
+json importedCaseToJson(const ImportedCaseRecord& record) {
+    return {
+        {"artifact_id", importedCaseArtifactId(record.importedCaseId)},
+        {"imported_case_id", record.importedCaseId},
+        {"imported_ts_engine_ns", record.importedTsEngineNs},
+        {"bundle_id", record.bundleId},
+        {"bundle_type", record.bundleType},
+        {"source_artifact_id", record.sourceArtifactId},
+        {"source_report_id", record.sourceReportId},
+        {"source_revision_id", record.sourceRevisionId},
+        {"first_session_seq", record.firstSessionSeq},
+        {"last_session_seq", record.lastSessionSeq},
+        {"instrument_id", record.instrumentId},
+        {"headline", record.headline},
+        {"file_name", record.fileName},
+        {"source_bundle_path", record.sourceBundlePath},
+        {"payload_sha256", record.payloadSha256}
+    };
+}
+
 OrderAnchorRecord orderAnchorFromJson(const json& payload) {
     OrderAnchorRecord record;
     record.anchorId = payload.value("anchor_id", 0ULL);
@@ -1834,6 +1871,25 @@ CaseReportRecord caseReportFromJson(const json& payload) {
     return record;
 }
 
+ImportedCaseRecord importedCaseFromJson(const json& payload) {
+    ImportedCaseRecord record;
+    record.importedCaseId = payload.value("imported_case_id", 0ULL);
+    record.importedTsEngineNs = payload.value("imported_ts_engine_ns", 0ULL);
+    record.bundleId = payload.value("bundle_id", std::string());
+    record.bundleType = payload.value("bundle_type", std::string());
+    record.sourceArtifactId = payload.value("source_artifact_id", std::string());
+    record.sourceReportId = payload.value("source_report_id", 0ULL);
+    record.sourceRevisionId = payload.value("source_revision_id", 0ULL);
+    record.firstSessionSeq = payload.value("first_session_seq", 0ULL);
+    record.lastSessionSeq = payload.value("last_session_seq", 0ULL);
+    record.instrumentId = payload.value("instrument_id", std::string());
+    record.headline = payload.value("headline", std::string());
+    record.fileName = payload.value("file_name", std::string());
+    record.sourceBundlePath = payload.value("source_bundle_path", std::string());
+    record.payloadSha256 = payload.value("payload_sha256", std::string());
+    return record;
+}
+
 json artifactLookupIndexToJson(const Server::ArtifactLookupIndex& index) {
     auto appendSorted = [](json* target,
                            const auto& map,
@@ -1856,6 +1912,7 @@ json artifactLookupIndexToJson(const Server::ArtifactLookupIndex& index) {
         {"version", 1},
         {"session_reports", json::array()},
         {"case_reports", json::array()},
+        {"imported_cases", json::array()},
         {"order_anchors", json::array()},
         {"protected_windows", json::array()},
         {"findings", json::array()},
@@ -1873,6 +1930,12 @@ json artifactLookupIndexToJson(const Server::ArtifactLookupIndex& index) {
                  caseReportToJson,
                  [](const CaseReportRecord& left, const CaseReportRecord& right) {
                      return left.reportId < right.reportId;
+                 });
+    appendSorted(&payload["imported_cases"],
+                 index.importedCasesById,
+                 importedCaseToJson,
+                 [](const ImportedCaseRecord& left, const ImportedCaseRecord& right) {
+                     return left.importedCaseId < right.importedCaseId;
                  });
     appendSorted(&payload["order_anchors"],
                  index.orderAnchorsById,
@@ -1910,6 +1973,10 @@ Server::ArtifactLookupIndex artifactLookupIndexFromJson(const json& payload) {
     for (const auto& item : payload.value("case_reports", json::array())) {
         CaseReportRecord record = caseReportFromJson(item);
         index.caseReportsById[record.reportId] = std::move(record);
+    }
+    for (const auto& item : payload.value("imported_cases", json::array())) {
+        ImportedCaseRecord record = importedCaseFromJson(item);
+        index.importedCasesById[record.importedCaseId] = std::move(record);
     }
     for (const auto& item : payload.value("order_anchors", json::array())) {
         OrderAnchorRecord record = orderAnchorFromJson(item);
@@ -2059,6 +2126,9 @@ Server::ArtifactLookupIndex Server::rebuildArtifactLookupIndexUnlocked() const {
     for (const auto& record : caseReports_) {
         index.caseReportsById[record.reportId] = record;
     }
+    for (const auto& record : importedCases_) {
+        index.importedCasesById[record.importedCaseId] = record;
+    }
     for (const auto& record : orderAnchors_) {
         index.orderAnchorsById[record.anchorId] = record;
     }
@@ -2111,6 +2181,10 @@ void Server::upsertArtifactLookupIndexUnlocked(const SessionReportRecord& record
 
 void Server::upsertArtifactLookupIndexUnlocked(const CaseReportRecord& record) {
     artifactLookupIndex_.caseReportsById[record.reportId] = record;
+}
+
+void Server::upsertArtifactLookupIndexUnlocked(const ImportedCaseRecord& record) {
+    artifactLookupIndex_.importedCasesById[record.importedCaseId] = record;
 }
 
 bool Server::persistArtifactLookupIndex(const ArtifactLookupIndex& index, std::string* error) const {
@@ -2194,6 +2268,7 @@ bool Server::restoreFrozenState(std::string* error) {
     incidents_.clear();
     sessionReports_.clear();
     caseReports_.clear();
+    importedCases_.clear();
     writerFailure_.clear();
     lastManifestHash_.clear();
     segmentEventCache_.clear();
@@ -2215,6 +2290,7 @@ bool Server::restoreFrozenState(std::string* error) {
     nextIncidentRevisionId_ = 1;
     nextSessionReportId_ = 1;
     nextCaseReportId_ = 1;
+    nextImportedCaseId_ = 1;
 
     const std::filesystem::path manifestPath = config_.dataDir / "manifest.jsonl";
     if (!std::filesystem::exists(manifestPath)) {
@@ -2364,6 +2440,12 @@ bool Server::restoreFrozenState(std::string* error) {
         }
     }
 
+    const std::filesystem::path importedCasesManifestPath = config_.dataDir / "imported-case-bundles.jsonl";
+    if (std::filesystem::exists(importedCasesManifestPath) &&
+        !restoreImportedCasesManifest(importedCasesManifestPath, error)) {
+        return false;
+    }
+
     if (!segments_.empty()) {
         const auto& lastSegment = segments_.back();
         if (!lastSegment.checkpointFileName.empty()) {
@@ -2437,6 +2519,20 @@ bool Server::start(std::string* error) {
     if (ec) {
         if (error != nullptr) {
             *error = "failed to create tape-engine reports dir: " + ec.message();
+        }
+        return false;
+    }
+    std::filesystem::create_directories(config_.dataDir / "bundles", ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "failed to create tape-engine bundles dir: " + ec.message();
+        }
+        return false;
+    }
+    std::filesystem::create_directories(config_.dataDir / "imports", ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "failed to create tape-engine imports dir: " + ec.message();
         }
         return false;
     }
@@ -2553,6 +2649,7 @@ EngineSnapshot Server::snapshot() const {
     snapshot.segments = segments_;
     snapshot.sessionReports = sessionReports_;
     snapshot.caseReports = caseReports_;
+    snapshot.importedCases = importedCases_;
     return snapshot;
 }
 
@@ -4198,8 +4295,10 @@ Server::QuerySnapshot Server::captureQuerySnapshot() const {
     snapshot.segments = segments_;
     snapshot.sessionReports = sessionReports_;
     snapshot.caseReports = caseReports_;
+    snapshot.importedCases = importedCases_;
     snapshot.sessionReportsById = artifactLookupIndex_.sessionReportsById;
     snapshot.caseReportsById = artifactLookupIndex_.caseReportsById;
+    snapshot.importedCasesById = artifactLookupIndex_.importedCasesById;
     snapshot.orderAnchorsById = artifactLookupIndex_.orderAnchorsById;
     snapshot.protectedWindowsById = artifactLookupIndex_.protectedWindowsById;
     snapshot.findingsById = artifactLookupIndex_.findingsById;
@@ -5013,6 +5112,130 @@ CaseReportRecord Server::persistCaseReport(const QuerySnapshot& snapshot,
     return record;
 }
 
+bool Server::restoreImportedCasesManifest(const std::filesystem::path& path, std::string* error) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        if (error != nullptr) {
+            *error = "failed to open tape-engine imported case manifest for restore";
+        }
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+
+        const json entry = json::parse(line, nullptr, false);
+        if (entry.is_discarded()) {
+            if (error != nullptr) {
+                *error = "failed to parse tape-engine imported case manifest during restore";
+            }
+            return false;
+        }
+
+        ImportedCaseRecord record = importedCaseFromJson(entry);
+        importedCases_.push_back(record);
+        nextImportedCaseId_ = std::max(nextImportedCaseId_, record.importedCaseId + 1);
+    }
+
+    return true;
+}
+
+std::optional<ImportedCaseRecord> Server::findImportedCaseByPayloadSha(const QuerySnapshot& snapshot,
+                                                                       const std::string& payloadSha256) const {
+    if (payloadSha256.empty()) {
+        return std::nullopt;
+    }
+    for (auto it = snapshot.importedCases.rbegin(); it != snapshot.importedCases.rend(); ++it) {
+        if (it->payloadSha256 == payloadSha256) {
+            return *it;
+        }
+    }
+    return std::nullopt;
+}
+
+ImportedCaseRecord Server::persistImportedCaseRecord(const QuerySnapshot& snapshot,
+                                                     const json& bundle,
+                                                     const std::filesystem::path& sourcePath,
+                                                     const std::vector<std::uint8_t>& bytes) {
+    std::lock_guard<std::mutex> persistLock(reportPersistMutex_);
+
+    const json sourceArtifact = bundle.value("source_artifact", json::object());
+    const json sourceReport = bundle.value("source_report", json::object());
+    const json reportBundle = bundle.value("report_bundle", json::object());
+    const json reportSummary = reportBundle.value("summary", json::object())
+        .value("report", reportBundle.value("summary", json::object()).value("report_summary", json::object()));
+
+    ImportedCaseRecord record;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        record.importedCaseId = nextImportedCaseId_++;
+    }
+    record.importedTsEngineNs = nowEngineNs();
+    record.bundleId = bundle.value("bundle_id", std::string());
+    record.bundleType = bundle.value("bundle_type", std::string());
+    record.sourceArtifactId = bundle.value("source_artifact_id",
+                                           sourceArtifact.value("artifact_id", std::string()));
+    record.sourceReportId = bundle.value("source_report_id",
+                                         sourceReport.value("report_id", 0ULL));
+    record.sourceRevisionId = bundle.value("source_revision_id",
+                                           sourceReport.value("revision_id",
+                                                              sourceArtifact.value("revision_id", 0ULL)));
+    record.firstSessionSeq = bundle.value("first_session_seq",
+                                          sourceArtifact.value("first_session_seq",
+                                                               sourceArtifact.value("from_session_seq", 0ULL)));
+    record.lastSessionSeq = bundle.value("last_session_seq",
+                                         sourceArtifact.value("last_session_seq",
+                                                              sourceArtifact.value("to_session_seq", 0ULL)));
+    record.instrumentId = bundle.value("instrument_id",
+                                       reportBundle.value("summary", json::object()).value("instrument_id",
+                                                                                           snapshot.instrumentId));
+    record.headline = bundle.value("headline",
+                                   reportSummary.value("headline", std::string("Imported case bundle")));
+    record.sourceBundlePath = sourcePath.string();
+    record.payloadSha256 = sha256Hex(bytes);
+
+    std::ostringstream fileName;
+    fileName << "imported-case-" << std::setw(6) << std::setfill('0') << record.importedCaseId << ".msgpack";
+    record.fileName = fileName.str();
+
+    const std::filesystem::path bundlePath = snapshot.dataDir / "imports" / record.fileName;
+    {
+        std::ofstream out(bundlePath, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("failed to open imported case bundle for write");
+        }
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        if (!out.good()) {
+            throw std::runtime_error("failed to write imported case bundle");
+        }
+    }
+
+    const std::filesystem::path manifestPath = snapshot.dataDir / "imported-case-bundles.jsonl";
+    {
+        std::ofstream manifestOut(manifestPath, std::ios::app);
+        if (!manifestOut.is_open()) {
+            throw std::runtime_error("failed to open imported case bundle manifest for append");
+        }
+        manifestOut << importedCaseToJson(record).dump() << '\n';
+    }
+
+    ArtifactLookupIndex lookupIndexSnapshot;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        importedCases_.push_back(record);
+        upsertArtifactLookupIndexUnlocked(record);
+        lookupIndexSnapshot = artifactLookupIndex_;
+    }
+    std::string lookupError;
+    if (!persistArtifactLookupIndex(lookupIndexSnapshot, &lookupError)) {
+        throw std::runtime_error(lookupError);
+    }
+    return record;
+}
+
 std::vector<json> Server::loadEvents(const QuerySnapshot& snapshot,
                                      std::uint64_t frozenRevisionId,
                                      std::uint64_t fromSessionSeq,
@@ -5778,8 +6001,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"latest_session_seq", snapshot.nextSessionSeq > 0 ? snapshot.nextSessionSeq - 1 : 0},
             {"live_event_count", snapshot.liveEvents.size()},
             {"case_report_count", snapshot.caseReports.size()},
+            {"imported_case_count", snapshot.importedCases.size()},
             {"next_revision_id", snapshot.nextRevisionId},
             {"next_case_report_id", snapshot.caseReports.empty() ? 1ULL : snapshot.caseReports.back().reportId + 1},
+            {"next_imported_case_id", snapshot.importedCases.empty() ? 1ULL : snapshot.importedCases.back().importedCaseId + 1},
             {"next_session_report_id", snapshot.sessionReports.empty() ? 1ULL : snapshot.sessionReports.back().reportId + 1},
             {"next_segment_id", snapshot.nextSegmentId},
             {"next_session_seq", snapshot.nextSessionSeq},
@@ -5977,6 +6202,232 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
+    if (operation == QueryOperation::ExportSessionBundle ||
+        operation == QueryOperation::ExportCaseBundle) {
+        if (request.reportId == 0) {
+            return rejectResponse(request, "report_id is required");
+        }
+
+        const bool isSessionBundle = operation == QueryOperation::ExportSessionBundle;
+        QueryResponse sourceResponse;
+        json sourceReport = json::object();
+        json sourceArtifact = json::object();
+        std::string bundleId;
+        std::string bundleType;
+        std::string filePrefix;
+        std::uint64_t sourceRevisionId = 0;
+        std::uint64_t firstSessionSeq = 0;
+        std::uint64_t lastSessionSeq = 0;
+        std::string instrumentId = snapshot.instrumentId;
+        std::string headline;
+
+        try {
+            if (isSessionBundle) {
+                const auto found = snapshot.sessionReportsById.find(request.reportId);
+                if (found == snapshot.sessionReportsById.end()) {
+                    return rejectResponse(request, "session report not found");
+                }
+                sourceResponse = loadSessionReportResponse(snapshot, found->second);
+                sourceReport = sessionReportToJson(found->second);
+                sourceArtifact = sourceResponse.summary.value("artifact", json::object());
+                bundleId = sessionBundleArtifactId(found->second.reportId);
+                bundleType = "session_bundle";
+                filePrefix = "session-bundle-report-";
+                sourceRevisionId = found->second.revisionId;
+                firstSessionSeq = found->second.fromSessionSeq;
+                lastSessionSeq = found->second.toSessionSeq;
+                instrumentId = found->second.instrumentId;
+                headline = found->second.headline;
+            } else {
+                const auto found = snapshot.caseReportsById.find(request.reportId);
+                if (found == snapshot.caseReportsById.end()) {
+                    return rejectResponse(request, "case report not found");
+                }
+                sourceResponse = loadCaseReportResponse(snapshot, found->second);
+                sourceReport = caseReportToJson(found->second);
+                sourceArtifact = sourceResponse.summary.value("artifact", json::object());
+                bundleId = caseBundleArtifactId(found->second.reportId);
+                bundleType = "case_bundle";
+                filePrefix = "case-bundle-report-";
+                sourceRevisionId = found->second.revisionId;
+                firstSessionSeq = found->second.firstSessionSeq;
+                lastSessionSeq = found->second.lastSessionSeq;
+                instrumentId = found->second.instrumentId;
+                headline = found->second.headline;
+            }
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        const json reportSummary = sourceResponse.summary.value("report",
+            sourceResponse.summary.value("report_summary", json::object()));
+        if (headline.empty()) {
+            headline = reportSummary.value("headline", std::string("Tape engine bundle"));
+        }
+        if (instrumentId.empty()) {
+            instrumentId = sourceResponse.summary.value("entity", json::object()).value("instrument_id",
+                         sourceResponse.summary.value("instrument_id", snapshot.instrumentId));
+        }
+
+        json bundle{
+            {"schema", kPhase6BundleSchema},
+            {"version", kPhase6BundleVersion},
+            {"bundle_id", bundleId},
+            {"bundle_type", bundleType},
+            {"exported_ts_engine_ns", nowEngineNs()},
+            {"source_artifact_id", sourceArtifact.value("artifact_id", std::string())},
+            {"source_report_id", request.reportId},
+            {"source_revision_id", sourceRevisionId},
+            {"first_session_seq", firstSessionSeq},
+            {"last_session_seq", lastSessionSeq},
+            {"instrument_id", instrumentId},
+            {"headline", headline},
+            {"source_artifact", sourceArtifact},
+            {"source_report", sourceReport},
+            {"report_markdown", renderReportMarkdown(sourceResponse)},
+            {"report_bundle", queryResponseToJson(sourceResponse)}
+        };
+
+        std::ostringstream fileName;
+        fileName << filePrefix << std::setw(6) << std::setfill('0') << request.reportId << ".msgpack";
+        const std::filesystem::path bundlePath = snapshot.dataDir / "bundles" / fileName.str();
+        const std::vector<std::uint8_t> payload = json::to_msgpack(bundle);
+        {
+            std::ofstream out(bundlePath, std::ios::binary);
+            if (!out.is_open()) {
+                return rejectResponse(request, "failed to open report bundle for write");
+            }
+            out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+            if (!out.good()) {
+                return rejectResponse(request, "failed to write report bundle");
+            }
+        }
+
+        response.summary = {
+            {"artifact", {
+                {"artifact_id", bundleId},
+                {"artifact_type", bundleType},
+                {"artifact_scope", "portable"},
+                {"first_session_seq", firstSessionSeq},
+                {"last_session_seq", lastSessionSeq},
+                {"revision_id", sourceRevisionId}
+            }},
+            {"bundle", {
+                {"bundle_id", bundleId},
+                {"bundle_type", bundleType},
+                {"bundle_path", bundlePath.string()},
+                {"file_name", fileName.str()},
+                {"payload_sha256", sha256Hex(payload)},
+                {"schema", kPhase6BundleSchema},
+                {"version", kPhase6BundleVersion}
+            }},
+            {"source_artifact", sourceArtifact},
+            {"source_report", sourceReport},
+            {"served_revision_id", sourceRevisionId},
+            {"export_status", "written"}
+        };
+        response.events = json::array();
+        return response;
+    }
+
+    if (operation == QueryOperation::ImportCaseBundle) {
+        if (request.bundlePath.empty()) {
+            return rejectResponse(request, "bundle_path is required");
+        }
+
+        std::filesystem::path sourcePath = request.bundlePath;
+        std::error_code pathError;
+        const std::filesystem::path absoluteSourcePath = std::filesystem::absolute(sourcePath, pathError);
+        if (!pathError) {
+            sourcePath = absoluteSourcePath;
+        }
+        if (!std::filesystem::exists(sourcePath)) {
+            return rejectResponse(request, "bundle_path does not exist");
+        }
+
+        std::ifstream in(sourcePath, std::ios::binary);
+        if (!in.is_open()) {
+            return rejectResponse(request, "failed to open case bundle for import");
+        }
+        const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                              std::istreambuf_iterator<char>());
+        if (bytes.empty()) {
+            return rejectResponse(request, "case bundle is empty");
+        }
+
+        const json bundle = json::from_msgpack(bytes, true, false);
+        if (bundle.is_discarded() ||
+            bundle.value("schema", std::string()) != kPhase6BundleSchema ||
+            bundle.value("version", 0U) != kPhase6BundleVersion) {
+            return rejectResponse(request, "case bundle schema/version is not supported");
+        }
+        if (bundle.value("bundle_type", std::string()) != "case_bundle") {
+            return rejectResponse(request, "import_case_bundle only supports case_bundle payloads");
+        }
+        if (!bundle.value("report_bundle", json::object()).is_object()) {
+            return rejectResponse(request, "case bundle is missing report_bundle payload");
+        }
+
+        const std::string payloadSha256 = sha256Hex(bytes);
+        if (const auto existing = findImportedCaseByPayloadSha(snapshot, payloadSha256); existing.has_value()) {
+            response.summary = {
+                {"artifact", {
+                    {"artifact_id", importedCaseArtifactId(existing->importedCaseId)},
+                    {"artifact_type", "imported_case_bundle"},
+                    {"artifact_scope", "imported"},
+                    {"first_session_seq", existing->firstSessionSeq},
+                    {"last_session_seq", existing->lastSessionSeq},
+                    {"revision_id", existing->sourceRevisionId}
+                }},
+                {"import_status", "existing"},
+                {"duplicate_import", true},
+                {"imported_case", importedCaseToJson(*existing)}
+            };
+            response.events = json::array();
+            return response;
+        }
+
+        ImportedCaseRecord record;
+        try {
+            record = persistImportedCaseRecord(snapshot, bundle, sourcePath, bytes);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        response.summary = {
+            {"artifact", {
+                {"artifact_id", importedCaseArtifactId(record.importedCaseId)},
+                {"artifact_type", "imported_case_bundle"},
+                {"artifact_scope", "imported"},
+                {"first_session_seq", record.firstSessionSeq},
+                {"last_session_seq", record.lastSessionSeq},
+                {"revision_id", record.sourceRevisionId}
+            }},
+            {"import_status", "imported"},
+            {"duplicate_import", false},
+            {"imported_case", importedCaseToJson(record)}
+        };
+        response.events = json::array();
+        return response;
+    }
+
+    if (operation == QueryOperation::ListImportedCases) {
+        response.events = json::array();
+        const std::size_t limit = request.limit == 0 ? 20 : request.limit;
+        for (auto it = snapshot.importedCases.rbegin();
+             it != snapshot.importedCases.rend() && response.events.size() < limit;
+             ++it) {
+            response.events.push_back(importedCaseToJson(*it));
+        }
+        response.summary = {
+            {"imported_case_count", snapshot.importedCases.size()},
+            {"returned_events", response.events.size()},
+            {"schema", kImportedCaseListSchema},
+            {"version", kImportedCaseListVersion}
+        };
+        return response;
+    }
+
     if (operation == QueryOperation::ReadArtifact || operation == QueryOperation::ExportArtifact) {
         if (request.artifactId.empty()) {
             return rejectResponse(request, "artifact_id is required");
@@ -5984,6 +6435,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         QueryRequest delegated = request;
         delegated.artifactId.clear();
         delegated.exportFormat.clear();
+        std::optional<QueryResponse> importedArtifactResponse;
         if (const auto overview = parseSessionOverviewArtifactId(request.artifactId); overview.has_value()) {
             delegated.operation = queryOperationName(QueryOperation::ReadSessionOverview);
             delegated.operationKind = QueryOperation::ReadSessionOverview;
@@ -6026,12 +6478,58 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                 delegated.operation = queryOperationName(QueryOperation::ReadOrderAnchor);
                 delegated.operationKind = QueryOperation::ReadOrderAnchor;
                 delegated.anchorId = parsed->second;
+            } else if (parsed->first == "imported-case") {
+                delegated.operation = "read_imported_case_bundle";
+                delegated.operationKind = QueryOperation::Unknown;
+                const auto found = snapshot.importedCasesById.find(parsed->second);
+                if (found == snapshot.importedCasesById.end()) {
+                    return rejectResponse(request, "imported case not found");
+                }
+
+                const std::filesystem::path bundlePath = snapshot.dataDir / "imports" / found->second.fileName;
+                std::ifstream in(bundlePath, std::ios::binary);
+                if (!in.is_open()) {
+                    return rejectResponse(request, "failed to open imported case bundle");
+                }
+                const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                                      std::istreambuf_iterator<char>());
+                if (bytes.empty()) {
+                    return rejectResponse(request, "imported case bundle is empty");
+                }
+                const json bundle = json::from_msgpack(bytes, true, false);
+                if (bundle.is_discarded() ||
+                    bundle.value("schema", std::string()) != kPhase6BundleSchema ||
+                    bundle.value("bundle_type", std::string()) != "case_bundle") {
+                    return rejectResponse(request, "imported case bundle is malformed");
+                }
+                QueryResponse importedResponse = queryResponseFromJson(bundle.value("report_bundle", json::object()));
+                importedResponse.summary["source_artifact"] = importedResponse.summary.value("artifact", json::object());
+                importedResponse.summary["artifact"] = {
+                    {"artifact_id", importedCaseArtifactId(found->second.importedCaseId)},
+                    {"artifact_type", "imported_case_bundle"},
+                    {"artifact_scope", "imported"},
+                    {"first_session_seq", found->second.firstSessionSeq},
+                    {"last_session_seq", found->second.lastSessionSeq},
+                    {"revision_id", found->second.sourceRevisionId}
+                };
+                importedResponse.summary["imported_case"] = importedCaseToJson(found->second);
+                importedResponse.summary["bundle"] = {
+                    {"bundle_id", found->second.bundleId},
+                    {"bundle_type", found->second.bundleType},
+                    {"bundle_path", bundlePath.string()}
+                };
+                importedArtifactResponse = std::move(importedResponse);
             } else {
                 return rejectResponse(request, "artifact_id type is not supported");
             }
         }
 
-        QueryResponse artifactResponse = processQueryFrame(encodeQueryRequestFrame(delegated));
+        QueryResponse artifactResponse;
+        if (importedArtifactResponse.has_value()) {
+            artifactResponse = *importedArtifactResponse;
+        } else {
+            artifactResponse = processQueryFrame(encodeQueryRequestFrame(delegated));
+        }
         artifactResponse.requestId = request.requestId;
         if (operation == QueryOperation::ReadArtifact) {
             artifactResponse.operation = request.operation;

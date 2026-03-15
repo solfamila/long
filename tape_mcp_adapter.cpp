@@ -376,6 +376,87 @@ json reportInventoryResultSchema(const char* rowKey) {
     };
 }
 
+json importedCaseRowSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"artifact_id", stringSchema()},
+            {"imported_case_id", positiveIntegerSchema()},
+            {"bundle_id", stringSchema()},
+            {"bundle_type", stringSchema()},
+            {"source_artifact_id", stringSchema()},
+            {"source_report_id", nonNegativeIntegerSchema()},
+            {"source_revision_id", nonNegativeIntegerSchema()},
+            {"first_session_seq", nonNegativeIntegerSchema()},
+            {"last_session_seq", nonNegativeIntegerSchema()},
+            {"instrument_id", stringSchema()},
+            {"headline", stringSchema()},
+            {"file_name", stringSchema()},
+            {"source_bundle_path", stringSchema()},
+            {"payload_sha256", stringSchema()}
+        }},
+        {"required", json::array({
+            "artifact_id",
+            "imported_case_id",
+            "bundle_id",
+            "bundle_type",
+            "source_artifact_id",
+            "source_report_id",
+            "source_revision_id",
+            "first_session_seq",
+            "last_session_seq",
+            "instrument_id",
+            "headline",
+            "file_name",
+            "source_bundle_path",
+            "payload_sha256"
+        })},
+        {"additionalProperties", true}
+    };
+}
+
+json bundleExportResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"bundle", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"source_report", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"served_revision_id", json{{"type", json::array({"integer", "null"})}}},
+            {"export_status", stringSchema()}
+        }},
+        {"required", json::array({
+            "artifact",
+            "bundle",
+            "source_artifact",
+            "source_report",
+            "served_revision_id",
+            "export_status"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json bundleImportResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"imported_case", importedCaseRowSchema()},
+            {"import_status", stringSchema()},
+            {"duplicate_import", booleanSchema()}
+        }},
+        {"required", json::array({
+            "artifact",
+            "imported_case",
+            "import_status",
+            "duplicate_import"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
 json seekOrderResultSchema() {
     return json{
         {"type", "object"},
@@ -502,6 +583,14 @@ std::string toolTitle(const ToolSpec& tool) {
             return "Read Artifact";
         case ToolId::ExportArtifact:
             return "Export Artifact";
+        case ToolId::ExportSessionBundle:
+            return "Export Session Bundle";
+        case ToolId::ExportCaseBundle:
+            return "Export Case Bundle";
+        case ToolId::ImportCaseBundle:
+            return "Import Case Bundle";
+        case ToolId::ListImportedCases:
+            return "List Imported Cases";
         case ToolId::ReadSessionQuality:
             return "Read Session Quality";
     }
@@ -513,6 +602,9 @@ json toolAnnotationsForSpec(const ToolSpec& tool) {
         case ToolId::ScanSessionReport:
         case ToolId::ScanIncidentReport:
         case ToolId::ScanOrderCaseReport:
+        case ToolId::ExportSessionBundle:
+        case ToolId::ExportCaseBundle:
+        case ToolId::ImportCaseBundle:
             return toolAnnotations(false, true, false);
         default:
             return toolAnnotations(true, true, false);
@@ -541,6 +633,8 @@ json toolInputSchemaForList(const ToolSpec& tool) {
             return withSchemaExamples(std::move(schema), {json{{"first_session_seq", 1}, {"last_session_seq", 200}}});
         case ToolId::ReadSessionReport:
         case ToolId::ReadCaseReport:
+        case ToolId::ExportSessionBundle:
+        case ToolId::ExportCaseBundle:
             return withSchemaExamples(std::move(schema), {json{{"report_id", 1}}});
         case ToolId::ScanIncidentReport:
         case ToolId::ReadIncident:
@@ -561,6 +655,10 @@ json toolInputSchemaForList(const ToolSpec& tool) {
             return withSchemaExamples(std::move(schema), {json{{"artifact_id", "session-report:1"}}, json{{"artifact_id", "window:1"}}});
         case ToolId::ExportArtifact:
             return withSchemaExamples(std::move(schema), {json{{"artifact_id", "case-report:1"}, {"export_format", "markdown"}}});
+        case ToolId::ImportCaseBundle:
+            return withSchemaExamples(std::move(schema), {json{{"bundle_path", "/tmp/case-bundle-report-000001.msgpack"}}});
+        case ToolId::ListImportedCases:
+            return withSchemaExamples(std::move(schema), {json{{"limit", 20}}});
         case ToolId::ReadSessionQuality:
             return withSchemaExamples(std::move(schema), {json{{"first_session_seq", 1}, {"last_session_seq", 200}}});
         case ToolId::Status:
@@ -1009,6 +1107,17 @@ json artifactInputSchema(bool exportTool) {
     };
 }
 
+json bundlePathInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"bundle_path", stringSchema()}
+        }},
+        {"required", json::array({"bundle_path"})},
+        {"additionalProperties", false}
+    };
+}
+
 json limitOnlyInputSchema() {
     return json{
         {"type", "object"},
@@ -1248,6 +1357,37 @@ std::vector<ToolSpec> buildToolSpecs() {
          "phase5.artifact-export.v1",
          tape_engine::QueryOperation::ExportArtifact,
          true},
+        {ToolId::ExportSessionBundle,
+         "tapescript_export_session_bundle",
+         "Export a durable session report as a portable Phase 6 bundle.",
+         idInputSchema("report_id", true, false, false),
+         bundleExportResultSchema(),
+         "phase6.bundle-export.v1",
+         tape_engine::QueryOperation::ExportSessionBundle,
+         true},
+        {ToolId::ExportCaseBundle,
+         "tapescript_export_case_bundle",
+         "Export a durable case report as a portable Phase 6 bundle.",
+         idInputSchema("report_id", true, false, false),
+         bundleExportResultSchema(),
+         "phase6.bundle-export.v1",
+         tape_engine::QueryOperation::ExportCaseBundle,
+         true},
+        {ToolId::ImportCaseBundle,
+         "tapescript_import_case_bundle",
+         "Import a portable case bundle into the local engine inventory.",
+         bundlePathInputSchema(),
+         bundleImportResultSchema(),
+         "phase6.bundle-import.v1",
+         tape_engine::QueryOperation::ImportCaseBundle,
+         true},
+        {ToolId::ListImportedCases,
+         "tapescript_list_imported_cases",
+         "List case bundles imported into the local engine inventory.",
+         listInputSchema(),
+         listRowsResultSchema("imported_cases", importedCaseRowSchema()),
+         "phase6.imported-case-list.v1",
+         tape_engine::QueryOperation::ListImportedCases},
         {ToolId::ReadSessionQuality,
          "tapescript_read_session_quality",
          "Read data-quality and provenance scoring for a session_seq range.",
@@ -1613,6 +1753,47 @@ json reportInventoryResultFromPayload(const tapescope::ReportInventoryPayload& p
     return json{
         {"returned_count", rows.size()},
         {sessionReports ? "session_reports" : "case_reports", std::move(rows)}
+    };
+}
+
+json importedCaseRowToJson(const json& row) {
+    return json{
+        {"artifact_id", row.value("artifact_id", std::string())},
+        {"imported_case_id", row.value("imported_case_id", 0ULL)},
+        {"bundle_id", row.value("bundle_id", std::string())},
+        {"bundle_type", row.value("bundle_type", std::string())},
+        {"source_artifact_id", row.value("source_artifact_id", std::string())},
+        {"source_report_id", row.value("source_report_id", 0ULL)},
+        {"source_revision_id", row.value("source_revision_id", 0ULL)},
+        {"first_session_seq", row.value("first_session_seq", 0ULL)},
+        {"last_session_seq", row.value("last_session_seq", 0ULL)},
+        {"instrument_id", row.value("instrument_id", std::string())},
+        {"headline", row.value("headline", std::string())},
+        {"file_name", row.value("file_name", std::string())},
+        {"source_bundle_path", row.value("source_bundle_path", std::string())},
+        {"payload_sha256", row.value("payload_sha256", std::string())}
+    };
+}
+
+json bundleExportResultFromResponse(const tape_engine::QueryResponse& response) {
+    const json& summary = response.summary;
+    return json{
+        {"artifact", summary.value("artifact", json::object())},
+        {"bundle", summary.value("bundle", json::object())},
+        {"source_artifact", summary.value("source_artifact", json::object())},
+        {"source_report", summary.value("source_report", json::object())},
+        {"served_revision_id", summary.contains("served_revision_id") ? summary.at("served_revision_id") : json(nullptr)},
+        {"export_status", summary.value("export_status", std::string())}
+    };
+}
+
+json bundleImportResultFromResponse(const tape_engine::QueryResponse& response) {
+    const json& summary = response.summary;
+    return json{
+        {"artifact", summary.value("artifact", json::object())},
+        {"imported_case", importedCaseRowToJson(summary.value("imported_case", json::object()))},
+        {"import_status", summary.value("import_status", std::string())},
+        {"duplicate_import", summary.value("duplicate_import", false)}
     };
 }
 
@@ -2477,6 +2658,14 @@ json Adapter::invokeTool(const ToolSpec& tool, const json& args) const {
             return invokeReadArtifactTool(tool, args);
         case ToolId::ExportArtifact:
             return invokeExportArtifactTool(tool, args);
+        case ToolId::ExportSessionBundle:
+            return invokeExportSessionBundleTool(tool, args);
+        case ToolId::ExportCaseBundle:
+            return invokeExportCaseBundleTool(tool, args);
+        case ToolId::ImportCaseBundle:
+            return invokeImportCaseBundleTool(tool, args);
+        case ToolId::ListImportedCases:
+            return invokeListImportedCasesTool(tool, args);
         case ToolId::ReadSessionQuality:
             return invokeReadSessionQualityTool(tool, args);
     }
@@ -3317,6 +3506,145 @@ json Adapter::invokeExportArtifactTool(const ToolSpec& tool, const json& args) c
     return makeToolResult(makeSuccessEnvelope(tool,
                                               exportResultFromPayload(result.value),
                                               revisionFromSummary(result.value.summary)));
+}
+
+json Adapter::invokeExportSessionBundleTool(const ToolSpec& tool, const json& args) const {
+    NumericIdQuery query;
+    std::string code;
+    std::string message;
+    if (!parseNumericIdArgs(args, "report_id", &query, &code, &message, true, false, false)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable()));
+    }
+    const auto result = engineRpc_.exportSessionBundle(BundleExportQuery{.reportId = query.id});
+    if (!result.ok()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                result.error.code,
+                                                result.error.message,
+                                                result.error.retryable,
+                                                revisionUnavailable()));
+    }
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              bundleExportResultFromResponse(result.value),
+                                              revisionFromSummary(result.value.summary)));
+}
+
+json Adapter::invokeExportCaseBundleTool(const ToolSpec& tool, const json& args) const {
+    NumericIdQuery query;
+    std::string code;
+    std::string message;
+    if (!parseNumericIdArgs(args, "report_id", &query, &code, &message, true, false, false)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable()));
+    }
+    const auto result = engineRpc_.exportCaseBundle(BundleExportQuery{.reportId = query.id});
+    if (!result.ok()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                result.error.code,
+                                                result.error.message,
+                                                result.error.retryable,
+                                                revisionUnavailable()));
+    }
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              bundleExportResultFromResponse(result.value),
+                                              revisionFromSummary(result.value.summary)));
+}
+
+json Adapter::invokeImportCaseBundleTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "bundle_path is required.",
+                                                false,
+                                                revisionUnavailable()));
+    }
+    const auto bundlePath = asNonEmptyString(args.value("bundle_path", json()));
+    if (!bundlePath.has_value()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "bundle_path is required.",
+                                                false,
+                                                revisionUnavailable()));
+    }
+    const auto result = engineRpc_.importCaseBundle(BundleImportQuery{.bundlePath = *bundlePath});
+    if (!result.ok()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                result.error.code,
+                                                result.error.message,
+                                                result.error.retryable,
+                                                revisionUnavailable()));
+    }
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              bundleImportResultFromResponse(result.value),
+                                              revisionFromSummary(result.value.summary)));
+}
+
+json Adapter::invokeListImportedCasesTool(const ToolSpec& tool, const json& args) const {
+    ListQuery query;
+    std::string code;
+    std::string message;
+    if (!parseListArgs(args, &query, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable()));
+    }
+    const auto result = engineRpc_.listImportedCases(query);
+    if (!result.ok()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                result.error.code,
+                                                result.error.message,
+                                                result.error.retryable,
+                                                revisionUnavailable()));
+    }
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              listRowsResultFromResponse(result.value,
+                                                                         "imported_cases",
+                                                                         importedCaseRowToJson),
+                                              revisionUnavailable()));
 }
 
 json Adapter::invokeReadSessionQualityTool(const ToolSpec& tool, const json& args) const {
