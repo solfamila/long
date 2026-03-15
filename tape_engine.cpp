@@ -2609,6 +2609,7 @@ void Server::handleClientConnection(int clientFd) {
     } catch (const std::exception& error) {
         QueryRequest request;
         request.operation = "unknown";
+        request.operationKind = QueryOperation::Unknown;
         try {
             writeAll(clientFd, encodeQueryResponseFrame(rejectResponse(request, error.what())));
         } catch (...) {
@@ -2664,6 +2665,7 @@ void Server::replayLoop() {
         } catch (const std::exception& error) {
             QueryRequest failedRequest;
             failedRequest.operation = "unknown";
+            failedRequest.operationKind = QueryOperation::Unknown;
             request->promise.set_value(encodeQueryResponseFrame(rejectResponse(failedRequest, error.what())));
         }
     }
@@ -5733,7 +5735,9 @@ QueryResponse Server::rejectResponse(const QueryRequest& request,
                                      const std::string& error) const {
     QueryResponse response;
     response.requestId = request.requestId;
-    response.operation = request.operation;
+    response.operation = request.operation.empty()
+        ? std::string(queryOperationName(request.operationKind))
+        : request.operation;
     response.status = "error";
     response.error = error;
     response.summary = {
@@ -5745,17 +5749,26 @@ QueryResponse Server::rejectResponse(const QueryRequest& request,
 }
 
 QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) {
-    const QueryRequest request = decodeQueryRequestFrame(frame);
+    QueryRequest request = decodeQueryRequestFrame(frame);
+    if (request.operationKind == QueryOperation::Unknown) {
+        request.operationKind = queryOperationFromString(request.operation);
+    }
+    if (request.operationKind != QueryOperation::Unknown) {
+        request.operation = queryOperationName(request.operationKind);
+    } else {
+        request.operation = canonicalizeQueryOperationName(request.operation);
+    }
     QueryResponse response;
     response.requestId = request.requestId;
     response.operation = request.operation;
+    const QueryOperation operation = request.operationKind;
 
     const std::size_t writerBacklog = [&]() {
         std::lock_guard<std::mutex> lock(writerMutex_);
         return writerQueue_.size();
     }();
     const QuerySnapshot snapshot = captureQuerySnapshot();
-    if (request.operation == "status") {
+    if (operation == QueryOperation::Status) {
         response.summary = {
             {"data_dir", snapshot.dataDir.string()},
             {"instrument_id", snapshot.instrumentId},
@@ -5781,7 +5794,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_live_tail") {
+    if (operation == QueryOperation::ReadLiveTail) {
         const std::size_t limit = request.limit == 0 ? 50 : request.limit;
         response.summary = {
             {"base_revision_id", snapshot.latestFrozenRevisionId},
@@ -5798,7 +5811,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_session_quality") {
+    if (operation == QueryOperation::ReadSessionQuality) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
@@ -5821,7 +5834,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_session_overview") {
+    if (operation == QueryOperation::ReadSessionOverview) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
@@ -5831,7 +5844,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return buildSessionOverviewResponse(request, snapshot, frozenRevisionId);
     }
 
-    if (request.operation == "scan_session_report") {
+    if (operation == QueryOperation::ScanSessionReport) {
         if (request.includeLiveTail) {
             return rejectResponse(request, "scan_session_report only supports frozen revision evidence");
         }
@@ -5844,7 +5857,8 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         QueryRequest overviewRequest = request;
-        overviewRequest.operation = "scan_session_report";
+        overviewRequest.operation = queryOperationName(QueryOperation::ScanSessionReport);
+        overviewRequest.operationKind = QueryOperation::ScanSessionReport;
         QueryResponse reportResponse = buildSessionOverviewResponse(overviewRequest, snapshot, frozenRevisionId);
         const std::uint64_t from = reportResponse.summary.value("from_session_seq", 0ULL);
         const std::uint64_t to = reportResponse.summary.value("to_session_seq", 0ULL);
@@ -5869,7 +5883,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return reportResponse;
     }
 
-    if (request.operation == "read_session_report") {
+    if (operation == QueryOperation::ReadSessionReport) {
         std::optional<SessionReportRecord> report;
         if (request.reportId > 0) {
             const auto found = snapshot.sessionReportsById.find(request.reportId);
@@ -5907,7 +5921,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
     }
 
-    if (request.operation == "list_session_reports") {
+    if (operation == QueryOperation::ListSessionReports) {
         response.events = json::array();
         const std::size_t limit = request.limit == 0 ? 20 : request.limit;
         for (auto it = snapshot.sessionReports.rbegin();
@@ -5925,7 +5939,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_case_report") {
+    if (operation == QueryOperation::ReadCaseReport) {
         std::optional<CaseReportRecord> report = findCaseReport(snapshot, request.reportId);
         if (!report.has_value()) {
             return rejectResponse(request, "case report not found");
@@ -5945,7 +5959,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
     }
 
-    if (request.operation == "list_case_reports") {
+    if (operation == QueryOperation::ListCaseReports) {
         response.events = json::array();
         const std::size_t limit = request.limit == 0 ? 20 : request.limit;
         for (auto it = snapshot.caseReports.rbegin();
@@ -5963,7 +5977,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_artifact" || request.operation == "export_artifact") {
+    if (operation == QueryOperation::ReadArtifact || operation == QueryOperation::ExportArtifact) {
         if (request.artifactId.empty()) {
             return rejectResponse(request, "artifact_id is required");
         }
@@ -5971,12 +5985,14 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         delegated.artifactId.clear();
         delegated.exportFormat.clear();
         if (const auto overview = parseSessionOverviewArtifactId(request.artifactId); overview.has_value()) {
-            delegated.operation = "read_session_overview";
+            delegated.operation = queryOperationName(QueryOperation::ReadSessionOverview);
+            delegated.operationKind = QueryOperation::ReadSessionOverview;
             delegated.revisionId = overview->revisionId;
             delegated.fromSessionSeq = overview->fromSessionSeq;
             delegated.toSessionSeq = overview->toSessionSeq;
         } else if (const auto orderCase = parseOrderCaseArtifactId(request.artifactId); orderCase.has_value()) {
-            delegated.operation = "read_order_case";
+            delegated.operation = queryOperationName(QueryOperation::ReadOrderCase);
+            delegated.operationKind = QueryOperation::ReadOrderCase;
             delegated.traceId = orderCase->traceId;
             delegated.orderId = orderCase->orderId;
             delegated.permId = orderCase->permId;
@@ -5987,22 +6003,28 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                 return rejectResponse(request, "artifact_id must use a supported session-overview, order-case, or numeric artifact form");
             }
             if (parsed->first == "session-report") {
-                delegated.operation = "read_session_report";
+                delegated.operation = queryOperationName(QueryOperation::ReadSessionReport);
+                delegated.operationKind = QueryOperation::ReadSessionReport;
                 delegated.reportId = parsed->second;
             } else if (parsed->first == "case-report") {
-                delegated.operation = "read_case_report";
+                delegated.operation = queryOperationName(QueryOperation::ReadCaseReport);
+                delegated.operationKind = QueryOperation::ReadCaseReport;
                 delegated.reportId = parsed->second;
             } else if (parsed->first == "incident") {
-                delegated.operation = "read_incident";
+                delegated.operation = queryOperationName(QueryOperation::ReadIncident);
+                delegated.operationKind = QueryOperation::ReadIncident;
                 delegated.logicalIncidentId = parsed->second;
             } else if (parsed->first == "window") {
-                delegated.operation = "read_protected_window";
+                delegated.operation = queryOperationName(QueryOperation::ReadProtectedWindow);
+                delegated.operationKind = QueryOperation::ReadProtectedWindow;
                 delegated.windowId = parsed->second;
             } else if (parsed->first == "finding") {
-                delegated.operation = "read_finding";
+                delegated.operation = queryOperationName(QueryOperation::ReadFinding);
+                delegated.operationKind = QueryOperation::ReadFinding;
                 delegated.findingId = parsed->second;
             } else if (parsed->first == "anchor") {
-                delegated.operation = "read_order_anchor";
+                delegated.operation = queryOperationName(QueryOperation::ReadOrderAnchor);
+                delegated.operationKind = QueryOperation::ReadOrderAnchor;
                 delegated.anchorId = parsed->second;
             } else {
                 return rejectResponse(request, "artifact_id type is not supported");
@@ -6011,7 +6033,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
 
         QueryResponse artifactResponse = processQueryFrame(encodeQueryRequestFrame(delegated));
         artifactResponse.requestId = request.requestId;
-        if (request.operation == "read_artifact") {
+        if (operation == QueryOperation::ReadArtifact) {
             artifactResponse.operation = request.operation;
             artifactResponse.summary["resolved_artifact_id"] = request.artifactId;
             artifactResponse.summary["artifact_resolution"] = {
@@ -6064,10 +6086,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return exportResponse;
     }
 
-    if (request.operation == "list_order_anchors" ||
-        request.operation == "list_protected_windows" ||
-        request.operation == "list_findings" ||
-        request.operation == "list_incidents") {
+    if (operation == QueryOperation::ListOrderAnchors ||
+        operation == QueryOperation::ListProtectedWindows ||
+        operation == QueryOperation::ListFindings ||
+        operation == QueryOperation::ListIncidents) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
@@ -6079,28 +6101,28 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
         response.events = json::array();
 
-        if (request.operation == "list_order_anchors") {
+        if (operation == QueryOperation::ListOrderAnchors) {
             const std::vector<OrderAnchorRecord>& records = artifacts.orderAnchors;
             for (auto it = records.rbegin();
                  it != records.rend() && response.events.size() < limit;
                  ++it) {
                 response.events.push_back(orderAnchorToJson(*it));
             }
-        } else if (request.operation == "list_protected_windows") {
+        } else if (operation == QueryOperation::ListProtectedWindows) {
             const std::vector<ProtectedWindowRecord>& records = artifacts.protectedWindows;
             for (auto it = records.rbegin();
                  it != records.rend() && response.events.size() < limit;
                  ++it) {
                 response.events.push_back(protectedWindowToJson(*it));
             }
-        } else if (request.operation == "list_findings") {
+        } else if (operation == QueryOperation::ListFindings) {
             const std::vector<FindingRecord>& records = artifacts.findings;
             for (auto it = records.rbegin();
                  it != records.rend() && response.events.size() < limit;
                  ++it) {
                 response.events.push_back(findingToJson(*it));
             }
-        } else if (request.operation == "list_incidents") {
+        } else if (operation == QueryOperation::ListIncidents) {
             const std::vector<IncidentRecord>& records = artifacts.incidents;
             const std::vector<IncidentRecord> collapsed = collapseAdjustedIncidents(snapshot,
                                                                                    artifacts,
@@ -6116,7 +6138,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         response.summary = {
-            {"collapsed_logical_incidents", request.operation == "list_incidents"},
+            {"collapsed_logical_incidents", operation == QueryOperation::ListIncidents},
             {"includes_mutable_tail", request.includeLiveTail},
             {"returned_events", response.events.size()},
             {"served_revision_id", frozenRevisionId}
@@ -6124,7 +6146,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_finding") {
+    if (operation == QueryOperation::ReadFinding) {
         if (request.findingId == 0) {
             return rejectResponse(request, "finding_id is required");
         }
@@ -6261,7 +6283,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_order_anchor") {
+    if (operation == QueryOperation::ReadOrderAnchor) {
         if (request.anchorId == 0) {
             return rejectResponse(request, "anchor_id is required");
         }
@@ -6283,7 +6305,8 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         QueryRequest delegated = request;
-        delegated.operation = "read_order_case";
+        delegated.operation = queryOperationName(QueryOperation::ReadOrderCase);
+        delegated.operationKind = QueryOperation::ReadOrderCase;
         delegated.traceId = anchorRecord->anchor.traceId;
         delegated.orderId = anchorRecord->anchor.orderId;
         delegated.permId = anchorRecord->anchor.permId;
@@ -6330,7 +6353,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return anchorResponse;
     }
 
-    if (request.operation == "read_incident" || request.operation == "scan_incident_report") {
+    if (operation == QueryOperation::ReadIncident || operation == QueryOperation::ScanIncidentReport) {
         if (request.logicalIncidentId == 0) {
             return rejectResponse(request, "logical_incident_id is required");
         }
@@ -6494,7 +6517,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         if (incidentWindow.has_value()) {
             response.summary["protected_window"] = protectedWindowToJson(*incidentWindow);
         }
-        if (request.operation == "scan_incident_report") {
+        if (operation == QueryOperation::ScanIncidentReport) {
             if (request.includeLiveTail) {
                 return rejectResponse(request, "scan_incident_report only supports frozen revision evidence");
             }
@@ -6522,12 +6545,12 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         annotateInvestigationEnvelope(&response,
                                       frozenRevisionId,
                                       request.includeLiveTail,
-                                      request.operation == "scan_incident_report" ? "incident_report" : "incident",
+                                      operation == QueryOperation::ScanIncidentReport ? "incident_report" : "incident",
                                       "incident");
         return response;
     }
 
-    if (request.operation == "read_protected_window") {
+    if (operation == QueryOperation::ReadProtectedWindow) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
@@ -6617,7 +6640,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_range") {
+    if (operation == QueryOperation::ReadRange) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
@@ -6650,7 +6673,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "find_order_anchor") {
+    if (operation == QueryOperation::FindOrderAnchor) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
@@ -6685,7 +6708,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "read_order_case" || request.operation == "scan_order_case_report") {
+    if (operation == QueryOperation::ReadOrderCase || operation == QueryOperation::ScanOrderCaseReport) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
@@ -6901,7 +6924,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         orderCaseSummary["evidence"] = buildEvidenceSection(timeline, timelineSummary, citations, dataQuality);
         orderCaseSummary["report"] = orderCaseSummary["case_report"];
         response.summary = std::move(orderCaseSummary);
-        if (request.operation == "scan_order_case_report") {
+        if (operation == QueryOperation::ScanOrderCaseReport) {
             if (request.includeLiveTail) {
                 return rejectResponse(request, "scan_order_case_report only supports frozen revision evidence");
             }
@@ -6929,12 +6952,12 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         annotateInvestigationEnvelope(&response,
                                       frozenRevisionId,
                                       request.includeLiveTail,
-                                      request.operation == "scan_order_case_report" ? "order_case_report" : "order_case",
+                                      operation == QueryOperation::ScanOrderCaseReport ? "order_case_report" : "order_case",
                                       "order_case");
         return response;
     }
 
-    if (request.operation == "seek_order_anchor") {
+    if (operation == QueryOperation::SeekOrderAnchor) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
@@ -6974,7 +6997,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
-    if (request.operation == "replay_snapshot") {
+    if (operation == QueryOperation::ReplaySnapshot) {
         std::uint64_t frozenRevisionId = 0;
         try {
             frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);

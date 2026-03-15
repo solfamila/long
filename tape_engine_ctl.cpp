@@ -52,17 +52,19 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const std::string command = tape_engine::canonicalizeQueryOperationName(argv[1]);
     tape_engine::QueryRequest request;
-    request.requestId = "ctl";
-    request.operation = argv[1];
+    const auto setOperation = [&](tape_engine::QueryOperation operation) {
+        request = tape_engine::makeQueryRequest(operation, "ctl");
+    };
 
-    if (request.operation == "read-live-tail") {
-        request.operation = "read_live_tail";
+    if (command == "read_live_tail") {
+        setOperation(tape_engine::QueryOperation::ReadLiveTail);
         if (argc >= 3) {
             request.limit = static_cast<std::size_t>(std::stoull(argv[2]));
         }
-    } else if (request.operation == "read-session-overview") {
-        request.operation = "read_session_overview";
+    } else if (command == "read_session_overview") {
+        setOperation(tape_engine::QueryOperation::ReadSessionOverview);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--from" && i + 1 < argc) {
@@ -77,8 +79,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "scan-session-report") {
-        request.operation = "scan_session_report";
+    } else if (command == "scan_session_report") {
+        setOperation(tape_engine::QueryOperation::ScanSessionReport);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--from" && i + 1 < argc) {
@@ -91,15 +93,15 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "read-session-report") {
-        request.operation = "read_session_report";
+    } else if (command == "read_session_report") {
+        setOperation(tape_engine::QueryOperation::ReadSessionReport);
         if (argc < 3) {
             printUsage();
             return 1;
         }
         request.reportId = std::stoull(argv[2]);
-    } else if (request.operation == "read-artifact") {
-        request.operation = "read_artifact";
+    } else if (command == "read_artifact") {
+        setOperation(tape_engine::QueryOperation::ReadArtifact);
         if (argc < 3) {
             printUsage();
             return 1;
@@ -115,8 +117,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "export-artifact") {
-        request.operation = "export_artifact";
+    } else if (command == "export_artifact") {
+        setOperation(tape_engine::QueryOperation::ExportArtifact);
         if (argc < 4) {
             printUsage();
             return 1;
@@ -133,8 +135,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "list-session-reports") {
-        request.operation = "list_session_reports";
+    } else if (command == "list_session_reports") {
+        setOperation(tape_engine::QueryOperation::ListSessionReports);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--revision" && i + 1 < argc) {
@@ -143,8 +145,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "scan-incident-report") {
-        request.operation = "scan_incident_report";
+    } else if (command == "scan_incident_report") {
+        setOperation(tape_engine::QueryOperation::ScanIncidentReport);
         if (argc < 3) {
             printUsage();
             return 1;
@@ -158,8 +160,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "scan-order-case-report") {
-        request.operation = "scan_order_case_report";
+    } else if (command == "scan_order_case_report") {
+        setOperation(tape_engine::QueryOperation::ScanOrderCaseReport);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--trace-id" && i + 1 < argc) {
@@ -176,15 +178,15 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "read-case-report") {
-        request.operation = "read_case_report";
+    } else if (command == "read_case_report") {
+        setOperation(tape_engine::QueryOperation::ReadCaseReport);
         if (argc < 3) {
             printUsage();
             return 1;
         }
         request.reportId = std::stoull(argv[2]);
-    } else if (request.operation == "list-case-reports") {
-        request.operation = "list_case_reports";
+    } else if (command == "list_case_reports") {
+        setOperation(tape_engine::QueryOperation::ListCaseReports);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--revision" && i + 1 < argc) {
@@ -193,8 +195,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "read-session-quality") {
-        request.operation = "read_session_quality";
+    } else if (command == "read_session_quality") {
+        setOperation(tape_engine::QueryOperation::ReadSessionQuality);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--from" && i + 1 < argc) {
@@ -207,8 +209,8 @@ int main(int argc, char** argv) {
                 request.revisionId = std::stoull(argv[++i]);
             }
         }
-    } else if (request.operation == "read-finding") {
-        request.operation = "read_finding";
+    } else if (command == "read_finding") {
+        setOperation(tape_engine::QueryOperation::ReadFinding);
         if (argc < 3) {
             printUsage();
             return 1;
@@ -224,8 +226,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "read-range") {
-        request.operation = "read_range";
+    } else if (command == "read_range") {
+        setOperation(tape_engine::QueryOperation::ReadRange);
         if (argc < 4) {
             printUsage();
             return 1;
@@ -242,8 +244,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "replay-snapshot") {
-        request.operation = "replay_snapshot";
+    } else if (command == "replay_snapshot") {
+        setOperation(tape_engine::QueryOperation::ReplaySnapshot);
         if (argc < 3) {
             printUsage();
             return 1;
@@ -259,8 +261,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "find-order") {
-        request.operation = "find_order_anchor";
+    } else if (command == "find_order") {
+        setOperation(tape_engine::QueryOperation::FindOrderAnchor);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--trace-id" && i + 1 < argc) {
@@ -279,8 +281,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "seek-order") {
-        request.operation = "seek_order_anchor";
+    } else if (command == "seek_order") {
+        setOperation(tape_engine::QueryOperation::SeekOrderAnchor);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--trace-id" && i + 1 < argc) {
@@ -299,8 +301,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "read-order-case") {
-        request.operation = "read_order_case";
+    } else if (command == "read_order_case") {
+        setOperation(tape_engine::QueryOperation::ReadOrderCase);
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--trace-id" && i + 1 < argc) {
@@ -319,8 +321,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "read-order-anchor") {
-        request.operation = "read_order_anchor";
+    } else if (command == "read_order_anchor") {
+        setOperation(tape_engine::QueryOperation::ReadOrderAnchor);
         if (argc < 3) {
             printUsage();
             return 1;
@@ -336,8 +338,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "read-protected-window") {
-        request.operation = "read_protected_window";
+    } else if (command == "read_protected_window") {
+        setOperation(tape_engine::QueryOperation::ReadProtectedWindow);
         if (argc < 3) {
             printUsage();
             return 1;
@@ -353,8 +355,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "read-incident") {
-        request.operation = "read_incident";
+    } else if (command == "read_incident") {
+        setOperation(tape_engine::QueryOperation::ReadIncident);
         if (argc < 3) {
             printUsage();
             return 1;
@@ -370,18 +372,18 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "list-order-anchors" ||
-               request.operation == "list-protected-windows" ||
-               request.operation == "list-findings" ||
-               request.operation == "list-incidents") {
-        if (request.operation == "list-order-anchors") {
-            request.operation = "list_order_anchors";
-        } else if (request.operation == "list-protected-windows") {
-            request.operation = "list_protected_windows";
-        } else if (request.operation == "list-findings") {
-            request.operation = "list_findings";
+    } else if (command == "list_order_anchors" ||
+               command == "list_protected_windows" ||
+               command == "list_findings" ||
+               command == "list_incidents") {
+        if (command == "list_order_anchors") {
+            setOperation(tape_engine::QueryOperation::ListOrderAnchors);
+        } else if (command == "list_protected_windows") {
+            setOperation(tape_engine::QueryOperation::ListProtectedWindows);
+        } else if (command == "list_findings") {
+            setOperation(tape_engine::QueryOperation::ListFindings);
         } else {
-            request.operation = "list_incidents";
+            setOperation(tape_engine::QueryOperation::ListIncidents);
         }
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
@@ -393,8 +395,8 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
-    } else if (request.operation == "status") {
-        request.operation = "status";
+    } else if (command == "status") {
+        setOperation(tape_engine::QueryOperation::Status);
     } else {
         printUsage();
         return 1;

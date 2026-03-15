@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -18,6 +19,40 @@ inline constexpr std::uint32_t kInvestigationEnvelopeVersion = 1;
 inline constexpr const char* kInvestigationEnvelopeSchema = "com.foxy.tape-engine.investigation-envelope";
 inline constexpr std::uint32_t kArtifactExportVersion = 1;
 inline constexpr const char* kArtifactExportSchema = "com.foxy.tape-engine.artifact-export";
+
+enum class QueryOperation {
+    Unknown = 0,
+    Status,
+    ReadLiveTail,
+    ReadRange,
+    ReplaySnapshot,
+    ReadSessionQuality,
+    ReadSessionOverview,
+    ScanSessionReport,
+    ReadSessionReport,
+    ListSessionReports,
+    ScanIncidentReport,
+    ScanOrderCaseReport,
+    ReadCaseReport,
+    ListCaseReports,
+    FindOrderAnchor,
+    SeekOrderAnchor,
+    ReadOrderCase,
+    ReadOrderAnchor,
+    ListOrderAnchors,
+    ListProtectedWindows,
+    ReadProtectedWindow,
+    ListFindings,
+    ReadFinding,
+    ReadIncident,
+    ListIncidents,
+    ReadArtifact,
+    ExportArtifact,
+};
+
+const char* queryOperationName(QueryOperation operation);
+std::string canonicalizeQueryOperationName(std::string_view operationName);
+QueryOperation queryOperationFromString(std::string_view operationName);
 
 struct IngestAck {
     std::uint32_t version = kAckWireVersion;
@@ -51,6 +86,7 @@ struct QueryRequest {
     std::string schema = kQueryRequestSchema;
     std::string requestId;
     std::string operation;
+    QueryOperation operationKind = QueryOperation::Unknown;
     std::uint64_t revisionId = 0;
     std::uint64_t fromSessionSeq = 0;
     std::uint64_t toSessionSeq = 0;
@@ -69,6 +105,8 @@ struct QueryRequest {
     std::string artifactId;
     std::string exportFormat;
 };
+
+QueryRequest makeQueryRequest(QueryOperation operation, std::string requestId = {});
 
 struct QueryResponse {
     std::uint32_t version = kAckWireVersion;

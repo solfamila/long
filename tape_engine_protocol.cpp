@@ -1,6 +1,7 @@
 #include "tape_engine_protocol.h"
 
 #include <limits>
+#include <string_view>
 #include <stdexcept>
 
 namespace tape_engine {
@@ -17,7 +18,174 @@ std::uint32_t decodeFrameSizePrefix(const std::vector<std::uint8_t>& frame) {
            static_cast<std::uint32_t>(frame[3]);
 }
 
+std::string normalizeOperationName(std::string_view operationName) {
+    std::string normalized;
+    normalized.reserve(operationName.size());
+    for (const char ch : operationName) {
+        normalized.push_back(ch == '-' ? '_' : ch);
+    }
+    return normalized;
+}
+
 } // namespace
+
+const char* queryOperationName(QueryOperation operation) {
+    switch (operation) {
+        case QueryOperation::Status:
+            return "status";
+        case QueryOperation::ReadLiveTail:
+            return "read_live_tail";
+        case QueryOperation::ReadRange:
+            return "read_range";
+        case QueryOperation::ReplaySnapshot:
+            return "replay_snapshot";
+        case QueryOperation::ReadSessionQuality:
+            return "read_session_quality";
+        case QueryOperation::ReadSessionOverview:
+            return "read_session_overview";
+        case QueryOperation::ScanSessionReport:
+            return "scan_session_report";
+        case QueryOperation::ReadSessionReport:
+            return "read_session_report";
+        case QueryOperation::ListSessionReports:
+            return "list_session_reports";
+        case QueryOperation::ScanIncidentReport:
+            return "scan_incident_report";
+        case QueryOperation::ScanOrderCaseReport:
+            return "scan_order_case_report";
+        case QueryOperation::ReadCaseReport:
+            return "read_case_report";
+        case QueryOperation::ListCaseReports:
+            return "list_case_reports";
+        case QueryOperation::FindOrderAnchor:
+            return "find_order_anchor";
+        case QueryOperation::SeekOrderAnchor:
+            return "seek_order_anchor";
+        case QueryOperation::ReadOrderCase:
+            return "read_order_case";
+        case QueryOperation::ReadOrderAnchor:
+            return "read_order_anchor";
+        case QueryOperation::ListOrderAnchors:
+            return "list_order_anchors";
+        case QueryOperation::ListProtectedWindows:
+            return "list_protected_windows";
+        case QueryOperation::ReadProtectedWindow:
+            return "read_protected_window";
+        case QueryOperation::ListFindings:
+            return "list_findings";
+        case QueryOperation::ReadFinding:
+            return "read_finding";
+        case QueryOperation::ReadIncident:
+            return "read_incident";
+        case QueryOperation::ListIncidents:
+            return "list_incidents";
+        case QueryOperation::ReadArtifact:
+            return "read_artifact";
+        case QueryOperation::ExportArtifact:
+            return "export_artifact";
+        case QueryOperation::Unknown:
+            return "unknown";
+    }
+    return "unknown";
+}
+
+std::string canonicalizeQueryOperationName(std::string_view operationName) {
+    return normalizeOperationName(operationName);
+}
+
+QueryOperation queryOperationFromString(std::string_view operationName) {
+    const std::string normalized = normalizeOperationName(operationName);
+    if (normalized == "status") {
+        return QueryOperation::Status;
+    }
+    if (normalized == "read_live_tail") {
+        return QueryOperation::ReadLiveTail;
+    }
+    if (normalized == "read_range") {
+        return QueryOperation::ReadRange;
+    }
+    if (normalized == "replay_snapshot") {
+        return QueryOperation::ReplaySnapshot;
+    }
+    if (normalized == "read_session_quality") {
+        return QueryOperation::ReadSessionQuality;
+    }
+    if (normalized == "read_session_overview") {
+        return QueryOperation::ReadSessionOverview;
+    }
+    if (normalized == "scan_session_report") {
+        return QueryOperation::ScanSessionReport;
+    }
+    if (normalized == "read_session_report") {
+        return QueryOperation::ReadSessionReport;
+    }
+    if (normalized == "list_session_reports") {
+        return QueryOperation::ListSessionReports;
+    }
+    if (normalized == "scan_incident_report") {
+        return QueryOperation::ScanIncidentReport;
+    }
+    if (normalized == "scan_order_case_report") {
+        return QueryOperation::ScanOrderCaseReport;
+    }
+    if (normalized == "read_case_report") {
+        return QueryOperation::ReadCaseReport;
+    }
+    if (normalized == "list_case_reports") {
+        return QueryOperation::ListCaseReports;
+    }
+    if (normalized == "find_order_anchor") {
+        return QueryOperation::FindOrderAnchor;
+    }
+    if (normalized == "seek_order_anchor") {
+        return QueryOperation::SeekOrderAnchor;
+    }
+    if (normalized == "read_order_case") {
+        return QueryOperation::ReadOrderCase;
+    }
+    if (normalized == "read_order_anchor") {
+        return QueryOperation::ReadOrderAnchor;
+    }
+    if (normalized == "list_order_anchors") {
+        return QueryOperation::ListOrderAnchors;
+    }
+    if (normalized == "list_protected_windows") {
+        return QueryOperation::ListProtectedWindows;
+    }
+    if (normalized == "read_protected_window") {
+        return QueryOperation::ReadProtectedWindow;
+    }
+    if (normalized == "list_findings") {
+        return QueryOperation::ListFindings;
+    }
+    if (normalized == "read_finding") {
+        return QueryOperation::ReadFinding;
+    }
+    if (normalized == "read_incident") {
+        return QueryOperation::ReadIncident;
+    }
+    if (normalized == "list_incidents") {
+        return QueryOperation::ListIncidents;
+    }
+    if (normalized == "read_artifact") {
+        return QueryOperation::ReadArtifact;
+    }
+    if (normalized == "export_artifact") {
+        return QueryOperation::ExportArtifact;
+    }
+    if (normalized == "unknown") {
+        return QueryOperation::Unknown;
+    }
+    return QueryOperation::Unknown;
+}
+
+QueryRequest makeQueryRequest(QueryOperation operation, std::string requestId) {
+    QueryRequest request;
+    request.requestId = std::move(requestId);
+    request.operationKind = operation;
+    request.operation = queryOperationName(operation);
+    return request;
+}
 
 json decodeFramedJson(const std::vector<std::uint8_t>& frame) {
     const std::uint32_t payloadSize = decodeFrameSizePrefix(frame);
@@ -107,13 +275,16 @@ IngestAck decodeAckFrame(const std::vector<std::uint8_t>& frame) {
 }
 
 json queryRequestToJson(const QueryRequest& request) {
+    const std::string operationName = request.operation.empty()
+                                          ? std::string(queryOperationName(request.operationKind))
+                                          : canonicalizeQueryOperationName(request.operation);
     json payload{
         {"anchor_id", request.anchorId},
         {"finding_id", request.findingId},
         {"from_session_seq", request.fromSessionSeq},
         {"include_live_tail", request.includeLiveTail},
         {"limit", request.limit},
-        {"operation", request.operation},
+        {"operation", operationName},
         {"logical_incident_id", request.logicalIncidentId},
         {"order_id", request.orderId},
         {"perm_id", request.permId},
@@ -144,7 +315,8 @@ QueryRequest queryRequestFromJson(const json& payload) {
     request.version = payload.value("version", kAckWireVersion);
     request.schema = payload.value("schema", std::string(kQueryRequestSchema));
     request.requestId = payload.value("request_id", std::string());
-    request.operation = payload.value("operation", std::string());
+    request.operation = canonicalizeQueryOperationName(payload.value("operation", std::string()));
+    request.operationKind = queryOperationFromString(request.operation);
     request.revisionId = payload.value("revision_id", 0ULL);
     request.fromSessionSeq = payload.value("from_session_seq", 0ULL);
     request.toSessionSeq = payload.value("to_session_seq", 0ULL);

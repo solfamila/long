@@ -1,32 +1,51 @@
 #include "tapescope_client.h"
+#include "tapescope_client_internal.h"
 
 #include <cstdlib>
-#include <utility>
 
 namespace tapescope {
 
+using namespace client_internal;
+
 namespace {
-
-template <typename T>
-QueryResult<T> makeError(QueryErrorKind kind, std::string message) {
-    QueryResult<T> result;
-    result.error.kind = kind;
-    result.error.message = std::move(message);
-    return result;
+tape_engine::QueryRequest makeRequest(tape_engine::QueryOperation operation, const char* requestId) {
+    return tape_engine::makeQueryRequest(operation, requestId == nullptr ? std::string() : std::string(requestId));
 }
 
-template <typename T>
-QueryResult<T> makeSuccess(T value) {
-    QueryResult<T> result;
-    result.value = std::move(value);
-    return result;
+void applyRangeQuery(tape_engine::QueryRequest* request,
+                     const RangeQuery& query,
+                     bool includeLiveTail = false) {
+    if (request == nullptr) {
+        return;
+    }
+    request->fromSessionSeq = query.firstSessionSeq;
+    request->toSessionSeq = query.lastSessionSeq;
+    request->includeLiveTail = includeLiveTail;
 }
 
-template <typename T>
-QueryResult<T> propagateError(const QueryError& error) {
-    QueryResult<T> result;
-    result.error = error;
-    return result;
+void applyLimit(tape_engine::QueryRequest* request, std::size_t limit) {
+    if (request == nullptr) {
+        return;
+    }
+    request->limit = limit;
+}
+
+void applyOrderAnchorQuery(tape_engine::QueryRequest* request, const OrderAnchorQuery& anchorQuery) {
+    if (request == nullptr) {
+        return;
+    }
+    if (anchorQuery.traceId.has_value()) {
+        request->traceId = *anchorQuery.traceId;
+    }
+    if (anchorQuery.orderId.has_value()) {
+        request->orderId = *anchorQuery.orderId;
+    }
+    if (anchorQuery.permId.has_value()) {
+        request->permId = *anchorQuery.permId;
+    }
+    if (anchorQuery.execId.has_value()) {
+        request->execId = *anchorQuery.execId;
+    }
 }
 
 } // namespace
@@ -88,9 +107,7 @@ QueryResult<json> QueryClient::packSummaryAndEvents(const QueryResult<tape_engin
 }
 
 QueryResult<StatusSnapshot> QueryClient::status() const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-status";
-    request.operation = "status";
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::Status, "tapescope-status");
 
     const QueryResult<tape_engine::QueryResponse> response = performQuery(request);
     if (!response.ok()) {
@@ -115,10 +132,8 @@ QueryResult<StatusSnapshot> QueryClient::status() const {
 }
 
 QueryResult<std::vector<json>> QueryClient::readLiveTail(std::size_t limit) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-live-tail";
-    request.operation = "read_live_tail";
-    request.limit = limit;
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadLiveTail, "tapescope-live-tail");
+    applyLimit(&request, limit);
 
     const QueryResult<tape_engine::QueryResponse> response = performQuery(request);
     if (!response.ok()) {
@@ -137,12 +152,22 @@ QueryResult<std::vector<json>> QueryClient::readLiveTail(std::size_t limit) cons
     return makeSuccess(std::move(events));
 }
 
+QueryResult<std::vector<EventRow>> QueryClient::readLiveTailRows(std::size_t limit) const {
+    const auto result = readLiveTail(limit);
+    if (!result.ok()) {
+        return propagateError<std::vector<EventRow>>(result.error);
+    }
+    std::vector<EventRow> rows;
+    rows.reserve(result.value.size());
+    for (const auto& event : result.value) {
+        rows.push_back(parseEventRow(event));
+    }
+    return makeSuccess(std::move(rows));
+}
+
 QueryResult<std::vector<json>> QueryClient::readRange(const RangeQuery& query) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-read-range";
-    request.operation = "read_range";
-    request.fromSessionSeq = query.firstSessionSeq;
-    request.toSessionSeq = query.lastSessionSeq;
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadRange, "tapescope-read-range");
+    applyRangeQuery(&request, query);
 
     const QueryResult<tape_engine::QueryResponse> response = performQuery(request);
     if (!response.ok()) {
@@ -161,184 +186,239 @@ QueryResult<std::vector<json>> QueryClient::readRange(const RangeQuery& query) c
     return makeSuccess(std::move(events));
 }
 
+QueryResult<std::vector<EventRow>> QueryClient::readRangeRows(const RangeQuery& query) const {
+    const auto result = readRange(query);
+    if (!result.ok()) {
+        return propagateError<std::vector<EventRow>>(result.error);
+    }
+    std::vector<EventRow> rows;
+    rows.reserve(result.value.size());
+    for (const auto& event : result.value) {
+        rows.push_back(parseEventRow(event));
+    }
+    return makeSuccess(std::move(rows));
+}
+
 QueryResult<json> QueryClient::readSessionQuality(const RangeQuery& query, bool includeLiveTail) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-read-session-quality";
-    request.operation = "read_session_quality";
-    request.fromSessionSeq = query.firstSessionSeq;
-    request.toSessionSeq = query.lastSessionSeq;
-    request.includeLiveTail = includeLiveTail;
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadSessionQuality,
+                                                    "tapescope-read-session-quality");
+    applyRangeQuery(&request, query, includeLiveTail);
 
     return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<SessionQualityPayload> QueryClient::readSessionQualityPayload(const RangeQuery& query,
+                                                                          bool includeLiveTail) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadSessionQuality,
+                                                    "tapescope-read-session-quality");
+    applyRangeQuery(&request, query, includeLiveTail);
+
+    return packSessionQualityPayload(performQuery(request));
 }
 
 QueryResult<json> QueryClient::readSessionOverview(const RangeQuery& query) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-read-session-overview";
-    request.operation = "read_session_overview";
-    request.fromSessionSeq = query.firstSessionSeq;
-    request.toSessionSeq = query.lastSessionSeq;
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadSessionOverview,
+                                                    "tapescope-read-session-overview");
+    applyRangeQuery(&request, query);
 
     return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<InvestigationPayload> QueryClient::readSessionOverviewPayload(const RangeQuery& query) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadSessionOverview,
+                                                    "tapescope-read-session-overview");
+    applyRangeQuery(&request, query);
+    return packInvestigationPayload(performQuery(request));
 }
 
 QueryResult<json> QueryClient::scanSessionReport(const RangeQuery& query) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-scan-session-report";
-    request.operation = "scan_session_report";
-    request.fromSessionSeq = query.firstSessionSeq;
-    request.toSessionSeq = query.lastSessionSeq;
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ScanSessionReport,
+                                                    "tapescope-scan-session-report");
+    applyRangeQuery(&request, query);
 
     return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<InvestigationPayload> QueryClient::scanSessionReportPayload(const RangeQuery& query) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ScanSessionReport,
+                                                    "tapescope-scan-session-report");
+    applyRangeQuery(&request, query);
+    return packInvestigationPayload(performQuery(request));
 }
 
 QueryResult<json> QueryClient::listSessionReports(std::size_t limit) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-list-session-reports";
-    request.operation = "list_session_reports";
-    request.limit = limit;
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListSessionReports,
+                                                    "tapescope-list-session-reports");
+    applyLimit(&request, limit);
 
     return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<ReportInventoryPayload> QueryClient::listSessionReportsPayload(std::size_t limit) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListSessionReports,
+                                                    "tapescope-list-session-reports");
+    applyLimit(&request, limit);
+
+    return packReportInventoryPayload(performQuery(request), true);
 }
 
 QueryResult<json> QueryClient::findOrderAnchor(const OrderAnchorQuery& anchorQuery) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-find-order-anchor";
-    request.operation = "find_order_anchor";
-    if (anchorQuery.traceId.has_value()) {
-        request.traceId = *anchorQuery.traceId;
-    }
-    if (anchorQuery.orderId.has_value()) {
-        request.orderId = *anchorQuery.orderId;
-    }
-    if (anchorQuery.permId.has_value()) {
-        request.permId = *anchorQuery.permId;
-    }
-    if (anchorQuery.execId.has_value()) {
-        request.execId = *anchorQuery.execId;
-    }
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::FindOrderAnchor,
+                                                    "tapescope-find-order-anchor");
+    applyOrderAnchorQuery(&request, anchorQuery);
 
     return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<EventListPayload> QueryClient::findOrderAnchorPayload(const OrderAnchorQuery& anchorQuery) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::FindOrderAnchor,
+                                                    "tapescope-find-order-anchor");
+    applyOrderAnchorQuery(&request, anchorQuery);
+
+    return packEventListPayload(performQuery(request));
 }
 
 QueryResult<json> QueryClient::seekOrderAnchor(const OrderAnchorQuery& anchorQuery) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-seek-order-anchor";
-    request.operation = "seek_order_anchor";
-    if (anchorQuery.traceId.has_value()) {
-        request.traceId = *anchorQuery.traceId;
-    }
-    if (anchorQuery.orderId.has_value()) {
-        request.orderId = *anchorQuery.orderId;
-    }
-    if (anchorQuery.permId.has_value()) {
-        request.permId = *anchorQuery.permId;
-    }
-    if (anchorQuery.execId.has_value()) {
-        request.execId = *anchorQuery.execId;
-    }
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::SeekOrderAnchor,
+                                                    "tapescope-seek-order-anchor");
+    applyOrderAnchorQuery(&request, anchorQuery);
 
     return packSummaryAndEvents(performQuery(request));
 }
 
+QueryResult<SeekOrderPayload> QueryClient::seekOrderAnchorPayload(const OrderAnchorQuery& anchorQuery) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::SeekOrderAnchor,
+                                                    "tapescope-seek-order-anchor");
+    applyOrderAnchorQuery(&request, anchorQuery);
+
+    return packSeekOrderPayload(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readFinding(std::uint64_t findingId) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-read-finding";
-    request.operation = "read_finding";
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadFinding,
+                                                    "tapescope-read-finding");
     request.findingId = findingId;
 
     return packSummaryAndEvents(performQuery(request));
 }
 
+QueryResult<InvestigationPayload> QueryClient::readFindingPayload(std::uint64_t findingId) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadFinding,
+                                                    "tapescope-read-finding");
+    request.findingId = findingId;
+    return packInvestigationPayload(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readOrderCase(const OrderAnchorQuery& anchorQuery) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-read-order-case";
-    request.operation = "read_order_case";
-    if (anchorQuery.traceId.has_value()) {
-        request.traceId = *anchorQuery.traceId;
-    }
-    if (anchorQuery.orderId.has_value()) {
-        request.orderId = *anchorQuery.orderId;
-    }
-    if (anchorQuery.permId.has_value()) {
-        request.permId = *anchorQuery.permId;
-    }
-    if (anchorQuery.execId.has_value()) {
-        request.execId = *anchorQuery.execId;
-    }
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadOrderCase,
+                                                    "tapescope-read-order-case");
+    applyOrderAnchorQuery(&request, anchorQuery);
 
     return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<InvestigationPayload> QueryClient::readOrderCasePayload(const OrderAnchorQuery& anchorQuery) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadOrderCase,
+                                                    "tapescope-read-order-case");
+    applyOrderAnchorQuery(&request, anchorQuery);
+    return packInvestigationPayload(performQuery(request));
 }
 
 QueryResult<json> QueryClient::scanOrderCaseReport(const OrderAnchorQuery& anchorQuery) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-scan-order-case-report";
-    request.operation = "scan_order_case_report";
-    if (anchorQuery.traceId.has_value()) {
-        request.traceId = *anchorQuery.traceId;
-    }
-    if (anchorQuery.orderId.has_value()) {
-        request.orderId = *anchorQuery.orderId;
-    }
-    if (anchorQuery.permId.has_value()) {
-        request.permId = *anchorQuery.permId;
-    }
-    if (anchorQuery.execId.has_value()) {
-        request.execId = *anchorQuery.execId;
-    }
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ScanOrderCaseReport,
+                                                    "tapescope-scan-order-case-report");
+    applyOrderAnchorQuery(&request, anchorQuery);
 
     return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<InvestigationPayload> QueryClient::scanOrderCaseReportPayload(const OrderAnchorQuery& anchorQuery) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ScanOrderCaseReport,
+                                                    "tapescope-scan-order-case-report");
+    applyOrderAnchorQuery(&request, anchorQuery);
+    return packInvestigationPayload(performQuery(request));
 }
 
 QueryResult<json> QueryClient::listCaseReports(std::size_t limit) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-list-case-reports";
-    request.operation = "list_case_reports";
-    request.limit = limit;
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListCaseReports,
+                                                    "tapescope-list-case-reports");
+    applyLimit(&request, limit);
 
     return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<ReportInventoryPayload> QueryClient::listCaseReportsPayload(std::size_t limit) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListCaseReports,
+                                                    "tapescope-list-case-reports");
+    applyLimit(&request, limit);
+
+    return packReportInventoryPayload(performQuery(request), false);
 }
 
 QueryResult<json> QueryClient::listIncidents(std::size_t limit) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-list-incidents";
-    request.operation = "list_incidents";
-    request.limit = limit;
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListIncidents,
+                                                    "tapescope-list-incidents");
+    applyLimit(&request, limit);
 
     return packSummaryAndEvents(performQuery(request));
 }
 
+QueryResult<IncidentListPayload> QueryClient::listIncidentsPayload(std::size_t limit) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListIncidents,
+                                                    "tapescope-list-incidents");
+    applyLimit(&request, limit);
+
+    return packIncidentListPayload(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readIncident(std::uint64_t logicalIncidentId) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-read-incident";
-    request.operation = "read_incident";
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadIncident,
+                                                    "tapescope-read-incident");
     request.logicalIncidentId = logicalIncidentId;
 
     return packSummaryAndEvents(performQuery(request));
 }
 
+QueryResult<InvestigationPayload> QueryClient::readIncidentPayload(std::uint64_t logicalIncidentId) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadIncident,
+                                                    "tapescope-read-incident");
+    request.logicalIncidentId = logicalIncidentId;
+    return packInvestigationPayload(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readOrderAnchor(std::uint64_t anchorId) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-read-order-anchor";
-    request.operation = "read_order_anchor";
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadOrderAnchor,
+                                                    "tapescope-read-order-anchor");
     request.anchorId = anchorId;
 
     return packSummaryAndEvents(performQuery(request));
 }
 
+QueryResult<InvestigationPayload> QueryClient::readOrderAnchorPayload(std::uint64_t anchorId) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadOrderAnchor,
+                                                    "tapescope-read-order-anchor");
+    request.anchorId = anchorId;
+    return packInvestigationPayload(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readArtifact(const std::string& artifactId) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-read-artifact";
-    request.operation = "read_artifact";
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadArtifact,
+                                                    "tapescope-read-artifact");
     request.artifactId = artifactId;
 
     return packSummaryAndEvents(performQuery(request));
 }
 
+QueryResult<InvestigationPayload> QueryClient::readArtifactPayload(const std::string& artifactId) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadArtifact,
+                                                    "tapescope-read-artifact");
+    request.artifactId = artifactId;
+    return packInvestigationPayload(performQuery(request));
+}
+
 QueryResult<json> QueryClient::exportArtifact(const std::string& artifactId, const std::string& exportFormat) const {
-    tape_engine::QueryRequest request;
-    request.requestId = "tapescope-export-artifact";
-    request.operation = "export_artifact";
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ExportArtifact,
+                                                    "tapescope-export-artifact");
     request.artifactId = artifactId;
     request.exportFormat = exportFormat;
 

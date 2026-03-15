@@ -124,7 +124,17 @@ set(TAPE_ENGINE_SOURCES
 
 set(TAPESCOPE_SOURCES
     tapescope_app.mm
+    tapescope_history.mm
+    tapescope_queries.mm
+    tapescope_session_queries.mm
+    tapescope_order_queries.mm
+    tapescope_artifact_queries.mm
     tapescope_client.cpp
+    tapescope_client_payloads.cpp
+    tapescope_investigation_pane.mm
+    tapescope_support_ui.mm
+    tapescope_support_describe.mm
+    tapescope_table_bindings.mm
     tape_engine_client.cpp
     tape_engine_protocol.cpp
 )
@@ -462,6 +472,7 @@ if(BUILD_TESTING)
         tape_engine_client.cpp
         tape_engine_protocol.cpp
         tapescope_client.cpp
+        tapescope_client_payloads.cpp
         trace_exporter.cpp
         trading_ui_format.cpp
         mac_observability.mm
@@ -508,6 +519,15 @@ set_source_files_properties(
     main.mm
     mac_observability.mm
     tapescope_app.mm
+    tapescope_history.mm
+    tapescope_queries.mm
+    tapescope_session_queries.mm
+    tapescope_order_queries.mm
+    tapescope_artifact_queries.mm
+    tapescope_investigation_pane.mm
+    tapescope_support_ui.mm
+    tapescope_support_describe.mm
+    tapescope_table_bindings.mm
     trading_export_panels.mm
     trading_refresh_scheduler.mm
     trading_settings_sheet.mm
