@@ -159,11 +159,195 @@ std::string readTextFile(const fs::path& path) {
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
+json readJsonFixture(const std::string& relativePath) {
+    return json::parse(readTextFile(fixturePath(relativePath)));
+}
+
+json readMsgpackFile(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    expect(in.is_open(), "failed to open msgpack file at " + path.string());
+    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                          std::istreambuf_iterator<char>());
+    expect(!bytes.empty(), "msgpack file is empty at " + path.string());
+    return json::from_msgpack(bytes, true, false);
+}
+
 std::string trimWhitespace(std::string text) {
     text.erase(std::remove_if(text.begin(), text.end(), [](unsigned char ch) {
         return std::isspace(ch) != 0;
     }), text.end());
     return text;
+}
+
+std::string normalizeArtifactId(std::string artifactId) {
+    const auto replaceSuffix = [&](const std::string& prefix, const std::string& replacement) {
+        if (artifactId.rfind(prefix, 0) == 0) {
+            artifactId = prefix + replacement;
+        }
+    };
+    replaceSuffix("session-report:", "<id>");
+    replaceSuffix("case-report:", "<id>");
+    replaceSuffix("incident:", "<id>");
+    replaceSuffix("window:", "<id>");
+    replaceSuffix("finding:", "<id>");
+    replaceSuffix("anchor:", "<id>");
+    if (artifactId.rfind("session-overview:", 0) == 0) {
+        return "session-overview:<revision>:<from>:<to>";
+    }
+    if (artifactId.rfind("order-case:order:", 0) == 0) {
+        return "order-case:order:<id>";
+    }
+    if (artifactId.rfind("order-case:trace:", 0) == 0) {
+        return "order-case:trace:<id>";
+    }
+    if (artifactId.rfind("order-case:perm:", 0) == 0) {
+        return "order-case:perm:<id>";
+    }
+    if (artifactId.rfind("order-case:exec:", 0) == 0) {
+        return "order-case:exec:<id>";
+    }
+    return artifactId;
+}
+
+json projectArtifactSummary(const json& artifact) {
+    if (!artifact.is_object()) {
+        return json::object();
+    }
+    json projected = {
+        {"artifact_id", normalizeArtifactId(artifact.value("artifact_id", std::string()))},
+        {"artifact_type", artifact.value("artifact_type", std::string())},
+        {"artifact_scope", artifact.value("artifact_scope", std::string())}
+    };
+    if (artifact.contains("schema_version")) {
+        projected["schema_version"] = artifact.value("schema_version", 0U);
+    }
+    return projected;
+}
+
+json projectEntitySummary(const json& entity) {
+    if (!entity.is_object()) {
+        return json::object();
+    }
+    return {
+        {"type", entity.value("type", std::string())},
+        {"entity_type", entity.value("entity_type", std::string())},
+        {"schema_version", entity.value("schema_version", 0U)}
+    };
+}
+
+json projectReportSummary(const json& report) {
+    if (!report.is_object()) {
+        return json::object();
+    }
+    json projected{
+        {"headline", report.value("headline", std::string())},
+        {"report_type", report.value("report_type", std::string())},
+        {"schema_version", report.value("schema_version", 0U)}
+    };
+    if (report.contains("what_changed_first")) {
+        projected["what_changed_first"] = report.value("what_changed_first", std::string());
+    }
+    if (report.contains("uncertainty")) {
+        projected["uncertainty"] = report.value("uncertainty", std::string());
+    }
+    if (report.contains("top_incident_kind")) {
+        projected["top_incident_kind"] = report.value("top_incident_kind", std::string());
+    }
+    return projected;
+}
+
+json projectEvidenceSummary(const json& evidence) {
+    if (!evidence.is_object()) {
+        return json::object();
+    }
+    json projected{
+        {"schema_version", evidence.value("schema_version", 0U)},
+        {"has_data_quality", evidence.contains("data_quality")},
+        {"has_timeline", evidence.contains("timeline")},
+        {"has_timeline_summary", evidence.contains("timeline_summary")}
+    };
+    json citations = json::array();
+    for (const auto& citation : evidence.value("citations", json::array())) {
+        citations.push_back({
+            {"artifact_id", normalizeArtifactId(citation.value("artifact_id", std::string()))},
+            {"type", citation.value("type", std::string())}
+        });
+    }
+    projected["citations"] = citations;
+    return projected;
+}
+
+json projectApiSummary(const json& api) {
+    if (!api.is_object()) {
+        return json::object();
+    }
+    return {
+        {"response_kind", api.value("response_kind", std::string())},
+        {"envelope_schema", api.value("envelope_schema", std::string())},
+        {"envelope_version", api.value("envelope_version", 0U)},
+        {"wire_schema", api.value("wire_schema", std::string())},
+        {"wire_version", api.value("wire_version", 0U)}
+    };
+}
+
+json projectContractResponse(const tape_engine::QueryResponse& response) {
+    json summary = {
+        {"api", projectApiSummary(response.summary.value("api", json::object()))},
+        {"is_durable_report", response.summary.value("is_durable_report", false)}
+    };
+    const json artifact = projectArtifactSummary(response.summary.value("artifact", json::object()));
+    if (!artifact.empty() &&
+        (!artifact.value("artifact_id", std::string()).empty() ||
+         !artifact.value("artifact_type", std::string()).empty())) {
+        summary["artifact"] = artifact;
+    }
+    const json entity = projectEntitySummary(response.summary.value("entity", json::object()));
+    if (!entity.empty() &&
+        (!entity.value("type", std::string()).empty() ||
+         !entity.value("entity_type", std::string()).empty())) {
+        summary["entity"] = entity;
+    }
+    const json report = projectReportSummary(response.summary.value("report", response.summary.value("report_summary", json::object())));
+    if (!report.empty() &&
+        (!report.value("headline", std::string()).empty() ||
+         !report.value("report_type", std::string()).empty())) {
+        summary["report"] = report;
+    }
+    const json evidence = projectEvidenceSummary(response.summary.value("evidence", json::object()));
+    if (!evidence.empty() &&
+        (!evidence.value("citations", json::array()).empty() ||
+         evidence.value("has_timeline", false) ||
+         evidence.value("has_data_quality", false))) {
+        summary["evidence"] = evidence;
+    }
+    json projected{
+        {"operation", response.operation},
+        {"status", response.status},
+        {"summary", summary}
+    };
+    if (response.summary.contains("source_artifact")) {
+        projected["summary"]["source_artifact"] =
+            projectArtifactSummary(response.summary.value("source_artifact", json::object()));
+    }
+    if (response.summary.contains("artifact_export")) {
+        const json artifactExport = response.summary.value("artifact_export", json::object());
+        projected["summary"]["artifact_export"] = {
+            {"schema", artifactExport.value("schema", std::string())},
+            {"version", artifactExport.value("version", 0U)},
+            {"format", artifactExport.value("format", std::string())}
+        };
+    }
+    if (response.summary.contains("bundle") && response.summary["bundle"].is_object()) {
+        projected["summary"]["bundle"] = {
+            {"operation", response.summary["bundle"].value("operation", std::string())},
+            {"summary", {
+                {"artifact", projectArtifactSummary(response.summary["bundle"].value("summary", json::object()).value("artifact", json::object()))},
+                {"entity", projectEntitySummary(response.summary["bundle"].value("summary", json::object()).value("entity", json::object()))},
+                {"report", projectReportSummary(response.summary["bundle"].value("summary", json::object()).value("report", json::object()))}
+            }}
+        };
+    }
+    return projected;
 }
 
 BridgeOutboxRecord makeBridgeRecord(std::uint64_t sourceSeq,
@@ -1434,6 +1618,7 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
 
     std::uint64_t reportId = 0;
     std::uint64_t servedRevisionId = 0;
+    std::string overviewArtifactId;
 
     {
         tape_engine::Server server(config);
@@ -1489,6 +1674,15 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
         tape_engine::Client client(socketPath.string());
         tape_engine::QueryResponse response;
 
+        tape_engine::QueryRequest overviewRequest;
+        overviewRequest.requestId = "read-phase3-session-overview";
+        overviewRequest.operation = "read_session_overview";
+        expect(client.query(overviewRequest, &response, &error), "phase 3 session overview read should succeed: " + error);
+        overviewArtifactId = response.summary.value("artifact", json::object()).value("artifact_id", std::string());
+        expectContains(response.summary.value("api", json::object()).value("envelope_schema", std::string()),
+                       "com.foxy.tape-engine.investigation-envelope",
+                       "session overview should expose the investigation envelope schema");
+
         tape_engine::QueryRequest scanRequest;
         scanRequest.requestId = "scan-phase3-session-report";
         scanRequest.operation = "scan_session_report";
@@ -1504,6 +1698,11 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
         servedRevisionId = response.summary.value("served_revision_id", 0ULL);
         expect(reportId > 0, "session report scan should assign a durable report id");
         expect(servedRevisionId > 0, "session report scan should pin the report to a frozen revision");
+        expect(response.summary.value("artifact", json::object()).value("artifact_id", std::string()) ==
+                   "session-report:" + std::to_string(reportId),
+               "session report scans should now promote the durable report artifact to the primary artifact envelope");
+        expect(response.summary.value("source_artifact", json::object()).value("artifact_id", std::string()) == overviewArtifactId,
+               "session report scans should preserve the source session-overview artifact they were derived from");
         expect(response.summary.value("incident_count", 0ULL) >= 1ULL,
                "session report scan should summarize at least one major incident");
         expect(response.summary.value("report_summary", json::object()).contains("top_incident_why_it_matters"),
@@ -1524,6 +1723,16 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
                "session report listing should include the newly scanned report");
 
         expect(fs::exists(rootDir / "session-reports.jsonl"), "session report scanning should persist a report manifest");
+        expect(fs::exists(rootDir / "artifact-lookup.msgpack"),
+               "session report scanning should persist the artifact lookup index");
+        {
+            const json lookup = readMsgpackFile(rootDir / "artifact-lookup.msgpack");
+            bool foundReport = false;
+            for (const auto& item : lookup.value("session_reports", json::array())) {
+                foundReport = foundReport || item.value("report_id", 0ULL) == reportId;
+            }
+            expect(foundReport, "artifact lookup index should include the persisted session report");
+        }
 
         server.stop();
     }
@@ -1560,6 +1769,16 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
         expect(client.query(readArtifactRequest, &response, &error), "read_artifact should reopen the session report by stable artifact id: " + error);
         expect(response.summary.value("resolved_artifact_id", std::string()) == "session-report:" + std::to_string(reportId),
                "read_artifact should echo the resolved durable artifact id");
+        expect(response.summary.value("api", json::object()).value("response_kind", std::string()) == "artifact_read",
+               "read_artifact should expose a stable artifact-read response kind");
+
+        tape_engine::QueryRequest readOverviewArtifactRequest;
+        readOverviewArtifactRequest.requestId = "read-artifact-session-overview";
+        readOverviewArtifactRequest.operation = "read_artifact";
+        readOverviewArtifactRequest.artifactId = overviewArtifactId;
+        expect(client.query(readOverviewArtifactRequest, &response, &error), "read_artifact should reopen a session-overview selector artifact: " + error);
+        expect(response.summary.value("resolved_artifact_id", std::string()) == overviewArtifactId,
+               "read_artifact should reopen the exact session-overview artifact id that was emitted earlier");
 
         tape_engine::QueryRequest exportArtifactRequest;
         exportArtifactRequest.requestId = "export-artifact-session-report";
@@ -1569,6 +1788,9 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
         expect(client.query(exportArtifactRequest, &response, &error), "export_artifact should render session report markdown: " + error);
         expectContains(response.summary.value("markdown", std::string()), "# Session overview",
                        "export_artifact markdown should include the session report headline");
+        expect(response.summary.value("artifact_export", json::object()).value("schema", std::string()) ==
+                   "com.foxy.tape-engine.artifact-export",
+               "artifact exports should expose a stable export schema identifier");
 
         restarted.stop();
     }
@@ -1590,6 +1812,9 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
     std::uint64_t incidentReportId = 0;
     std::uint64_t orderCaseReportId = 0;
     std::uint64_t logicalIncidentId = 0;
+    std::uint64_t firstFindingId = 0;
+    std::uint64_t firstAnchorId = 0;
+    std::string orderCaseArtifactId;
 
     {
         tape_engine::Server server(config);
@@ -1660,6 +1885,12 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(incidentReportRequest, &response, &error), "incident case-report scan should succeed: " + error);
         incidentReportId = response.summary.value("case_report_artifact", json::object()).value("report_id", 0ULL);
         expect(incidentReportId > 0, "incident case-report scan should persist a durable artifact");
+        expect(response.summary.value("artifact", json::object()).value("artifact_id", std::string()) ==
+                   "case-report:" + std::to_string(incidentReportId),
+               "incident case-report scans should promote the durable case-report artifact to the primary artifact envelope");
+        expect(response.summary.value("source_artifact", json::object()).value("artifact_id", std::string()) ==
+                   "incident:" + std::to_string(logicalIncidentId),
+               "incident case-report scans should preserve the source incident artifact id");
 
         tape_engine::QueryRequest orderReportRequest;
         orderReportRequest.requestId = "scan-order-case-report";
@@ -1669,6 +1900,10 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         orderCaseReportId = response.summary.value("case_report_artifact", json::object()).value("report_id", 0ULL);
         expect(orderCaseReportId > 0, "order case-report scan should persist a durable artifact");
         expect(orderCaseReportId != incidentReportId, "incident and order case reports should persist as distinct artifacts");
+        orderCaseArtifactId = response.summary.value("source_artifact", json::object()).value("artifact_id", std::string());
+        expect(response.summary.value("artifact", json::object()).value("artifact_id", std::string()) ==
+                   "case-report:" + std::to_string(orderCaseReportId),
+               "order case-report scans should promote the durable case-report artifact to the primary artifact envelope");
 
         tape_engine::QueryRequest listReportsRequest;
         listReportsRequest.requestId = "list-case-reports";
@@ -1676,6 +1911,50 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(listReportsRequest, &response, &error), "case-report listing should succeed: " + error);
         expect(response.events.is_array() && response.events.size() >= 2, "case-report listing should include both durable report artifacts");
         expect(fs::exists(rootDir / "case-reports.jsonl"), "case-report scanning should persist a case report manifest");
+
+        tape_engine::QueryRequest findingsRequest;
+        findingsRequest.requestId = "list-findings-case-reports";
+        findingsRequest.operation = "list_findings";
+        expect(client.query(findingsRequest, &response, &error), "case-report finding list query should succeed: " + error);
+        expect(response.events.is_array() && !response.events.empty(), "case-report setup should produce at least one finding");
+        firstFindingId = response.events.at(0).value("finding_id", 0ULL);
+
+        tape_engine::QueryRequest anchorsRequest;
+        anchorsRequest.requestId = "list-anchors-case-reports";
+        anchorsRequest.operation = "list_order_anchors";
+        expect(client.query(anchorsRequest, &response, &error), "case-report anchor list query should succeed: " + error);
+        expect(response.events.is_array() && !response.events.empty(), "case-report setup should persist at least one anchor");
+        firstAnchorId = response.events.at(0).value("anchor_id", 0ULL);
+
+        expect(fs::exists(rootDir / "artifact-lookup.msgpack"),
+               "case-report scanning should persist the artifact lookup index");
+        {
+            const json lookup = readMsgpackFile(rootDir / "artifact-lookup.msgpack");
+            bool foundIncidentCaseReport = false;
+            bool foundOrderCaseReport = false;
+            bool foundFinding = false;
+            bool foundAnchor = false;
+            bool foundIncident = false;
+            for (const auto& item : lookup.value("case_reports", json::array())) {
+                const std::uint64_t reportId = item.value("report_id", 0ULL);
+                foundIncidentCaseReport = foundIncidentCaseReport || reportId == incidentReportId;
+                foundOrderCaseReport = foundOrderCaseReport || reportId == orderCaseReportId;
+            }
+            for (const auto& item : lookup.value("findings", json::array())) {
+                foundFinding = foundFinding || item.value("finding_id", 0ULL) == firstFindingId;
+            }
+            for (const auto& item : lookup.value("order_anchors", json::array())) {
+                foundAnchor = foundAnchor || item.value("anchor_id", 0ULL) == firstAnchorId;
+            }
+            for (const auto& item : lookup.value("incidents", json::array())) {
+                foundIncident = foundIncident || item.value("logical_incident_id", 0ULL) == logicalIncidentId;
+            }
+            expect(foundIncidentCaseReport && foundOrderCaseReport,
+                   "artifact lookup index should include both durable case reports");
+            expect(foundFinding, "artifact lookup index should include direct finding lookup entries");
+            expect(foundAnchor, "artifact lookup index should include direct anchor lookup entries");
+            expect(foundIncident, "artifact lookup index should include the latest logical incident lookup entry");
+        }
 
         server.stop();
     }
@@ -1710,6 +1989,30 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
                "restored order case-report should keep its report type");
         expect(response.summary.contains("case_report"), "restored order case-report should still expose the case summary");
 
+        tape_engine::QueryRequest readOrderCaseArtifactRequest;
+        readOrderCaseArtifactRequest.requestId = "read-order-case-artifact";
+        readOrderCaseArtifactRequest.operation = "read_artifact";
+        readOrderCaseArtifactRequest.artifactId = orderCaseArtifactId;
+        expect(client.query(readOrderCaseArtifactRequest, &response, &error), "read_artifact should reopen the order-case selector artifact: " + error);
+        expect(response.summary.value("resolved_artifact_id", std::string()) == orderCaseArtifactId,
+               "read_artifact should resolve selector-style order-case artifacts directly");
+
+        tape_engine::QueryRequest readFindingArtifactRequest;
+        readFindingArtifactRequest.requestId = "read-finding-artifact";
+        readFindingArtifactRequest.operation = "read_artifact";
+        readFindingArtifactRequest.artifactId = "finding:" + std::to_string(firstFindingId);
+        expect(client.query(readFindingArtifactRequest, &response, &error), "read_artifact should reopen finding artifacts directly: " + error);
+        expect(response.summary.value("finding", json::object()).value("finding_id", 0ULL) == firstFindingId,
+               "finding artifact reads should resolve the requested finding");
+
+        tape_engine::QueryRequest readAnchorArtifactRequest;
+        readAnchorArtifactRequest.requestId = "read-anchor-artifact";
+        readAnchorArtifactRequest.operation = "read_artifact";
+        readAnchorArtifactRequest.artifactId = "anchor:" + std::to_string(firstAnchorId);
+        expect(client.query(readAnchorArtifactRequest, &response, &error), "read_artifact should reopen anchor artifacts directly: " + error);
+        expect(response.summary.value("order_anchor", json::object()).value("anchor_id", 0ULL) == firstAnchorId,
+               "anchor artifact reads should resolve the requested anchor");
+
         tape_engine::QueryRequest exportCaseArtifactRequest;
         exportCaseArtifactRequest.requestId = "export-case-artifact";
         exportCaseArtifactRequest.operation = "export_artifact";
@@ -1721,6 +2024,163 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
 
         restarted.stop();
     }
+}
+
+void testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-contract-fixtures";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-contract-fixtures.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for contract fixture test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-contract-fixtures";
+    options.runtimeSessionId = "runtime-engine-phase3-contract-fixtures";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8601, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      711, 3301, 0, "", "contract fixture anchor", "2026-03-15T09:42:10.100");
+    orderIntent.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+    options.batchSeq = 601;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the contract fixture anchor batch: " + error);
+
+    BridgeOutboxRecord bidTick = makeBridgeRecord(8602, "market_tick", "BrokerMarketData", "INTC", "BID",
+                                                  0, 0, 0, "", "contract fixture bid", "2026-03-15T09:42:10.120");
+    bidTick.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+    bidTick.marketField = 1;
+    bidTick.price = 45.20;
+
+    BridgeOutboxRecord askTick = makeBridgeRecord(8603, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                  0, 0, 0, "", "contract fixture ask", "2026-03-15T09:42:10.130");
+    askTick.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+    askTick.marketField = 2;
+    askTick.price = 45.21;
+
+    options.batchSeq = 602;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({bidTick, askTick}, options)), &error),
+           "tape-engine should accept the contract fixture seed batch: " + error);
+
+    BridgeOutboxRecord widenedAsk = makeBridgeRecord(8604, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                     0, 0, 0, "", "contract fixture widened ask", "2026-03-15T09:42:10.150");
+    widenedAsk.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+    widenedAsk.marketField = 2;
+    widenedAsk.price = 45.24;
+
+    options.batchSeq = 603;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAsk}, options)), &error),
+           "tape-engine should accept the contract fixture widening batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+    }, "tape-engine should freeze contract fixture batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    waitUntil([&]() {
+        tape_engine::QueryRequest readyRequest;
+        readyRequest.requestId = "contract-order-case-ready";
+        readyRequest.operation = "read_order_case";
+        readyRequest.orderId = 3301;
+        if (!client.query(readyRequest, &response, &error)) {
+            return false;
+        }
+        return response.summary.value("related_finding_count", 0ULL) >= 4ULL &&
+               response.summary.value("timeline_summary", json::object()).value("timeline_entry_count", 0ULL) >= 16ULL;
+    }, "contract fixture setup should wait for deferred investigation findings to settle");
+
+    tape_engine::QueryRequest incidentsRequest;
+    incidentsRequest.requestId = "contract-read-incident-list";
+    incidentsRequest.operation = "list_incidents";
+    expect(client.query(incidentsRequest, &response, &error), "contract incident list query should succeed: " + error);
+    expect(response.events.is_array() && !response.events.empty(), "contract fixture setup should create a ranked incident");
+    const std::uint64_t logicalIncidentId = response.events.at(0).value("logical_incident_id", 0ULL);
+    expect(logicalIncidentId > 0, "contract fixture setup should expose a logical incident id");
+
+    tape_engine::QueryRequest sessionReportRequest;
+    sessionReportRequest.requestId = "contract-scan-session-report";
+    sessionReportRequest.operation = "scan_session_report";
+    expect(client.query(sessionReportRequest, &response, &error), "contract session-report scan should succeed: " + error);
+    const std::uint64_t sessionReportId = response.summary.value("session_report", json::object()).value("report_id", 0ULL);
+    expect(sessionReportId > 0, "contract session report should persist a durable report id");
+    const json sessionReportProjection = projectContractResponse(response);
+
+    tape_engine::QueryRequest incidentRequest;
+    incidentRequest.requestId = "contract-read-incident";
+    incidentRequest.operation = "read_incident";
+    incidentRequest.logicalIncidentId = logicalIncidentId;
+    expect(client.query(incidentRequest, &response, &error), "contract incident read should succeed: " + error);
+    const json incidentProjection = projectContractResponse(response);
+
+    tape_engine::QueryRequest incidentReportRequest;
+    incidentReportRequest.requestId = "contract-scan-incident-report";
+    incidentReportRequest.operation = "scan_incident_report";
+    incidentReportRequest.logicalIncidentId = logicalIncidentId;
+    expect(client.query(incidentReportRequest, &response, &error), "contract incident-report scan should succeed: " + error);
+    const json incidentReportProjection = projectContractResponse(response);
+
+    tape_engine::QueryRequest orderCaseRequest;
+    orderCaseRequest.requestId = "contract-read-order-case";
+    orderCaseRequest.operation = "read_order_case";
+    orderCaseRequest.orderId = 3301;
+    expect(client.query(orderCaseRequest, &response, &error), "contract order-case read should succeed: " + error);
+    const std::string orderCaseArtifactId = response.summary.value("artifact", json::object()).value("artifact_id", std::string());
+    const json orderCaseProjection = projectContractResponse(response);
+
+    tape_engine::QueryRequest orderCaseReportRequest;
+    orderCaseReportRequest.requestId = "contract-scan-order-case-report";
+    orderCaseReportRequest.operation = "scan_order_case_report";
+    orderCaseReportRequest.orderId = 3301;
+    expect(client.query(orderCaseReportRequest, &response, &error), "contract order-case report scan should succeed: " + error);
+    const json orderCaseReportProjection = projectContractResponse(response);
+
+    tape_engine::QueryRequest readArtifactRequest;
+    readArtifactRequest.requestId = "contract-read-artifact";
+    readArtifactRequest.operation = "read_artifact";
+    readArtifactRequest.artifactId = "session-report:" + std::to_string(sessionReportId);
+    expect(client.query(readArtifactRequest, &response, &error), "contract read_artifact query should succeed: " + error);
+    const json readArtifactProjection = projectContractResponse(response);
+
+    tape_engine::QueryRequest exportArtifactRequest;
+    exportArtifactRequest.requestId = "contract-export-artifact";
+    exportArtifactRequest.operation = "export_artifact";
+    exportArtifactRequest.artifactId = orderCaseArtifactId;
+    exportArtifactRequest.exportFormat = "json-bundle";
+    expect(client.query(exportArtifactRequest, &response, &error), "contract export_artifact query should succeed: " + error);
+    const json exportArtifactProjection = projectContractResponse(response);
+
+    const json fixture = readJsonFixture("phase3_investigation_contracts.json");
+    expect(sessionReportProjection == fixture.value("scan_session_report", json::object()),
+           "session report contract projection should match the golden fixture\nactual:\n" + sessionReportProjection.dump(2));
+    expect(incidentProjection == fixture.value("read_incident", json::object()),
+           "incident contract projection should match the golden fixture\nactual:\n" + incidentProjection.dump(2));
+    expect(incidentReportProjection == fixture.value("scan_incident_report", json::object()),
+           "incident report contract projection should match the golden fixture\nactual:\n" + incidentReportProjection.dump(2));
+    expect(orderCaseProjection == fixture.value("read_order_case", json::object()),
+           "order-case contract projection should match the golden fixture\nactual:\n" + orderCaseProjection.dump(2));
+    expect(orderCaseReportProjection == fixture.value("scan_order_case_report", json::object()),
+           "order-case report contract projection should match the golden fixture\nactual:\n" + orderCaseReportProjection.dump(2));
+    expect(readArtifactProjection == fixture.value("read_artifact_session_report", json::object()),
+           "artifact-read contract projection should match the golden fixture\nactual:\n" + readArtifactProjection.dump(2));
+    expect(exportArtifactProjection == fixture.value("export_artifact_order_case_bundle", json::object()),
+           "artifact-export contract projection should match the golden fixture\nactual:\n" + exportArtifactProjection.dump(2));
+
+    server.stop();
 }
 
 void testTapeEnginePrefersStrongConfiguredInstrumentIdentityAndMarksHeuristicFallback() {
@@ -1792,8 +2252,16 @@ void testTapeEnginePrefersStrongConfiguredInstrumentIdentityAndMarksHeuristicFal
            "mismatched symbol records should fall back to an explicit heuristic identity");
     expect(response.events.at(1).value("instrument_identity_strength", std::string()) == "heuristic",
            "heuristic fallback identity should be surfaced explicitly");
+    expect(response.events.at(2).value("instrument_id", std::string()) == "ib:heuristic:STK:SMART:USD:AAPL",
+           "mismatched strong identities should be coerced away from broker-supplied strong IDs when the symbol does not match");
+    expect(response.events.at(2).value("source_instrument_id", std::string()) == "ib:conid:9402:STK:SMART:USD:MSFT",
+           "mismatched strong identities should preserve the original broker-supplied instrument id as source evidence");
     expect(response.events.at(2).value("instrument_identity_status", std::string()) == "mismatch",
            "mismatched strong identities should be surfaced explicitly as mismatches");
+    expect(response.events.at(2).value("instrument_identity_policy", std::string()) == "coerced_from_mismatch",
+           "mismatched strong identities should surface the coercion policy that kept canonical evidence consistent");
+    expect(response.events.at(2).value("source_instrument_identity_strength", std::string()) == "strong",
+           "mismatched strong identities should preserve the original source identity strength");
 
     tape_engine::QueryRequest qualityRequest;
     qualityRequest.requestId = "identity-quality";
@@ -1801,12 +2269,59 @@ void testTapeEnginePrefersStrongConfiguredInstrumentIdentityAndMarksHeuristicFal
     qualityRequest.fromSessionSeq = 1;
     qualityRequest.toSessionSeq = 3;
     expect(client.query(qualityRequest, &response, &error), "identity hardening quality query should succeed: " + error);
-    expect(response.summary.value("data_quality", json::object()).value("heuristic_instrument_identity_count", 0ULL) == 1ULL,
-           "data-quality scoring should count heuristic instrument identity usage");
-    expect(response.summary.value("data_quality", json::object()).value("strong_instrument_identity_count", 0ULL) == 2ULL,
-           "data-quality scoring should count strong-form instrument identities separately even when one is mismatched");
+    expect(response.summary.value("data_quality", json::object()).value("heuristic_instrument_identity_count", 0ULL) == 2ULL,
+           "data-quality scoring should count both heuristic fallback and coerced mismatch resolution as heuristic evidence");
+    expect(response.summary.value("data_quality", json::object()).value("strong_instrument_identity_count", 0ULL) == 1ULL,
+           "data-quality scoring should only count resolved strong identities as strong evidence");
+    expect(response.summary.value("data_quality", json::object()).value("source_strong_instrument_identity_count", 0ULL) == 1ULL,
+           "data-quality scoring should still report how many broker-supplied source identities were strong-form");
     expect(response.summary.value("data_quality", json::object()).value("mismatched_instrument_identity_count", 0ULL) == 1ULL,
            "data-quality scoring should count mismatched strong identities separately");
+    expect(response.summary.value("data_quality", json::object()).value("identity_policy_override_count", 0ULL) == 1ULL,
+           "data-quality scoring should count identity coercions when the engine overrides mismatched source identities");
+
+    server.stop();
+}
+
+void testTapeEngineCanRejectMismatchedStrongInstrumentIdsInStrictMode() {
+    const fs::path rootDir = testDataDir() / "tape-engine-identity-strict";
+    const fs::path socketPath = testDataDir() / "tape-engine-identity-strict.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+    config.rejectMismatchedStrongInstrumentIds = true;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for strict identity policy test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-identity-strict";
+    options.runtimeSessionId = "runtime-engine-identity-strict";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord mismatchedStrong = makeBridgeRecord(8501, "order_intent", "WebSocket", "AAPL", "BUY",
+                                                           614, 2501, 0, "", "strict identity mismatch", "2026-03-15T09:42:40.300");
+    mismatchedStrong.instrumentId = "ib:conid:9502:STK:SMART:USD:MSFT";
+    options.batchSeq = 501;
+    expect(!transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({mismatchedStrong}, options)), &error),
+           "strict identity mode should reject mismatched strong instrument ids at ingest");
+    expectContains(error, "mismatched strong instrument_id",
+                   "strict identity mode should explain the rejected mismatched strong instrument id");
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId == 0 && snapshot.segments.empty();
+    }, "strict identity mode should not freeze a rejected mismatched batch");
 
     server.stop();
 }
@@ -2757,6 +3272,332 @@ void testTapeEnginePhase3BuildsPassiveFillQueueProxyAndAdverseSelection() {
     }
     expect(sawQueueProxy, "order-case related findings should include the passive-fill queue proxy analysis");
     expect(sawAdverseSelection, "order-case related findings should include the post-fill adverse-selection analysis");
+
+    server.stop();
+}
+
+void testTapeEnginePhase3BuildsPassiveQueueLossAndCutThroughSignals() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-passive-queue-loss";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-passive-queue-loss.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9451:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for passive queue-loss test: " + startError);
+
+    auto marketTick = [](std::uint64_t sourceSeq,
+                         int field,
+                         double price,
+                         const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, "market_tick", "BrokerMarketData", "INTC",
+                                                     field == 1 ? "BID" : (field == 2 ? "ASK" : "LAST"),
+                                                     0, 0, 0, "", note, "2026-03-14T09:44:10.000");
+        record.instrumentId = "ib:conid:9451:STK:SMART:USD:INTC";
+        record.marketField = field;
+        record.price = price;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-passive-queue-loss";
+    options.runtimeSessionId = "runtime-engine-phase3-passive-queue-loss";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8601, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      761, 5601, 0, "", "passive queue-loss anchor", "2026-03-14T09:44:10.010");
+    orderIntent.instrumentId = "ib:conid:9451:STK:SMART:USD:INTC";
+    options.batchSeq = 151;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the passive queue-loss anchor batch: " + error);
+
+    options.batchSeq = 152;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8602, 1, 45.00, "queue-loss bid"),
+        marketTick(8603, 2, 45.01, "queue-loss ask")
+    }, options)), &error), "tape-engine should accept the passive queue-loss seed batch: " + error);
+
+    options.batchSeq = 153;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8604, 4, 45.00, "queue-loss touch trade one"),
+        marketTick(8605, 4, 45.00, "queue-loss touch trade two"),
+        marketTick(8606, 1, 44.97, "queue-loss bid lower"),
+        marketTick(8607, 2, 44.98, "queue-loss ask lower")
+    }, options)), &error), "tape-engine should accept the passive queue-loss follow-through batch: " + error);
+
+    BridgeOutboxRecord cancel = makeBridgeRecord(8608, "cancel_request", "WebSocket", "INTC", "BUY",
+                                                 761, 5601, 0, "", "queue-loss cancel", "2026-03-14T09:44:10.060");
+    cancel.instrumentId = "ib:conid:9451:STK:SMART:USD:INTC";
+    options.batchSeq = 154;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({cancel}, options)), &error),
+           "tape-engine should accept the passive queue-loss cancel batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+    }, "tape-engine should freeze passive queue-loss batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest caseRequest;
+    caseRequest.requestId = "order-case-phase3-passive-queue-loss";
+    caseRequest.operation = "read_order_case";
+    caseRequest.orderId = 5601;
+    caseRequest.includeLiveTail = true;
+    expect(client.query(caseRequest, &response, &error), "phase 3 passive queue-loss order-case query should succeed: " + error);
+
+    bool sawQueueLoss = false;
+    bool sawCutThrough = false;
+    for (const auto& item : response.summary.value("related_findings", json::array())) {
+        const std::string kind = item.value("kind", std::string());
+        sawQueueLoss = sawQueueLoss || kind == "passive_queue_loss_proxy";
+        sawCutThrough = sawCutThrough || kind == "passive_cut_through_proxy";
+    }
+    expect(sawQueueLoss, "order-case related findings should include the passive queue-loss proxy");
+    expect(sawCutThrough, "order-case related findings should include the passive cut-through proxy");
+
+    server.stop();
+}
+
+void testTapeEnginePhase3BuildsSweepAndFadeSignals() {
+    auto runCase = [&](const fs::path& rootDir,
+                       const fs::path& socketPath,
+                       OrderId orderId,
+                       std::uint64_t traceId,
+                       const std::vector<BridgeOutboxRecord>& records,
+                       const std::string& expectedKind,
+                       const std::string& label) {
+        std::error_code ec;
+        fs::remove_all(rootDir, ec);
+        fs::remove(socketPath, ec);
+
+        tape_engine::EngineConfig config;
+        config.socketPath = socketPath.string();
+        config.dataDir = rootDir;
+        config.instrumentId = "ib:conid:9461:STK:SMART:USD:INTC";
+        config.ringCapacity = 32;
+
+        tape_engine::Server server(config);
+        std::string startError;
+        expect(server.start(&startError), "tape-engine should start for " + label + ": " + startError);
+
+        bridge_batch::BuildOptions options;
+        options.appSessionId = "app-engine-phase3-" + label;
+        options.runtimeSessionId = "runtime-engine-phase3-" + label;
+        options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+        bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+        std::string error;
+
+        BridgeOutboxRecord orderIntent = makeBridgeRecord(records.front().sourceSeq - 1, "order_intent", "WebSocket", "INTC", "BUY",
+                                                          traceId, orderId, 0, "", label + " anchor", "2026-03-14T09:44:20.010");
+        orderIntent.instrumentId = "ib:conid:9461:STK:SMART:USD:INTC";
+        options.batchSeq = 161;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+               "tape-engine should accept the " + label + " anchor batch: " + error);
+
+        options.batchSeq = 162;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch(records, options)), &error),
+               "tape-engine should accept the " + label + " market batch: " + error);
+
+        waitUntil([&]() {
+            const auto snapshot = server.snapshot();
+            return snapshot.latestFrozenRevisionId >= 2 && snapshot.segments.size() >= 2;
+        }, "tape-engine should freeze " + label + " batches");
+
+        tape_engine::Client client(socketPath.string());
+        tape_engine::QueryResponse response;
+        std::string lastSeenKinds;
+
+        waitUntil([&]() {
+            tape_engine::QueryRequest pollRequest;
+            pollRequest.requestId = "poll-findings-phase3-" + label;
+            pollRequest.operation = "list_findings";
+            pollRequest.limit = 64;
+            pollRequest.includeLiveTail = true;
+            if (!client.query(pollRequest, &response, &error)) {
+                lastSeenKinds = "query failed: " + error;
+                return false;
+            }
+            std::ostringstream seenKinds;
+            for (const auto& item : response.events) {
+                const std::string kind = item.value("kind", std::string());
+                if (!seenKinds.str().empty()) {
+                    seenKinds << ", ";
+                }
+                seenKinds << kind;
+                if (kind == expectedKind) {
+                    lastSeenKinds = seenKinds.str();
+                    return true;
+                }
+            }
+            lastSeenKinds = seenKinds.str();
+            return false;
+        }, "phase 3 " + label + " findings should surface " + expectedKind +
+           " (saw during polling: " + lastSeenKinds + ")");
+
+        tape_engine::QueryRequest caseRequest;
+        caseRequest.requestId = "order-case-phase3-" + label;
+        caseRequest.operation = "read_order_case";
+        caseRequest.orderId = orderId;
+        caseRequest.includeLiveTail = true;
+        expect(client.query(caseRequest, &response, &error), "phase 3 " + label + " order-case query should succeed: " + error);
+
+        expect(response.summary.value("related_finding_count", 0ULL) >= 1ULL,
+               "order-case should still carry related findings for " + label);
+
+        server.stop();
+    };
+
+    auto marketTick = [](std::uint64_t sourceSeq,
+                         int field,
+                         double price,
+                         const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, "market_tick", "BrokerMarketData", "INTC",
+                                                     field == 1 ? "BID" : (field == 2 ? "ASK" : "LAST"),
+                                                     0, 0, 0, "", note, "2026-03-14T09:44:20.000");
+        record.instrumentId = "ib:conid:9461:STK:SMART:USD:INTC";
+        record.marketField = field;
+        record.price = price;
+        return record;
+    };
+
+    runCase(testDataDir() / "tape-engine-phase3-sweep-signal",
+            testDataDir() / "tape-engine-phase3-sweep-signal.sock",
+            5701,
+            771,
+            {
+                marketTick(8701, 1, 45.10, "sweep bid"),
+                marketTick(8702, 2, 45.11, "sweep ask"),
+                marketTick(8703, 4, 45.11, "sweep print one"),
+                marketTick(8704, 4, 45.11, "sweep print two"),
+                marketTick(8705, 2, 45.14, "sweep ask up"),
+                marketTick(8706, 4, 45.14, "sweep print three"),
+                marketTick(8707, 4, 45.14, "sweep print four"),
+                marketTick(8708, 1, 45.13, "sweep bid up")
+            },
+            "buy_sweep_sequence",
+            "sweep-sequence");
+
+    runCase(testDataDir() / "tape-engine-phase3-fade-signal",
+            testDataDir() / "tape-engine-phase3-fade-signal.sock",
+            5702,
+            772,
+            {
+                marketTick(8711, 1, 45.20, "fade bid"),
+                marketTick(8712, 2, 45.21, "fade ask"),
+                marketTick(8713, 2, 45.24, "fade ask higher"),
+                marketTick(8714, 1, 45.22, "fade bid slightly higher")
+            },
+            "buy_fade_sequence",
+            "fade-sequence");
+}
+
+void testTapeEnginePhase3BuildsFillOutcomeChains() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-fill-outcome";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-fill-outcome.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9471:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for fill outcome-chain test: " + startError);
+
+    auto marketTick = [](std::uint64_t sourceSeq,
+                         int field,
+                         double price,
+                         const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, "market_tick", "BrokerMarketData", "INTC",
+                                                     field == 1 ? "BID" : (field == 2 ? "ASK" : "LAST"),
+                                                     0, 0, 0, "", note, "2026-03-14T09:44:30.000");
+        record.instrumentId = "ib:conid:9471:STK:SMART:USD:INTC";
+        record.marketField = field;
+        record.price = price;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-fill-outcome";
+    options.runtimeSessionId = "runtime-engine-phase3-fill-outcome";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8801, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      781, 5801, 0, "", "fill outcome anchor", "2026-03-14T09:44:30.010");
+    orderIntent.instrumentId = "ib:conid:9471:STK:SMART:USD:INTC";
+    options.batchSeq = 171;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the fill outcome anchor batch: " + error);
+
+    options.batchSeq = 172;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8802, 1, 45.50, "fill outcome bid"),
+        marketTick(8803, 2, 45.51, "fill outcome ask")
+    }, options)), &error), "tape-engine should accept the fill outcome seed batch: " + error);
+
+    BridgeOutboxRecord fill = makeBridgeRecord(8804, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                                               781, 5801, 0, "exec-5801-a", "fill outcome fill", "2026-03-14T09:44:30.040");
+    fill.instrumentId = "ib:conid:9471:STK:SMART:USD:INTC";
+    fill.price = 45.51;
+    fill.size = 100.0;
+    options.batchSeq = 173;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({fill}, options)), &error),
+           "tape-engine should accept the fill outcome fill batch: " + error);
+
+    BridgeOutboxRecord cancel = makeBridgeRecord(8805, "cancel_request", "WebSocket", "INTC", "BUY",
+                                                 781, 5801, 0, "", "fill outcome cancel", "2026-03-14T09:44:30.050");
+    cancel.instrumentId = "ib:conid:9471:STK:SMART:USD:INTC";
+    options.batchSeq = 174;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        cancel,
+        marketTick(8806, 1, 45.47, "fill outcome bid down"),
+        marketTick(8807, 2, 45.49, "fill outcome ask down")
+    }, options)), &error), "tape-engine should accept the fill outcome follow-through batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+    }, "tape-engine should freeze fill outcome batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest caseRequest;
+    caseRequest.requestId = "order-case-phase3-fill-outcome";
+    caseRequest.operation = "read_order_case";
+    caseRequest.orderId = 5801;
+    caseRequest.includeLiveTail = true;
+    expect(client.query(caseRequest, &response, &error), "phase 3 fill outcome order-case query should succeed: " + error);
+
+    bool sawFillToCancel = false;
+    bool sawFillToAdverseMove = false;
+    for (const auto& item : response.summary.value("related_findings", json::array())) {
+        const std::string kind = item.value("kind", std::string());
+        sawFillToCancel = sawFillToCancel || kind == "fill_to_cancel_chain";
+        sawFillToAdverseMove = sawFillToAdverseMove || kind == "fill_to_adverse_move_chain";
+    }
+    expect(sawFillToCancel, "order-case related findings should include the fill-to-cancel chain");
+    expect(sawFillToAdverseMove, "order-case related findings should include the fill-to-adverse-move chain");
 
     server.stop();
 }
@@ -3937,6 +4778,7 @@ int main() {
         testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();
         testTapeEnginePhase3ScansSessionIntoDurableReportArtifact();
         testTapeEnginePhase3PersistsIncidentAndOrderCaseReports();
+        testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures();
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
         testTapeEnginePhase3DetectsInsideLiquiditySignals();
         testTapeEnginePhase3DetectsDisplayInstabilitySignals();
@@ -3945,11 +4787,15 @@ int main() {
         testTapeEnginePhase3DetectsFillInvalidationSignals();
         testTapeEnginePhase3BuildsOrderWindowMarketImpactFinding();
         testTapeEnginePhase3BuildsPassiveFillQueueProxyAndAdverseSelection();
+        testTapeEnginePhase3BuildsPassiveQueueLossAndCutThroughSignals();
+        testTapeEnginePhase3BuildsSweepAndFadeSignals();
+        testTapeEnginePhase3BuildsFillOutcomeChains();
         testTapeEnginePhase3BuildsTradePressureOrderCase();
         testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity();
         testTapeEngineReplaySnapshotRebuildsFrozenMarketState();
         testBridgeMarketDataEmissionExpandsPublicEvents();
         testTapeEnginePrefersStrongConfiguredInstrumentIdentityAndMarksHeuristicFallback();
+        testTapeEngineCanRejectMismatchedStrongInstrumentIdsInStrictMode();
         testBridgeLifecycleEmissionExpandsPrivateOrderEvents();
         testGeneratedRuntimeRegistryMatchesPhase15QueueSpec();
         testBridgeOutboxOverflowWritesExplicitLossMarker();

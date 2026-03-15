@@ -62,10 +62,12 @@ Query the engine daemon:
 ./build/tape_engine_ctl find-order --order-id 701 --revision 1
 ./build/tape_engine_ctl seek-order --order-id 701 --revision 1
 ./build/tape_engine_ctl read-order-case --order-id 701 --revision 1
+./build/tape_engine_ctl read-order-anchor 1 --revision 1
 ./build/tape_engine_ctl list-order-anchors --limit 20
 ./build/tape_engine_ctl list-protected-windows --limit 20
 ./build/tape_engine_ctl read-protected-window 1 --revision 3
 ./build/tape_engine_ctl list-findings --limit 20
+./build/tape_engine_ctl read-finding 1 --revision 3
 ./build/tape_engine_ctl list-incidents --limit 20
 ./build/tape_engine_ctl read-incident 1 --revision 4
 ```
@@ -121,9 +123,11 @@ Phase-1 bridge sender notes:
 - `read_session_overview` now returns a ranked session-level investigation summary with top incidents, top findings, protected-window coverage, timeline highlights, and data-quality scoring for any requested `session_seq` range.
 - `scan_session_report` now turns that same session-level investigation summary into a canonical durable report artifact pinned to a frozen revision and `session_seq` range, and `read_session_report` / `list_session_reports` let clients reopen those persisted summaries later.
 - `scan_incident_report` and `scan_order_case_report` now persist revision-pinned durable case reports for incident drilldowns and order/fill investigations, and `read_case_report` / `list_case_reports` reopen those artifacts later without rebuilding the narrative from live query logic.
-- `read_artifact` and `export_artifact` now give the engine a stable artifact-facing surface for future MCP/tool clients. Durable reports expose stable IDs like `session-report:<id>` and `case-report:<id>`, while incident and protected-window reads expose `incident:<id>` / `window:<id>` references.
-- Investigation/report responses now share a cleaner envelope with `artifact`, `entity`, `report`, and `evidence` sections, so session, incident, and order-case outputs line up structurally instead of only sharing ad hoc summary fields.
+- `read_artifact` and `export_artifact` now give the engine a stable artifact-facing surface for future MCP/tool clients. The resolver now supports durable report IDs plus selector-style artifacts like `session-overview:<revision>:<from>:<to>`, `order-case:order:<id>`, `finding:<id>`, and `anchor:<id>`.
+- Investigation/report responses now share a versioned envelope with `api`, `artifact`, `entity`, `report`, and `evidence` sections, so session, incident, protected-window, finding, and order-case outputs line up structurally instead of only sharing ad hoc summary fields.
 - `export_artifact` supports Markdown summaries and JSON bundles, which makes durable report artifacts easier to hand to future native UI and MCP clients without rebuilding them from live query code.
+- Scan operations now promote the persisted durable report artifact to the primary `artifact` envelope and preserve the live source object under `source_artifact`, which keeps later `read_*_report` and `read_artifact` semantics aligned.
+- `read_finding` and `read_order_anchor` now provide direct investigation reads for those artifact IDs instead of forcing clients to back into them through list endpoints or order-case drilldowns.
 - `read_session_quality` now summarizes evidence trust for the whole frozen session or any requested `session_seq` range, and case/incident/protected-window reads now surface a `data_quality` block alongside their narrative output.
 - Frozen range/replay reads now snapshot engine state up front and use segment `session_seq` bounds to avoid holding the main engine lock across disk I/O and broad rescans.
 - Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.
@@ -138,7 +142,7 @@ Phase-1 bridge sender notes:
 - Query lookups now use selector indexes for anchors/findings/incidents plus a frozen segment event cache, which keeps incident/window/order-case reads cheaper as sessions grow.
 - Frozen segments now also persist `.index.msgpack` selector indexes and `.checkpoint.msgpack` replay checkpoints, so anchor reads can skip non-matching segments and `replay_snapshot` can resume from the latest frozen checkpoint instead of rebuilding the whole session from scratch.
 - Data-quality scoring is now a first-class Phase 3 output. Query surfaces report gaps, resets, weak instrument identity, timestamp coverage, vendor-sequence coverage, and mutable-tail caveats so investigations can say how strong the evidence is, not just what happened.
-- Canonical instrument identity now prefers strong bridged or configured `ib:conid:...` identities, and any last-resort fallback is surfaced explicitly as `ib:heuristic:...` with `instrument_identity_strength` and `instrument_identity_status` in query output and data-quality summaries. Mismatched symbol-vs-identity events are flagged explicitly instead of being treated as ordinary canonical evidence.
+- Canonical instrument identity now prefers strong bridged or configured `ib:conid:...` identities, and any last-resort fallback is surfaced explicitly as `ib:heuristic:...` with both resolved and source identity fields in query output. Mismatched symbol-vs-identity events are now coerced away from the bad source ID by default, surfaced with `instrument_identity_policy`, and can be rejected at ingest entirely with `EngineConfig::rejectMismatchedStrongInstrumentIds`.
 - Incident ranking now applies clearer score factors for severity, overlap, kind, range, evidence breadth, corroboration, and uncertainty penalties driven by incident-local data quality.
 
 Runtime registry and QoS:

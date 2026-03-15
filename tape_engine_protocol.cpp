@@ -108,6 +108,8 @@ IngestAck decodeAckFrame(const std::vector<std::uint8_t>& frame) {
 
 json queryRequestToJson(const QueryRequest& request) {
     json payload{
+        {"anchor_id", request.anchorId},
+        {"finding_id", request.findingId},
         {"from_session_seq", request.fromSessionSeq},
         {"include_live_tail", request.includeLiveTail},
         {"limit", request.limit},
@@ -149,6 +151,8 @@ QueryRequest queryRequestFromJson(const json& payload) {
     request.targetSessionSeq = payload.value("target_session_seq", 0ULL);
     request.windowId = payload.value("window_id", 0ULL);
     request.logicalIncidentId = payload.value("logical_incident_id", 0ULL);
+    request.findingId = payload.value("finding_id", 0ULL);
+    request.anchorId = payload.value("anchor_id", 0ULL);
     request.reportId = payload.value("report_id", 0ULL);
     request.limit = payload.value("limit", static_cast<std::size_t>(0));
     request.includeLiveTail = payload.value("include_live_tail", false);

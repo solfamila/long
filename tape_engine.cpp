@@ -299,12 +299,107 @@ bool isHeuristicInstrumentId(const std::string& instrumentId) {
     return instrumentId.rfind("ib:heuristic:", 0) == 0;
 }
 
+std::string instrumentIdSymbolSuffix(const std::string& instrumentId);
+
+bool symbolMatchesInstrumentId(const std::string& instrumentId, const std::string& symbol) {
+    if (instrumentId.empty() || symbol.empty()) {
+        return true;
+    }
+    const std::string suffix = instrumentIdSymbolSuffix(instrumentId);
+    return suffix.empty() || suffix == symbol;
+}
+
 std::string instrumentIdSymbolSuffix(const std::string& instrumentId) {
     const std::size_t lastColon = instrumentId.find_last_of(':');
     if (lastColon == std::string::npos || lastColon + 1 >= instrumentId.size()) {
         return std::string();
     }
     return instrumentId.substr(lastColon + 1);
+}
+
+struct ResolvedInstrumentIdentity {
+    std::string resolvedInstrumentId;
+    std::string sourceInstrumentId;
+    std::string source;
+    std::string policy;
+};
+
+ResolvedInstrumentIdentity resolveInstrumentIdentity(const EngineConfig& config,
+                                                     const BridgeOutboxRecord& record) {
+    ResolvedInstrumentIdentity result;
+    result.sourceInstrumentId = record.instrumentId;
+    result.source = "configured";
+    result.policy = "accepted";
+
+    const std::string symbol = record.symbol;
+    const std::string configured = config.instrumentId;
+    const bool configuredMatches = !configured.empty() && symbolMatchesInstrumentId(configured, symbol);
+    const bool recordMatches = !record.instrumentId.empty() && symbolMatchesInstrumentId(record.instrumentId, symbol);
+
+    if (!record.instrumentId.empty()) {
+        if (isStrongInstrumentId(record.instrumentId)) {
+            if (recordMatches) {
+                result.resolvedInstrumentId = record.instrumentId;
+                result.source = "bridge";
+                return result;
+            }
+            if (!configured.empty() && isStrongInstrumentId(configured) && configuredMatches) {
+                result.resolvedInstrumentId = configured;
+                result.source = "configured";
+                result.policy = "coerced_from_mismatch";
+                return result;
+            }
+            if (!symbol.empty()) {
+                result.resolvedInstrumentId = makeWeakFallbackInstrumentId(symbol);
+                result.source = "heuristic";
+                result.policy = "coerced_from_mismatch";
+                return result;
+            }
+            result.resolvedInstrumentId = record.instrumentId;
+            result.source = "bridge";
+            result.policy = "mismatch_unresolved";
+            return result;
+        }
+        if (record.instrumentId.rfind("ib:", 0) == 0) {
+            if (recordMatches) {
+                result.resolvedInstrumentId = record.instrumentId;
+                result.source = "bridge";
+                return result;
+            }
+            if (!configured.empty() && configuredMatches) {
+                result.resolvedInstrumentId = configured;
+                result.source = isStrongInstrumentId(configured) ? "configured" : "configured_weak";
+                result.policy = "coerced_from_mismatch";
+                return result;
+            }
+        }
+    }
+
+    if (!configured.empty()) {
+        if (isStrongInstrumentId(configured)) {
+            if (configuredMatches) {
+                result.resolvedInstrumentId = configured;
+                result.source = "configured";
+                return result;
+            }
+        } else if (configuredMatches || symbol.empty()) {
+            result.resolvedInstrumentId = configured;
+            result.source = "configured_weak";
+            return result;
+        }
+    }
+
+    if (!symbol.empty()) {
+        result.resolvedInstrumentId = makeWeakFallbackInstrumentId(symbol);
+        result.source = "heuristic";
+        result.policy = "weak_fallback";
+        return result;
+    }
+
+    result.resolvedInstrumentId = configured;
+    result.source = configured.empty() ? "missing" : "configured";
+    result.policy = configured.empty() ? "missing" : "accepted";
+    return result;
 }
 
 std::string instrumentIdentityStrength(const std::string& instrumentId) {
@@ -412,11 +507,23 @@ double severityScoreWeight(const std::string& severity) {
 }
 
 double incidentKindWeight(std::string_view kind) {
+    if (kind == "fill_to_adverse_move_chain") {
+        return 2.3;
+    }
     if (kind == "buy_fill_invalidation" || kind == "sell_fill_invalidation") {
         return 2.35;
     }
+    if (kind == "fill_to_cancel_chain") {
+        return 2.15;
+    }
     if (kind == "post_fill_adverse_selection") {
         return 2.25;
+    }
+    if (kind == "passive_cut_through_proxy") {
+        return 2.05;
+    }
+    if (kind == "buy_sweep_sequence" || kind == "sell_sweep_sequence") {
+        return 1.95;
     }
     if (kind == "ask_pull_follow_through" || kind == "bid_pull_follow_through") {
         return 2.1;
@@ -448,6 +555,12 @@ double incidentKindWeight(std::string_view kind) {
     }
     if (kind == "ask_genuine_refill" || kind == "bid_genuine_refill") {
         return 1.18;
+    }
+    if (kind == "buy_fade_sequence" || kind == "sell_fade_sequence") {
+        return 1.45;
+    }
+    if (kind == "passive_queue_loss_proxy") {
+        return 1.4;
     }
     if (kind == "passive_fill_queue_proxy") {
         return 1.25;
@@ -593,6 +706,87 @@ json buildReportEnvelope(const json& artifact,
     };
 }
 
+struct SessionOverviewArtifactRef {
+    std::uint64_t revisionId = 0;
+    std::uint64_t fromSessionSeq = 0;
+    std::uint64_t toSessionSeq = 0;
+};
+
+std::optional<SessionOverviewArtifactRef> parseSessionOverviewArtifactId(const std::string& artifactId) {
+    if (artifactId.rfind("session-overview:", 0) != 0) {
+        return std::nullopt;
+    }
+    const std::string suffix = artifactId.substr(std::strlen("session-overview:"));
+    std::vector<std::string> parts;
+    std::size_t start = 0;
+    while (start <= suffix.size()) {
+        const std::size_t colon = suffix.find(':', start);
+        if (colon == std::string::npos) {
+            parts.push_back(suffix.substr(start));
+            break;
+        }
+        parts.push_back(suffix.substr(start, colon - start));
+        start = colon + 1;
+    }
+    if (parts.size() != 3) {
+        return std::nullopt;
+    }
+    SessionOverviewArtifactRef result;
+    char* end = nullptr;
+    result.revisionId = std::strtoull(parts[0].c_str(), &end, 10);
+    if (end == nullptr || *end != '\0') {
+        return std::nullopt;
+    }
+    result.fromSessionSeq = std::strtoull(parts[1].c_str(), &end, 10);
+    if (end == nullptr || *end != '\0') {
+        return std::nullopt;
+    }
+    result.toSessionSeq = std::strtoull(parts[2].c_str(), &end, 10);
+    if (end == nullptr || *end != '\0') {
+        return std::nullopt;
+    }
+    return result;
+}
+
+std::optional<BridgeAnchorIdentity> parseOrderCaseArtifactId(const std::string& artifactId) {
+    if (artifactId.rfind("order-case:", 0) != 0) {
+        return std::nullopt;
+    }
+    const std::string suffix = artifactId.substr(std::strlen("order-case:"));
+    const std::size_t colon = suffix.find(':');
+    if (colon == std::string::npos) {
+        return std::nullopt;
+    }
+    const std::string selector = suffix.substr(0, colon);
+    const std::string value = suffix.substr(colon + 1);
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    BridgeAnchorIdentity anchor;
+    char* end = nullptr;
+    if (selector == "trace") {
+        anchor.traceId = std::strtoull(value.c_str(), &end, 10);
+        if (end == nullptr || *end != '\0') {
+            return std::nullopt;
+        }
+    } else if (selector == "order") {
+        anchor.orderId = static_cast<OrderId>(std::strtoll(value.c_str(), &end, 10));
+        if (end == nullptr || *end != '\0') {
+            return std::nullopt;
+        }
+    } else if (selector == "perm") {
+        anchor.permId = std::strtoll(value.c_str(), &end, 10);
+        if (end == nullptr || *end != '\0') {
+            return std::nullopt;
+        }
+    } else if (selector == "exec") {
+        anchor.execId = value;
+    } else {
+        return std::nullopt;
+    }
+    return anchor;
+}
+
 std::optional<std::pair<std::string, std::uint64_t>> parseNumericArtifactId(const std::string& artifactId) {
     const std::size_t colon = artifactId.find(':');
     if (colon == std::string::npos || colon + 1 >= artifactId.size()) {
@@ -675,6 +869,80 @@ std::string renderReportMarkdown(const QueryResponse& response) {
     return out.str();
 }
 
+json buildInvestigationApiSummary(const QueryResponse& response,
+                                  std::uint64_t servedRevisionId,
+                                  bool includesMutableTail,
+                                  std::string responseKind) {
+    return {
+        {"operation", response.operation},
+        {"response_kind", std::move(responseKind)},
+        {"served_revision_id", servedRevisionId},
+        {"wire_schema", response.schema},
+        {"wire_version", response.version},
+        {"envelope_schema", kInvestigationEnvelopeSchema},
+        {"envelope_version", kInvestigationEnvelopeVersion},
+        {"includes_mutable_tail", includesMutableTail}
+    };
+}
+
+void annotateInvestigationEnvelope(QueryResponse* response,
+                                   std::uint64_t servedRevisionId,
+                                   bool includesMutableTail,
+                                   const std::string& responseKind,
+                                   const std::string& reportType) {
+    if (response == nullptr) {
+        return;
+    }
+    response->summary["api"] = buildInvestigationApiSummary(*response,
+                                                            servedRevisionId,
+                                                            includesMutableTail,
+                                                            responseKind);
+    response->summary["served_revision_id"] = servedRevisionId;
+    response->summary["includes_mutable_tail"] = includesMutableTail;
+    if (response->summary.contains("artifact") && response->summary["artifact"].is_object()) {
+        json artifact = response->summary["artifact"];
+        artifact["schema_version"] = kInvestigationEnvelopeVersion;
+        if (!artifact.contains("artifact_scope")) {
+            artifact["artifact_scope"] = response->summary.value("is_durable_report", false) ? "durable" : "ephemeral";
+        }
+        if (!artifact.contains("resolved_revision_id")) {
+            artifact["resolved_revision_id"] = servedRevisionId;
+        }
+        response->summary["artifact"] = std::move(artifact);
+    }
+    if (response->summary.contains("entity") && response->summary["entity"].is_object()) {
+        json entity = response->summary["entity"];
+        if (!entity.contains("entity_type")) {
+            entity["entity_type"] = entity.value("type", std::string());
+        }
+        entity["schema_version"] = kInvestigationEnvelopeVersion;
+        response->summary["entity"] = std::move(entity);
+    }
+    if (response->summary.contains("report") && response->summary["report"].is_object()) {
+        json report = response->summary["report"];
+        report["schema_version"] = kInvestigationEnvelopeVersion;
+        if (!reportType.empty() && !report.contains("report_type")) {
+            report["report_type"] = reportType;
+        }
+        if (response->summary.contains("artifact") &&
+            response->summary["artifact"].is_object() &&
+            !report.contains("artifact_id")) {
+            report["artifact_id"] = response->summary["artifact"].value("artifact_id", std::string());
+        }
+        response->summary["report"] = std::move(report);
+        response->summary["report_summary"] = response->summary["report"];
+    }
+    if (response->summary.contains("evidence") && response->summary["evidence"].is_object()) {
+        json evidence = response->summary["evidence"];
+        evidence["schema_version"] = kInvestigationEnvelopeVersion;
+        const json citations = evidence.value("citations", json::array());
+        evidence["citation_count"] = citations.is_array() ? citations.size() : 0;
+        const json timeline = evidence.value("timeline", response->summary.value("timeline", json::array()));
+        evidence["timeline_entry_count"] = timeline.is_array() ? timeline.size() : 0;
+        response->summary["evidence"] = std::move(evidence);
+    }
+}
+
 std::string incidentWhyItMatters(const IncidentRecord& incident) {
     if (incident.kind == "spread_widened") {
         return incident.overlapsOrder
@@ -724,11 +992,29 @@ std::string incidentWhyItMatters(const IncidentRecord& incident) {
             ? "After the buy fill, the best bid moved materially lower, which is a strong sign that the immediate execution thesis failed."
             : "After the sell fill, the best ask moved materially higher, which is a strong sign that the immediate execution thesis failed.";
     }
+    if (incident.kind == "fill_to_cancel_chain") {
+        return "A fill was followed by cancellation activity in the same protected window, which usually points to a deteriorating execution setup or incomplete fill thesis.";
+    }
+    if (incident.kind == "fill_to_adverse_move_chain") {
+        return "A fill was followed by a measurable adverse move in the same protected window, which is stronger than a generic post-fill warning because it preserves the sequence.";
+    }
     if (incident.kind == "post_fill_adverse_selection") {
         return "The market moved against the fill after execution, which is a direct adverse-selection signal rather than a generic order-window summary.";
     }
+    if (incident.kind == "passive_queue_loss_proxy") {
+        return "The order window saw touch trading but no fill before cancellation, which is a useful proxy for passive queue loss or stale queue position.";
+    }
+    if (incident.kind == "passive_cut_through_proxy") {
+        return "The market traded at or through the passive price without filling the order window, which is a strong proxy for being cut through.";
+    }
     if (incident.kind == "passive_fill_queue_proxy") {
         return "The fill window contains enough touch-size behavior to form a queue-position proxy, which helps explain whether the passive fill looked supported or fragile.";
+    }
+    if (incident.kind == "buy_sweep_sequence" || incident.kind == "sell_sweep_sequence") {
+        return "The protected window moved with repeated touch-trade confirmation, which looks more like a true sweep than a simple fade in displayed liquidity.";
+    }
+    if (incident.kind == "buy_fade_sequence" || incident.kind == "sell_fade_sequence") {
+        return "The protected window moved with limited trade confirmation, which looks more like fading displayed liquidity than a decisive sweep.";
     }
     if (incident.kind == "order_window_market_impact") {
         return "The order window ended with a measurable mid/spread change, which is a useful proxy for whether the market moved with or against the execution.";
@@ -1000,6 +1286,8 @@ json buildDataQualitySummary(const std::vector<json>& events,
     std::size_t canonicalInstrumentIdentityCount = 0;
     std::size_t strongInstrumentIdentityCount = 0;
     std::size_t mismatchedInstrumentIdentityCount = 0;
+    std::size_t sourceStrongInstrumentIdentityCount = 0;
+    std::size_t identityPolicyOverrideCount = 0;
     std::size_t missingReceiveTimestampCount = 0;
     std::size_t missingExchangeTimestampCount = 0;
     std::size_t missingVendorSequenceCount = 0;
@@ -1041,6 +1329,9 @@ json buildDataQualitySummary(const std::vector<json>& events,
         const std::string identityStatus = event.value("instrument_identity_status",
                                                        instrumentIdentityStatus(instrumentId,
                                                                                 event.value("symbol", std::string())));
+        const std::string sourceIdentityStrength = event.value("source_instrument_identity_strength",
+                                                               instrumentIdentityStrength(event.value("source_instrument_id", std::string())));
+        const std::string identityPolicy = event.value("instrument_identity_policy", std::string("accepted"));
         if (instrumentId.empty() ||
             (!expectedInstrumentId.empty() && instrumentId != expectedInstrumentId) ||
             !isStrongInstrumentId(instrumentId)) {
@@ -1055,6 +1346,12 @@ json buildDataQualitySummary(const std::vector<json>& events,
             ++canonicalInstrumentIdentityCount;
         } else if (identityStrength == "strong") {
             ++strongInstrumentIdentityCount;
+        }
+        if (sourceIdentityStrength == "strong") {
+            ++sourceStrongInstrumentIdentityCount;
+        }
+        if (identityPolicy == "coerced_from_mismatch") {
+            ++identityPolicyOverrideCount;
         }
         if (event.value("ts_receive_ns", 0ULL) == 0ULL) {
             ++missingReceiveTimestampCount;
@@ -1076,6 +1373,9 @@ json buildDataQualitySummary(const std::vector<json>& events,
     }
     if (mismatchedInstrumentIdentityCount > 0) {
         score -= 8.0;
+    }
+    if (identityPolicyOverrideCount > 0) {
+        score -= 6.0;
     }
     score -= 12.0 * (static_cast<double>(missingReceiveTimestampCount) / std::max<double>(1.0, static_cast<double>(totalEvents)));
     score -= 18.0 * (static_cast<double>(missingExchangeTimestampCount) / marketDenominator);
@@ -1109,6 +1409,9 @@ json buildDataQualitySummary(const std::vector<json>& events,
     if (mismatchedInstrumentIdentityCount > 0) {
         issues.push_back("At least one event carried an instrument identity whose symbol suffix did not match the bridged symbol.");
     }
+    if (identityPolicyOverrideCount > 0) {
+        issues.push_back("The engine had to override at least one bridged instrument identity to keep canonical evidence consistent.");
+    }
     if (heuristicInstrumentIdentityCount > 0) {
         issues.push_back("At least one event relied on heuristic instrument identity fallback instead of a strong canonical ID.");
     }
@@ -1140,6 +1443,8 @@ json buildDataQualitySummary(const std::vector<json>& events,
         {"heuristic_instrument_identity_count", heuristicInstrumentIdentityCount},
         {"canonical_instrument_identity_count", canonicalInstrumentIdentityCount},
         {"strong_instrument_identity_count", strongInstrumentIdentityCount},
+        {"source_strong_instrument_identity_count", sourceStrongInstrumentIdentityCount},
+        {"identity_policy_override_count", identityPolicyOverrideCount},
         {"missing_receive_timestamp_count", missingReceiveTimestampCount},
         {"missing_exchange_timestamp_count", missingExchangeTimestampCount},
         {"missing_vendor_sequence_count", missingVendorSequenceCount},
@@ -1228,12 +1533,32 @@ bool rangeOverlaps(std::uint64_t firstSessionSeq,
     return true;
 }
 
+bool protectedWindowIsNewer(const ProtectedWindowRecord& candidate,
+                            const ProtectedWindowRecord& current) {
+    if (candidate.revisionId != current.revisionId) {
+        return candidate.revisionId > current.revisionId;
+    }
+    if (candidate.lastSessionSeq != current.lastSessionSeq) {
+        return candidate.lastSessionSeq > current.lastSessionSeq;
+    }
+    if (candidate.firstSessionSeq != current.firstSessionSeq) {
+        return candidate.firstSessionSeq < current.firstSessionSeq;
+    }
+    if (candidate.endEngineNs != current.endEngineNs) {
+        return candidate.endEngineNs > current.endEngineNs;
+    }
+    if (candidate.startEngineNs != current.startEngineNs) {
+        return candidate.startEngineNs < current.startEngineNs;
+    }
+    return candidate.windowId > current.windowId;
+}
+
 std::vector<ProtectedWindowRecord> collapseLatestProtectedWindowRevisions(const std::vector<ProtectedWindowRecord>& records) {
     std::map<std::uint64_t, ProtectedWindowRecord> latestByWindowId;
     for (const auto& record : records) {
         auto found = latestByWindowId.find(record.windowId);
         if (found == latestByWindowId.end() ||
-            found->second.revisionId < record.revisionId) {
+            protectedWindowIsNewer(record, found->second)) {
             latestByWindowId[record.windowId] = record;
         }
     }
@@ -1509,14 +1834,129 @@ CaseReportRecord caseReportFromJson(const json& payload) {
     return record;
 }
 
+json artifactLookupIndexToJson(const Server::ArtifactLookupIndex& index) {
+    auto appendSorted = [](json* target,
+                           const auto& map,
+                           const auto& toJsonFn,
+                           const auto& lessFn) {
+        using ValueType = typename std::decay_t<decltype(map)>::mapped_type;
+        std::vector<ValueType> values;
+        values.reserve(map.size());
+        for (const auto& entry : map) {
+            values.push_back(entry.second);
+        }
+        std::sort(values.begin(), values.end(), lessFn);
+        for (const auto& value : values) {
+            target->push_back(toJsonFn(value));
+        }
+    };
+
+    json payload{
+        {"schema", "com.foxy.tape-engine.artifact-lookup"},
+        {"version", 1},
+        {"session_reports", json::array()},
+        {"case_reports", json::array()},
+        {"order_anchors", json::array()},
+        {"protected_windows", json::array()},
+        {"findings", json::array()},
+        {"incidents", json::array()}
+    };
+
+    appendSorted(&payload["session_reports"],
+                 index.sessionReportsById,
+                 sessionReportToJson,
+                 [](const SessionReportRecord& left, const SessionReportRecord& right) {
+                     return left.reportId < right.reportId;
+                 });
+    appendSorted(&payload["case_reports"],
+                 index.caseReportsById,
+                 caseReportToJson,
+                 [](const CaseReportRecord& left, const CaseReportRecord& right) {
+                     return left.reportId < right.reportId;
+                 });
+    appendSorted(&payload["order_anchors"],
+                 index.orderAnchorsById,
+                 orderAnchorToJson,
+                 [](const OrderAnchorRecord& left, const OrderAnchorRecord& right) {
+                     return left.anchorId < right.anchorId;
+                 });
+    appendSorted(&payload["protected_windows"],
+                 index.protectedWindowsById,
+                 protectedWindowToJson,
+                 [](const ProtectedWindowRecord& left, const ProtectedWindowRecord& right) {
+                     return left.windowId < right.windowId;
+                 });
+    appendSorted(&payload["findings"],
+                 index.findingsById,
+                 findingToJson,
+                 [](const FindingRecord& left, const FindingRecord& right) {
+                     return left.findingId < right.findingId;
+                 });
+    appendSorted(&payload["incidents"],
+                 index.incidentsByLogicalIncident,
+                 incidentToJson,
+                 [](const IncidentRecord& left, const IncidentRecord& right) {
+                     return left.logicalIncidentId < right.logicalIncidentId;
+                 });
+    return payload;
+}
+
+Server::ArtifactLookupIndex artifactLookupIndexFromJson(const json& payload) {
+    Server::ArtifactLookupIndex index;
+    for (const auto& item : payload.value("session_reports", json::array())) {
+        SessionReportRecord record = sessionReportFromJson(item);
+        index.sessionReportsById[record.reportId] = std::move(record);
+    }
+    for (const auto& item : payload.value("case_reports", json::array())) {
+        CaseReportRecord record = caseReportFromJson(item);
+        index.caseReportsById[record.reportId] = std::move(record);
+    }
+    for (const auto& item : payload.value("order_anchors", json::array())) {
+        OrderAnchorRecord record = orderAnchorFromJson(item);
+        index.orderAnchorsById[record.anchorId] = std::move(record);
+    }
+    for (const auto& item : payload.value("protected_windows", json::array())) {
+        ProtectedWindowRecord record = protectedWindowFromJson(item);
+        auto found = index.protectedWindowsById.find(record.windowId);
+        if (found == index.protectedWindowsById.end() ||
+            protectedWindowIsNewer(record, found->second)) {
+            index.protectedWindowsById[record.windowId] = std::move(record);
+        }
+    }
+    for (const auto& item : payload.value("findings", json::array())) {
+        FindingRecord record = findingFromJson(item);
+        index.findingsById[record.findingId] = std::move(record);
+    }
+    for (const auto& item : payload.value("incidents", json::array())) {
+        IncidentRecord record = incidentFromJson(item);
+        auto found = index.incidentsByLogicalIncident.find(record.logicalIncidentId);
+        if (found == index.incidentsByLogicalIncident.end() ||
+            found->second.incidentRevisionId < record.incidentRevisionId) {
+            index.incidentsByLogicalIncident[record.logicalIncidentId] = std::move(record);
+        }
+    }
+    return index;
+}
+
 json eventToJson(const EngineEvent& event) {
+    const std::string sourceInstrumentId = event.sourceInstrumentId.empty() ? event.bridgeRecord.instrumentId
+                                                                            : event.sourceInstrumentId;
+    const std::string resolvedStatus = instrumentIdentityStatus(event.instrumentId, event.bridgeRecord.symbol);
+    const std::string sourceStatus = instrumentIdentityStatus(sourceInstrumentId, event.bridgeRecord.symbol);
     json payload{
         {"adapter_id", event.adapterId},
         {"connection_id", event.connectionId},
         {"event_kind", event.eventKind},
         {"instrument_id", event.instrumentId},
+        {"resolved_instrument_id", event.instrumentId},
+        {"source_instrument_id", sourceInstrumentId},
         {"instrument_identity_strength", instrumentIdentityStrength(event.instrumentId)},
-        {"instrument_identity_status", instrumentIdentityStatus(event.instrumentId, event.bridgeRecord.symbol)},
+        {"instrument_identity_status", event.instrumentIdentityPolicy == "coerced_from_mismatch" ? "mismatch" : resolvedStatus},
+        {"resolved_instrument_identity_status", resolvedStatus},
+        {"source_instrument_identity_status", sourceStatus},
+        {"source_instrument_identity_strength", instrumentIdentityStrength(sourceInstrumentId)},
+        {"instrument_identity_source", event.instrumentIdentitySource},
+        {"instrument_identity_policy", event.instrumentIdentityPolicy},
         {"revision_id", event.revisionId},
         {"session_seq", event.sessionSeq},
         {"source_seq", event.sourceSeq},
@@ -1536,6 +1976,10 @@ json eventToJson(const EngineEvent& event) {
 
     const json recordPayload = bridge_batch::recordToJson(event.bridgeRecord);
     for (auto it = recordPayload.begin(); it != recordPayload.end(); ++it) {
+        if (it.key() == "instrument_id") {
+            payload["bridge_instrument_id"] = it.value();
+            continue;
+        }
         payload[it.key()] = it.value();
     }
     return payload;
@@ -1607,6 +2051,138 @@ Server::~Server() {
     stop();
 }
 
+Server::ArtifactLookupIndex Server::rebuildArtifactLookupIndexUnlocked() const {
+    ArtifactLookupIndex index;
+    for (const auto& record : sessionReports_) {
+        index.sessionReportsById[record.reportId] = record;
+    }
+    for (const auto& record : caseReports_) {
+        index.caseReportsById[record.reportId] = record;
+    }
+    for (const auto& record : orderAnchors_) {
+        index.orderAnchorsById[record.anchorId] = record;
+    }
+    for (const auto& record : protectedWindows_) {
+        auto found = index.protectedWindowsById.find(record.windowId);
+        if (found == index.protectedWindowsById.end() ||
+            protectedWindowIsNewer(record, found->second)) {
+            index.protectedWindowsById[record.windowId] = record;
+        }
+    }
+    for (const auto& record : findings_) {
+        index.findingsById[record.findingId] = record;
+    }
+    for (const auto& record : incidents_) {
+        auto found = index.incidentsByLogicalIncident.find(record.logicalIncidentId);
+        if (found == index.incidentsByLogicalIncident.end() ||
+            found->second.incidentRevisionId < record.incidentRevisionId) {
+            index.incidentsByLogicalIncident[record.logicalIncidentId] = record;
+        }
+    }
+    return index;
+}
+
+void Server::upsertArtifactLookupIndexUnlocked(const PendingSegment& segment) {
+    for (const auto& record : segment.orderAnchors) {
+        artifactLookupIndex_.orderAnchorsById[record.anchorId] = record;
+    }
+    for (const auto& record : segment.protectedWindows) {
+        auto found = artifactLookupIndex_.protectedWindowsById.find(record.windowId);
+        if (found == artifactLookupIndex_.protectedWindowsById.end() ||
+            protectedWindowIsNewer(record, found->second)) {
+            artifactLookupIndex_.protectedWindowsById[record.windowId] = record;
+        }
+    }
+    for (const auto& record : segment.findings) {
+        artifactLookupIndex_.findingsById[record.findingId] = record;
+    }
+    for (const auto& record : segment.incidents) {
+        auto found = artifactLookupIndex_.incidentsByLogicalIncident.find(record.logicalIncidentId);
+        if (found == artifactLookupIndex_.incidentsByLogicalIncident.end() ||
+            found->second.incidentRevisionId < record.incidentRevisionId) {
+            artifactLookupIndex_.incidentsByLogicalIncident[record.logicalIncidentId] = record;
+        }
+    }
+}
+
+void Server::upsertArtifactLookupIndexUnlocked(const SessionReportRecord& record) {
+    artifactLookupIndex_.sessionReportsById[record.reportId] = record;
+}
+
+void Server::upsertArtifactLookupIndexUnlocked(const CaseReportRecord& record) {
+    artifactLookupIndex_.caseReportsById[record.reportId] = record;
+}
+
+bool Server::persistArtifactLookupIndex(const ArtifactLookupIndex& index, std::string* error) const {
+    const std::filesystem::path lookupPath = config_.dataDir / "artifact-lookup.msgpack";
+    const std::filesystem::path tempPath = lookupPath.string() + ".tmp";
+    const std::vector<std::uint8_t> payload = json::to_msgpack(artifactLookupIndexToJson(index));
+
+    {
+        std::ofstream out(tempPath, std::ios::binary);
+        if (!out.is_open()) {
+            if (error != nullptr) {
+                *error = "failed to open tape-engine artifact lookup index for write";
+            }
+            return false;
+        }
+        out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+        if (!out.good()) {
+            if (error != nullptr) {
+                *error = "failed to write tape-engine artifact lookup index";
+            }
+            return false;
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(tempPath, lookupPath, ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "failed to publish tape-engine artifact lookup index: " + ec.message();
+        }
+        std::filesystem::remove(tempPath, ec);
+        return false;
+    }
+    return true;
+}
+
+bool Server::restoreArtifactLookupIndex(const std::filesystem::path& path,
+                                        ArtifactLookupIndex* index,
+                                        std::string* error) const {
+    if (index == nullptr) {
+        if (error != nullptr) {
+            *error = "artifact lookup restore target is null";
+        }
+        return false;
+    }
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        if (error != nullptr) {
+            *error = "failed to open tape-engine artifact lookup index";
+        }
+        return false;
+    }
+    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                          std::istreambuf_iterator<char>());
+    if (bytes.empty()) {
+        if (error != nullptr) {
+            *error = "tape-engine artifact lookup index is empty";
+        }
+        return false;
+    }
+    const json payload = json::from_msgpack(bytes, true, false);
+    if (payload.is_discarded() ||
+        payload.value("schema", std::string()) != "com.foxy.tape-engine.artifact-lookup") {
+        if (error != nullptr) {
+            *error = "failed to parse tape-engine artifact lookup index";
+        }
+        return false;
+    }
+    *index = artifactLookupIndexFromJson(payload);
+    return true;
+}
+
 bool Server::restoreFrozenState(std::string* error) {
     std::lock_guard<std::mutex> lock(stateMutex_);
     liveRing_.clear();
@@ -1624,6 +2200,7 @@ bool Server::restoreFrozenState(std::string* error) {
     segmentIndexCache_.clear();
     replayCheckpointCache_.clear();
     reportResponseCache_.clear();
+    artifactLookupIndex_ = {};
     analyzerBookState_ = {};
     frozenReplayCheckpointState_ = {};
     nextSessionSeq_ = 1;
@@ -1812,6 +2389,31 @@ bool Server::restoreFrozenState(std::string* error) {
                     replayCheckpointCache_[lastSegment.checkpointFileName] = frozenReplayCheckpointState_;
                 }
             }
+        }
+    }
+
+    bool shouldPersistLookupIndex = false;
+    const std::filesystem::path lookupPath = config_.dataDir / "artifact-lookup.msgpack";
+    if (std::filesystem::exists(lookupPath)) {
+        std::string lookupError;
+        ArtifactLookupIndex restoredLookup;
+        if (restoreArtifactLookupIndex(lookupPath, &restoredLookup, &lookupError)) {
+            artifactLookupIndex_ = std::move(restoredLookup);
+        } else {
+            artifactLookupIndex_ = rebuildArtifactLookupIndexUnlocked();
+            shouldPersistLookupIndex = true;
+        }
+    } else {
+        artifactLookupIndex_ = rebuildArtifactLookupIndexUnlocked();
+        shouldPersistLookupIndex = true;
+    }
+    if (shouldPersistLookupIndex) {
+        std::string persistError;
+        if (!persistArtifactLookupIndex(artifactLookupIndex_, &persistError)) {
+            if (error != nullptr) {
+                *error = persistError;
+            }
+            return false;
         }
     }
 
@@ -2199,39 +2801,7 @@ void Server::deferredAnalyzerLoop() {
 }
 
 std::string Server::resolveInstrumentId(const BridgeOutboxRecord& record) const {
-    const std::string symbol = record.symbol;
-    const std::string configured = config_.instrumentId;
-
-    if (!record.instrumentId.empty()) {
-        if (isStrongInstrumentId(record.instrumentId)) {
-            return record.instrumentId;
-        }
-        if (!configured.empty() &&
-            isStrongInstrumentId(configured) &&
-            (symbol.empty() || instrumentIdSymbolSuffix(configured) == symbol)) {
-            return configured;
-        }
-        if (record.instrumentId.rfind("ib:", 0) == 0) {
-            return record.instrumentId;
-        }
-    }
-
-    if (!configured.empty()) {
-        if (isStrongInstrumentId(configured)) {
-            if (symbol.empty() || instrumentIdSymbolSuffix(configured) == symbol) {
-                return configured;
-            }
-        } else if (!symbol.empty() && instrumentIdSymbolSuffix(configured) == symbol) {
-            return configured;
-        } else if (symbol.empty()) {
-            return configured;
-        }
-    }
-
-    if (!symbol.empty()) {
-        return makeWeakFallbackInstrumentId(symbol);
-    }
-    return configured;
+    return resolveInstrumentIdentity(config_, record).resolvedInstrumentId;
 }
 
 void Server::rememberSourceSeqUnlocked(ConnectionCursor& cursor, std::uint64_t sourceSeq) {
@@ -2432,9 +3002,8 @@ void Server::updateProtectedWindowBoundsUnlocked(const EngineEvent& event) {
         updated.lastSessionSeq = updatedLastSessionSeq;
         updatedRecords.push_back(updated);
 
-        if (updated.logicalIncidentId == 0 &&
-            hasAnchorIdentity(updated.anchor) &&
-            previousLastSessionSeq <= updated.anchorSessionSeq &&
+        if (hasAnchorIdentity(updated.anchor) &&
+            updated.lastSessionSeq > previousLastSessionSeq &&
             updated.lastSessionSeq > updated.anchorSessionSeq &&
             (updated.reason == "order_intent" ||
              updated.reason == "open_order" ||
@@ -3561,6 +4130,7 @@ void Server::writeSegment(const PendingSegment& segment) {
         manifestOut << manifestEntry.dump() << '\n';
     }
 
+    ArtifactLookupIndex lookupIndexSnapshot;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         lastManifestHash_ = info.manifestHash;
@@ -3578,6 +4148,14 @@ void Server::writeSegment(const PendingSegment& segment) {
             .gapMarkers = replayCheckpointState.gapMarkers
         };
         segments_.push_back(std::move(info));
+        upsertArtifactLookupIndexUnlocked(segment);
+        lookupIndexSnapshot = artifactLookupIndex_;
+    }
+    {
+        std::string lookupError;
+        if (!persistArtifactLookupIndex(lookupIndexSnapshot, &lookupError)) {
+            throw std::runtime_error(lookupError);
+        }
     }
     {
         std::lock_guard<std::mutex> lock(segmentCacheMutex_);
@@ -3618,6 +4196,12 @@ Server::QuerySnapshot Server::captureQuerySnapshot() const {
     snapshot.segments = segments_;
     snapshot.sessionReports = sessionReports_;
     snapshot.caseReports = caseReports_;
+    snapshot.sessionReportsById = artifactLookupIndex_.sessionReportsById;
+    snapshot.caseReportsById = artifactLookupIndex_.caseReportsById;
+    snapshot.orderAnchorsById = artifactLookupIndex_.orderAnchorsById;
+    snapshot.protectedWindowsById = artifactLookupIndex_.protectedWindowsById;
+    snapshot.findingsById = artifactLookupIndex_.findingsById;
+    snapshot.incidentsByLogicalIncident = artifactLookupIndex_.incidentsByLogicalIncident;
     snapshot.liveEvents.assign(liveRing_.begin(), liveRing_.end());
     snapshot.orderAnchors = orderAnchors_;
     snapshot.protectedWindows = protectedWindows_;
@@ -3737,12 +4321,18 @@ Server::QueryArtifacts Server::buildQueryArtifacts(const QuerySnapshot& snapshot
     });
 
     for (std::size_t i = 0; i < artifacts.orderAnchors.size(); ++i) {
+        artifacts.orderAnchorsById[artifacts.orderAnchors[i].anchorId] = i;
         for (const auto& key : anchorSelectorKeys(artifacts.orderAnchors[i].anchor)) {
             artifacts.orderAnchorsBySelector.emplace(key, i);
         }
     }
     for (std::size_t i = 0; i < artifacts.protectedWindows.size(); ++i) {
         const auto& window = artifacts.protectedWindows[i];
+        auto existingById = artifacts.protectedWindowsById.find(window.windowId);
+        if (existingById == artifacts.protectedWindowsById.end() ||
+            protectedWindowIsNewer(window, artifacts.protectedWindows[existingById->second])) {
+            artifacts.protectedWindowsById[window.windowId] = i;
+        }
         for (const auto& key : anchorSelectorKeys(window.anchor)) {
             artifacts.protectedWindowsBySelector.emplace(key, i);
         }
@@ -3751,11 +4341,12 @@ Server::QueryArtifacts Server::buildQueryArtifacts(const QuerySnapshot& snapshot
         }
         auto existing = artifacts.latestProtectedWindowById.find(window.windowId);
         if (existing == artifacts.latestProtectedWindowById.end() ||
-            artifacts.protectedWindows[existing->second].revisionId < window.revisionId) {
+            protectedWindowIsNewer(window, artifacts.protectedWindows[existing->second])) {
             artifacts.latestProtectedWindowById[window.windowId] = i;
         }
     }
     for (std::size_t i = 0; i < artifacts.findings.size(); ++i) {
+        artifacts.findingsById[artifacts.findings[i].findingId] = i;
         if (artifacts.findings[i].logicalIncidentId > 0) {
             artifacts.findingsByIncident.emplace(artifacts.findings[i].logicalIncidentId, i);
         }
@@ -4083,6 +4674,11 @@ QueryResponse Server::buildSessionOverviewResponse(const QueryRequest& request,
         {"data_quality", dataQuality},
         {"report", reportSummary}
     };
+    annotateInvestigationEnvelope(&response,
+                                  frozenRevisionId,
+                                  request.includeLiveTail,
+                                  "session_overview",
+                                  "session_overview");
     return response;
 }
 
@@ -4116,6 +4712,11 @@ QueryResponse Server::loadSessionReportResponse(const QuerySnapshot& snapshot,
                 {"to_session_seq", report.toSessionSeq}
             };
             cached.summary["is_durable_report"] = true;
+            annotateInvestigationEnvelope(&cached,
+                                          report.revisionId,
+                                          false,
+                                          "session_report",
+                                          "session_overview");
             return cached;
         }
     }
@@ -4146,6 +4747,11 @@ QueryResponse Server::loadSessionReportResponse(const QuerySnapshot& snapshot,
         {"to_session_seq", report.toSessionSeq}
     };
     response.summary["is_durable_report"] = true;
+    annotateInvestigationEnvelope(&response,
+                                  report.revisionId,
+                                  false,
+                                  "session_report",
+                                  "session_overview");
     return response;
 }
 
@@ -4208,23 +4814,29 @@ SessionReportRecord Server::persistSessionReport(const QuerySnapshot& snapshot,
         manifestOut << sessionReportToJson(record).dump() << '\n';
     }
 
+    ArtifactLookupIndex lookupIndexSnapshot;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         sessionReports_.push_back(record);
+        upsertArtifactLookupIndexUnlocked(record);
+        lookupIndexSnapshot = artifactLookupIndex_;
     }
     {
         std::lock_guard<std::mutex> lock(segmentCacheMutex_);
         reportResponseCache_[record.fileName] = payloadResponse;
+    }
+    std::string lookupError;
+    if (!persistArtifactLookupIndex(lookupIndexSnapshot, &lookupError)) {
+        throw std::runtime_error(lookupError);
     }
     return record;
 }
 
 std::optional<CaseReportRecord> Server::findCaseReport(const QuerySnapshot& snapshot,
                                                        std::uint64_t reportId) const {
-    for (auto it = snapshot.caseReports.rbegin(); it != snapshot.caseReports.rend(); ++it) {
-        if (it->reportId == reportId) {
-            return *it;
-        }
+    const auto found = snapshot.caseReportsById.find(reportId);
+    if (found != snapshot.caseReportsById.end()) {
+        return found->second;
     }
     return std::nullopt;
 }
@@ -4271,6 +4883,11 @@ QueryResponse Server::loadCaseReportResponse(const QuerySnapshot& snapshot,
                 {"revision_id", report.revisionId}
             };
             cached.summary["is_durable_report"] = true;
+            annotateInvestigationEnvelope(&cached,
+                                          report.revisionId,
+                                          false,
+                                          "case_report",
+                                          report.reportType);
             return cached;
         }
     }
@@ -4301,6 +4918,11 @@ QueryResponse Server::loadCaseReportResponse(const QuerySnapshot& snapshot,
         {"revision_id", report.revisionId}
     };
     response.summary["is_durable_report"] = true;
+    annotateInvestigationEnvelope(&response,
+                                  report.revisionId,
+                                  false,
+                                  "case_report",
+                                  report.reportType);
     return response;
 }
 
@@ -4371,13 +4993,20 @@ CaseReportRecord Server::persistCaseReport(const QuerySnapshot& snapshot,
         manifestOut << caseReportToJson(record).dump() << '\n';
     }
 
+    ArtifactLookupIndex lookupIndexSnapshot;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         caseReports_.push_back(record);
+        upsertArtifactLookupIndexUnlocked(record);
+        lookupIndexSnapshot = artifactLookupIndex_;
     }
     {
         std::lock_guard<std::mutex> lock(segmentCacheMutex_);
         reportResponseCache_[record.fileName] = payloadResponse;
+    }
+    std::string lookupError;
+    if (!persistArtifactLookupIndex(lookupIndexSnapshot, &lookupError)) {
+        throw std::runtime_error(lookupError);
     }
     return record;
 }
@@ -4975,6 +5604,16 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
         };
 
         for (const auto& record : batch.records) {
+            const ResolvedInstrumentIdentity identity = resolveInstrumentIdentity(config_, record);
+            if (config_.rejectMismatchedStrongInstrumentIds &&
+                identity.policy == "coerced_from_mismatch" &&
+                isStrongInstrumentId(record.instrumentId)) {
+                return rejectAck(batch.header.batchSeq,
+                                 batch.header.producer,
+                                 batch.header.runtimeSessionId,
+                                 "bridge batch contains a mismatched strong instrument_id for symbol " + record.symbol);
+            }
+
             if (cursor.recentSourceSeqSet.count(record.sourceSeq) > 0) {
                 ++ack.duplicateRecords;
                 continue;
@@ -4988,7 +5627,10 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
                 reset.eventKind = "reset_marker";
                 reset.adapterId = batch.header.producer;
                 reset.connectionId = batch.header.runtimeSessionId;
-                reset.instrumentId = resolveInstrumentId(record);
+                reset.instrumentId = identity.resolvedInstrumentId;
+                reset.sourceInstrumentId = identity.sourceInstrumentId;
+                reset.instrumentIdentitySource = identity.source;
+                reset.instrumentIdentityPolicy = identity.policy;
                 reset.tsEngineNs = nowEngineNs();
                 reset.resetPreviousSourceSeq = cursor.lastAcceptedSourceSeq;
                 reset.resetSourceSeq = record.sourceSeq;
@@ -5012,7 +5654,10 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
                 gap.eventKind = "gap_marker";
                 gap.adapterId = batch.header.producer;
                 gap.connectionId = batch.header.runtimeSessionId;
-                gap.instrumentId = resolveInstrumentId(record);
+                gap.instrumentId = identity.resolvedInstrumentId;
+                gap.sourceInstrumentId = identity.sourceInstrumentId;
+                gap.instrumentIdentitySource = identity.source;
+                gap.instrumentIdentityPolicy = identity.policy;
                 gap.tsEngineNs = nowEngineNs();
                 gap.gapStartSourceSeq = cursor.lastAcceptedSourceSeq + 1;
                 gap.gapEndSourceSeq = record.sourceSeq - 1;
@@ -5033,7 +5678,10 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
             event.eventKind = record.recordType;
             event.adapterId = batch.header.producer;
             event.connectionId = batch.header.runtimeSessionId;
-            event.instrumentId = resolveInstrumentId(record);
+            event.instrumentId = identity.resolvedInstrumentId;
+            event.sourceInstrumentId = identity.sourceInstrumentId;
+            event.instrumentIdentitySource = identity.source;
+            event.instrumentIdentityPolicy = identity.policy;
             event.tsEngineNs = nowEngineNs();
             event.bridgeRecord = record;
 
@@ -5088,6 +5736,11 @@ QueryResponse Server::rejectResponse(const QueryRequest& request,
     response.operation = request.operation;
     response.status = "error";
     response.error = error;
+    response.summary = {
+        {"api", buildInvestigationApiSummary(response, request.revisionId, request.includeLiveTail, "error")},
+        {"includes_mutable_tail", request.includeLiveTail},
+        {"served_revision_id", request.revisionId}
+    };
     return response;
 }
 
@@ -5196,19 +5849,32 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         const std::uint64_t from = reportResponse.summary.value("from_session_seq", 0ULL);
         const std::uint64_t to = reportResponse.summary.value("to_session_seq", 0ULL);
         const SessionReportRecord report = persistSessionReport(snapshot, frozenRevisionId, from, to, reportResponse);
+        reportResponse.summary["source_artifact"] = reportResponse.summary.value("artifact", json::object());
         reportResponse.summary["session_report"] = sessionReportToJson(report);
+        reportResponse.summary["artifact"] = {
+            {"artifact_id", sessionReportArtifactId(report.reportId)},
+            {"artifact_type", "session_report"},
+            {"artifact_scope", "durable"},
+            {"from_session_seq", report.fromSessionSeq},
+            {"revision_id", report.revisionId},
+            {"to_session_seq", report.toSessionSeq}
+        };
         reportResponse.summary["is_durable_report"] = true;
         reportResponse.summary["scan_status"] = "persisted";
+        annotateInvestigationEnvelope(&reportResponse,
+                                      frozenRevisionId,
+                                      false,
+                                      "session_report",
+                                      "session_overview");
         return reportResponse;
     }
 
     if (request.operation == "read_session_report") {
         std::optional<SessionReportRecord> report;
         if (request.reportId > 0) {
-            for (const auto& item : snapshot.sessionReports) {
-                if (item.reportId == request.reportId) {
-                    report = item;
-                }
+            const auto found = snapshot.sessionReportsById.find(request.reportId);
+            if (found != snapshot.sessionReportsById.end()) {
+                report = found->second;
             }
         } else {
             std::uint64_t frozenRevisionId = 0;
@@ -5230,6 +5896,11 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             QueryResponse stored = loadSessionReportResponse(snapshot, *report);
             stored.requestId = request.requestId;
             stored.operation = request.operation;
+            annotateInvestigationEnvelope(&stored,
+                                          stored.summary.value("served_revision_id", report->revisionId),
+                                          false,
+                                          "session_report",
+                                          "session_overview");
             return stored;
         } catch (const std::exception& error) {
             return rejectResponse(request, error.what());
@@ -5263,6 +5934,11 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             QueryResponse stored = loadCaseReportResponse(snapshot, *report);
             stored.requestId = request.requestId;
             stored.operation = request.operation;
+            annotateInvestigationEnvelope(&stored,
+                                          stored.summary.value("served_revision_id", report->revisionId),
+                                          false,
+                                          "case_report",
+                                          report->reportType);
             return stored;
         } catch (const std::exception& error) {
             return rejectResponse(request, error.what());
@@ -5291,28 +5967,46 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         if (request.artifactId.empty()) {
             return rejectResponse(request, "artifact_id is required");
         }
-        const auto parsed = parseNumericArtifactId(request.artifactId);
-        if (!parsed.has_value()) {
-            return rejectResponse(request, "artifact_id must use a supported numeric form");
-        }
-
         QueryRequest delegated = request;
         delegated.artifactId.clear();
         delegated.exportFormat.clear();
-        if (parsed->first == "session-report") {
-            delegated.operation = "read_session_report";
-            delegated.reportId = parsed->second;
-        } else if (parsed->first == "case-report") {
-            delegated.operation = "read_case_report";
-            delegated.reportId = parsed->second;
-        } else if (parsed->first == "incident") {
-            delegated.operation = "read_incident";
-            delegated.logicalIncidentId = parsed->second;
-        } else if (parsed->first == "window") {
-            delegated.operation = "read_protected_window";
-            delegated.windowId = parsed->second;
+        if (const auto overview = parseSessionOverviewArtifactId(request.artifactId); overview.has_value()) {
+            delegated.operation = "read_session_overview";
+            delegated.revisionId = overview->revisionId;
+            delegated.fromSessionSeq = overview->fromSessionSeq;
+            delegated.toSessionSeq = overview->toSessionSeq;
+        } else if (const auto orderCase = parseOrderCaseArtifactId(request.artifactId); orderCase.has_value()) {
+            delegated.operation = "read_order_case";
+            delegated.traceId = orderCase->traceId;
+            delegated.orderId = orderCase->orderId;
+            delegated.permId = orderCase->permId;
+            delegated.execId = orderCase->execId;
         } else {
-            return rejectResponse(request, "artifact_id type is not supported");
+            const auto parsed = parseNumericArtifactId(request.artifactId);
+            if (!parsed.has_value()) {
+                return rejectResponse(request, "artifact_id must use a supported session-overview, order-case, or numeric artifact form");
+            }
+            if (parsed->first == "session-report") {
+                delegated.operation = "read_session_report";
+                delegated.reportId = parsed->second;
+            } else if (parsed->first == "case-report") {
+                delegated.operation = "read_case_report";
+                delegated.reportId = parsed->second;
+            } else if (parsed->first == "incident") {
+                delegated.operation = "read_incident";
+                delegated.logicalIncidentId = parsed->second;
+            } else if (parsed->first == "window") {
+                delegated.operation = "read_protected_window";
+                delegated.windowId = parsed->second;
+            } else if (parsed->first == "finding") {
+                delegated.operation = "read_finding";
+                delegated.findingId = parsed->second;
+            } else if (parsed->first == "anchor") {
+                delegated.operation = "read_order_anchor";
+                delegated.anchorId = parsed->second;
+            } else {
+                return rejectResponse(request, "artifact_id type is not supported");
+            }
         }
 
         QueryResponse artifactResponse = processQueryFrame(encodeQueryRequestFrame(delegated));
@@ -5320,6 +6014,16 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         if (request.operation == "read_artifact") {
             artifactResponse.operation = request.operation;
             artifactResponse.summary["resolved_artifact_id"] = request.artifactId;
+            artifactResponse.summary["artifact_resolution"] = {
+                {"requested_artifact_id", request.artifactId},
+                {"resolved_operation", delegated.operation},
+                {"resolved_revision_id", artifactResponse.summary.value("served_revision_id", 0ULL)}
+            };
+            annotateInvestigationEnvelope(&artifactResponse,
+                                          artifactResponse.summary.value("served_revision_id", 0ULL),
+                                          artifactResponse.summary.value("includes_mutable_tail", request.includeLiveTail),
+                                          "artifact_read",
+                                          artifactResponse.summary.value("report", json::object()).value("report_type", std::string()));
             return artifactResponse;
         }
 
@@ -5333,7 +6037,13 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         exportResponse.summary = {
             {"artifact_id", request.artifactId},
             {"export_format", request.exportFormat},
-            {"served_revision_id", artifactResponse.summary.value("served_revision_id", 0ULL)}
+            {"served_revision_id", artifactResponse.summary.value("served_revision_id", 0ULL)},
+            {"artifact_export", {
+                {"artifact_id", request.artifactId},
+                {"schema", kArtifactExportSchema},
+                {"version", kArtifactExportVersion},
+                {"format", request.exportFormat}
+            }}
         };
         if (request.exportFormat == "markdown") {
             exportResponse.summary["markdown"] = renderReportMarkdown(artifactResponse);
@@ -5341,6 +6051,16 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             exportResponse.summary["bundle"] = queryResponseToJson(artifactResponse);
         }
         exportResponse.events = json::array();
+        exportResponse.summary["api"] = {
+            {"operation", exportResponse.operation},
+            {"response_kind", "artifact_export"},
+            {"served_revision_id", artifactResponse.summary.value("served_revision_id", 0ULL)},
+            {"wire_schema", exportResponse.schema},
+            {"wire_version", exportResponse.version},
+            {"envelope_schema", kArtifactExportSchema},
+            {"envelope_version", kArtifactExportVersion},
+            {"includes_mutable_tail", artifactResponse.summary.value("includes_mutable_tail", request.includeLiveTail)}
+        };
         return exportResponse;
     }
 
@@ -5402,6 +6122,212 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"served_revision_id", frozenRevisionId}
         };
         return response;
+    }
+
+    if (request.operation == "read_finding") {
+        if (request.findingId == 0) {
+            return rejectResponse(request, "finding_id is required");
+        }
+
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        std::optional<FindingRecord> finding;
+        const auto directFinding = snapshot.findingsById.find(request.findingId);
+        if (directFinding != snapshot.findingsById.end()) {
+            finding = directFinding->second;
+        }
+        if (!finding.has_value()) {
+            return rejectResponse(request, "finding_id not found");
+        }
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
+
+        std::optional<IncidentRecord> incident;
+        if (finding->logicalIncidentId > 0) {
+            const auto range = artifacts.incidentsByLogicalIncident.equal_range(finding->logicalIncidentId);
+            for (auto it = range.first; it != range.second; ++it) {
+                const auto& record = artifacts.incidents[it->second];
+                if (!incident.has_value() || incident->incidentRevisionId < record.incidentRevisionId) {
+                    incident = record;
+                }
+            }
+        }
+        const auto incidentWindow = incident.has_value()
+            ? latestIncidentProtectedWindow(artifacts, incident->logicalIncidentId)
+            : std::optional<ProtectedWindowRecord>();
+
+        const std::size_t limit = request.limit == 0 ? 64 : request.limit;
+        std::vector<json> events;
+        if (incidentWindow.has_value()) {
+            events = filterEventsByProtectedWindow(snapshot,
+                                                  artifacts,
+                                                  incidentWindow->windowId,
+                                                  limit,
+                                                  frozenRevisionId,
+                                                  request.includeLiveTail,
+                                                  nullptr);
+        } else {
+            events = filterEventsByRange(snapshot,
+                                         finding->firstSessionSeq,
+                                         finding->lastSessionSeq,
+                                         limit,
+                                         frozenRevisionId,
+                                         request.includeLiveTail);
+        }
+
+        response.events = json::array();
+        for (const auto& event : events) {
+            response.events.push_back(event);
+        }
+
+        json timeline = json::array();
+        for (const auto& event : events) {
+            timeline.push_back(timelineEntryFromEvent(event));
+        }
+        timeline.push_back(timelineEntryFromFinding(*finding));
+        if (incident.has_value()) {
+            timeline.push_back(timelineEntryFromIncident(*incident));
+        }
+        timeline = sortAndTrimTimeline(std::move(timeline), 24);
+        const json timelineSummary = buildTimelineSummary(timeline);
+        const json dataQuality = buildDataQualitySummary(events,
+                                                         request.includeLiveTail,
+                                                         finding->instrumentId);
+        const std::string uncertaintySummary = reportUncertaintySummary(dataQuality,
+                                                                        incident.has_value() ? 2 : 1,
+                                                                        incident.has_value() ? 2 : 1);
+        json citations = json::array();
+        citations.push_back(evidenceCitation("finding",
+                                             findingArtifactId(finding->findingId),
+                                             finding->firstSessionSeq,
+                                             finding->lastSessionSeq,
+                                             finding->title));
+        if (incident.has_value()) {
+            citations.push_back(evidenceCitation("incident",
+                                                 incidentArtifactId(incident->logicalIncidentId),
+                                                 incident->firstSessionSeq,
+                                                 incident->lastSessionSeq,
+                                                 incident->title));
+        }
+        if (incidentWindow.has_value()) {
+            citations.push_back(evidenceCitation("protected_window",
+                                                 protectedWindowArtifactId(incidentWindow->windowId),
+                                                 incidentWindow->firstSessionSeq,
+                                                 incidentWindow->lastSessionSeq,
+                                                 incidentWindow->reason));
+        }
+
+        const json reportSummary = {
+            {"headline", finding->title},
+            {"summary", finding->summary},
+            {"why_it_matters", incident.has_value() ? incidentWhyItMatters(*incident) : finding->summary},
+            {"timeline_highlights", buildTimelineHighlights(timeline, 3)},
+            {"what_changed_first", firstTimelineHeadline(timeline)},
+            {"uncertainty", uncertaintySummary}
+        };
+        response.summary = {
+            {"artifact", {
+                {"artifact_id", findingArtifactId(finding->findingId)},
+                {"artifact_type", "finding"},
+                {"first_session_seq", finding->firstSessionSeq},
+                {"last_session_seq", finding->lastSessionSeq},
+                {"revision_id", frozenRevisionId}
+            }},
+            {"entity", {
+                {"type", "finding"},
+                {"finding_id", finding->findingId},
+                {"logical_incident_id", finding->logicalIncidentId}
+            }},
+            {"finding", findingToJson(*finding)},
+            {"incident", incident.has_value() ? incidentToJson(*incident) : json::object()},
+            {"protected_window", incidentWindow.has_value() ? protectedWindowToJson(*incidentWindow) : json::object()},
+            {"evidence", buildEvidenceSection(timeline, timelineSummary, citations, dataQuality)},
+            {"report", reportSummary},
+            {"report_summary", reportSummary},
+            {"timeline", timeline},
+            {"timeline_summary", timelineSummary},
+            {"data_quality", dataQuality},
+            {"returned_events", response.events.size()}
+        };
+        annotateInvestigationEnvelope(&response,
+                                      frozenRevisionId,
+                                      request.includeLiveTail,
+                                      "finding",
+                                      "finding");
+        return response;
+    }
+
+    if (request.operation == "read_order_anchor") {
+        if (request.anchorId == 0) {
+            return rejectResponse(request, "anchor_id is required");
+        }
+
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        std::optional<OrderAnchorRecord> anchorRecord;
+        const auto directAnchor = snapshot.orderAnchorsById.find(request.anchorId);
+        if (directAnchor != snapshot.orderAnchorsById.end()) {
+            anchorRecord = directAnchor->second;
+        }
+        if (!anchorRecord.has_value()) {
+            return rejectResponse(request, "anchor_id not found");
+        }
+
+        QueryRequest delegated = request;
+        delegated.operation = "read_order_case";
+        delegated.traceId = anchorRecord->anchor.traceId;
+        delegated.orderId = anchorRecord->anchor.orderId;
+        delegated.permId = anchorRecord->anchor.permId;
+        delegated.execId = anchorRecord->anchor.execId;
+        delegated.anchorId = 0;
+        QueryResponse anchorResponse = processQueryFrame(encodeQueryRequestFrame(delegated));
+        anchorResponse.requestId = request.requestId;
+        anchorResponse.operation = request.operation;
+        if (anchorResponse.status != "ok") {
+            return anchorResponse;
+        }
+
+        json citations = anchorResponse.summary.value("evidence", json::object()).value("citations", json::array());
+        citations.insert(citations.begin(),
+                         evidenceCitation("order_anchor",
+                                          anchorArtifactId(anchorRecord->anchorId),
+                                          anchorRecord->sessionSeq,
+                                          anchorRecord->sessionSeq,
+                                          anchorRecord->eventKind));
+        anchorResponse.summary["order_anchor"] = orderAnchorToJson(*anchorRecord);
+        anchorResponse.summary["artifact"] = {
+            {"artifact_id", anchorArtifactId(anchorRecord->anchorId)},
+            {"artifact_type", "order_anchor"},
+            {"first_session_seq", anchorRecord->sessionSeq},
+            {"last_session_seq", anchorRecord->sessionSeq},
+            {"revision_id", frozenRevisionId}
+        };
+        anchorResponse.summary["entity"] = {
+            {"type", "order_anchor"},
+            {"anchor_id", anchorRecord->anchorId},
+            {"anchor", anchorToJson(anchorRecord->anchor)}
+        };
+        anchorResponse.summary["evidence"]["citations"] = citations;
+        anchorResponse.summary["report"]["headline"] = "Order anchor " + std::to_string(anchorRecord->anchorId);
+        anchorResponse.summary["report"]["summary"] =
+            "Anchor event " + anchorRecord->eventKind + " at session_seq " + std::to_string(anchorRecord->sessionSeq) +
+            " with related order-case evidence.";
+        anchorResponse.summary["report_summary"] = anchorResponse.summary["report"];
+        annotateInvestigationEnvelope(&anchorResponse,
+                                      frozenRevisionId,
+                                      request.includeLiveTail,
+                                      "order_anchor",
+                                      "order_anchor");
+        return anchorResponse;
     }
 
     if (request.operation == "read_incident" || request.operation == "scan_incident_report") {
@@ -5580,10 +6506,24 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                               latestIncident.firstSessionSeq,
                                                               latestIncident.lastSessionSeq,
                                                               response);
+            response.summary["source_artifact"] = response.summary.value("artifact", json::object());
+            response.summary["artifact"] = {
+                {"artifact_id", caseReportArtifactId(report.reportId)},
+                {"artifact_type", "case_report"},
+                {"artifact_scope", "durable"},
+                {"first_session_seq", report.firstSessionSeq},
+                {"last_session_seq", report.lastSessionSeq},
+                {"revision_id", report.revisionId}
+            };
             response.summary["case_report_artifact"] = caseReportToJson(report);
             response.summary["is_durable_report"] = true;
             response.summary["scan_status"] = "persisted";
         }
+        annotateInvestigationEnvelope(&response,
+                                      frozenRevisionId,
+                                      request.includeLiveTail,
+                                      request.operation == "scan_incident_report" ? "incident_report" : "incident",
+                                      "incident");
         return response;
     }
 
@@ -5658,6 +6598,22 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"timeline_summary", timelineSummary},
             {"window_id", request.windowId}
         };
+        response.summary["report"] = {
+            {"headline", selectedWindowSummary.value("reason", std::string("Protected window"))},
+            {"summary", "Protected-window evidence slice pinned to the requested forensic window."},
+            {"timeline_highlights", buildTimelineHighlights(timeline, 3)},
+            {"what_changed_first", firstTimelineHeadline(timeline)},
+            {"report_type", "protected_window"},
+            {"uncertainty", reportUncertaintySummary(response.summary["data_quality"],
+                                                     response.events.size(),
+                                                     1)}
+        };
+        response.summary["report_summary"] = response.summary["report"];
+        annotateInvestigationEnvelope(&response,
+                                      frozenRevisionId,
+                                      request.includeLiveTail,
+                                      "protected_window",
+                                      "protected_window");
         return response;
     }
 
@@ -5957,10 +6913,24 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                               response.summary.value("first_session_seq", 0ULL),
                                                               response.summary.value("last_session_seq", 0ULL),
                                                               response);
+            response.summary["source_artifact"] = response.summary.value("artifact", json::object());
+            response.summary["artifact"] = {
+                {"artifact_id", caseReportArtifactId(report.reportId)},
+                {"artifact_type", "case_report"},
+                {"artifact_scope", "durable"},
+                {"first_session_seq", report.firstSessionSeq},
+                {"last_session_seq", report.lastSessionSeq},
+                {"revision_id", report.revisionId}
+            };
             response.summary["case_report_artifact"] = caseReportToJson(report);
             response.summary["is_durable_report"] = true;
             response.summary["scan_status"] = "persisted";
         }
+        annotateInvestigationEnvelope(&response,
+                                      frozenRevisionId,
+                                      request.includeLiveTail,
+                                      request.operation == "scan_order_case_report" ? "order_case_report" : "order_case",
+                                      "order_case");
         return response;
     }
 

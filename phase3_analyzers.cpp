@@ -28,6 +28,16 @@ double numberOrDefault(const json& payload, const char* key, double fallback) {
         : fallback;
 }
 
+std::optional<bool> inferSide(const std::string& side) {
+    if (side == "BOT" || side == "BUY") {
+        return true;
+    }
+    if (side == "SLD" || side == "SELL") {
+        return false;
+    }
+    return std::nullopt;
+}
+
 class Phase3Analyzer {
 public:
     virtual ~Phase3Analyzer() = default;
@@ -1131,6 +1141,376 @@ public:
     }
 };
 
+class PassiveQueueLossAnalyzer final : public Phase3Analyzer {
+public:
+    const char* name() const override { return "passive_queue_loss"; }
+    AnalyzerLane lane() const override { return AnalyzerLane::Deferred; }
+
+    void analyzeDeferred(const DeferredAnalyzerInput& input,
+                         std::vector<AnalyzerFindingSpec>* findings) const override {
+        if (!hasAnchorIdentity(input.protectedWindow.anchor) || input.windowEvents.empty()) {
+            return;
+        }
+
+        std::optional<bool> orderIsBuy;
+        std::uint64_t firstSessionSeq = 0;
+        std::uint64_t lastSessionSeq = 0;
+        std::uint64_t tsEngineNs = 0;
+        double currentBid = std::numeric_limits<double>::quiet_NaN();
+        double currentAsk = std::numeric_limits<double>::quiet_NaN();
+        double referencePassivePrice = std::numeric_limits<double>::quiet_NaN();
+        double movedAwayPrice = std::numeric_limits<double>::quiet_NaN();
+        std::size_t touchTradeCount = 0;
+        std::size_t fillCount = 0;
+        bool cancelSeen = false;
+        bool cutThroughSeen = false;
+
+        for (const auto& event : input.windowEvents) {
+            const std::string kind = event.value("event_kind", std::string());
+            const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+            if (firstSessionSeq == 0 || sessionSeq < firstSessionSeq) {
+                firstSessionSeq = sessionSeq;
+            }
+            lastSessionSeq = std::max(lastSessionSeq, sessionSeq);
+            tsEngineNs = std::max(tsEngineNs, event.value("ts_engine_ns", 0ULL));
+
+            if (!orderIsBuy.has_value()) {
+                orderIsBuy = inferSide(event.value("side", std::string()));
+            }
+
+            if (kind == "market_tick") {
+                const int field = event.value("market_field", -1);
+                const double price = numberOrDefault(event, "price", std::numeric_limits<double>::quiet_NaN());
+                if (!std::isfinite(price)) {
+                    continue;
+                }
+                if (field == 1) {
+                    currentBid = price;
+                    if (!std::isfinite(referencePassivePrice) && orderIsBuy == true) {
+                        referencePassivePrice = price;
+                    }
+                    if (orderIsBuy == true && std::isfinite(referencePassivePrice) &&
+                        price < referencePassivePrice - kTouchTradeTolerance) {
+                        movedAwayPrice = price;
+                    }
+                } else if (field == 2) {
+                    currentAsk = price;
+                    if (!std::isfinite(referencePassivePrice) && orderIsBuy == false) {
+                        referencePassivePrice = price;
+                    }
+                    if (orderIsBuy == false && std::isfinite(referencePassivePrice) &&
+                        price > referencePassivePrice + kTouchTradeTolerance) {
+                        movedAwayPrice = price;
+                    }
+                } else if (field == 4 && orderIsBuy.has_value() && std::isfinite(referencePassivePrice)) {
+                    const bool touchedPassivePrice = *orderIsBuy
+                        ? price <= referencePassivePrice + kTouchTradeTolerance
+                        : price >= referencePassivePrice - kTouchTradeTolerance;
+                    if (touchedPassivePrice) {
+                        ++touchTradeCount;
+                    }
+                    const bool printedThroughPassivePrice = *orderIsBuy
+                        ? price < referencePassivePrice - kTouchTradeTolerance
+                        : price > referencePassivePrice + kTouchTradeTolerance;
+                    cutThroughSeen = cutThroughSeen || printedThroughPassivePrice;
+                }
+            } else if (kind == "fill_execution") {
+                ++fillCount;
+            } else if (kind == "cancel_request") {
+                cancelSeen = true;
+            } else if (kind == "order_status") {
+                const std::string status = event.value("status", std::string());
+                cancelSeen = cancelSeen ||
+                    status == "Cancelled" ||
+                    status == "ApiCancelled" ||
+                    status == "Inactive";
+            }
+        }
+
+        if (!orderIsBuy.has_value() || !std::isfinite(referencePassivePrice) || touchTradeCount == 0 || fillCount > 0) {
+            return;
+        }
+
+        if (cancelSeen && touchTradeCount >= 2) {
+            AnalyzerFindingSpec finding;
+            finding.kind = "passive_queue_loss_proxy";
+            finding.severity = "warning";
+            finding.confidence = touchTradeCount >= 3 ? 0.83 : 0.76;
+            finding.firstSessionSeq = firstSessionSeq;
+            finding.lastSessionSeq = lastSessionSeq;
+            finding.tsEngineNs = tsEngineNs;
+            finding.instrumentId = input.protectedWindow.instrumentId;
+            finding.overlapsOrder = true;
+            finding.overlappingAnchor = input.protectedWindow.anchor;
+
+            finding.title = orderIsBuy == true
+                ? "Passive buy likely lost queue position"
+                : "Passive sell likely lost queue position";
+            std::ostringstream summary;
+            summary << touchTradeCount << " touch trades printed at passive price "
+                    << std::fixed << std::setprecision(2) << referencePassivePrice
+                    << " before the order window canceled without a fill. "
+                    << "This is a queue-loss proxy, not a direct queue-position measurement.";
+            finding.summary = summary.str();
+            findings->push_back(std::move(finding));
+        }
+
+        if ((cutThroughSeen || std::isfinite(movedAwayPrice)) && touchTradeCount >= 1) {
+            AnalyzerFindingSpec finding;
+            finding.kind = "passive_cut_through_proxy";
+            finding.severity = "warning";
+            finding.confidence = cutThroughSeen ? 0.86 : 0.78;
+            finding.firstSessionSeq = firstSessionSeq;
+            finding.lastSessionSeq = lastSessionSeq;
+            finding.tsEngineNs = tsEngineNs;
+            finding.instrumentId = input.protectedWindow.instrumentId;
+            finding.overlapsOrder = true;
+            finding.overlappingAnchor = input.protectedWindow.anchor;
+            finding.title = orderIsBuy == true
+                ? "Passive buy was cut through"
+                : "Passive sell was cut through";
+
+            std::ostringstream summary;
+            summary << "The market traded at passive price "
+                    << std::fixed << std::setprecision(2) << referencePassivePrice;
+            if (cutThroughSeen) {
+                summary << " and then printed through it";
+            }
+            if (std::isfinite(movedAwayPrice)) {
+                summary << ", with the touch later moving to " << movedAwayPrice;
+            }
+            summary << " without the order window recording a fill.";
+            finding.summary = summary.str();
+            findings->push_back(std::move(finding));
+        }
+    }
+};
+
+class SweepVsFadeAnalyzer final : public Phase3Analyzer {
+public:
+    const char* name() const override { return "sweep_vs_fade"; }
+    AnalyzerLane lane() const override { return AnalyzerLane::Deferred; }
+
+    void analyzeDeferred(const DeferredAnalyzerInput& input,
+                         std::vector<AnalyzerFindingSpec>* findings) const override {
+        if (input.windowEvents.empty()) {
+            return;
+        }
+
+        std::uint64_t firstSessionSeq = 0;
+        std::uint64_t lastSessionSeq = 0;
+        std::uint64_t tsEngineNs = 0;
+        double currentBid = std::numeric_limits<double>::quiet_NaN();
+        double currentAsk = std::numeric_limits<double>::quiet_NaN();
+        double firstMid = std::numeric_limits<double>::quiet_NaN();
+        double lastMid = std::numeric_limits<double>::quiet_NaN();
+        std::size_t askTouchTrades = 0;
+        std::size_t bidTouchTrades = 0;
+
+        for (const auto& event : input.windowEvents) {
+            const std::string kind = event.value("event_kind", std::string());
+            const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+            if (firstSessionSeq == 0 || sessionSeq < firstSessionSeq) {
+                firstSessionSeq = sessionSeq;
+            }
+            lastSessionSeq = std::max(lastSessionSeq, sessionSeq);
+            tsEngineNs = std::max(tsEngineNs, event.value("ts_engine_ns", 0ULL));
+
+            if (kind != "market_tick") {
+                continue;
+            }
+            const int field = event.value("market_field", -1);
+            const double price = numberOrDefault(event, "price", std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(price)) {
+                continue;
+            }
+            if (field == 1) {
+                currentBid = price;
+            } else if (field == 2) {
+                currentAsk = price;
+            } else if (field == 4 && std::isfinite(currentBid) && std::isfinite(currentAsk)) {
+                if (price >= currentAsk - kTouchTradeTolerance) {
+                    ++askTouchTrades;
+                }
+                if (price <= currentBid + kTouchTradeTolerance) {
+                    ++bidTouchTrades;
+                }
+            }
+
+            if (std::isfinite(currentBid) && std::isfinite(currentAsk)) {
+                const double mid = (currentBid + currentAsk) * 0.5;
+                if (!std::isfinite(firstMid)) {
+                    firstMid = mid;
+                }
+                lastMid = mid;
+            }
+        }
+
+        if (!std::isfinite(firstMid) || !std::isfinite(lastMid)) {
+            return;
+        }
+        const double midMove = lastMid - firstMid;
+        if (std::fabs(midMove) < kMarketImpactMinMidMove) {
+            return;
+        }
+
+        const bool upwardMove = midMove > 0.0;
+        const std::size_t confirmingTrades = upwardMove ? askTouchTrades : bidTouchTrades;
+        AnalyzerFindingSpec finding;
+        finding.kind = upwardMove
+            ? (confirmingTrades >= 2 ? "buy_sweep_sequence" : "buy_fade_sequence")
+            : (confirmingTrades >= 2 ? "sell_sweep_sequence" : "sell_fade_sequence");
+        finding.severity = confirmingTrades >= 2 ? "warning" : "info";
+        finding.confidence = confirmingTrades >= 2 ? 0.82 : 0.73;
+        finding.firstSessionSeq = firstSessionSeq;
+        finding.lastSessionSeq = lastSessionSeq;
+        finding.tsEngineNs = tsEngineNs;
+        finding.instrumentId = input.protectedWindow.instrumentId;
+        finding.overlapsOrder = hasAnchorIdentity(input.protectedWindow.anchor);
+        finding.overlappingAnchor = input.protectedWindow.anchor;
+
+        if (confirmingTrades >= 2) {
+            finding.title = upwardMove ? "Up move behaved like a sweep" : "Down move behaved like a sweep";
+        } else {
+            finding.title = upwardMove ? "Up move behaved more like a fade" : "Down move behaved more like a fade";
+        }
+
+        std::ostringstream summary;
+        summary << "Mid moved from " << std::fixed << std::setprecision(2) << firstMid
+                << " to " << lastMid << " across the protected window";
+        if (upwardMove) {
+            summary << " with " << askTouchTrades << " ask-side touch trades";
+        } else {
+            summary << " with " << bidTouchTrades << " bid-side touch trades";
+        }
+        summary << ". The sequence is classified as "
+                << (confirmingTrades >= 2 ? "trade-confirmed sweep pressure." : "fading liquidity rather than a clean sweep.");
+        finding.summary = summary.str();
+        findings->push_back(std::move(finding));
+    }
+};
+
+class FillOutcomeChainAnalyzer final : public Phase3Analyzer {
+public:
+    const char* name() const override { return "fill_outcome_chain"; }
+    AnalyzerLane lane() const override { return AnalyzerLane::Deferred; }
+
+    void analyzeDeferred(const DeferredAnalyzerInput& input,
+                         std::vector<AnalyzerFindingSpec>* findings) const override {
+        if (!hasAnchorIdentity(input.protectedWindow.anchor) || input.windowEvents.empty()) {
+            return;
+        }
+
+        std::optional<bool> fillIsBuy;
+        std::uint64_t firstSessionSeq = 0;
+        std::uint64_t lastSessionSeq = 0;
+        std::uint64_t tsEngineNs = 0;
+        std::uint64_t firstFillSessionSeq = 0;
+        std::uint64_t cancelSessionSeq = 0;
+        double fillPrice = std::numeric_limits<double>::quiet_NaN();
+        double currentBid = std::numeric_limits<double>::quiet_NaN();
+        double currentAsk = std::numeric_limits<double>::quiet_NaN();
+        double adversePrice = std::numeric_limits<double>::quiet_NaN();
+
+        for (const auto& event : input.windowEvents) {
+            const std::string kind = event.value("event_kind", std::string());
+            const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+            if (firstSessionSeq == 0 || sessionSeq < firstSessionSeq) {
+                firstSessionSeq = sessionSeq;
+            }
+            lastSessionSeq = std::max(lastSessionSeq, sessionSeq);
+            tsEngineNs = std::max(tsEngineNs, event.value("ts_engine_ns", 0ULL));
+
+            if (kind == "market_tick") {
+                const int field = event.value("market_field", -1);
+                const double price = numberOrDefault(event, "price", std::numeric_limits<double>::quiet_NaN());
+                if (!std::isfinite(price)) {
+                    continue;
+                }
+                if (field == 1) {
+                    currentBid = price;
+                } else if (field == 2) {
+                    currentAsk = price;
+                }
+                if (firstFillSessionSeq > 0) {
+                    if (fillIsBuy == true && field == 1) {
+                        adversePrice = !std::isfinite(adversePrice) ? price : std::min(adversePrice, price);
+                    } else if (fillIsBuy == false && field == 2) {
+                        adversePrice = !std::isfinite(adversePrice) ? price : std::max(adversePrice, price);
+                    }
+                }
+            } else if (kind == "fill_execution" && !std::isfinite(fillPrice)) {
+                fillPrice = numberOrDefault(event, "price", std::numeric_limits<double>::quiet_NaN());
+                fillIsBuy = inferSide(event.value("side", std::string()));
+                firstFillSessionSeq = sessionSeq;
+            } else if (firstFillSessionSeq > 0 && (kind == "cancel_request" || kind == "order_reject")) {
+                cancelSessionSeq = sessionSeq;
+            } else if (firstFillSessionSeq > 0 && kind == "order_status") {
+                const std::string status = event.value("status", std::string());
+                if (status == "Cancelled" || status == "ApiCancelled" || status == "Inactive") {
+                    cancelSessionSeq = sessionSeq;
+                }
+            }
+        }
+
+        if (!std::isfinite(fillPrice) || !fillIsBuy.has_value()) {
+            return;
+        }
+
+        if (cancelSessionSeq > firstFillSessionSeq) {
+            AnalyzerFindingSpec finding;
+            finding.kind = "fill_to_cancel_chain";
+            finding.severity = "warning";
+            finding.confidence = 0.84;
+            finding.firstSessionSeq = firstFillSessionSeq;
+            finding.lastSessionSeq = cancelSessionSeq;
+            finding.tsEngineNs = tsEngineNs;
+            finding.instrumentId = input.protectedWindow.instrumentId;
+            finding.overlapsOrder = true;
+            finding.overlappingAnchor = input.protectedWindow.anchor;
+            finding.title = "Fill-to-cancel chain detected";
+
+            std::ostringstream summary;
+            summary << "A fill at " << std::fixed << std::setprecision(2) << fillPrice
+                    << " was followed by cancellation activity before the protected window ended.";
+            finding.summary = summary.str();
+            findings->push_back(std::move(finding));
+        }
+
+        double adverseMove = 0.0;
+        if (fillIsBuy == true && std::isfinite(adversePrice)) {
+            adverseMove = std::max(0.0, fillPrice - adversePrice);
+        } else if (fillIsBuy == false && std::isfinite(adversePrice)) {
+            adverseMove = std::max(0.0, adversePrice - fillPrice);
+        }
+        if (adverseMove >= kMarketImpactMinMidMove) {
+            AnalyzerFindingSpec finding;
+            finding.kind = "fill_to_adverse_move_chain";
+            finding.severity = "warning";
+            finding.confidence = 0.87;
+            finding.firstSessionSeq = firstFillSessionSeq;
+            finding.lastSessionSeq = lastSessionSeq;
+            finding.tsEngineNs = tsEngineNs;
+            finding.instrumentId = input.protectedWindow.instrumentId;
+            finding.overlapsOrder = true;
+            finding.overlappingAnchor = input.protectedWindow.anchor;
+            finding.title = "Fill-to-adverse-move chain detected";
+
+            std::ostringstream summary;
+            summary << "After the fill at " << std::fixed << std::setprecision(2) << fillPrice
+                    << ", the market moved " << adverseMove << " against the fill";
+            if (fillIsBuy == true && std::isfinite(currentBid)) {
+                summary << " with the best bid reaching " << adversePrice;
+            } else if (fillIsBuy == false && std::isfinite(currentAsk)) {
+                summary << " with the best ask reaching " << adversePrice;
+            }
+            summary << '.';
+            finding.summary = summary.str();
+            findings->push_back(std::move(finding));
+        }
+    }
+};
+
 } // namespace
 
 struct AnalyzerRuntime::Impl {
@@ -1167,6 +1547,9 @@ AnalyzerRuntime::AnalyzerRuntime()
     impl_->registerAnalyzer(std::make_unique<OrderFillContextAnalyzer>());
     impl_->registerAnalyzer(std::make_unique<PassiveFillQueueProxyAnalyzer>());
     impl_->registerAnalyzer(std::make_unique<PostFillAdverseSelectionAnalyzer>());
+    impl_->registerAnalyzer(std::make_unique<PassiveQueueLossAnalyzer>());
+    impl_->registerAnalyzer(std::make_unique<SweepVsFadeAnalyzer>());
+    impl_->registerAnalyzer(std::make_unique<FillOutcomeChainAnalyzer>());
     impl_->registerAnalyzer(std::make_unique<OrderWindowMarketImpactAnalyzer>());
 }
 

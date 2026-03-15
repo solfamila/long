@@ -29,6 +29,7 @@ struct EngineConfig {
     std::string instrumentId = "ib:STK:SMART:USD:INTC";
     std::size_t ringCapacity = 4096;
     std::size_t dedupeWindowSize = 8192;
+    bool rejectMismatchedStrongInstrumentIds = false;
 };
 
 struct EngineEvent {
@@ -39,6 +40,9 @@ struct EngineEvent {
     std::string adapterId;
     std::string connectionId;
     std::string instrumentId;
+    std::string sourceInstrumentId;
+    std::string instrumentIdentitySource;
+    std::string instrumentIdentityPolicy;
     std::uint64_t tsEngineNs = 0;
     BridgeOutboxRecord bridgeRecord;
     std::uint64_t gapStartSourceSeq = 0;
@@ -229,6 +233,12 @@ private:
         std::vector<IncidentRecord> incidents;
         std::vector<SessionReportRecord> sessionReports;
         std::vector<CaseReportRecord> caseReports;
+        std::unordered_map<std::uint64_t, SessionReportRecord> sessionReportsById;
+        std::unordered_map<std::uint64_t, CaseReportRecord> caseReportsById;
+        std::unordered_map<std::uint64_t, OrderAnchorRecord> orderAnchorsById;
+        std::unordered_map<std::uint64_t, ProtectedWindowRecord> protectedWindowsById;
+        std::unordered_map<std::uint64_t, FindingRecord> findingsById;
+        std::unordered_map<std::uint64_t, IncidentRecord> incidentsByLogicalIncident;
     };
 
     struct FrozenArtifacts {
@@ -243,6 +253,9 @@ private:
         std::vector<ProtectedWindowRecord> protectedWindows;
         std::vector<FindingRecord> findings;
         std::vector<IncidentRecord> incidents;
+        std::unordered_map<std::uint64_t, std::size_t> orderAnchorsById;
+        std::unordered_map<std::uint64_t, std::size_t> protectedWindowsById;
+        std::unordered_map<std::uint64_t, std::size_t> findingsById;
         std::unordered_multimap<std::string, std::size_t> orderAnchorsBySelector;
         std::unordered_multimap<std::string, std::size_t> protectedWindowsBySelector;
         std::unordered_multimap<std::string, std::size_t> findingsBySelector;
@@ -272,6 +285,18 @@ private:
         std::size_t appliedEvents = 0;
         std::size_t gapMarkers = 0;
     };
+
+public:
+    struct ArtifactLookupIndex {
+        std::unordered_map<std::uint64_t, SessionReportRecord> sessionReportsById;
+        std::unordered_map<std::uint64_t, CaseReportRecord> caseReportsById;
+        std::unordered_map<std::uint64_t, OrderAnchorRecord> orderAnchorsById;
+        std::unordered_map<std::uint64_t, ProtectedWindowRecord> protectedWindowsById;
+        std::unordered_map<std::uint64_t, FindingRecord> findingsById;
+        std::unordered_map<std::uint64_t, IncidentRecord> incidentsByLogicalIncident;
+    };
+
+private:
 
     struct AnalyzerBookState {
         struct DisplayInstabilitySideState {
@@ -528,6 +553,14 @@ private:
                                        std::uint64_t firstSessionSeq,
                                        std::uint64_t lastSessionSeq,
                                        const QueryResponse& response);
+    ArtifactLookupIndex rebuildArtifactLookupIndexUnlocked() const;
+    void upsertArtifactLookupIndexUnlocked(const PendingSegment& segment);
+    void upsertArtifactLookupIndexUnlocked(const SessionReportRecord& record);
+    void upsertArtifactLookupIndexUnlocked(const CaseReportRecord& record);
+    bool persistArtifactLookupIndex(const ArtifactLookupIndex& index, std::string* error = nullptr) const;
+    bool restoreArtifactLookupIndex(const std::filesystem::path& path,
+                                    ArtifactLookupIndex* index,
+                                    std::string* error) const;
 
     EngineConfig config_;
     mutable std::mutex stateMutex_;
@@ -548,6 +581,7 @@ private:
     std::vector<IncidentRecord> incidents_;
     std::vector<SessionReportRecord> sessionReports_;
     std::vector<CaseReportRecord> caseReports_;
+    ArtifactLookupIndex artifactLookupIndex_;
     std::uint64_t nextOrderAnchorId_ = 1;
     std::uint64_t nextProtectedWindowId_ = 1;
     std::uint64_t nextFindingId_ = 1;

@@ -34,10 +34,12 @@ void printUsage() {
               << "  tape_engine_ctl find-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl seek-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl read-order-case [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
+              << "  tape_engine_ctl read-order-anchor <anchor_id> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-order-anchors [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-protected-windows [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl read-protected-window <window_id> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-findings [--revision N] [--include-live-tail] [--limit N]\n"
+              << "  tape_engine_ctl read-finding <finding_id> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl read-incident <logical_incident_id> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-incidents [--revision N] [--include-live-tail] [--limit N]\n";
 }
@@ -205,6 +207,23 @@ int main(int argc, char** argv) {
                 request.revisionId = std::stoull(argv[++i]);
             }
         }
+    } else if (request.operation == "read-finding") {
+        request.operation = "read_finding";
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.findingId = std::stoull(argv[2]);
+        for (int i = 3; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--include-live-tail") {
+                request.includeLiveTail = true;
+            } else if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
     } else if (request.operation == "read-range") {
         request.operation = "read_range";
         if (argc < 4) {
@@ -293,6 +312,23 @@ int main(int argc, char** argv) {
             } else if (arg == "--exec-id" && i + 1 < argc) {
                 request.execId = argv[++i];
             } else if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--include-live-tail") {
+                request.includeLiveTail = true;
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
+    } else if (request.operation == "read-order-anchor") {
+        request.operation = "read_order_anchor";
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.anchorId = std::stoull(argv[2]);
+        for (int i = 3; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--revision" && i + 1 < argc) {
                 request.revisionId = std::stoull(argv[++i]);
             } else if (arg == "--include-live-tail") {
                 request.includeLiveTail = true;

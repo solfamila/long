@@ -1,0 +1,484 @@
+{
+  "scan_session_report": {
+    "operation": "scan_session_report",
+    "status": "ok",
+    "summary": {
+      "api": {
+        "envelope_schema": "com.foxy.tape-engine.investigation-envelope",
+        "envelope_version": 1,
+        "response_kind": "session_report",
+        "wire_schema": "com.foxy.tape-engine.query-response",
+        "wire_version": 1
+      },
+      "artifact": {
+        "artifact_id": "session-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "session_report",
+        "schema_version": 1
+      },
+      "entity": {
+        "entity_type": "session_range",
+        "schema_version": 1,
+        "type": "session_range"
+      },
+      "evidence": {
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "type": "protected_window"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "type": "protected_window"
+          }
+        ],
+        "schema_version": 1
+      },
+      "is_durable_report": true,
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "top_incident_kind": "order_fill_context",
+        "what_changed_first": "Spread widened to 0.04"
+      },
+      "source_artifact": {
+        "artifact_id": "session-overview:<revision>:<from>:<to>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "session_overview",
+        "schema_version": 1
+      }
+    }
+  },
+  "read_incident": {
+    "operation": "read_incident",
+    "status": "ok",
+    "summary": {
+      "api": {
+        "envelope_schema": "com.foxy.tape-engine.investigation-envelope",
+        "envelope_version": 1,
+        "response_kind": "incident",
+        "wire_schema": "com.foxy.tape-engine.query-response",
+        "wire_version": 1
+      },
+      "artifact": {
+        "artifact_id": "incident:<id>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "incident",
+        "schema_version": 1
+      },
+      "entity": {
+        "entity_type": "incident",
+        "schema_version": 1,
+        "type": "incident"
+      },
+      "evidence": {
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "type": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          }
+        ],
+        "schema_version": 1
+      },
+      "is_durable_report": false,
+      "report": {
+        "headline": "Order/fill context captured 3 market updates",
+        "report_type": "incident",
+        "schema_version": 1,
+        "uncertainty": "Evidence quality is materially degraded, so confidence should be treated cautiously.",
+        "what_changed_first": "Order/fill context captured 3 market updates"
+      }
+    }
+  },
+  "scan_incident_report": {
+    "operation": "scan_incident_report",
+    "status": "ok",
+    "summary": {
+      "api": {
+        "envelope_schema": "com.foxy.tape-engine.investigation-envelope",
+        "envelope_version": 1,
+        "response_kind": "incident_report",
+        "wire_schema": "com.foxy.tape-engine.query-response",
+        "wire_version": 1
+      },
+      "artifact": {
+        "artifact_id": "case-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "case_report",
+        "schema_version": 1
+      },
+      "entity": {
+        "entity_type": "incident",
+        "schema_version": 1,
+        "type": "incident"
+      },
+      "evidence": {
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "type": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          }
+        ],
+        "schema_version": 1
+      },
+      "is_durable_report": true,
+      "report": {
+        "headline": "Order/fill context captured 3 market updates",
+        "report_type": "incident",
+        "schema_version": 1,
+        "uncertainty": "Evidence quality is materially degraded, so confidence should be treated cautiously.",
+        "what_changed_first": "Order/fill context captured 3 market updates"
+      },
+      "source_artifact": {
+        "artifact_id": "incident:<id>",
+        "artifact_scope": "",
+        "artifact_type": "incident"
+      }
+    }
+  },
+  "read_order_case": {
+    "operation": "read_order_case",
+    "status": "ok",
+    "summary": {
+      "api": {
+        "envelope_schema": "com.foxy.tape-engine.investigation-envelope",
+        "envelope_version": 1,
+        "response_kind": "order_case",
+        "wire_schema": "com.foxy.tape-engine.query-response",
+        "wire_version": 1
+      },
+      "artifact": {
+        "artifact_id": "order-case:order:<id>",
+        "artifact_scope": "ephemeral",
+        "artifact_type": "order_case",
+        "schema_version": 1
+      },
+      "entity": {
+        "entity_type": "order_case",
+        "schema_version": 1,
+        "type": "order_case"
+      },
+      "evidence": {
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "citations": [
+          {
+            "artifact_id": "order-case:order:<id>",
+            "type": "order_case"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "type": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          }
+        ],
+        "schema_version": 1
+      },
+      "is_durable_report": false,
+      "report": {
+        "headline": "Order case for order 3301",
+        "report_type": "order_case",
+        "schema_version": 1,
+        "uncertainty": "Evidence quality is materially degraded, so confidence should be treated cautiously.",
+        "what_changed_first": "Spread widened to 0.04"
+      }
+    }
+  },
+  "scan_order_case_report": {
+    "operation": "scan_order_case_report",
+    "status": "ok",
+    "summary": {
+      "api": {
+        "envelope_schema": "com.foxy.tape-engine.investigation-envelope",
+        "envelope_version": 1,
+        "response_kind": "order_case_report",
+        "wire_schema": "com.foxy.tape-engine.query-response",
+        "wire_version": 1
+      },
+      "artifact": {
+        "artifact_id": "case-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "case_report",
+        "schema_version": 1
+      },
+      "entity": {
+        "entity_type": "order_case",
+        "schema_version": 1,
+        "type": "order_case"
+      },
+      "evidence": {
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "citations": [
+          {
+            "artifact_id": "order-case:order:<id>",
+            "type": "order_case"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "type": "protected_window"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          }
+        ],
+        "schema_version": 1
+      },
+      "is_durable_report": true,
+      "report": {
+        "headline": "Order case for order 3301",
+        "report_type": "order_case",
+        "schema_version": 1,
+        "uncertainty": "Evidence quality is materially degraded, so confidence should be treated cautiously.",
+        "what_changed_first": "Spread widened to 0.04"
+      },
+      "source_artifact": {
+        "artifact_id": "order-case:order:<id>",
+        "artifact_scope": "",
+        "artifact_type": "order_case"
+      }
+    }
+  },
+  "read_artifact_session_report": {
+    "operation": "read_artifact",
+    "status": "ok",
+    "summary": {
+      "api": {
+        "envelope_schema": "com.foxy.tape-engine.investigation-envelope",
+        "envelope_version": 1,
+        "response_kind": "artifact_read",
+        "wire_schema": "com.foxy.tape-engine.query-response",
+        "wire_version": 1
+      },
+      "artifact": {
+        "artifact_id": "session-report:<id>",
+        "artifact_scope": "durable",
+        "artifact_type": "session_report",
+        "schema_version": 1
+      },
+      "entity": {
+        "entity_type": "session_range",
+        "schema_version": 1,
+        "type": "session_range"
+      },
+      "evidence": {
+        "has_data_quality": true,
+        "has_timeline": true,
+        "has_timeline_summary": true,
+        "citations": [
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "incident:<id>",
+            "type": "incident"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "finding:<id>",
+            "type": "finding"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "type": "protected_window"
+          },
+          {
+            "artifact_id": "window:<id>",
+            "type": "protected_window"
+          }
+        ],
+        "schema_version": 1
+      },
+      "is_durable_report": true,
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "top_incident_kind": "order_fill_context",
+        "what_changed_first": "Spread widened to 0.04"
+      }
+    }
+  },
+  "export_artifact_order_case_bundle": {
+    "operation": "export_artifact",
+    "status": "ok",
+    "summary": {
+      "api": {
+        "envelope_schema": "com.foxy.tape-engine.artifact-export",
+        "envelope_version": 1,
+        "response_kind": "artifact_export",
+        "wire_schema": "com.foxy.tape-engine.query-response",
+        "wire_version": 1
+      },
+      "artifact_export": {
+        "format": "json-bundle",
+        "schema": "com.foxy.tape-engine.artifact-export",
+        "version": 1
+      },
+      "bundle": {
+        "operation": "read_order_case",
+        "summary": {
+          "artifact": {
+            "artifact_id": "order-case:order:<id>",
+            "artifact_scope": "ephemeral",
+            "artifact_type": "order_case",
+            "schema_version": 1
+          },
+          "entity": {
+            "entity_type": "order_case",
+            "schema_version": 1,
+            "type": "order_case"
+          },
+          "report": {
+            "headline": "Order case for order 3301",
+            "report_type": "order_case",
+            "schema_version": 1,
+            "uncertainty": "Evidence quality is materially degraded, so confidence should be treated cautiously.",
+            "what_changed_first": "Spread widened to 0.04"
+          }
+        }
+      },
+      "is_durable_report": false
+    }
+  }
+}

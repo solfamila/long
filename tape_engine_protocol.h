@@ -14,6 +14,10 @@ inline constexpr std::uint32_t kAckWireVersion = 1;
 inline constexpr const char* kAckSchema = "com.foxy.tape-engine.ingest-ack";
 inline constexpr const char* kQueryRequestSchema = "com.foxy.tape-engine.query";
 inline constexpr const char* kQueryResponseSchema = "com.foxy.tape-engine.query-response";
+inline constexpr std::uint32_t kInvestigationEnvelopeVersion = 1;
+inline constexpr const char* kInvestigationEnvelopeSchema = "com.foxy.tape-engine.investigation-envelope";
+inline constexpr std::uint32_t kArtifactExportVersion = 1;
+inline constexpr const char* kArtifactExportSchema = "com.foxy.tape-engine.artifact-export";
 
 struct IngestAck {
     std::uint32_t version = kAckWireVersion;
@@ -53,6 +57,8 @@ struct QueryRequest {
     std::uint64_t targetSessionSeq = 0;
     std::uint64_t windowId = 0;
     std::uint64_t logicalIncidentId = 0;
+    std::uint64_t findingId = 0;
+    std::uint64_t anchorId = 0;
     std::uint64_t reportId = 0;
     std::size_t limit = 0;
     bool includeLiveTail = false;
