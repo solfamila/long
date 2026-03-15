@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "subsystems": {
+    "long_bridge": "com.foxy.long.bridge",
+    "tape_engine": "com.foxy.tape-engine",
+    "tapescope": "com.foxy.tapescope",
+    "tape_mcp": "com.foxy.tape-mcp"
+  },
+  "categories": [
+    "bridge",
+    "ingest",
+    "sequencer",
+    "recorder",
+    "revision",
+    "replay",
+    "rpc",
+    "ui",
+    "metal",
+    "export",
+    "housekeeping"
+  ],
+  "queues": [
+    {
+      "id": "bridge_capture",
+      "subsystem": "long_bridge",
+      "label": "com.foxy.long.bridge.capture",
+      "qos": "inherited",
+      "category": "bridge"
+    },
+    {
+      "id": "bridge_sender",
+      "subsystem": "long_bridge",
+      "label": "com.foxy.long.bridge.sender",
+      "qos": "userInitiated",
+      "category": "bridge"
+    },
+    {
+      "id": "outbox_journal",
+      "subsystem": "long_bridge",
+      "label": "com.foxy.long.bridge.outbox-journal",
+      "qos": "utility",
+      "category": "bridge"
+    },
+    {
+      "id": "outbox_drain",
+      "subsystem": "long_bridge",
+      "label": "com.foxy.long.bridge.outbox-drain",
+      "qos": "utility",
+      "category": "bridge"
+    },
+    {
+      "id": "engine_accept_loop",
+      "subsystem": "tape_engine",
+      "label": "com.foxy.tape-engine.accept-loop",
+      "qos": "utility",
+      "category": "rpc"
+    },
+    {
+      "id": "engine_sequencer",
+      "subsystem": "tape_engine",
+      "label": "com.foxy.tape-engine.sequencer",
+      "qos": "userInitiated",
+      "category": "sequencer"
+    },
+    {
+      "id": "engine_segment_writer",
+      "subsystem": "tape_engine",
+      "label": "com.foxy.tape-engine.segment-writer",
+      "qos": "utility",
+      "category": "recorder"
+    },
+    {
+      "id": "engine_replay",
+      "subsystem": "tape_engine",
+      "label": "com.foxy.tape-engine.replay",
+      "qos": "utility",
+      "category": "replay"
+    }
+  ]
+}

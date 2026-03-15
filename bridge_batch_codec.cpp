@@ -106,6 +106,18 @@ json recordToJson(const BridgeOutboxRecord& record) {
         {"symbol", record.symbol},
         {"wall_time", record.wallTime}
     };
+    if (!record.instrumentId.empty()) {
+        payload["instrument_id"] = record.instrumentId;
+    }
+    if (record.tsExchangeNs > 0) {
+        payload["ts_exchange_ns"] = record.tsExchangeNs;
+    }
+    if (record.tsReceiveNs > 0) {
+        payload["ts_receive_ns"] = record.tsReceiveNs;
+    }
+    if (record.vendorSeq > 0) {
+        payload["vendor_seq"] = record.vendorSeq;
+    }
     if (record.marketField >= 0) {
         payload["market_field"] = record.marketField;
     }
@@ -133,6 +145,7 @@ BridgeOutboxRecord recordFromJson(const json& payload) {
     record.recordType = payload.value("record_type", std::string());
     record.source = payload.value("source", std::string());
     record.symbol = payload.value("symbol", std::string());
+    record.instrumentId = payload.value("instrument_id", std::string());
     record.side = payload.value("side", std::string());
     record.marketField = payload.value("market_field", -1);
     record.bookPosition = payload.value("book_position", -1);
@@ -145,6 +158,9 @@ BridgeOutboxRecord recordFromJson(const json& payload) {
         ? payload["size"].get<double>()
         : std::numeric_limits<double>::quiet_NaN();
     record.anchor = anchorFromJson(payload.value("anchor", json::object()));
+    record.tsExchangeNs = payload.value("ts_exchange_ns", 0ULL);
+    record.tsReceiveNs = payload.value("ts_receive_ns", 0ULL);
+    record.vendorSeq = payload.value("vendor_seq", 0ULL);
     record.fallbackState = payload.value("fallback_state", std::string());
     record.fallbackReason = payload.value("fallback_reason", std::string());
     record.note = payload.value("note", std::string());

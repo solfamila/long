@@ -1,6 +1,7 @@
 #include "app_shared.h"
 #include "bridge_batch_codec.h"
 #include "bridge_batch_transport.h"
+#include "runtime_registry.h"
 #include "tape_engine_client.h"
 #include "tape_engine.h"
 #include "tape_engine_protocol.h"
@@ -40,6 +41,21 @@ void expect(bool condition, const std::string& message) {
 
 void expectContains(const std::string& text, const std::string& needle, const std::string& message) {
     expect(text.find(needle) != std::string::npos, message + " (missing: " + needle + ")");
+}
+
+template <typename Fn>
+void waitUntil(Fn&& predicate,
+               const std::string& message,
+               std::chrono::milliseconds timeout = std::chrono::milliseconds(2000),
+               std::chrono::milliseconds pollInterval = std::chrono::milliseconds(10)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return;
+        }
+        std::this_thread::sleep_for(pollInterval);
+    }
+    expect(predicate(), message);
 }
 
 const fs::path& testDataDir() {
@@ -605,6 +621,14 @@ void testBridgeDispatchBatchRespectsThresholdsAndImmediateFlush() {
     };
     const bridge_batch::PreparedBatch immediateBatch = bridge_batch::prepareBatch(immediateRecords, options, policy);
     expect(immediateBatch.immediateFlush, "order and fill lifecycle records should force immediate flush");
+    expect(bridge_batch::recordTypeRequiresImmediateFlush("open_order"), "open_order should force immediate bridge flush");
+    expect(bridge_batch::recordTypeRequiresImmediateFlush("order_status"), "order_status should force immediate bridge flush");
+    expect(bridge_batch::recordTypeRequiresImmediateFlush("commission_report"), "commission_report should force immediate bridge flush");
+    expect(bridge_batch::recordTypeRequiresImmediateFlush("broker_error"), "broker_error should force immediate bridge flush");
+    expect(bridge_batch::recordTypeRequiresImmediateFlush("feed_reset"), "feed_reset should force immediate bridge flush");
+    expect(bridge_batch::recordTypeRequiresImmediateFlush("gap_marker"), "gap_marker should force immediate bridge flush");
+    expect(bridge_batch::recordTypeRequiresImmediateFlush("reset_marker"), "reset_marker should force immediate bridge flush");
+    expect(!bridge_batch::recordTypeRequiresImmediateFlush("market_depth"), "market_depth should remain batchable");
 
     bridge_batch::BatchPolicy bytePolicy;
     bytePolicy.maxRecords = 64;
@@ -782,6 +806,11 @@ void testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments() {
     expect(transport.sendFrame(bridge_batch::encodeFrame(batch), &error),
            "tape-engine should accept a real bridge batch: " + error);
 
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.segments.size() == 1 && snapshot.latestFrozenRevisionId >= 1;
+    }, "tape-engine should freeze the accepted batch into one segment");
+
     const tape_engine::EngineSnapshot snapshot = server.snapshot();
     expect(snapshot.nextSessionSeq == 3, "tape-engine should assign contiguous session_seq values to accepted records");
     expect(snapshot.liveEvents.size() == 2, "tape-engine live ring should retain accepted records");
@@ -789,6 +818,7 @@ void testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments() {
     expect(snapshot.liveEvents.back().sessionSeq == 2, "tape-engine should assign the second session_seq");
     expect(snapshot.liveEvents.back().bridgeRecord.anchor.execId == "EXEC-71", "tape-engine should preserve bridge anchors");
     expect(snapshot.segments.size() == 1, "tape-engine should emit one segment for the accepted batch");
+    expect(snapshot.segments.front().revisionId == 1, "tape-engine should assign a frozen revision id to the segment");
     expect(snapshot.segments.front().firstSessionSeq == 1, "tape-engine segment metadata should preserve the first session_seq");
     expect(snapshot.segments.front().lastSessionSeq == 2, "tape-engine segment metadata should preserve the last session_seq");
     expect(!snapshot.segments.front().payloadSha256.empty(), "tape-engine segment metadata should include a payload checksum");
@@ -905,6 +935,11 @@ void testTapeEngineQueryStatusAndReads() {
     expect(transport.sendFrame(bridge_batch::encodeFrame(second), &error),
            "tape-engine should accept the second query batch: " + error);
 
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.segments.size() == 2 && snapshot.latestFrozenRevisionId >= 2;
+    }, "tape-engine should freeze both query batches before frozen reads");
+
     tape_engine::Client client(socketPath.string());
     tape_engine::QueryResponse response;
 
@@ -913,6 +948,7 @@ void testTapeEngineQueryStatusAndReads() {
     statusRequest.operation = "status";
     expect(client.query(statusRequest, &response, &error), "tape-engine status query should succeed: " + error);
     expect(response.summary.value("segment_count", 0ULL) == 2, "status query should report the written segment count");
+    expect(response.summary.value("latest_frozen_revision_id", 0ULL) == 2, "status query should expose the latest frozen revision");
     expect(response.summary.value("latest_session_seq", 0ULL) == 4, "status query should report the latest accepted session_seq");
 
     tape_engine::QueryRequest rangeRequest;
@@ -922,6 +958,7 @@ void testTapeEngineQueryStatusAndReads() {
     rangeRequest.toSessionSeq = 4;
     expect(client.query(rangeRequest, &response, &error), "tape-engine range query should succeed: " + error);
     expect(response.events.is_array() && response.events.size() == 3, "range query should return the requested session_seq window");
+    expect(response.summary.value("served_revision_id", 0ULL) == 2, "range query should say which frozen revision served the read");
     expect(response.events.at(0).value("event_kind", std::string()) == "order_status", "range query should include the original order status event");
     expect(response.events.at(1).value("event_kind", std::string()) == "gap_marker", "range query should expose the explicit gap marker");
     expect(response.events.at(2).value("event_kind", std::string()) == "fill_execution", "range query should expose the later fill event");
@@ -943,6 +980,130 @@ void testTapeEngineQueryStatusAndReads() {
     expect(response.events.is_array() && response.events.size() == 3, "anchor query should return the order-anchored lifecycle events");
     expect(response.events.at(0).value("event_kind", std::string()) == "order_intent", "anchor query should begin with the queued order intent");
     expect(response.events.at(2).value("event_kind", std::string()) == "fill_execution", "anchor query should include the fill execution");
+
+    server.stop();
+}
+
+void testTapeEngineRevisionPinnedReadsCanOverlayMutableTail() {
+    const fs::path rootDir = testDataDir() / "tape-engine-revision-overlay";
+    const fs::path socketPath = testDataDir() / "tape-engine-revision-overlay.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:6401:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for revision overlay test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-revision-overlay";
+    options.runtimeSessionId = "runtime-engine-revision-overlay";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    options.batchSeq = 71;
+    BridgeOutboxRecord firstRecord = makeBridgeRecord(5001, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      101, 801, 0, "", "first frozen event", "2026-03-14T09:38:30.100");
+    firstRecord.instrumentId = "ib:conid:6401:STK:SMART:USD:INTC";
+    const bridge_batch::Batch first = bridge_batch::buildBatch({firstRecord}, options);
+    expect(transport.sendFrame(bridge_batch::encodeFrame(first), &error),
+           "tape-engine should accept the first revision batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 1 && snapshot.segments.size() == 1;
+    }, "tape-engine should freeze revision 1 before pinned reads");
+
+    options.batchSeq = 72;
+    BridgeOutboxRecord secondRecord = makeBridgeRecord(5002, "order_status", "BrokerOrderStatus", "INTC", "BUY",
+                                                       101, 801, 0, "", "mutable tail event", "2026-03-14T09:38:30.200");
+    secondRecord.instrumentId = "ib:conid:6401:STK:SMART:USD:INTC";
+    const bridge_batch::Batch second = bridge_batch::buildBatch({secondRecord}, options);
+    expect(transport.sendFrame(bridge_batch::encodeFrame(second), &error),
+           "tape-engine should accept the second revision batch: " + error);
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest frozenOnly;
+    frozenOnly.requestId = "revision-frozen-only";
+    frozenOnly.operation = "read_range";
+    frozenOnly.revisionId = 1;
+    frozenOnly.fromSessionSeq = 1;
+    frozenOnly.toSessionSeq = 10;
+    expect(client.query(frozenOnly, &response, &error), "pinned frozen read should succeed: " + error);
+    expect(response.summary.value("served_revision_id", 0ULL) == 1, "pinned frozen read should report revision 1");
+    expect(!response.summary.value("includes_mutable_tail", true), "pinned frozen read should exclude the mutable tail by default");
+    expect(response.events.is_array() && response.events.size() == 1, "pinned frozen read should only return the frozen revision events");
+    expect(response.events.at(0).value("event_kind", std::string()) == "order_intent", "pinned frozen read should preserve revision-1 events");
+
+    tape_engine::QueryRequest overlay = frozenOnly;
+    overlay.requestId = "revision-overlay";
+    overlay.includeLiveTail = true;
+    expect(client.query(overlay, &response, &error), "pinned overlay read should succeed: " + error);
+    expect(response.summary.value("served_revision_id", 0ULL) == 1, "overlay read should stay pinned to revision 1");
+    expect(response.summary.value("includes_mutable_tail", false), "overlay read should explicitly report mutable-tail inclusion");
+    expect(response.events.is_array() && response.events.size() == 2, "overlay read should merge the live tail on top of the pinned revision");
+    expect(response.events.at(1).value("event_kind", std::string()) == "order_status", "overlay read should include the later mutable-tail event");
+
+    server.stop();
+}
+
+void testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity() {
+    const fs::path rootDir = testDataDir() / "tape-engine-reset-marker";
+    const fs::path socketPath = testDataDir() / "tape-engine-reset-marker.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:7501:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+    config.dedupeWindowSize = 4;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for reset marker test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-reset-marker";
+    options.runtimeSessionId = "runtime-engine-reset-marker";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord firstRecord = makeBridgeRecord(6002, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      111, 901, 0, "", "initial event", "2026-03-14T09:38:45.100");
+    firstRecord.instrumentId = "ib:conid:7501:STK:SMART:USD:INTC";
+    options.batchSeq = 81;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({firstRecord}, options)), &error),
+           "tape-engine should accept the first reset test batch: " + error);
+
+    BridgeOutboxRecord secondRecord = makeBridgeRecord(6001, "order_status", "BrokerOrderStatus", "INTC", "BUY",
+                                                       111, 901, 0, "", "out-of-order reset trigger", "2026-03-14T09:38:45.200");
+    secondRecord.instrumentId = "ib:conid:7501:STK:SMART:USD:INTC";
+    options.batchSeq = 82;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({secondRecord}, options)), &error),
+           "tape-engine should accept the out-of-order batch and emit a reset marker: " + error);
+
+    const tape_engine::EngineSnapshot snapshot = server.snapshot();
+    expect(snapshot.liveEvents.size() == 3, "reset flow should keep the original event, reset marker, and replacement event in the live ring");
+    expect(snapshot.liveEvents.at(1).eventKind == "reset_marker", "out-of-order source_seq should emit an explicit reset marker");
+    expect(snapshot.liveEvents.at(1).resetPreviousSourceSeq == 6002, "reset marker should preserve the previous accepted source_seq");
+    expect(snapshot.liveEvents.at(1).resetSourceSeq == 6001, "reset marker should preserve the new reset source_seq");
+    expect(snapshot.liveEvents.at(1).instrumentId == "ib:conid:7501:STK:SMART:USD:INTC", "reset marker should keep the canonical instrument identity");
+    expect(snapshot.liveEvents.at(2).instrumentId == "ib:conid:7501:STK:SMART:USD:INTC", "accepted replacement events should keep the canonical instrument identity");
 
     server.stop();
 }
@@ -1006,6 +1167,11 @@ void testTapeEngineReplaySnapshotRebuildsFrozenMarketState() {
     expect(transport.sendFrame(bridge_batch::encodeFrame(batch), &error),
            "tape-engine should accept replay market data batch: " + error);
 
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.segments.size() == 1 && snapshot.latestFrozenRevisionId >= 1;
+    }, "tape-engine should freeze replay market data before rebuilding a frozen snapshot");
+
     tape_engine::Client client(socketPath.string());
     tape_engine::QueryResponse response;
 
@@ -1016,6 +1182,7 @@ void testTapeEngineReplaySnapshotRebuildsFrozenMarketState() {
     replayRequest.limit = 2;
     expect(client.query(replayRequest, &response, &error), "tape-engine replay snapshot query should succeed: " + error);
 
+    expect(response.summary.value("served_revision_id", 0ULL) == 1, "replay snapshot should identify the frozen revision used");
     expect(response.summary.value("target_session_seq", 0ULL) == 7, "replay snapshot should preserve the requested session_seq");
     expect(response.summary.value("replayed_through_session_seq", 0ULL) == 7, "replay snapshot should rebuild through the target session_seq");
     expect(response.summary.value("applied_event_count", 0ULL) == 7, "replay snapshot should count the applied market events");
@@ -1042,6 +1209,7 @@ void testBridgeMarketDataEmissionExpandsPublicEvents() {
 
     trading_engine::reduce(appState(), trading_engine::MarketSubscriptionStartedEvent{
         "INTC",
+        "ib:conid:9101:STK:SMART:USD:INTC",
         9101,
         9201,
         false
@@ -1060,6 +1228,7 @@ void testBridgeMarketDataEmissionExpandsPublicEvents() {
         return record.recordType == "market_tick" && record.marketField == 1;
     });
     expect(bidTick != dispatch.records.end(), "bridge outbox should include a bid market_tick record");
+    expect(bidTick->instrumentId == "ib:conid:9101:STK:SMART:USD:INTC", "market tick records should preserve the canonical instrument identity");
     expect(bidTick->side == "BID", "market tick record should preserve the bid side label");
     expect(std::fabs(bidTick->price - 45.10) < 0.0001, "market tick record should preserve the quote price");
 
@@ -1072,6 +1241,20 @@ void testBridgeMarketDataEmissionExpandsPublicEvents() {
 
     unbindSharedDataOwner(&owner);
     resetSharedDataForTesting();
+}
+
+void testGeneratedRuntimeRegistryMatchesPhase15QueueSpec() {
+    expect(runtime_registry::kRegistryVersion == 1, "generated runtime registry should expose version 1");
+
+    const auto bridgeSender = runtime_registry::queueSpec(runtime_registry::QueueId::BridgeSender);
+    expect(bridgeSender.label == "com.foxy.long.bridge.sender", "generated runtime registry should preserve the bridge sender label");
+    expect(bridgeSender.qosName == "userInitiated", "generated runtime registry should preserve bridge sender QoS");
+    expect(runtime_registry::logCategoryName(bridgeSender.category) == "bridge", "generated runtime registry should preserve bridge sender category");
+
+    const auto engineWriter = runtime_registry::queueSpec(runtime_registry::QueueId::EngineSegmentWriter);
+    expect(engineWriter.label == "com.foxy.tape-engine.segment-writer", "generated runtime registry should preserve the engine writer label");
+    expect(engineWriter.qosName == "utility", "generated runtime registry should preserve engine writer QoS");
+    expect(runtime_registry::subsystemName(engineWriter.subsystem) == "com.foxy.tape-engine", "generated runtime registry should preserve the engine subsystem name");
 }
 
 void testBridgeLifecycleEmissionExpandsPrivateOrderEvents() {
@@ -1154,6 +1337,12 @@ void testBridgeLifecycleEmissionExpandsPrivateOrderEvents() {
            "bridge outbox should include general broker_error records");
     expect(std::find(recordTypes.begin(), recordTypes.end(), "order_reject") != recordTypes.end(),
            "bridge outbox should include rejection-specific order_reject records");
+
+    const auto fillRecord = std::find_if(dispatch.records.begin(), dispatch.records.end(), [](const BridgeOutboxRecord& record) {
+        return record.recordType == "fill_execution";
+    });
+    expect(fillRecord != dispatch.records.end(), "expanded lifecycle emission should include a fill_execution record to inspect");
+    expect(fillRecord->instrumentId == "ib:STK:SMART:USD:INTC", "lifecycle bridge records should preserve canonical instrument identity even before a live conId arrives");
 
     unbindSharedDataOwner(&owner);
     resetSharedDataForTesting();
@@ -1866,9 +2055,12 @@ int main() {
         testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments();
         testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq();
         testTapeEngineQueryStatusAndReads();
+        testTapeEngineRevisionPinnedReadsCanOverlayMutableTail();
+        testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity();
         testTapeEngineReplaySnapshotRebuildsFrozenMarketState();
         testBridgeMarketDataEmissionExpandsPublicEvents();
         testBridgeLifecycleEmissionExpandsPrivateOrderEvents();
+        testGeneratedRuntimeRegistryMatchesPhase15QueueSpec();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();

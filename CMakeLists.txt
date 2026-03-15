@@ -29,6 +29,7 @@ enable_language(OBJCXX)
 
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 include(CTest)
 include(FetchContent)
 
@@ -64,6 +65,23 @@ set(VENDORED_IB_API_DIR "${DEFAULT_VENDORED_IB_API_DIR}" CACHE PATH "Path to ven
 set(IXWEBSOCKET_DIR "${CMAKE_SOURCE_DIR}/ixwebsocket" CACHE PATH "Path to ixWebSocket")
 set(NLOHMANN_JSON_DIR "${CMAKE_SOURCE_DIR}/nlohmann_json" CACHE PATH "Path to nlohmann/json")
 set(LOCAL_IBAPI_STUB_DIR "${CMAKE_SOURCE_DIR}/stubs/ibapi")
+set(RUNTIME_CONFIG_DIR "${CMAKE_SOURCE_DIR}/config/runtime")
+set(RUNTIME_REGISTRY_INPUT "${RUNTIME_CONFIG_DIR}/queues.yaml")
+set(RUNTIME_REGISTRY_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
+set(RUNTIME_REGISTRY_GENERATED_HEADER "${RUNTIME_REGISTRY_GENERATED_DIR}/runtime_registry.generated.h")
+
+add_custom_command(
+    OUTPUT "${RUNTIME_REGISTRY_GENERATED_HEADER}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/tools/generate_runtime_registry.py"
+            "${RUNTIME_REGISTRY_INPUT}"
+            "${RUNTIME_REGISTRY_GENERATED_HEADER}"
+    DEPENDS
+            "${RUNTIME_REGISTRY_INPUT}"
+            "${CMAKE_SOURCE_DIR}/tools/generate_runtime_registry.py"
+    VERBATIM
+)
+add_custom_target(generate_runtime_registry DEPENDS "${RUNTIME_REGISTRY_GENERATED_HEADER}")
 
 if(NOT EXISTS "${IXWEBSOCKET_DIR}/CMakeLists.txt")
     message(FATAL_ERROR "IXWebSocket sources not found at ${IXWEBSOCKET_DIR}")
@@ -78,6 +96,7 @@ set(APP_SOURCES
     app_shared.cpp
     bridge_batch_codec.cpp
     bridge_batch_transport.cpp
+    runtime_qos.cpp
     tape_engine_protocol.cpp
     mac_observability.mm
     trading_export_panels.mm
@@ -99,6 +118,7 @@ set(TAPE_ENGINE_SOURCES
     tape_engine_client.cpp
     tape_engine_protocol.cpp
     bridge_batch_codec.cpp
+    runtime_qos.cpp
 )
 
 set(BUILD_DEMO OFF CACHE BOOL "" FORCE)
@@ -116,21 +136,28 @@ add_executable(tape_engine_ctl
 
 target_include_directories(tws_gui PRIVATE
     "${CMAKE_SOURCE_DIR}"
+    "${RUNTIME_REGISTRY_GENERATED_DIR}"
     "${IXWEBSOCKET_DIR}"
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
 target_include_directories(tape_engine PRIVATE
     "${CMAKE_SOURCE_DIR}"
+    "${RUNTIME_REGISTRY_GENERATED_DIR}"
     "${IXWEBSOCKET_DIR}"
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
 target_include_directories(tape_engine_ctl PRIVATE
     "${CMAKE_SOURCE_DIR}"
+    "${RUNTIME_REGISTRY_GENERATED_DIR}"
     "${IXWEBSOCKET_DIR}"
     "${NLOHMANN_JSON_DIR}/single_include"
 )
+
+add_dependencies(tws_gui generate_runtime_registry)
+add_dependencies(tape_engine generate_runtime_registry)
+add_dependencies(tape_engine_ctl generate_runtime_registry)
 
 target_link_libraries(tws_gui PRIVATE
     Threads::Threads
@@ -389,6 +416,7 @@ if(BUILD_TESTING)
         app_shared.cpp
         bridge_batch_codec.cpp
         bridge_batch_transport.cpp
+        runtime_qos.cpp
         tape_engine.cpp
         tape_engine_client.cpp
         tape_engine_protocol.cpp
@@ -399,9 +427,11 @@ if(BUILD_TESTING)
 
     target_include_directories(tws_gui_tests PRIVATE
         "${CMAKE_SOURCE_DIR}"
+        "${RUNTIME_REGISTRY_GENERATED_DIR}"
         "${IXWEBSOCKET_DIR}"
         "${NLOHMANN_JSON_DIR}/single_include"
     )
+    add_dependencies(tws_gui_tests generate_runtime_registry)
     target_compile_definitions(tws_gui_tests PRIVATE
         TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )

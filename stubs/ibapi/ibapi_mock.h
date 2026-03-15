@@ -43,6 +43,7 @@ struct MarketDepthL2 {};
 } // namespace protobuf
 
 struct Contract {
+    long conId = 0;
     std::string symbol;
     std::string secType;
     std::string exchange;

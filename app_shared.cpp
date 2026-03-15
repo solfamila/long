@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <system_error>
 #include <unordered_map>
 
@@ -123,6 +124,7 @@ void copySharedDataState(const SharedData& src, SharedData& dst) {
     dst.selectedAccount = src.selectedAccount;
 
     dst.currentSymbol = src.currentSymbol;
+    dst.currentInstrumentId = src.currentInstrumentId;
     dst.bidPrice = src.bidPrice;
     dst.askPrice = src.askPrice;
     dst.lastPrice = src.lastPrice;
@@ -248,6 +250,7 @@ struct ImmutableSharedDataSnapshot {
     std::string selectedAccount;
 
     std::string currentSymbol;
+    std::string currentInstrumentId;
     double bidPrice = 0.0;
     double askPrice = 0.0;
     double lastPrice = 0.0;
@@ -333,6 +336,9 @@ std::string bridgeTickSideLabel(TickType field);
 std::string buildBridgeTickNote(TickType field, double price);
 std::string bridgeBookSideLabel(int side);
 std::string buildBridgeDepthNote(int side, int operation, int position, double price, double size);
+std::string canonicalInstrumentIdFromContract(const Contract& contract);
+std::string defaultCanonicalInstrumentIdForSymbol(const std::string& symbol);
+std::uint64_t nowSystemNs();
 
 template <typename Fn>
 auto invokeSharedDataMutation(Fn&& fn) -> decltype(fn()) {
@@ -429,12 +435,45 @@ std::string buildBookSummary(const std::vector<BookLevel>& askBook, const std::v
     return summarizeBookSide(askBook, 3, "ask") + " " + summarizeBookSide(bidBook, 3, "bid");
 }
 
+std::string canonicalInstrumentIdFromContract(const Contract& contract) {
+    const std::string symbol = toUpperCase(contract.symbol);
+    const std::string secType = contract.secType.empty() ? "STK" : toUpperCase(contract.secType);
+    const std::string exchange = contract.exchange.empty() ? "SMART" : toUpperCase(contract.exchange);
+    const std::string currency = contract.currency.empty() ? "USD" : toUpperCase(contract.currency);
+
+    std::ostringstream oss;
+    if (contract.conId > 0) {
+        oss << "ib:conid:" << static_cast<long long>(contract.conId) << ':';
+    } else {
+        oss << "ib:";
+    }
+    oss << secType << ':' << exchange << ':' << currency << ':' << symbol;
+    return oss.str();
+}
+
+std::string defaultCanonicalInstrumentIdForSymbol(const std::string& symbol) {
+    Contract contract;
+    contract.symbol = toUpperCase(symbol);
+    contract.secType = "STK";
+    contract.exchange = "SMART";
+    contract.currency = "USD";
+    return canonicalInstrumentIdFromContract(contract);
+}
+
+std::uint64_t nowSystemNs() {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
 void appendBridgeRecordDetails(json& details, const BridgeOutboxRecord& record) {
     if (!record.source.empty()) {
         details["source"] = record.source;
     }
     if (!record.symbol.empty()) {
         details["symbol"] = record.symbol;
+    }
+    if (!record.instrumentId.empty()) {
+        details["instrumentId"] = record.instrumentId;
     }
     if (!record.side.empty()) {
         details["side"] = record.side;
@@ -456,6 +495,15 @@ void appendBridgeRecordDetails(json& details, const BridgeOutboxRecord& record) 
     }
     if (std::isfinite(record.size)) {
         details["size"] = record.size;
+    }
+    if (record.tsReceiveNs > 0) {
+        details["tsReceiveNs"] = record.tsReceiveNs;
+    }
+    if (record.tsExchangeNs > 0) {
+        details["tsExchangeNs"] = record.tsExchangeNs;
+    }
+    if (record.vendorSeq > 0) {
+        details["vendorSeq"] = record.vendorSeq;
     }
     if (record.anchor.traceId > 0) {
         details["traceId"] = static_cast<unsigned long long>(record.anchor.traceId);
@@ -532,6 +580,15 @@ BridgeOutboxEnqueueResult enqueueBridgeOutboxRecordLocked(SharedData& state, con
     record.recordType = input.recordType;
     record.source = input.source;
     record.symbol = toUpperCase(input.symbol);
+    if (!input.instrumentId.empty()) {
+        record.instrumentId = input.instrumentId;
+    } else if (!record.symbol.empty() && record.symbol == state.currentSymbol && !state.currentInstrumentId.empty()) {
+        record.instrumentId = state.currentInstrumentId;
+    } else if (!record.symbol.empty()) {
+        record.instrumentId = canonicalInstrumentIdForSymbol(record.symbol);
+    } else {
+        record.instrumentId = state.currentInstrumentId;
+    }
     record.side = input.side;
     record.marketField = input.marketField;
     record.bookPosition = input.bookPosition;
@@ -539,6 +596,9 @@ BridgeOutboxEnqueueResult enqueueBridgeOutboxRecordLocked(SharedData& state, con
     record.bookSide = input.bookSide;
     record.price = input.price;
     record.size = input.size;
+    record.tsReceiveNs = input.tsReceiveNs > 0 ? input.tsReceiveNs : nowSystemNs();
+    record.tsExchangeNs = input.tsExchangeNs;
+    record.vendorSeq = input.vendorSeq;
     record.anchor.traceId = input.traceId;
     record.anchor.orderId = input.orderId;
     record.anchor.permId = input.permId;
@@ -1064,6 +1124,10 @@ void requestUiInvalidation() {
     }
 }
 
+std::string canonicalInstrumentIdForSymbol(const std::string& symbol) {
+    return defaultCanonicalInstrumentIdForSymbol(symbol);
+}
+
 namespace trading_engine {
 
 void reduce(SharedData& state, const RuntimeBootstrapEvent& event) {
@@ -1200,6 +1264,7 @@ void reduce(SharedData& state, const MarketSubscriptionClearedEvent& event) {
         }
     }
     state.depthSubscribed = false;
+    state.currentInstrumentId.clear();
     state.bidPrice = 0.0;
     state.askPrice = 0.0;
     state.lastPrice = 0.0;
@@ -1213,6 +1278,9 @@ void reduce(SharedData& state, const MarketSubscriptionStartedEvent& event) {
     state.activeDepthReqId = event.depthRequestId;
     state.depthSubscribed = true;
     state.currentSymbol = event.symbol;
+    state.currentInstrumentId = event.instrumentId.empty()
+        ? canonicalInstrumentIdForSymbol(event.symbol)
+        : event.instrumentId;
     state.bidPrice = 0.0;
     state.askPrice = 0.0;
     state.lastPrice = 0.0;
@@ -1319,6 +1387,7 @@ void reduce(SharedData& state, const BrokerTickPriceEvent& event) {
         bridgeRecord.recordType = "market_tick";
         bridgeRecord.source = "BrokerTickPrice";
         bridgeRecord.symbol = state.currentSymbol;
+        bridgeRecord.instrumentId = state.currentInstrumentId;
         bridgeRecord.marketField = static_cast<int>(event.field);
         bridgeRecord.price = event.price;
         bridgeRecord.side = bridgeTickSideLabel(event.field);
@@ -1395,6 +1464,7 @@ void reduce(SharedData& state, const BrokerMarketDepthEvent& event) {
     bridgeRecord.recordType = "market_depth";
     bridgeRecord.source = "BrokerMarketDepth";
     bridgeRecord.symbol = state.currentSymbol;
+    bridgeRecord.instrumentId = state.currentInstrumentId;
     bridgeRecord.side = bridgeBookSideLabel(event.side);
     bridgeRecord.bookPosition = event.position;
     bridgeRecord.bookOperation = event.operation;
@@ -2400,6 +2470,7 @@ std::shared_ptr<const ImmutableSharedDataSnapshot> buildImmutableSharedDataSnaps
     snapshot->selectedAccount = state.selectedAccount;
 
     snapshot->currentSymbol = state.currentSymbol;
+    snapshot->currentInstrumentId = state.currentInstrumentId;
     snapshot->bidPrice = state.bidPrice;
     snapshot->askPrice = state.askPrice;
     snapshot->lastPrice = state.lastPrice;
@@ -2967,6 +3038,19 @@ BridgeDispatchSnapshot captureBridgeDispatchSnapshot(std::size_t maxItems) {
     return snapshot;
 }
 
+std::string captureCurrentInstrumentIdForSymbol(const std::string& symbol) {
+    const auto published = ensurePublishedSharedDataSnapshot();
+    const std::string normalizedSymbol = toUpperCase(symbol);
+    if (!published->currentInstrumentId.empty() &&
+        (normalizedSymbol.empty() || published->currentSymbol == normalizedSymbol)) {
+        return published->currentInstrumentId;
+    }
+    if (!normalizedSymbol.empty()) {
+        return canonicalInstrumentIdForSymbol(normalizedSymbol);
+    }
+    return published->currentInstrumentId;
+}
+
 std::size_t acknowledgeDeliveredBridgeRecords(const std::vector<BridgeOutboxRecord>& records) {
     if (records.empty()) {
         return 0;
@@ -3170,6 +3254,7 @@ bool requestSymbolSubscription(EClientSocket* client,
     contract.secType = "STK";
     contract.exchange = "SMART";
     contract.currency = "USD";
+    const std::string instrumentId = canonicalInstrumentIdFromContract(contract);
 
     {
         std::lock_guard<std::recursive_mutex> clientLock(g_data.clientMutex);
@@ -3184,6 +3269,7 @@ bool requestSymbolSubscription(EClientSocket* client,
     invokeSharedDataMutation([&]() {
         trading_engine::reduce(appState(), trading_engine::MarketSubscriptionStartedEvent{
             symbol,
+            instrumentId,
             mktDataReqId,
             depthReqId,
             recalcQtyFromFirstAsk
@@ -3192,6 +3278,7 @@ bool requestSymbolSubscription(EClientSocket* client,
 
     appendSharedMessage("Subscription request sent for " + symbol);
     appendRuntimeJournalEvent("subscribe_request_sent", {
+        {"instrumentId", instrumentId},
         {"symbol", symbol},
         {"recalculateQuantity", recalcQtyFromFirstAsk}
     });
@@ -4361,7 +4448,8 @@ void enqueueBridgeLifecycleRecord(const std::string& recordType,
                                   const std::string& execId,
                                   const std::string& note,
                                   const std::string& symbol = {},
-                                  const std::string& side = {}) {
+                                  const std::string& side = {},
+                                  const std::string& instrumentId = {}) {
     const auto published = ensurePublishedSharedDataSnapshot();
 
     BridgeOutboxRecordInput bridgeRecord;
@@ -4374,6 +4462,7 @@ void enqueueBridgeLifecycleRecord(const std::string& recordType,
     bridgeRecord.note = note;
     bridgeRecord.symbol = symbol;
     bridgeRecord.side = side;
+    bridgeRecord.instrumentId = instrumentId;
 
     if ((bridgeRecord.traceId == 0 || bridgeRecord.symbol.empty() || bridgeRecord.side.empty() || bridgeRecord.permId == 0) &&
         orderId > 0) {
@@ -4396,6 +4485,16 @@ void enqueueBridgeLifecycleRecord(const std::string& recordType,
         }
         if (bridgeRecord.orderId == 0 && traceIt->second.orderId > 0) {
             bridgeRecord.orderId = traceIt->second.orderId;
+        }
+    }
+
+    if (bridgeRecord.instrumentId.empty()) {
+        if (!bridgeRecord.symbol.empty() &&
+            bridgeRecord.symbol == published->currentSymbol &&
+            !published->currentInstrumentId.empty()) {
+            bridgeRecord.instrumentId = published->currentInstrumentId;
+        } else if (!bridgeRecord.symbol.empty()) {
+            bridgeRecord.instrumentId = canonicalInstrumentIdForSymbol(bridgeRecord.symbol);
         }
     }
 
@@ -4497,7 +4596,8 @@ void recordTraceOpenOrder(OrderId orderId, const Contract& contract, const Order
                                      {},
                                      result.stage + ": " + result.details,
                                      contract.symbol,
-                                     order.action);
+                                     order.action,
+                                     canonicalInstrumentIdFromContract(contract));
     }
 }
 
@@ -4544,6 +4644,7 @@ void recordTraceExecution(const Contract& contract, const Execution& execution) 
         bridgeRecord.recordType = "fill_execution";
         bridgeRecord.source = "BrokerExecution";
         bridgeRecord.symbol = contract.symbol;
+        bridgeRecord.instrumentId = canonicalInstrumentIdFromContract(contract);
         bridgeRecord.side = execution.side;
         bridgeRecord.traceId = result.traceId;
         bridgeRecord.orderId = static_cast<OrderId>(execution.orderId);

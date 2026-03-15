@@ -162,9 +162,18 @@ const std::string& UnixDomainSocketTransport::socketPath() const {
 
 bool recordTypeRequiresImmediateFlush(std::string_view recordType) {
     return recordType == "order_intent" ||
+           recordType == "open_order" ||
+           recordType == "order_status" ||
            recordType == "fill_execution" ||
+           recordType == "commission_report" ||
            recordType == "cancel_request" ||
-           recordType == "order_reject";
+           recordType == "order_reject" ||
+           recordType == "broker_error" ||
+           recordType == "market_status" ||
+           recordType == "feed_reset" ||
+           recordType == "gap_marker" ||
+           recordType == "reset_marker" ||
+           recordType == "trade_correction";
 }
 
 PreparedBatch prepareBatch(const std::vector<BridgeOutboxRecord>& records,

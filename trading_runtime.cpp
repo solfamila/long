@@ -4,6 +4,7 @@
 #include "bridge_batch_transport.h"
 #include "controller.h"
 #include "mac_observability.h"
+#include "runtime_qos.h"
 #include "trading_wrapper.h"
 #include "websocket_handlers.h"
 
@@ -277,6 +278,7 @@ struct TradingRuntime::Impl {
     }
 
     void bridgeLoop() {
+        runtime_qos::applyCurrentThreadSpec(runtime_registry::QueueId::BridgeSender);
         const std::string socketPath = resolveBridgeSocketPath();
         bridge_batch::UnixDomainSocketTransport transport(socketPath);
         bridge_batch::Sender sender(transport);
@@ -1082,6 +1084,7 @@ bool TradingRuntime::submitOrderIntent(const SubmitIntent& intent,
         bridgeRecord.recordType = "order_intent";
         bridgeRecord.source = intent.source;
         bridgeRecord.symbol = intent.symbol;
+        bridgeRecord.instrumentId = captureCurrentInstrumentIdForSymbol(intent.symbol);
         bridgeRecord.side = intent.side;
         bridgeRecord.traceId = traceId;
         bridgeRecord.orderId = orderId;

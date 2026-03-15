@@ -1,4 +1,5 @@
 #include "tape_engine.h"
+#include "runtime_qos.h"
 
 #include <CommonCrypto/CommonDigest.h>
 
@@ -109,6 +110,7 @@ json eventToJson(const EngineEvent& event) {
         {"connection_id", event.connectionId},
         {"event_kind", event.eventKind},
         {"instrument_id", event.instrumentId},
+        {"revision_id", event.revisionId},
         {"session_seq", event.sessionSeq},
         {"source_seq", event.sourceSeq},
         {"ts_engine_ns", event.tsEngineNs}
@@ -117,6 +119,11 @@ json eventToJson(const EngineEvent& event) {
     if (event.eventKind == "gap_marker") {
         payload["gap_start_source_seq"] = event.gapStartSourceSeq;
         payload["gap_end_source_seq"] = event.gapEndSourceSeq;
+        return payload;
+    }
+    if (event.eventKind == "reset_marker") {
+        payload["reset_previous_source_seq"] = event.resetPreviousSourceSeq;
+        payload["reset_source_seq"] = event.resetSourceSeq;
         return payload;
     }
 
@@ -232,6 +239,7 @@ bool Server::start(std::string* error) {
     }
 
     running_.store(true, std::memory_order_release);
+    writerThread_ = std::thread(&Server::writerLoop, this);
     sequencerThread_ = std::thread(&Server::sequencerLoop, this);
     acceptThread_ = std::thread(&Server::acceptLoop, this);
     return true;
@@ -248,6 +256,7 @@ void Server::stop() {
         serverFd_ = -1;
     }
     queueCv_.notify_all();
+    writerCv_.notify_all();
 
     if (acceptThread_.joinable()) {
         acceptThread_.join();
@@ -255,16 +264,27 @@ void Server::stop() {
     if (sequencerThread_.joinable()) {
         sequencerThread_.join();
     }
+    if (writerThread_.joinable()) {
+        writerThread_.join();
+    }
 
     std::error_code ec;
     std::filesystem::remove(config_.socketPath, ec);
 }
 
 EngineSnapshot Server::snapshot() const {
+    const std::size_t writerBacklog = [&]() {
+        std::lock_guard<std::mutex> writerLock(writerMutex_);
+        return writerQueue_.size();
+    }();
     std::lock_guard<std::mutex> lock(stateMutex_);
     EngineSnapshot snapshot;
     snapshot.nextSessionSeq = nextSessionSeq_;
     snapshot.nextSegmentId = nextSegmentId_;
+    snapshot.nextRevisionId = nextRevisionId_;
+    snapshot.latestFrozenRevisionId = latestFrozenRevisionId_;
+    snapshot.latestFrozenSessionSeq = latestFrozenSessionSeq_;
+    snapshot.writerBacklogSegments = writerBacklog;
     snapshot.liveEvents.assign(liveRing_.begin(), liveRing_.end());
     snapshot.segments = segments_;
     return snapshot;
@@ -275,6 +295,7 @@ const EngineConfig& Server::config() const {
 }
 
 void Server::acceptLoop() {
+    runtime_qos::applyCurrentThreadSpec(runtime_registry::QueueId::EngineAcceptLoop);
     while (running_.load(std::memory_order_acquire)) {
         const int clientFd = ::accept(serverFd_, nullptr, nullptr);
         if (clientFd < 0) {
@@ -305,6 +326,7 @@ void Server::acceptLoop() {
 }
 
 void Server::sequencerLoop() {
+    runtime_qos::applyCurrentThreadSpec(runtime_registry::QueueId::EngineSequencer);
     while (running_.load(std::memory_order_acquire) || !queue_.empty()) {
         std::shared_ptr<PendingRequest> request;
         {
@@ -325,6 +347,56 @@ void Server::sequencerLoop() {
             request->promise.set_value(encodeAckFrame(rejectAck(0, "", "", error.what())));
         }
     }
+}
+
+void Server::writerLoop() {
+    runtime_qos::applyCurrentThreadSpec(runtime_registry::QueueId::EngineSegmentWriter);
+    while (running_.load(std::memory_order_acquire) || !writerQueue_.empty()) {
+        PendingSegment segment;
+        {
+            std::unique_lock<std::mutex> lock(writerMutex_);
+            writerCv_.wait(lock, [&]() {
+                return !running_.load(std::memory_order_acquire) || !writerQueue_.empty();
+            });
+            if (writerQueue_.empty()) {
+                continue;
+            }
+            segment = std::move(writerQueue_.front());
+            writerQueue_.pop_front();
+        }
+
+        try {
+            writeSegment(segment);
+        } catch (const std::exception& error) {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            writerFailure_ = error.what();
+        }
+    }
+}
+
+std::string Server::resolveInstrumentId(const BridgeOutboxRecord& record) const {
+    if (!record.instrumentId.empty()) {
+        return record.instrumentId;
+    }
+    if (!record.symbol.empty()) {
+        return "ib:STK:SMART:USD:" + record.symbol;
+    }
+    return config_.instrumentId;
+}
+
+void Server::rememberSourceSeqUnlocked(ConnectionCursor& cursor, std::uint64_t sourceSeq) {
+    cursor.recentSourceSeqs.push_back(sourceSeq);
+    cursor.recentSourceSeqSet.insert(sourceSeq);
+    while (cursor.recentSourceSeqs.size() > config_.dedupeWindowSize) {
+        const std::uint64_t evicted = cursor.recentSourceSeqs.front();
+        cursor.recentSourceSeqs.pop_front();
+        cursor.recentSourceSeqSet.erase(evicted);
+    }
+}
+
+void Server::resetSourceSeqWindowUnlocked(ConnectionCursor& cursor) {
+    cursor.recentSourceSeqs.clear();
+    cursor.recentSourceSeqSet.clear();
 }
 
 IngestAck Server::rejectAck(std::uint64_t batchSeq,
@@ -350,12 +422,30 @@ void Server::appendLiveEvent(const EngineEvent& event) {
     liveRing_.push_back(event);
 }
 
-void Server::writeSegment(const std::vector<EngineEvent>& events) {
-    if (events.empty()) {
+void Server::enqueueSegment(PendingSegment segment) {
+    if (segment.events.empty()) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(writerMutex_);
+        writerQueue_.push_back(std::move(segment));
+    }
+    writerCv_.notify_one();
+}
+
+void Server::writeSegment(const PendingSegment& segment) {
+    if (segment.events.empty()) {
         return;
     }
 
-    const std::uint64_t segmentId = nextSegmentId_++;
+    std::uint64_t segmentId = 0;
+    std::string previousManifestHash;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        segmentId = nextSegmentId_++;
+        previousManifestHash = lastManifestHash_;
+    }
+
     std::ostringstream name;
     name << "segment-" << std::setw(6) << std::setfill('0') << segmentId;
     const std::string baseName = name.str();
@@ -364,7 +454,7 @@ void Server::writeSegment(const std::vector<EngineEvent>& events) {
     const std::filesystem::path manifestPath = config_.dataDir / "manifest.jsonl";
 
     std::ostringstream payloadBuilder;
-    for (const auto& event : events) {
+    for (const auto& event : segment.events) {
         payloadBuilder << eventToJson(event).dump() << '\n';
     }
     const std::string payload = payloadBuilder.str();
@@ -379,13 +469,14 @@ void Server::writeSegment(const std::vector<EngineEvent>& events) {
 
     SegmentInfo info;
     info.segmentId = segmentId;
-    info.firstSessionSeq = events.front().sessionSeq;
-    info.lastSessionSeq = events.back().sessionSeq;
-    info.eventCount = static_cast<std::uint64_t>(events.size());
+    info.revisionId = segment.revisionId;
+    info.firstSessionSeq = segment.events.front().sessionSeq;
+    info.lastSessionSeq = segment.events.back().sessionSeq;
+    info.eventCount = static_cast<std::uint64_t>(segment.events.size());
     info.fileName = segmentPath.filename().string();
     info.metadataFileName = metadataPath.filename().string();
     info.payloadSha256 = sha256Hex(payload);
-    info.prevManifestHash = lastManifestHash_;
+    info.prevManifestHash = previousManifestHash;
 
     json manifestEntry{
         {"event_count", info.eventCount},
@@ -395,6 +486,7 @@ void Server::writeSegment(const std::vector<EngineEvent>& events) {
         {"metadata_file_name", info.metadataFileName},
         {"payload_sha256", info.payloadSha256},
         {"prev_manifest_hash", info.prevManifestHash},
+        {"revision_id", info.revisionId},
         {"segment_id", info.segmentId}
     };
     info.manifestHash = sha256Hex(manifestEntry.dump());
@@ -415,13 +507,31 @@ void Server::writeSegment(const std::vector<EngineEvent>& events) {
         manifestOut << manifestEntry.dump() << '\n';
     }
 
-    lastManifestHash_ = info.manifestHash;
-    segments_.push_back(std::move(info));
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        lastManifestHash_ = info.manifestHash;
+        latestFrozenRevisionId_ = std::max(latestFrozenRevisionId_, segment.revisionId);
+        latestFrozenSessionSeq_ = std::max(latestFrozenSessionSeq_, info.lastSessionSeq);
+        segments_.push_back(std::move(info));
+    }
 }
 
-std::vector<json> Server::loadAllEventsUnlocked() const {
+std::uint64_t Server::resolveFrozenRevisionUnlocked(std::uint64_t requestedRevisionId) const {
+    if (requestedRevisionId == 0) {
+        return latestFrozenRevisionId_;
+    }
+    if (requestedRevisionId > latestFrozenRevisionId_) {
+        throw std::runtime_error("requested revision_id is not frozen yet");
+    }
+    return requestedRevisionId;
+}
+
+std::vector<json> Server::loadAllEventsUnlocked(std::uint64_t frozenRevisionId) const {
     std::vector<json> events;
     for (const auto& segment : segments_) {
+        if (segment.revisionId > frozenRevisionId) {
+            continue;
+        }
         const std::filesystem::path segmentPath = config_.dataDir / "segments" / segment.fileName;
         std::ifstream in(segmentPath);
         if (!in.is_open()) {
@@ -441,8 +551,8 @@ std::vector<json> Server::loadAllEventsUnlocked() const {
     return events;
 }
 
-std::vector<json> Server::mergedEventsUnlocked(bool includeLiveTail) const {
-    std::vector<json> events = loadAllEventsUnlocked();
+std::vector<json> Server::mergedEventsUnlocked(std::uint64_t frozenRevisionId, bool includeLiveTail) const {
+    std::vector<json> events = loadAllEventsUnlocked(frozenRevisionId);
     if (!includeLiveTail) {
         return events;
     }
@@ -453,6 +563,9 @@ std::vector<json> Server::mergedEventsUnlocked(bool includeLiveTail) const {
         seenSessionSeq.insert(event.value("session_seq", 0ULL));
     }
     for (const auto& event : liveRing_) {
+        if (event.revisionId > 0 && event.revisionId <= frozenRevisionId) {
+            continue;
+        }
         if (seenSessionSeq.insert(event.sessionSeq).second) {
             events.push_back(eventToJson(event));
         }
@@ -467,9 +580,10 @@ std::vector<json> Server::mergedEventsUnlocked(bool includeLiveTail) const {
 std::vector<json> Server::filterEventsByRangeUnlocked(std::uint64_t fromSessionSeq,
                                                       std::uint64_t toSessionSeq,
                                                       std::size_t limit,
+                                                      std::uint64_t frozenRevisionId,
                                                       bool includeLiveTail) const {
     std::vector<json> results;
-    const auto allEvents = mergedEventsUnlocked(includeLiveTail);
+    const auto allEvents = mergedEventsUnlocked(frozenRevisionId, includeLiveTail);
     for (const auto& event : allEvents) {
         const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
         if (sessionSeq < fromSessionSeq) {
@@ -491,9 +605,11 @@ std::vector<json> Server::filterEventsByAnchorUnlocked(std::uint64_t traceId,
                                                        long long orderId,
                                                        long long permId,
                                                        const std::string& execId,
-                                                       std::size_t limit) const {
+                                                       std::size_t limit,
+                                                       std::uint64_t frozenRevisionId,
+                                                       bool includeLiveTail) const {
     std::vector<json> results;
-    const auto allEvents = loadAllEventsUnlocked();
+    const auto allEvents = mergedEventsUnlocked(frozenRevisionId, includeLiveTail);
     for (const auto& event : allEvents) {
         const json anchor = event.value("anchor", json::object());
         const bool matchesTrace = traceId > 0 && anchor.value("trace_id", 0ULL) == traceId;
@@ -513,8 +629,9 @@ std::vector<json> Server::filterEventsByAnchorUnlocked(std::uint64_t traceId,
 
 json Server::buildReplaySnapshotUnlocked(std::uint64_t targetSessionSeq,
                                          std::size_t depthLimit,
+                                         std::uint64_t frozenRevisionId,
                                          bool includeLiveTail) const {
-    const std::vector<json> allEvents = mergedEventsUnlocked(includeLiveTail);
+    const std::vector<json> allEvents = mergedEventsUnlocked(frozenRevisionId, includeLiveTail);
     if (targetSessionSeq == 0 && !allEvents.empty()) {
         targetSessionSeq = allEvents.back().value("session_seq", 0ULL);
     }
@@ -635,25 +752,56 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
     }
 
     std::vector<EngineEvent> writtenEvents;
+    std::uint64_t assignedRevisionId = 0;
 
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         ConnectionCursor& cursor = cursors_[connectionKey(batch.header.producer, batch.header.runtimeSessionId)];
+        const auto ensureRevisionId = [&]() -> std::uint64_t {
+            if (assignedRevisionId == 0) {
+                assignedRevisionId = nextRevisionId_++;
+            }
+            return assignedRevisionId;
+        };
 
         for (const auto& record : batch.records) {
-            if (cursor.seenSourceSeqs.count(record.sourceSeq) > 0) {
+            if (cursor.recentSourceSeqSet.count(record.sourceSeq) > 0) {
                 ++ack.duplicateRecords;
                 continue;
+            }
+
+            if (cursor.hasLastAccepted && record.sourceSeq <= cursor.lastAcceptedSourceSeq) {
+                EngineEvent reset;
+                reset.sessionSeq = nextSessionSeq_++;
+                reset.revisionId = ensureRevisionId();
+                reset.sourceSeq = record.sourceSeq;
+                reset.eventKind = "reset_marker";
+                reset.adapterId = batch.header.producer;
+                reset.connectionId = batch.header.runtimeSessionId;
+                reset.instrumentId = resolveInstrumentId(record);
+                reset.tsEngineNs = nowEngineNs();
+                reset.resetPreviousSourceSeq = cursor.lastAcceptedSourceSeq;
+                reset.resetSourceSeq = record.sourceSeq;
+                appendLiveEvent(reset);
+                writtenEvents.push_back(reset);
+                resetSourceSeqWindowUnlocked(cursor);
+                cursor.lastAcceptedSourceSeq = 0;
+                cursor.hasLastAccepted = false;
+                if (ack.firstSessionSeq == 0) {
+                    ack.firstSessionSeq = reset.sessionSeq;
+                }
+                ack.lastSessionSeq = reset.sessionSeq;
             }
 
             if (cursor.hasLastAccepted && record.sourceSeq > cursor.lastAcceptedSourceSeq + 1) {
                 EngineEvent gap;
                 gap.sessionSeq = nextSessionSeq_++;
+                gap.revisionId = ensureRevisionId();
                 gap.sourceSeq = cursor.lastAcceptedSourceSeq + 1;
                 gap.eventKind = "gap_marker";
                 gap.adapterId = batch.header.producer;
                 gap.connectionId = batch.header.runtimeSessionId;
-                gap.instrumentId = record.symbol.empty() ? config_.instrumentId : record.symbol;
+                gap.instrumentId = resolveInstrumentId(record);
                 gap.tsEngineNs = nowEngineNs();
                 gap.gapStartSourceSeq = cursor.lastAcceptedSourceSeq + 1;
                 gap.gapEndSourceSeq = record.sourceSeq - 1;
@@ -668,17 +816,18 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
 
             EngineEvent event;
             event.sessionSeq = nextSessionSeq_++;
+            event.revisionId = ensureRevisionId();
             event.sourceSeq = record.sourceSeq;
             event.eventKind = record.recordType;
             event.adapterId = batch.header.producer;
             event.connectionId = batch.header.runtimeSessionId;
-            event.instrumentId = record.symbol.empty() ? config_.instrumentId : record.symbol;
+            event.instrumentId = resolveInstrumentId(record);
             event.tsEngineNs = nowEngineNs();
             event.bridgeRecord = record;
 
             appendLiveEvent(event);
             writtenEvents.push_back(event);
-            cursor.seenSourceSeqs[record.sourceSeq] = true;
+            rememberSourceSeqUnlocked(cursor, record.sourceSeq);
             cursor.lastAcceptedSourceSeq = std::max(cursor.lastAcceptedSourceSeq, record.sourceSeq);
             cursor.hasLastAccepted = true;
 
@@ -688,9 +837,10 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
             }
             ack.lastSessionSeq = event.sessionSeq;
         }
-
-        writeSegment(writtenEvents);
+        ack.assignedRevisionId = assignedRevisionId;
     }
+
+    enqueueSegment(PendingSegment{assignedRevisionId, std::move(writtenEvents)});
 
     return ack;
 }
@@ -711,25 +861,37 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
     response.requestId = request.requestId;
     response.operation = request.operation;
 
+    const std::size_t writerBacklog = [&]() {
+        std::lock_guard<std::mutex> lock(writerMutex_);
+        return writerQueue_.size();
+    }();
     std::lock_guard<std::mutex> lock(stateMutex_);
     if (request.operation == "status") {
         response.summary = {
             {"data_dir", config_.dataDir.string()},
             {"instrument_id", config_.instrumentId},
             {"last_manifest_hash", lastManifestHash_},
+            {"latest_frozen_revision_id", latestFrozenRevisionId_},
+            {"latest_frozen_session_seq", latestFrozenSessionSeq_},
             {"latest_session_seq", nextSessionSeq_ > 0 ? nextSessionSeq_ - 1 : 0},
             {"live_event_count", liveRing_.size()},
+            {"next_revision_id", nextRevisionId_},
             {"next_segment_id", nextSegmentId_},
             {"next_session_seq", nextSessionSeq_},
             {"segment_count", segments_.size()},
-            {"socket_path", config_.socketPath}
+            {"socket_path", config_.socketPath},
+            {"writer_backlog_segments", writerBacklog}
         };
+        if (!writerFailure_.empty()) {
+            response.summary["writer_error"] = writerFailure_;
+        }
         return response;
     }
 
     if (request.operation == "read_live_tail") {
         const std::size_t limit = request.limit == 0 ? 50 : request.limit;
         response.summary = {
+            {"base_revision_id", latestFrozenRevisionId_},
             {"includes_mutable_tail", true},
             {"live_tail_high_water_seq", liveRing_.empty() ? 0 : liveRing_.back().sessionSeq},
             {"returned_events", 0}
@@ -744,10 +906,16 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
     }
 
     if (request.operation == "read_range") {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevisionUnlocked(request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
         const std::uint64_t from = request.fromSessionSeq == 0 ? 1 : request.fromSessionSeq;
         const std::uint64_t to = request.toSessionSeq;
         const std::size_t limit = request.limit == 0 ? 200 : request.limit;
-        const std::vector<json> events = filterEventsByRangeUnlocked(from, to, limit, request.includeLiveTail);
+        const std::vector<json> events = filterEventsByRangeUnlocked(from, to, limit, frozenRevisionId, request.includeLiveTail);
         response.events = json::array();
         for (const auto& event : events) {
             response.events.push_back(event);
@@ -756,6 +924,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"from_session_seq", from},
             {"includes_mutable_tail", request.includeLiveTail},
             {"returned_events", response.events.size()},
+            {"served_revision_id", frozenRevisionId},
             {"to_session_seq", to}
         };
         if (request.includeLiveTail) {
@@ -765,26 +934,50 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
     }
 
     if (request.operation == "find_order_anchor") {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevisionUnlocked(request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
         const std::size_t limit = request.limit == 0 ? 100 : request.limit;
         const std::vector<json> events =
-            filterEventsByAnchorUnlocked(request.traceId, request.orderId, request.permId, request.execId, limit);
+            filterEventsByAnchorUnlocked(request.traceId,
+                                         request.orderId,
+                                         request.permId,
+                                         request.execId,
+                                         limit,
+                                         frozenRevisionId,
+                                         request.includeLiveTail);
         response.events = json::array();
         for (const auto& event : events) {
             response.events.push_back(event);
         }
         response.summary = {
             {"exec_id", request.execId},
+            {"includes_mutable_tail", request.includeLiveTail},
             {"order_id", request.orderId},
             {"perm_id", request.permId},
             {"returned_events", response.events.size()},
+            {"served_revision_id", frozenRevisionId},
             {"trace_id", request.traceId}
         };
         return response;
     }
 
     if (request.operation == "replay_snapshot") {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevisionUnlocked(request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
         const std::size_t depthLimit = request.limit == 0 ? 5 : request.limit;
-        response.summary = buildReplaySnapshotUnlocked(request.targetSessionSeq, depthLimit, request.includeLiveTail);
+        response.summary = buildReplaySnapshotUnlocked(request.targetSessionSeq,
+                                                      depthLimit,
+                                                      frozenRevisionId,
+                                                      request.includeLiveTail);
+        response.summary["served_revision_id"] = frozenRevisionId;
         response.events = json::array();
         return response;
     }

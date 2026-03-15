@@ -20,6 +20,7 @@ struct IngestAck {
     std::string schema = kAckSchema;
     std::string status = "accepted";
     std::uint64_t batchSeq = 0;
+    std::uint64_t assignedRevisionId = 0;
     std::string adapterId;
     std::string connectionId;
     std::uint64_t acceptedRecords = 0;
@@ -46,6 +47,7 @@ struct QueryRequest {
     std::string schema = kQueryRequestSchema;
     std::string requestId;
     std::string operation;
+    std::uint64_t revisionId = 0;
     std::uint64_t fromSessionSeq = 0;
     std::uint64_t toSessionSeq = 0;
     std::uint64_t targetSessionSeq = 0;

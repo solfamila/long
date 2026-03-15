@@ -49,8 +49,10 @@ Query the engine daemon:
 ./build/tape_engine_ctl status
 ./build/tape_engine_ctl read-live-tail 20
 ./build/tape_engine_ctl read-range 1 50 --include-live-tail
+./build/tape_engine_ctl read-range 1 50 --revision 1
 ./build/tape_engine_ctl replay-snapshot 50 --depth 5
-./build/tape_engine_ctl find-order --order-id 701
+./build/tape_engine_ctl replay-snapshot 50 --depth 5 --revision 1 --include-live-tail
+./build/tape_engine_ctl find-order --order-id 701 --revision 1
 ```
 
 Package a distributable zip:
@@ -93,11 +95,19 @@ Phase-1 bridge sender notes:
 - `long` now batches queued bridge records into framed MessagePack batches for `tape-engine`.
 - The sender uses the Unix domain socket path from `LONG_TAPE_ENGINE_SOCKET` when set.
 - If that env var is unset, the sender defaults to `/tmp/tape-engine.sock`.
+- `tape_engine` now assigns ordered `session_seq` values on accept and freezes accepted batches into revisioned segments on a dedicated writer thread.
 - `tape_engine` writes per-batch segments and a hash-linked `manifest.jsonl` under `LONG_TAPE_ENGINE_DATA_DIR`.
 - If `LONG_TAPE_ENGINE_DATA_DIR` is unset, the daemon defaults to `/tmp/tape-engine`.
 - The daemon now answers `status`, `read_live_tail`, `read_range`, `replay_snapshot`, and `find_order_anchor` queries over the same framed MessagePack UDS transport.
+- Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.
 - `long` now emits normalized public market records (`market_tick`, `market_depth`) alongside widened private lifecycle records including `open_order`, `order_status`, `commission_report`, `cancel_request`, `broker_error`, and `order_reject`.
+- Bridge records now carry canonical `instrument_id`, receive/exchange timestamps, and vendor sequence placeholders so the engine can preserve stronger forensic provenance.
 - `replay_snapshot` rebuilds a deterministic bid/ask/last and depth snapshot from frozen `session_seq` history, with optional live-tail overlay.
+
+Runtime registry and QoS:
+
+- Queue labels, categories, and QoS names are generated from `config/runtime/queues.yaml` into `runtime_registry.generated.h` at build time.
+- `runtime_qos` applies the generated queue spec to bridge and engine threads on macOS, including pthread QoS classes and thread names.
 
 Packaging notes:
 - The app is built as a real macOS `.app` bundle.

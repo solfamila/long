@@ -48,6 +48,7 @@ json ackToJson(const IngestAck& ack) {
     json payload{
         {"accepted_records", ack.acceptedRecords},
         {"adapter_id", ack.adapterId},
+        {"assigned_revision_id", ack.assignedRevisionId},
         {"batch_seq", ack.batchSeq},
         {"connection_id", ack.connectionId},
         {"duplicate_records", ack.duplicateRecords},
@@ -72,6 +73,7 @@ IngestAck ackFromJson(const json& payload) {
     ack.schema = payload.value("schema", std::string(kAckSchema));
     ack.status = payload.value("status", std::string("accepted"));
     ack.batchSeq = payload.value("batch_seq", 0ULL);
+    ack.assignedRevisionId = payload.value("assigned_revision_id", 0ULL);
     ack.adapterId = payload.value("adapter_id", std::string());
     ack.connectionId = payload.value("connection_id", std::string());
     ack.acceptedRecords = payload.value("accepted_records", 0ULL);
@@ -112,6 +114,7 @@ json queryRequestToJson(const QueryRequest& request) {
         {"operation", request.operation},
         {"order_id", request.orderId},
         {"perm_id", request.permId},
+        {"revision_id", request.revisionId},
         {"request_id", request.requestId},
         {"schema", request.schema},
         {"target_session_seq", request.targetSessionSeq},
@@ -131,6 +134,7 @@ QueryRequest queryRequestFromJson(const json& payload) {
     request.schema = payload.value("schema", std::string(kQueryRequestSchema));
     request.requestId = payload.value("request_id", std::string());
     request.operation = payload.value("operation", std::string());
+    request.revisionId = payload.value("revision_id", 0ULL);
     request.fromSessionSeq = payload.value("from_session_seq", 0ULL);
     request.toSessionSeq = payload.value("to_session_seq", 0ULL);
     request.targetSessionSeq = payload.value("target_session_seq", 0ULL);

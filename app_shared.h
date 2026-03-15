@@ -328,6 +328,7 @@ struct BridgeOutboxRecord {
     std::string recordType;
     std::string source;
     std::string symbol;
+    std::string instrumentId;
     std::string side;
     int marketField = -1;
     int bookPosition = -1;
@@ -335,6 +336,9 @@ struct BridgeOutboxRecord {
     int bookSide = -1;
     double price = std::numeric_limits<double>::quiet_NaN();
     double size = std::numeric_limits<double>::quiet_NaN();
+    std::uint64_t tsReceiveNs = 0;
+    std::uint64_t tsExchangeNs = 0;
+    std::uint64_t vendorSeq = 0;
     BridgeAnchorIdentity anchor;
     std::string fallbackState;
     std::string fallbackReason;
@@ -346,6 +350,7 @@ struct BridgeOutboxRecordInput {
     std::string recordType;
     std::string source;
     std::string symbol;
+    std::string instrumentId;
     std::string side;
     int marketField = -1;
     int bookPosition = -1;
@@ -353,6 +358,9 @@ struct BridgeOutboxRecordInput {
     int bookSide = -1;
     double price = std::numeric_limits<double>::quiet_NaN();
     double size = std::numeric_limits<double>::quiet_NaN();
+    std::uint64_t tsReceiveNs = 0;
+    std::uint64_t tsExchangeNs = 0;
+    std::uint64_t vendorSeq = 0;
     std::uint64_t traceId = 0;
     OrderId orderId = 0;
     long long permId = 0;
@@ -396,6 +404,7 @@ struct SharedData {
     std::string selectedAccount;
 
     std::string currentSymbol;
+    std::string currentInstrumentId;
     double bidPrice = 0.0;
     double askPrice = 0.0;
     double lastPrice = 0.0;
@@ -692,6 +701,7 @@ struct MarketSubscriptionClearedEvent {
 
 struct MarketSubscriptionStartedEvent {
     std::string symbol;
+    std::string instrumentId;
     int marketDataRequestId = 0;
     int depthRequestId = 0;
     bool recalcQtyFromFirstAsk = false;
@@ -847,6 +857,7 @@ BridgeOutboxEnqueueResult enqueueBridgeOutboxRecord(const BridgeOutboxRecordInpu
 void seedBridgeOutboxRecoveryState(const RuntimeRecoverySnapshot& recovery);
 BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems = 100);
 BridgeDispatchSnapshot captureBridgeDispatchSnapshot(std::size_t maxItems = 0);
+std::string captureCurrentInstrumentIdForSymbol(const std::string& symbol);
 std::size_t acknowledgeDeliveredBridgeRecords(const std::vector<BridgeOutboxRecord>& records);
 void noteBridgeTransportUnavailable(const std::string& reason);
 double calculateOpenBuyExposureUnlocked(const std::string& account);
@@ -938,5 +949,6 @@ void resetSharedDataForTesting();
 void appendTradeTraceLogLine(const json& line);
 void appendRuntimeJournalLine(const json& line);
 void appendRuntimeJournalEvent(const std::string& event, const json& details = {});
+std::string canonicalInstrumentIdForSymbol(const std::string& symbol);
 std::vector<std::string> recoverUnfinishedTraceSummariesFromLog(std::size_t maxItems = 20);
 RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems = 20);
