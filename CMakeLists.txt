@@ -15,6 +15,7 @@ endif()
 
 option(TWS_GUI_BUILD_UNIVERSAL "Build a universal macOS binary (arm64 + x86_64)" OFF)
 option(TWS_GUI_USE_STATIC_PROTOBUF "Build protobuf from source as static libs to reduce bundled dylib fan-out" ON)
+option(TAPESCOPE_ISOLATED_BUILD "Configure only the TapeScope Wave 1 target and its direct dependencies" OFF)
 set(TWS_GUI_PROTOBUF_SOURCE_DIR "" CACHE PATH "Optional local protobuf source directory for static builds")
 set(TWS_GUI_PROTOBUF_URL "https://github.com/protocolbuffers/protobuf/releases/download/v34.0/protobuf-34.0.tar.gz" CACHE STRING "Official protobuf source tarball URL")
 if(TWS_GUI_BUILD_UNIVERSAL)
@@ -65,34 +66,34 @@ set(IXWEBSOCKET_DIR "${CMAKE_SOURCE_DIR}/ixwebsocket" CACHE PATH "Path to ixWebS
 set(NLOHMANN_JSON_DIR "${CMAKE_SOURCE_DIR}/nlohmann_json" CACHE PATH "Path to nlohmann/json")
 set(LOCAL_IBAPI_STUB_DIR "${CMAKE_SOURCE_DIR}/stubs/ibapi")
 
-set(HAVE_IXWEBSOCKET OFF)
-if(EXISTS "${IXWEBSOCKET_DIR}/CMakeLists.txt")
-    set(HAVE_IXWEBSOCKET ON)
-else()
-    add_library(ixwebsocket::ixwebsocket INTERFACE IMPORTED GLOBAL)
-    message(WARNING
-        "IXWebSocket sources not found at ${IXWEBSOCKET_DIR}. "
-        "The TapeScope target can still build in isolation, but tws_gui/tws_gui_tests "
-        "will remain blocked until the dependency is restored.")
-endif()
-
-set(NLOHMANN_JSON_INCLUDE_DIR "${NLOHMANN_JSON_DIR}/single_include")
-if(NOT EXISTS "${NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp")
-    unset(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR CACHE)
-    find_path(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR
-        NAMES nlohmann/json.hpp
-        PATHS
-            "/opt/homebrew/include"
-            "/usr/local/include"
-    )
-    if(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR)
-        set(NLOHMANN_JSON_INCLUDE_DIR "${NLOHMANN_JSON_SYSTEM_INCLUDE_DIR}")
+if(TAPESCOPE_ISOLATED_BUILD)
+    set(NLOHMANN_JSON_INCLUDE_DIR "${NLOHMANN_JSON_DIR}/single_include")
+    if(NOT EXISTS "${NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp")
+        unset(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR CACHE)
+        find_path(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR
+            NAMES nlohmann/json.hpp
+            PATHS
+                "/opt/homebrew/include"
+                "/usr/local/include"
+        )
+        if(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR)
+            set(NLOHMANN_JSON_INCLUDE_DIR "${NLOHMANN_JSON_SYSTEM_INCLUDE_DIR}")
+        endif()
     endif()
-endif()
 
-if(NOT NLOHMANN_JSON_INCLUDE_DIR OR NOT EXISTS "${NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp")
-    message(FATAL_ERROR
-        "nlohmann/json headers not found at ${NLOHMANN_JSON_DIR} and no system install was discovered")
+    if(NOT NLOHMANN_JSON_INCLUDE_DIR OR NOT EXISTS "${NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp")
+        message(FATAL_ERROR
+            "TapeScope isolated build requires nlohmann/json headers at ${NLOHMANN_JSON_DIR} "
+            "or in a supported system include path")
+    endif()
+else()
+    if(NOT EXISTS "${IXWEBSOCKET_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "IXWebSocket sources not found at ${IXWEBSOCKET_DIR}")
+    endif()
+    if(NOT EXISTS "${NLOHMANN_JSON_DIR}/single_include/nlohmann/json.hpp")
+        message(FATAL_ERROR "nlohmann/json headers not found at ${NLOHMANN_JSON_DIR}")
+    endif()
+    set(NLOHMANN_JSON_INCLUDE_DIR "${NLOHMANN_JSON_DIR}/single_include")
 endif()
 
 set(APP_SOURCES
@@ -130,221 +131,229 @@ set(TAPE_ENGINE_SOURCES
 set(BUILD_DEMO OFF CACHE BOOL "" FORCE)
 set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
 set(USE_TLS OFF CACHE BOOL "" FORCE)
-if(HAVE_IXWEBSOCKET)
+if(NOT TAPESCOPE_ISOLATED_BUILD)
     add_subdirectory("${IXWEBSOCKET_DIR}" "${CMAKE_BINARY_DIR}/third_party/ixwebsocket" EXCLUDE_FROM_ALL)
 endif()
 
-add_executable(tws_gui MACOSX_BUNDLE ${APP_SOURCES})
+if(NOT TAPESCOPE_ISOLATED_BUILD)
+    add_executable(tws_gui MACOSX_BUNDLE ${APP_SOURCES})
+    add_executable(tape_engine ${TAPE_ENGINE_SOURCES})
+endif()
 add_executable(TapeScope MACOSX_BUNDLE ${TAPESCOPE_SOURCES})
-add_executable(tape_engine ${TAPE_ENGINE_SOURCES})
-
-target_include_directories(tws_gui PRIVATE
-    "${CMAKE_SOURCE_DIR}"
-    "${IXWEBSOCKET_DIR}"
-    "${NLOHMANN_JSON_INCLUDE_DIR}"
-)
 
 target_include_directories(TapeScope PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${NLOHMANN_JSON_INCLUDE_DIR}"
 )
 
-target_include_directories(tape_engine PRIVATE
-    "${CMAKE_SOURCE_DIR}"
-    "${IXWEBSOCKET_DIR}"
-    "${NLOHMANN_JSON_INCLUDE_DIR}"
-)
-
-target_link_libraries(tws_gui PRIVATE
-    Threads::Threads
-    ixwebsocket::ixwebsocket
-)
-
 target_link_libraries(TapeScope PRIVATE
     Threads::Threads
 )
 
-target_link_libraries(tape_engine PRIVATE
-    Threads::Threads
-)
-
-if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
-    file(GLOB IB_API_SOURCES CONFIGURE_DEPENDS "${VENDORED_IB_API_DIR}/*.cpp")
-    set(IB_API_EXTRA_SOURCES)
-    set(IB_API_EXTRA_INCLUDE_DIRS)
-    set(IB_API_LINK_LIBS)
-    set(IB_API_COMPILE_DEFINITIONS)
-
-    if(EXISTS "${VENDORED_IB_API_DIR}/CommissionAndFeesReport.h")
-        get_filename_component(IB_API_CPPCLIENT_DIR "${VENDORED_IB_API_DIR}" DIRECTORY)
-        get_filename_component(IB_API_SOURCE_DIR "${IB_API_CPPCLIENT_DIR}" DIRECTORY)
-        set(IB_API_PROTO_DIR "${IB_API_SOURCE_DIR}/proto")
-        set(IB_API_GENERATED_PROTO_DIR "${CMAKE_BINARY_DIR}/generated/ibapi_protobuf")
-
-        if(TWS_GUI_USE_STATIC_PROTOBUF)
-            set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
-            set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-            set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
-            set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-            set(protobuf_BUILD_PROTOBUF_BINARIES ON CACHE BOOL "" FORCE)
-            set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "" FORCE)
-            set(protobuf_BUILD_LIBPROTOC OFF CACHE BOOL "" FORCE)
-            set(protobuf_BUILD_LIBUPB OFF CACHE BOOL "" FORCE)
-            set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-            set(protobuf_FORCE_FETCH_DEPENDENCIES ON CACHE BOOL "" FORCE)
-            set(protobuf_LOCAL_DEPENDENCIES_ONLY OFF CACHE BOOL "" FORCE)
-
-            if(TWS_GUI_PROTOBUF_SOURCE_DIR AND EXISTS "${TWS_GUI_PROTOBUF_SOURCE_DIR}/CMakeLists.txt")
-                add_subdirectory("${TWS_GUI_PROTOBUF_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/third_party/protobuf")
-            else()
-                FetchContent_Declare(
-                    protobuf
-                    URL "${TWS_GUI_PROTOBUF_URL}"
-                    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-                )
-                FetchContent_MakeAvailable(protobuf)
-            endif()
-
-            if(NOT TARGET protobuf::libprotobuf)
-                message(FATAL_ERROR "Static protobuf build did not provide protobuf::libprotobuf")
-            endif()
-
-            list(APPEND IB_API_LINK_LIBS protobuf::libprotobuf)
-        else()
-            find_package(Protobuf REQUIRED)
-            pkg_check_modules(PROTOBUF REQUIRED IMPORTED_TARGET protobuf)
-            list(APPEND IB_API_LINK_LIBS PkgConfig::PROTOBUF)
-            list(APPEND IB_API_EXTRA_INCLUDE_DIRS
-                ${Protobuf_INCLUDE_DIRS}
-                ${PROTOBUF_INCLUDE_DIRS}
-            )
-            list(APPEND BUNDLE_SEARCH_DIRS
-                ${Protobuf_LIBRARY_DIRS}
-                ${PROTOBUF_LIBRARY_DIRS}
-            )
-        endif()
-
-        file(MAKE_DIRECTORY "${IB_API_GENERATED_PROTO_DIR}")
-        file(GLOB IB_API_PROTO_FILES CONFIGURE_DEPENDS "${IB_API_PROTO_DIR}/*.proto")
-
-        if(NOT IB_API_PROTO_FILES)
-            message(FATAL_ERROR "Interactive Brokers proto sources not found at ${IB_API_PROTO_DIR}")
-        endif()
-
-        if(Protobuf_PROTOC_EXECUTABLE)
-            set(IB_API_PROTOC_EXECUTABLE "${Protobuf_PROTOC_EXECUTABLE}")
-        else()
-            find_program(IB_API_PROTOC_EXECUTABLE protoc REQUIRED)
-        endif()
-
-        set(IB_API_GENERATED_PROTO_SRCS)
-        set(IB_API_GENERATED_PROTO_HDRS)
-        foreach(PROTO_FILE IN LISTS IB_API_PROTO_FILES)
-            get_filename_component(PROTO_NAME "${PROTO_FILE}" NAME_WE)
-            list(APPEND IB_API_GENERATED_PROTO_SRCS "${IB_API_GENERATED_PROTO_DIR}/${PROTO_NAME}.pb.cc")
-            list(APPEND IB_API_GENERATED_PROTO_HDRS "${IB_API_GENERATED_PROTO_DIR}/${PROTO_NAME}.pb.h")
-            add_custom_command(
-                OUTPUT
-                    "${IB_API_GENERATED_PROTO_DIR}/${PROTO_NAME}.pb.cc"
-                    "${IB_API_GENERATED_PROTO_DIR}/${PROTO_NAME}.pb.h"
-                COMMAND
-                    "${IB_API_PROTOC_EXECUTABLE}"
-                    "--proto_path=${IB_API_PROTO_DIR}"
-                    --experimental_allow_proto3_optional
-                    "--cpp_out=${IB_API_GENERATED_PROTO_DIR}"
-                    "${PROTO_FILE}"
-                DEPENDS "${PROTO_FILE}"
-                VERBATIM
-            )
-        endforeach()
-
-        add_custom_target(ibapi_proto_gen DEPENDS ${IB_API_GENERATED_PROTO_SRCS} ${IB_API_GENERATED_PROTO_HDRS})
-
-        list(APPEND IB_API_EXTRA_SOURCES
-            ${IB_API_GENERATED_PROTO_SRCS}
-            "${CMAKE_SOURCE_DIR}/ib_decimal_compat.cpp"
-        )
-        list(APPEND IB_API_EXTRA_INCLUDE_DIRS
-            "${IB_API_GENERATED_PROTO_DIR}"
-        )
-        list(APPEND IB_API_COMPILE_DEFINITIONS
-            TWS_HAS_ORDER_CANCEL_OBJECT=1
-            TWS_ERROR_HAS_TIMESTAMP=1
-            TWS_HAS_COMMISSION_AND_FEES_REPORT=1
-        )
-    else()
-        list(APPEND IB_API_LINK_LIBS "${VENDORED_IB_API_DIR}/lib/libbid.a")
-        list(APPEND IB_API_COMPILE_DEFINITIONS
-            TWS_ORDER_STATUS_PERMID_IS_INT=1
-            TWS_NEEDS_DECIMAL_FUNCTIONS_SHIM=1
-        )
-    endif()
-
-    add_library(twsapi STATIC ${IB_API_SOURCES} ${IB_API_EXTRA_SOURCES})
-    if(TARGET ibapi_proto_gen)
-        add_dependencies(twsapi ibapi_proto_gen)
-    endif()
-    target_include_directories(twsapi PUBLIC
-        "${VENDORED_IB_API_DIR}"
-        ${IB_API_EXTRA_INCLUDE_DIRS}
-    )
-    target_compile_definitions(twsapi PUBLIC ${IB_API_COMPILE_DEFINITIONS})
-    target_link_libraries(twsapi PUBLIC ${IB_API_LINK_LIBS})
-    target_compile_options(twsapi PRIVATE -Wno-switch -Wno-unused-function)
-
+if(NOT TAPESCOPE_ISOLATED_BUILD)
     target_include_directories(tws_gui PRIVATE
-        "${VENDORED_IB_API_DIR}"
-        ${IB_API_EXTRA_INCLUDE_DIRS}
+        "${CMAKE_SOURCE_DIR}"
+        "${IXWEBSOCKET_DIR}"
+        "${NLOHMANN_JSON_INCLUDE_DIR}"
     )
-    target_link_libraries(tws_gui PRIVATE twsapi)
+
     target_include_directories(tape_engine PRIVATE
-        "${VENDORED_IB_API_DIR}"
-        ${IB_API_EXTRA_INCLUDE_DIRS}
+        "${CMAKE_SOURCE_DIR}"
+        "${IXWEBSOCKET_DIR}"
+        "${NLOHMANN_JSON_INCLUDE_DIR}"
     )
-    target_compile_definitions(tape_engine PRIVATE ${IB_API_COMPILE_DEFINITIONS})
-    message(STATUS "Using vendored Interactive Brokers API sources from ${VENDORED_IB_API_DIR}")
-elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
-    target_include_directories(tws_gui PRIVATE "${IB_API_INCLUDE_DIR}")
-    target_include_directories(tape_engine PRIVATE "${IB_API_INCLUDE_DIR}")
-    message(STATUS "Using Interactive Brokers API from ${IB_API_INCLUDE_DIR}")
-else()
-    target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
-    target_include_directories(tape_engine PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
-    target_compile_definitions(tws_gui PRIVATE
-        TWS_GUI_MOCK_IBAPI=1
-        TWS_HAS_PROTOBUF_API=1
-        TWS_HAS_ORDER_CANCEL_OBJECT=1
+
+    target_link_libraries(tws_gui PRIVATE
+        Threads::Threads
+        ixwebsocket::ixwebsocket
     )
-    target_compile_definitions(tape_engine PRIVATE
-        TWS_GUI_MOCK_IBAPI=1
-        TWS_HAS_PROTOBUF_API=1
-        TWS_HAS_ORDER_CANCEL_OBJECT=1
+
+    target_link_libraries(tape_engine PRIVATE
+        Threads::Threads
     )
-    message(STATUS "Interactive Brokers API not found; building with local mock API shims")
+
+    if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
+        file(GLOB IB_API_SOURCES CONFIGURE_DEPENDS "${VENDORED_IB_API_DIR}/*.cpp")
+        set(IB_API_EXTRA_SOURCES)
+        set(IB_API_EXTRA_INCLUDE_DIRS)
+        set(IB_API_LINK_LIBS)
+        set(IB_API_COMPILE_DEFINITIONS)
+
+        if(EXISTS "${VENDORED_IB_API_DIR}/CommissionAndFeesReport.h")
+            get_filename_component(IB_API_CPPCLIENT_DIR "${VENDORED_IB_API_DIR}" DIRECTORY)
+            get_filename_component(IB_API_SOURCE_DIR "${IB_API_CPPCLIENT_DIR}" DIRECTORY)
+            set(IB_API_PROTO_DIR "${IB_API_SOURCE_DIR}/proto")
+            set(IB_API_GENERATED_PROTO_DIR "${CMAKE_BINARY_DIR}/generated/ibapi_protobuf")
+
+            if(TWS_GUI_USE_STATIC_PROTOBUF)
+                set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+                set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+                set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
+                set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+                set(protobuf_BUILD_PROTOBUF_BINARIES ON CACHE BOOL "" FORCE)
+                set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "" FORCE)
+                set(protobuf_BUILD_LIBPROTOC OFF CACHE BOOL "" FORCE)
+                set(protobuf_BUILD_LIBUPB OFF CACHE BOOL "" FORCE)
+                set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+                set(protobuf_FORCE_FETCH_DEPENDENCIES ON CACHE BOOL "" FORCE)
+                set(protobuf_LOCAL_DEPENDENCIES_ONLY OFF CACHE BOOL "" FORCE)
+
+                if(TWS_GUI_PROTOBUF_SOURCE_DIR AND EXISTS "${TWS_GUI_PROTOBUF_SOURCE_DIR}/CMakeLists.txt")
+                    add_subdirectory("${TWS_GUI_PROTOBUF_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/third_party/protobuf")
+                else()
+                    FetchContent_Declare(
+                        protobuf
+                        URL "${TWS_GUI_PROTOBUF_URL}"
+                        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+                    )
+                    FetchContent_MakeAvailable(protobuf)
+                endif()
+
+                if(NOT TARGET protobuf::libprotobuf)
+                    message(FATAL_ERROR "Static protobuf build did not provide protobuf::libprotobuf")
+                endif()
+
+                list(APPEND IB_API_LINK_LIBS protobuf::libprotobuf)
+            else()
+                find_package(Protobuf REQUIRED)
+                pkg_check_modules(PROTOBUF REQUIRED IMPORTED_TARGET protobuf)
+                list(APPEND IB_API_LINK_LIBS PkgConfig::PROTOBUF)
+                list(APPEND IB_API_EXTRA_INCLUDE_DIRS
+                    ${Protobuf_INCLUDE_DIRS}
+                    ${PROTOBUF_INCLUDE_DIRS}
+                )
+                list(APPEND BUNDLE_SEARCH_DIRS
+                    ${Protobuf_LIBRARY_DIRS}
+                    ${PROTOBUF_LIBRARY_DIRS}
+                )
+            endif()
+
+            file(MAKE_DIRECTORY "${IB_API_GENERATED_PROTO_DIR}")
+            file(GLOB IB_API_PROTO_FILES CONFIGURE_DEPENDS "${IB_API_PROTO_DIR}/*.proto")
+
+            if(NOT IB_API_PROTO_FILES)
+                message(FATAL_ERROR "Interactive Brokers proto sources not found at ${IB_API_PROTO_DIR}")
+            endif()
+
+            if(Protobuf_PROTOC_EXECUTABLE)
+                set(IB_API_PROTOC_EXECUTABLE "${Protobuf_PROTOC_EXECUTABLE}")
+            else()
+                find_program(IB_API_PROTOC_EXECUTABLE protoc REQUIRED)
+            endif()
+
+            set(IB_API_GENERATED_PROTO_SRCS)
+            set(IB_API_GENERATED_PROTO_HDRS)
+            foreach(PROTO_FILE IN LISTS IB_API_PROTO_FILES)
+                get_filename_component(PROTO_NAME "${PROTO_FILE}" NAME_WE)
+                list(APPEND IB_API_GENERATED_PROTO_SRCS "${IB_API_GENERATED_PROTO_DIR}/${PROTO_NAME}.pb.cc")
+                list(APPEND IB_API_GENERATED_PROTO_HDRS "${IB_API_GENERATED_PROTO_DIR}/${PROTO_NAME}.pb.h")
+                add_custom_command(
+                    OUTPUT
+                        "${IB_API_GENERATED_PROTO_DIR}/${PROTO_NAME}.pb.cc"
+                        "${IB_API_GENERATED_PROTO_DIR}/${PROTO_NAME}.pb.h"
+                    COMMAND
+                        "${IB_API_PROTOC_EXECUTABLE}"
+                        "--proto_path=${IB_API_PROTO_DIR}"
+                        --experimental_allow_proto3_optional
+                        "--cpp_out=${IB_API_GENERATED_PROTO_DIR}"
+                        "${PROTO_FILE}"
+                    DEPENDS "${PROTO_FILE}"
+                    VERBATIM
+                )
+            endforeach()
+
+            add_custom_target(ibapi_proto_gen DEPENDS ${IB_API_GENERATED_PROTO_SRCS} ${IB_API_GENERATED_PROTO_HDRS})
+
+            list(APPEND IB_API_EXTRA_SOURCES
+                ${IB_API_GENERATED_PROTO_SRCS}
+                "${CMAKE_SOURCE_DIR}/ib_decimal_compat.cpp"
+            )
+            list(APPEND IB_API_EXTRA_INCLUDE_DIRS
+                "${IB_API_GENERATED_PROTO_DIR}"
+            )
+            list(APPEND IB_API_COMPILE_DEFINITIONS
+                TWS_HAS_ORDER_CANCEL_OBJECT=1
+                TWS_ERROR_HAS_TIMESTAMP=1
+                TWS_HAS_COMMISSION_AND_FEES_REPORT=1
+            )
+        else()
+            list(APPEND IB_API_LINK_LIBS "${VENDORED_IB_API_DIR}/lib/libbid.a")
+            list(APPEND IB_API_COMPILE_DEFINITIONS
+                TWS_ORDER_STATUS_PERMID_IS_INT=1
+                TWS_NEEDS_DECIMAL_FUNCTIONS_SHIM=1
+            )
+        endif()
+
+        add_library(twsapi STATIC ${IB_API_SOURCES} ${IB_API_EXTRA_SOURCES})
+        if(TARGET ibapi_proto_gen)
+            add_dependencies(twsapi ibapi_proto_gen)
+        endif()
+        target_include_directories(twsapi PUBLIC
+            "${VENDORED_IB_API_DIR}"
+            ${IB_API_EXTRA_INCLUDE_DIRS}
+        )
+        target_compile_definitions(twsapi PUBLIC ${IB_API_COMPILE_DEFINITIONS})
+        target_link_libraries(twsapi PUBLIC ${IB_API_LINK_LIBS})
+        target_compile_options(twsapi PRIVATE -Wno-switch -Wno-unused-function)
+
+        target_include_directories(tws_gui PRIVATE
+            "${VENDORED_IB_API_DIR}"
+            ${IB_API_EXTRA_INCLUDE_DIRS}
+        )
+        target_link_libraries(tws_gui PRIVATE twsapi)
+        target_include_directories(tape_engine PRIVATE
+            "${VENDORED_IB_API_DIR}"
+            ${IB_API_EXTRA_INCLUDE_DIRS}
+        )
+        target_compile_definitions(tape_engine PRIVATE ${IB_API_COMPILE_DEFINITIONS})
+        message(STATUS "Using vendored Interactive Brokers API sources from ${VENDORED_IB_API_DIR}")
+    elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
+        target_include_directories(tws_gui PRIVATE "${IB_API_INCLUDE_DIR}")
+        target_include_directories(tape_engine PRIVATE "${IB_API_INCLUDE_DIR}")
+        message(STATUS "Using Interactive Brokers API from ${IB_API_INCLUDE_DIR}")
+    else()
+        target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+        target_include_directories(tape_engine PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+        target_compile_definitions(tws_gui PRIVATE
+            TWS_GUI_MOCK_IBAPI=1
+            TWS_HAS_PROTOBUF_API=1
+            TWS_HAS_ORDER_CANCEL_OBJECT=1
+        )
+        target_compile_definitions(tape_engine PRIVATE
+            TWS_GUI_MOCK_IBAPI=1
+            TWS_HAS_PROTOBUF_API=1
+            TWS_HAS_ORDER_CANCEL_OBJECT=1
+        )
+        message(STATUS "Interactive Brokers API not found; building with local mock API shims")
+    endif()
 endif()
 
 find_library(APP_KIT_LIBRARY AppKit REQUIRED)
 find_library(GAME_CONTROLLER_LIBRARY GameController REQUIRED)
 
-target_link_libraries(tws_gui PRIVATE
-    ${APP_KIT_LIBRARY}
-    ${GAME_CONTROLLER_LIBRARY}
-)
+if(NOT TAPESCOPE_ISOLATED_BUILD)
+    target_link_libraries(tws_gui PRIVATE
+        ${APP_KIT_LIBRARY}
+        ${GAME_CONTROLLER_LIBRARY}
+    )
+endif()
 
 target_link_libraries(TapeScope PRIVATE
     ${APP_KIT_LIBRARY}
 )
 
-set_target_properties(tws_gui PROPERTIES
-    OUTPUT_NAME "tws_gui"
-    MACOSX_BUNDLE_BUNDLE_NAME "${APP_BUNDLE_NAME}"
-    MACOSX_BUNDLE_GUI_IDENTIFIER "${APP_BUNDLE_IDENTIFIER}"
-    MACOSX_BUNDLE_BUNDLE_VERSION "${APP_BUNDLE_VERSION}"
-    MACOSX_BUNDLE_SHORT_VERSION_STRING "${APP_BUNDLE_VERSION}"
-    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/Info.plist.in"
-    BUILD_RPATH "@executable_path/../Frameworks"
-    INSTALL_RPATH "@executable_path/../Frameworks"
-)
+if(NOT TAPESCOPE_ISOLATED_BUILD)
+    set_target_properties(tws_gui PROPERTIES
+        OUTPUT_NAME "tws_gui"
+        MACOSX_BUNDLE_BUNDLE_NAME "${APP_BUNDLE_NAME}"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "${APP_BUNDLE_IDENTIFIER}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${APP_BUNDLE_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${APP_BUNDLE_VERSION}"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/Info.plist.in"
+        BUILD_RPATH "@executable_path/../Frameworks"
+        INSTALL_RPATH "@executable_path/../Frameworks"
+    )
+endif()
 
 set_target_properties(TapeScope PROPERTIES
     OUTPUT_NAME "TapeScope"
@@ -356,58 +365,60 @@ set_target_properties(TapeScope PROPERTIES
 )
 
 find_program(CODESIGN_EXECUTABLE codesign)
-configure_file("${CMAKE_SOURCE_DIR}/cmake/FixupBundle.cmake.in"
-               "${CMAKE_BINARY_DIR}/FixupBundle.cmake"
-               @ONLY)
-configure_file("${CMAKE_SOURCE_DIR}/cmake/NotarizeBundle.cmake.in"
-               "${CMAKE_BINARY_DIR}/NotarizeBundle.cmake"
-               @ONLY)
+if(NOT TAPESCOPE_ISOLATED_BUILD)
+    configure_file("${CMAKE_SOURCE_DIR}/cmake/FixupBundle.cmake.in"
+                   "${CMAKE_BINARY_DIR}/FixupBundle.cmake"
+                   @ONLY)
+    configure_file("${CMAKE_SOURCE_DIR}/cmake/NotarizeBundle.cmake.in"
+                   "${CMAKE_BINARY_DIR}/NotarizeBundle.cmake"
+                   @ONLY)
 
-add_custom_command(TARGET tws_gui POST_BUILD
-    COMMAND "${CMAKE_COMMAND}"
-            -Dbundle_path="$<TARGET_BUNDLE_DIR:tws_gui>"
-            -Dcodesign_executable="${CODESIGN_EXECUTABLE}"
-            -P "${CMAKE_BINARY_DIR}/FixupBundle.cmake"
-    VERBATIM
-)
+    add_custom_command(TARGET tws_gui POST_BUILD
+        COMMAND "${CMAKE_COMMAND}"
+                -Dbundle_path="$<TARGET_BUNDLE_DIR:tws_gui>"
+                -Dcodesign_executable="${CODESIGN_EXECUTABLE}"
+                -P "${CMAKE_BINARY_DIR}/FixupBundle.cmake"
+        VERBATIM
+    )
 
-add_custom_target(tws_gui_zip
-    COMMAND "${CMAKE_COMMAND}" -E rm -f "${CMAKE_BINARY_DIR}/${APP_PACKAGE_FILENAME}"
-    COMMAND ditto -c -k --norsrc --keepParent
-            "$<TARGET_BUNDLE_DIR:tws_gui>"
-            "${CMAKE_BINARY_DIR}/${APP_PACKAGE_FILENAME}"
-    DEPENDS tws_gui
-    VERBATIM
-)
+    add_custom_target(tws_gui_zip
+        COMMAND "${CMAKE_COMMAND}" -E rm -f "${CMAKE_BINARY_DIR}/${APP_PACKAGE_FILENAME}"
+        COMMAND ditto -c -k --norsrc --keepParent
+                "$<TARGET_BUNDLE_DIR:tws_gui>"
+                "${CMAKE_BINARY_DIR}/${APP_PACKAGE_FILENAME}"
+        DEPENDS tws_gui
+        VERBATIM
+    )
 
-set(APP_DMG_STAGING_DIR "${CMAKE_BINARY_DIR}/dmg-root")
-add_custom_target(tws_gui_dmg
-    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${APP_DMG_STAGING_DIR}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${APP_DMG_STAGING_DIR}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory
-            "$<TARGET_BUNDLE_DIR:tws_gui>"
-            "${APP_DMG_STAGING_DIR}/tws_gui.app"
-    COMMAND ln -sfn /Applications "${APP_DMG_STAGING_DIR}/Applications"
-    COMMAND hdiutil create
-            -volname "${APP_BUNDLE_NAME}"
-            -srcfolder "${APP_DMG_STAGING_DIR}"
-            -ov
-            -format UDZO
-            "${CMAKE_BINARY_DIR}/${APP_DMG_FILENAME}"
-    DEPENDS tws_gui
-    VERBATIM
-)
+    set(APP_DMG_STAGING_DIR "${CMAKE_BINARY_DIR}/dmg-root")
+    add_custom_target(tws_gui_dmg
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf "${APP_DMG_STAGING_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${APP_DMG_STAGING_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                "$<TARGET_BUNDLE_DIR:tws_gui>"
+                "${APP_DMG_STAGING_DIR}/tws_gui.app"
+        COMMAND ln -sfn /Applications "${APP_DMG_STAGING_DIR}/Applications"
+        COMMAND hdiutil create
+                -volname "${APP_BUNDLE_NAME}"
+                -srcfolder "${APP_DMG_STAGING_DIR}"
+                -ov
+                -format UDZO
+                "${CMAKE_BINARY_DIR}/${APP_DMG_FILENAME}"
+        DEPENDS tws_gui
+        VERBATIM
+    )
 
-add_custom_target(tws_gui_notarize
-    COMMAND "${CMAKE_COMMAND}"
-            -Dbundle_path="$<TARGET_BUNDLE_DIR:tws_gui>"
-            -Dzip_path="${CMAKE_BINARY_DIR}/${APP_BUNDLE_NAME}-notarize.zip"
-            -P "${CMAKE_BINARY_DIR}/NotarizeBundle.cmake"
-    DEPENDS tws_gui
-    VERBATIM
-)
+    add_custom_target(tws_gui_notarize
+        COMMAND "${CMAKE_COMMAND}"
+                -Dbundle_path="$<TARGET_BUNDLE_DIR:tws_gui>"
+                -Dzip_path="${CMAKE_BINARY_DIR}/${APP_BUNDLE_NAME}-notarize.zip"
+                -P "${CMAKE_BINARY_DIR}/NotarizeBundle.cmake"
+        DEPENDS tws_gui
+        VERBATIM
+    )
+endif()
 
-if(BUILD_TESTING)
+if(NOT TAPESCOPE_ISOLATED_BUILD AND BUILD_TESTING)
     add_executable(tws_gui_tests
         tests/trade_trace_tests.cpp
         app_shared.cpp
