@@ -88,7 +88,7 @@ std::string toUpperCase(const std::string& str);
 
 inline constexpr const char* DEFAULT_HOST = "127.0.0.1";
 inline constexpr int DEFAULT_PORT = 7496;
-inline constexpr int DEFAULT_CLIENT_ID = 101;
+inline constexpr int DEFAULT_CLIENT_ID = 102;
 inline constexpr const char* DEFAULT_SYMBOL = "QBTS";
 inline constexpr const char* HARDCODED_ACCOUNT = "U23154741";
 inline constexpr int FIRST_DYNAMIC_REQ_ID = 1001;

@@ -708,6 +708,37 @@ void testRuntimePresentationSnapshotCapturesShortPositionState() {
     resetSharedDataForTesting();
 }
 
+void testShortAppConnectionDefaultsAndFallback() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    constexpr int kLongAppDefaultClientId = 101;
+    const RuntimeConnectionConfig initial = captureRuntimeConnectionConfig();
+    expect(DEFAULT_CLIENT_ID == 102, "short app default client id should be 102");
+    expect(initial.clientId == DEFAULT_CLIENT_ID,
+           "runtime connection config should start from the short app default client id");
+    expect(initial.clientId != kLongAppDefaultClientId,
+           "short app default client id should differ from long app default 101");
+
+    RuntimeConnectionConfig overrideConfig = initial;
+    overrideConfig.clientId = 777;
+    updateRuntimeConnectionConfig(overrideConfig);
+    const RuntimeConnectionConfig overrideSnapshot = captureRuntimeConnectionConfig();
+    expect(overrideSnapshot.clientId == 777, "explicit client id override should be preserved");
+
+    RuntimeConnectionConfig fallbackConfig = overrideSnapshot;
+    fallbackConfig.clientId = 0;
+    updateRuntimeConnectionConfig(fallbackConfig);
+    const RuntimeConnectionConfig fallbackSnapshot = captureRuntimeConnectionConfig();
+    expect(fallbackSnapshot.clientId == DEFAULT_CLIENT_ID,
+           "invalid client id should fall back to the short app default client id");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 void testShortOpenSubmitSucceeds() {
     clearTestFiles();
 
@@ -1314,6 +1345,7 @@ int main() {
         testPendingUiSyncUpdateConsumesFlags();
         testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking();
         testRuntimePresentationSnapshotCapturesShortPositionState();
+        testShortAppConnectionDefaultsAndFallback();
         testShortOpenSubmitSucceeds();
         testBuyToCoverSubmitSucceedsWhenBorrowUnavailable();
         testShortOpenRejectsWhenBorrowIsUnavailable();
