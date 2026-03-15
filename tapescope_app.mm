@@ -48,6 +48,8 @@ using tapescope::json;
 
 constexpr NSTimeInterval kPollIntervalSeconds = 2.0;
 constexpr std::size_t kLiveTailLimit = 32;
+constexpr std::size_t kRecentHistoryLimit = 24;
+NSString* const kTapeScopeStateDefaultsKey = @"TapeScopeStateV1";
 
 NSColor* TapeBackgroundColor() {
     return [NSColor colorWithCalibratedRed:0.953 green:0.941 blue:0.914 alpha:1.0];
@@ -597,7 +599,82 @@ std::string ExtractArtifactId(const json& payload) {
     if (!artifact.is_object()) {
         return {};
     }
-    return artifact.value("artifact_id", std::string());
+    return artifact.value("artifact_id", artifact.value("id", std::string()));
+}
+
+std::string RecentHistoryHeadlineForPayload(const json& payload,
+                                           const std::string& fallbackHeadline) {
+    if (!payload.is_object()) {
+        return fallbackHeadline;
+    }
+    const json summary = payload.value("summary", json::object());
+    const json report = summary.value("report", json::object());
+    const json entity = summary.value("entity", json::object());
+    const json artifact = summary.value("artifact", json::object());
+
+    std::string headline = FirstPresentString(report, {"title", "headline"});
+    if (!headline.empty()) {
+        return headline;
+    }
+    headline = FirstPresentString(summary, {"headline", "title", "why_it_matters"});
+    if (!headline.empty()) {
+        return headline;
+    }
+    headline = FirstPresentString(entity, {"headline", "label", "kind"});
+    if (!headline.empty()) {
+        return headline;
+    }
+    headline = FirstPresentString(artifact, {"headline", "id", "artifact_id"});
+    if (!headline.empty()) {
+        return headline;
+    }
+    return fallbackHeadline;
+}
+
+std::string RecentHistoryDetailForPayload(const json& payload,
+                                         const std::string& fallbackDetail) {
+    if (!payload.is_object()) {
+        return fallbackDetail;
+    }
+    const json summary = payload.value("summary", json::object());
+    const json report = summary.value("report", json::object());
+    const json timelineSummary = summary.value("timeline_summary", json::object());
+    std::string detail = FirstPresentString(report, {"summary", "why_it_matters"});
+    if (!detail.empty()) {
+        return detail;
+    }
+    detail = FirstPresentString(summary, {"what_changed_first", "why_it_matters", "headline"});
+    if (!detail.empty()) {
+        return detail;
+    }
+    detail = FirstPresentString(timelineSummary, {"headline", "summary", "description"});
+    if (!detail.empty()) {
+        return detail;
+    }
+    return fallbackDetail;
+}
+
+std::string DescribeRecentHistoryEntry(const json& entry) {
+    std::ostringstream out;
+    out << "kind: " << entry.value("kind", std::string("--")) << "\n";
+    out << "target_id: " << entry.value("target_id", std::string("--")) << "\n";
+    const std::string artifactId = entry.value("artifact_id", std::string());
+    if (!artifactId.empty()) {
+        out << "artifact_id: " << artifactId << "\n";
+    }
+    const auto firstSessionSeq = entry.value("first_session_seq", 0ULL);
+    const auto lastSessionSeq = entry.value("last_session_seq", 0ULL);
+    if (firstSessionSeq > 0 && lastSessionSeq >= firstSessionSeq) {
+        out << "session_seq: [" << firstSessionSeq << ", " << lastSessionSeq << "]\n";
+    }
+    const std::string anchorKind = entry.value("anchor_kind", std::string());
+    const std::string anchorValue = entry.value("anchor_value", std::string());
+    if (!anchorKind.empty() && !anchorValue.empty()) {
+        out << "anchor: " << anchorKind << "=" << anchorValue << "\n";
+    }
+    out << "\nheadline:\n" << entry.value("headline", std::string("--")) << "\n";
+    out << "\ndetail:\n" << entry.value("detail", std::string("--")) << "\n";
+    return out.str();
 }
 
 std::string EvidenceCitationLabel(const json& citation) {
@@ -815,6 +892,33 @@ enum class OrderAnchorType {
     ExecId = 3
 };
 
+std::string OrderAnchorTypeKey(OrderAnchorType type) {
+    switch (type) {
+        case OrderAnchorType::TraceId:
+            return "traceId";
+        case OrderAnchorType::OrderId:
+            return "orderId";
+        case OrderAnchorType::PermId:
+            return "permId";
+        case OrderAnchorType::ExecId:
+            return "execId";
+    }
+    return "traceId";
+}
+
+NSInteger OrderAnchorTypeIndexForKey(const std::string& key) {
+    if (key == "orderId") {
+        return 1;
+    }
+    if (key == "permId") {
+        return 2;
+    }
+    if (key == "execId") {
+        return 3;
+    }
+    return 0;
+}
+
 OrderAnchorType OrderAnchorTypeFromIndex(NSInteger index) {
     switch (index) {
         case 1:
@@ -893,6 +997,13 @@ struct InvestigationPaneModel {
     NSTextView* _liveTextView;
     NSTableView* _liveTableView;
     std::vector<json> _liveEvents;
+
+    NSButton* _recentOpenButton;
+    NSButton* _recentClearButton;
+    NSTextField* _recentStateLabel;
+    NSTableView* _recentTableView;
+    NSTextView* _recentTextView;
+    std::vector<json> _recentHistoryItems;
 
     NSTextField* _overviewFirstField;
     NSTextField* _overviewLastField;
@@ -1066,6 +1177,7 @@ struct InvestigationPaneModel {
     _lastQualityQuery.lastSessionSeq = 128;
 
     [self buildInterface];
+    [self restoreApplicationState];
     return self;
 }
 
@@ -1103,6 +1215,50 @@ struct InvestigationPaneModel {
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"LiveEventsPane"];
     item.label = @"LiveEventsPane";
+    item.view = pane;
+    return item;
+}
+
+- (NSTabViewItem*)recentHistoryTabItem {
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Recent history: reopen recently viewed incidents, findings, anchors, order cases, artifacts, and overview ranges without retyping ids.",
+                                             2)];
+
+    NSStackView* controls = MakeControlRow();
+    _recentOpenButton = [NSButton buttonWithTitle:@"Open Selected"
+                                           target:self
+                                           action:@selector(openSelectedRecentHistory:)];
+    _recentOpenButton.enabled = NO;
+    [controls addArrangedSubview:_recentOpenButton];
+
+    _recentClearButton = [NSButton buttonWithTitle:@"Clear History"
+                                            target:self
+                                            action:@selector(clearRecentHistory:)];
+    _recentClearButton.enabled = NO;
+    [controls addArrangedSubview:_recentClearButton];
+    [stack addArrangedSubview:controls];
+
+    _recentStateLabel = MakeLabel(@"Recent history will populate as you open investigations.",
+                                  [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                  [NSColor secondaryLabelColor]);
+    [stack addArrangedSubview:_recentStateLabel];
+
+    _recentTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_recentTableView, @"kind", @"kind", 140.0);
+    AddTableColumn(_recentTableView, @"target_id", @"target_id", 220.0);
+    AddTableColumn(_recentTableView, @"headline", @"headline", 430.0);
+    ConfigureTablePrimaryAction(_recentTableView, self, @selector(openSelectedRecentHistory:));
+    [stack addArrangedSubview:MakeTableScrollView(_recentTableView, 180.0)];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Selected Recent Entry")];
+
+    _recentTextView = MakeReadOnlyTextView();
+    _recentTextView.string = @"Open findings, incidents, order cases, anchors, artifacts, or overview ranges and they will appear here.";
+    [stack addArrangedSubview:MakeScrollView(_recentTextView, 250.0)];
+
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"RecentPane"];
+    item.label = @"RecentPane";
     item.view = pane;
     return item;
 }
@@ -1803,6 +1959,7 @@ struct InvestigationPaneModel {
     _tabView.translatesAutoresizingMaskIntoConstraints = NO;
     [_tabView addTabViewItem:[self textTabItemWithLabel:@"StatusPane" textView:&_statusTextView]];
     [_tabView addTabViewItem:[self liveEventsTabItem]];
+    [_tabView addTabViewItem:[self recentHistoryTabItem]];
     [_tabView addTabViewItem:[self overviewTabItem]];
     [_tabView addTabViewItem:[self incidentTabItem]];
     [_tabView addTabViewItem:[self seekTabItem]];
@@ -1863,6 +2020,298 @@ struct InvestigationPaneModel {
     _pollingToggleButton.title = _pollingPaused ? @"Resume Polling" : @"Pause Polling";
 }
 
+- (json)capturePersistentState {
+    json state = json::object();
+    if (_tabView.selectedTabViewItem.identifier != nil &&
+        [_tabView.selectedTabViewItem.identifier isKindOfClass:[NSString class]]) {
+        state["selected_tab"] = ToStdString((NSString*)_tabView.selectedTabViewItem.identifier);
+    }
+    state["polling_paused"] = (_pollingPaused == YES);
+    state["recent_history"] = _recentHistoryItems;
+    state["overview"] = json{{"first_session_seq", ToStdString(_overviewFirstField.stringValue)},
+                             {"last_session_seq", ToStdString(_overviewLastField.stringValue)}};
+    state["range"] = json{{"first_session_seq", ToStdString(_rangeFirstField.stringValue)},
+                          {"last_session_seq", ToStdString(_rangeLastField.stringValue)}};
+    state["quality"] = json{{"first_session_seq", ToStdString(_qualityFirstField.stringValue)},
+                            {"last_session_seq", ToStdString(_qualityLastField.stringValue)},
+                            {"include_live_tail", _qualityIncludeLiveTailButton.state == NSControlStateValueOn}};
+    state["finding"] = json{{"finding_id", ToStdString(_findingIdField.stringValue)}};
+    state["anchor"] = json{{"anchor_id", ToStdString(_anchorIdField.stringValue)}};
+    state["order_lookup"] = json{{"anchor_kind",
+                                  OrderAnchorTypeKey(OrderAnchorTypeFromIndex(_orderAnchorTypePopup.indexOfSelectedItem))},
+                                 {"anchor_value", ToStdString(_orderAnchorInputField.stringValue)}};
+    state["order_case"] = json{{"anchor_kind",
+                                OrderAnchorTypeKey(OrderAnchorTypeFromIndex(_orderCaseAnchorTypePopup.indexOfSelectedItem))},
+                               {"anchor_value", ToStdString(_orderCaseAnchorInputField.stringValue)}};
+    state["seek"] = json{{"anchor_kind",
+                          OrderAnchorTypeKey(OrderAnchorTypeFromIndex(_seekAnchorTypePopup.indexOfSelectedItem))},
+                         {"anchor_value", ToStdString(_seekAnchorInputField.stringValue)}};
+    state["incident"] = json{{"logical_incident_id", ToStdString(_incidentIdField.stringValue)}};
+    state["artifact"] = json{{"artifact_id", ToStdString(_artifactIdField.stringValue)},
+                             {"export_format", ToStdString(_artifactExportFormatPopup.titleOfSelectedItem)}};
+    return state;
+}
+
+- (void)persistApplicationState {
+    const json state = [self capturePersistentState];
+    NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:ToNSString(state.dump()) forKey:kTapeScopeStateDefaultsKey];
+}
+
+- (void)restoreApplicationState {
+    NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
+    NSString* raw = [defaults stringForKey:kTapeScopeStateDefaultsKey];
+    if (raw == nil || raw.length == 0) {
+        return;
+    }
+
+    json state;
+    try {
+        state = json::parse(ToStdString(raw));
+    } catch (const std::exception&) {
+        return;
+    }
+    if (!state.is_object()) {
+        return;
+    }
+
+    _pollingPaused = state.value("polling_paused", false);
+
+    const json overview = state.value("overview", json::object());
+    _overviewFirstField.stringValue = ToNSString(overview.value("first_session_seq", std::string()));
+    _overviewLastField.stringValue = ToNSString(overview.value("last_session_seq", std::string()));
+
+    const json range = state.value("range", json::object());
+    _rangeFirstField.stringValue = ToNSString(range.value("first_session_seq", std::string()));
+    _rangeLastField.stringValue = ToNSString(range.value("last_session_seq", std::string()));
+
+    const json quality = state.value("quality", json::object());
+    _qualityFirstField.stringValue = ToNSString(quality.value("first_session_seq", std::string()));
+    _qualityLastField.stringValue = ToNSString(quality.value("last_session_seq", std::string()));
+    _qualityIncludeLiveTailButton.state = quality.value("include_live_tail", false)
+                                              ? NSControlStateValueOn
+                                              : NSControlStateValueOff;
+
+    const json finding = state.value("finding", json::object());
+    _findingIdField.stringValue = ToNSString(finding.value("finding_id", std::string()));
+
+    const json anchor = state.value("anchor", json::object());
+    _anchorIdField.stringValue = ToNSString(anchor.value("anchor_id", std::string()));
+
+    const json orderLookup = state.value("order_lookup", json::object());
+    [_orderAnchorTypePopup selectItemAtIndex:OrderAnchorTypeIndexForKey(orderLookup.value("anchor_kind", std::string("traceId")))];
+    [self orderAnchorTypeChanged:nil];
+    _orderAnchorInputField.stringValue = ToNSString(orderLookup.value("anchor_value", std::string()));
+
+    const json orderCase = state.value("order_case", json::object());
+    [_orderCaseAnchorTypePopup selectItemAtIndex:OrderAnchorTypeIndexForKey(orderCase.value("anchor_kind", std::string("traceId")))];
+    [self orderCaseAnchorTypeChanged:nil];
+    _orderCaseAnchorInputField.stringValue = ToNSString(orderCase.value("anchor_value", std::string()));
+
+    const json seek = state.value("seek", json::object());
+    [_seekAnchorTypePopup selectItemAtIndex:OrderAnchorTypeIndexForKey(seek.value("anchor_kind", std::string("traceId")))];
+    [self seekAnchorTypeChanged:nil];
+    _seekAnchorInputField.stringValue = ToNSString(seek.value("anchor_value", std::string()));
+
+    const json incident = state.value("incident", json::object());
+    _incidentIdField.stringValue = ToNSString(incident.value("logical_incident_id", std::string()));
+
+    const json artifact = state.value("artifact", json::object());
+    _artifactIdField.stringValue = ToNSString(artifact.value("artifact_id", std::string()));
+    const std::string exportFormat = artifact.value("export_format", std::string("markdown"));
+    if (!exportFormat.empty()) {
+        [_artifactExportFormatPopup selectItemWithTitle:ToNSString(exportFormat)];
+    }
+
+    _recentHistoryItems.clear();
+    const json recentHistory = state.value("recent_history", json::array());
+    if (recentHistory.is_array()) {
+        for (const auto& item : recentHistory) {
+            if (item.is_object()) {
+                _recentHistoryItems.push_back(item);
+            }
+        }
+    }
+    [_recentTableView reloadData];
+    _recentClearButton.enabled = !_recentHistoryItems.empty();
+    _recentOpenButton.enabled = NO;
+    if (!_recentHistoryItems.empty()) {
+        _recentStateLabel.stringValue = @"Restored recent history from the last TapeScope session.";
+        _recentStateLabel.textColor = TapeInkMutedColor();
+        [_recentTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    }
+
+    const std::string selectedTab = state.value("selected_tab", std::string());
+    if (!selectedTab.empty()) {
+        [_tabView selectTabViewItemWithIdentifier:ToNSString(selectedTab)];
+    }
+    [self updatePollingStatusText];
+}
+
+- (void)recordRecentHistoryEntry:(json)entry {
+    if (!entry.is_object()) {
+        return;
+    }
+
+    const std::string key = entry.value("kind", std::string()) + "|" + entry.value("target_id", std::string());
+    _recentHistoryItems.erase(std::remove_if(_recentHistoryItems.begin(),
+                                             _recentHistoryItems.end(),
+                                             [&](const json& item) {
+                                                 return (item.value("kind", std::string()) + "|" +
+                                                         item.value("target_id", std::string())) == key;
+                                             }),
+                              _recentHistoryItems.end());
+    _recentHistoryItems.insert(_recentHistoryItems.begin(), std::move(entry));
+    if (_recentHistoryItems.size() > kRecentHistoryLimit) {
+        _recentHistoryItems.resize(kRecentHistoryLimit);
+    }
+    [_recentTableView reloadData];
+    _recentClearButton.enabled = !_recentHistoryItems.empty();
+    if (_recentHistoryItems.empty()) {
+        _recentStateLabel.stringValue = @"Recent history is empty.";
+        _recentStateLabel.textColor = TapeInkMutedColor();
+        _recentOpenButton.enabled = NO;
+        _recentTextView.string = @"Open investigations to build recent history.";
+        return;
+    }
+    _recentStateLabel.stringValue = @"Recent history updated.";
+    _recentStateLabel.textColor = [NSColor systemGreenColor];
+    [_recentTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    [self persistApplicationState];
+}
+
+- (void)recordRecentHistoryForPayloadKind:(const std::string&)kind
+                                 targetId:(const std::string&)targetId
+                                  payload:(const json&)payload
+                            fallbackTitle:(const std::string&)fallbackTitle
+                           fallbackDetail:(const std::string&)fallbackDetail
+                                 metadata:(const json&)metadata {
+    json entry = json::object();
+    entry["kind"] = kind;
+    entry["target_id"] = targetId;
+    entry["headline"] = RecentHistoryHeadlineForPayload(payload, fallbackTitle);
+    entry["detail"] = RecentHistoryDetailForPayload(payload, fallbackDetail);
+    const std::string artifactId = ExtractArtifactId(payload);
+    if (!artifactId.empty()) {
+        entry["artifact_id"] = artifactId;
+    }
+    const json summary = payload.value("summary", json::object());
+    const std::uint64_t firstSessionSeq =
+        summary.value("first_session_seq", summary.value("from_session_seq", 0ULL));
+    const std::uint64_t lastSessionSeq =
+        summary.value("last_session_seq", summary.value("to_session_seq", 0ULL));
+    if (firstSessionSeq > 0 && lastSessionSeq >= firstSessionSeq) {
+        entry["first_session_seq"] = firstSessionSeq;
+        entry["last_session_seq"] = lastSessionSeq;
+    }
+    if (metadata.is_object()) {
+        for (auto it = metadata.begin(); it != metadata.end(); ++it) {
+            entry[it.key()] = it.value();
+        }
+    }
+    [self recordRecentHistoryEntry:std::move(entry)];
+}
+
+- (void)openRecentHistoryEntry:(const json&)entry {
+    if (!entry.is_object()) {
+        return;
+    }
+
+    const std::string kind = entry.value("kind", std::string());
+    if (kind == "overview") {
+        const std::uint64_t firstSessionSeq = entry.value("first_session_seq", 0ULL);
+        const std::uint64_t lastSessionSeq = entry.value("last_session_seq", 0ULL);
+        if (firstSessionSeq > 0 && lastSessionSeq >= firstSessionSeq) {
+            _overviewFirstField.stringValue = UInt64String(firstSessionSeq);
+            _overviewLastField.stringValue = UInt64String(lastSessionSeq);
+            [_tabView selectTabViewItemWithIdentifier:@"SessionOverviewPane"];
+            [self fetchOverview:nil];
+        }
+        return;
+    }
+    if (kind == "incident") {
+        const std::uint64_t logicalIncidentId = entry.value("logical_incident_id", 0ULL);
+        if (logicalIncidentId > 0) {
+            _incidentIdField.stringValue = UInt64String(logicalIncidentId);
+            [_tabView selectTabViewItemWithIdentifier:@"IncidentPane"];
+            [self fetchIncident:nil];
+        }
+        return;
+    }
+    if (kind == "finding") {
+        const std::uint64_t findingId = entry.value("finding_id", 0ULL);
+        if (findingId > 0) {
+            _findingIdField.stringValue = UInt64String(findingId);
+            [_tabView selectTabViewItemWithIdentifier:@"FindingPane"];
+            [self fetchFinding:nil];
+        }
+        return;
+    }
+    if (kind == "anchor") {
+        const std::uint64_t anchorId = entry.value("anchor_id", 0ULL);
+        if (anchorId > 0) {
+            _anchorIdField.stringValue = UInt64String(anchorId);
+            [_tabView selectTabViewItemWithIdentifier:@"AnchorPane"];
+            [self fetchOrderAnchorById:nil];
+        }
+        return;
+    }
+    if (kind == "order_case") {
+        const std::string anchorKind = entry.value("anchor_kind", std::string("traceId"));
+        const std::string anchorValue = entry.value("anchor_value", std::string());
+        if (!anchorValue.empty()) {
+            [_orderCaseAnchorTypePopup selectItemAtIndex:OrderAnchorTypeIndexForKey(anchorKind)];
+            [self orderCaseAnchorTypeChanged:nil];
+            _orderCaseAnchorInputField.stringValue = ToNSString(anchorValue);
+            [_tabView selectTabViewItemWithIdentifier:@"OrderCasePane"];
+            [self fetchOrderCase:nil];
+        }
+        return;
+    }
+    if (kind == "artifact") {
+        const std::string artifactId = entry.value("artifact_id", entry.value("target_id", std::string()));
+        if (!artifactId.empty()) {
+            _artifactIdField.stringValue = ToNSString(artifactId);
+            [_tabView selectTabViewItemWithIdentifier:@"ArtifactPane"];
+            [self fetchArtifact:nil];
+        }
+        return;
+    }
+    if (kind == "range") {
+        const std::uint64_t firstSessionSeq = entry.value("first_session_seq", 0ULL);
+        const std::uint64_t lastSessionSeq = entry.value("last_session_seq", 0ULL);
+        if (firstSessionSeq > 0 && lastSessionSeq >= firstSessionSeq) {
+            _rangeFirstField.stringValue = UInt64String(firstSessionSeq);
+            _rangeLastField.stringValue = UInt64String(lastSessionSeq);
+            [_tabView selectTabViewItemWithIdentifier:@"RangePane"];
+            [self fetchRange:nil];
+        }
+    }
+}
+
+- (void)openSelectedRecentHistory:(id)sender {
+    (void)sender;
+    const NSInteger selected = _recentTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _recentHistoryItems.size()) {
+        _recentStateLabel.stringValue = @"Select a recent-history row first.";
+        _recentStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    [self openRecentHistoryEntry:_recentHistoryItems.at(static_cast<std::size_t>(selected))];
+}
+
+- (void)clearRecentHistory:(id)sender {
+    (void)sender;
+    _recentHistoryItems.clear();
+    [_recentTableView reloadData];
+    _recentOpenButton.enabled = NO;
+    _recentClearButton.enabled = NO;
+    _recentStateLabel.stringValue = @"Recent history cleared.";
+    _recentStateLabel.textColor = TapeInkMutedColor();
+    _recentTextView.string = @"Open investigations to repopulate recent history.";
+    [self persistApplicationState];
+}
+
 - (void)refreshNow:(id)sender {
     (void)sender;
     [self refresh:nil];
@@ -1882,6 +2331,7 @@ struct InvestigationPaneModel {
                                                      repeats:YES];
     }
     [self updatePollingStatusText];
+    [self persistApplicationState];
 }
 
 - (InvestigationPaneModel)overviewPaneModel {
@@ -2229,16 +2679,19 @@ struct InvestigationPaneModel {
 }
 
 - (void)startPolling {
-    [self refresh:nil];
-    _pollTimer = [NSTimer scheduledTimerWithTimeInterval:kPollIntervalSeconds
-                                                  target:self
-                                                selector:@selector(refresh:)
-                                                userInfo:nil
-                                                 repeats:YES];
+    [self refresh:_refreshNowButton];
+    if (!_pollingPaused) {
+        _pollTimer = [NSTimer scheduledTimerWithTimeInterval:kPollIntervalSeconds
+                                                      target:self
+                                                    selector:@selector(refresh:)
+                                                    userInfo:nil
+                                                     repeats:YES];
+    }
     [self updatePollingStatusText];
 }
 
 - (void)shutdown {
+    [self persistApplicationState];
     [_pollTimer invalidate];
     _pollTimer = nil;
 }
@@ -2480,6 +2933,14 @@ struct InvestigationPaneModel {
                                          toPane:[innerSelf findingPaneModel]
                                     successText:@"Finding loaded."
                                syncArtifactField:YES];
+            if (result.ok()) {
+                [innerSelf recordRecentHistoryForPayloadKind:"finding"
+                                                    targetId:std::to_string(findingId)
+                                                     payload:result.value
+                                               fallbackTitle:"Finding " + std::to_string(findingId)
+                                              fallbackDetail:"Reopen the persisted finding drilldown."
+                                                    metadata:json{{"finding_id", findingId}}];
+            }
             innerSelf->_findingTextView.string =
                 ToNSString(DescribeInvestigationPayload("finding",
                                                        "finding_id=" + std::to_string(findingId),
@@ -2534,6 +2995,14 @@ struct InvestigationPaneModel {
                                          toPane:[innerSelf anchorPaneModel]
                                     successText:@"Order anchor loaded."
                                syncArtifactField:YES];
+            if (result.ok()) {
+                [innerSelf recordRecentHistoryForPayloadKind:"anchor"
+                                                    targetId:std::to_string(anchorId)
+                                                     payload:result.value
+                                               fallbackTitle:"Order anchor " + std::to_string(anchorId)
+                                              fallbackDetail:"Reopen the persisted order anchor drilldown."
+                                                    metadata:json{{"anchor_id", anchorId}}];
+            }
             innerSelf->_anchorTextView.string =
                 ToNSString(DescribeInvestigationPayload("order_anchor",
                                                        "anchor_id=" + std::to_string(anchorId),
@@ -2604,6 +3073,16 @@ struct InvestigationPaneModel {
                                              toPane:[innerSelf overviewPaneModel]
                                         successText:@"Session overview loaded."
                                    syncArtifactField:NO];
+                [innerSelf recordRecentHistoryForPayloadKind:"overview"
+                                                    targetId:std::to_string(query.firstSessionSeq) + "-" +
+                                                             std::to_string(query.lastSessionSeq)
+                                                     payload:result.value
+                                               fallbackTitle:"Session overview " +
+                                                             std::to_string(query.firstSessionSeq) + "-" +
+                                                             std::to_string(query.lastSessionSeq)
+                                              fallbackDetail:"Reopen the recent session-overview range."
+                                                    metadata:json{{"first_session_seq", query.firstSessionSeq},
+                                                                  {"last_session_seq", query.lastSessionSeq}}];
                 innerSelf->_overviewOpenSelectedIncidentButton.enabled = !innerSelf->_overviewIncidents.empty();
                 if (!innerSelf->_overviewIncidents.empty()) {
                     [innerSelf->_overviewIncidentTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
@@ -2679,6 +3158,15 @@ struct InvestigationPaneModel {
                                              toPane:[innerSelf overviewPaneModel]
                                         successText:@"Durable session report scanned."
                                    syncArtifactField:YES];
+                const std::string artifactId = ExtractArtifactId(result.value);
+                if (!artifactId.empty()) {
+                    [innerSelf recordRecentHistoryForPayloadKind:"artifact"
+                                                        targetId:artifactId
+                                                         payload:result.value
+                                                   fallbackTitle:"Session report " + artifactId
+                                                  fallbackDetail:"Reopen the durable scanned session report."
+                                                        metadata:json{{"artifact_id", artifactId}}];
+                }
                 innerSelf->_overviewOpenSelectedIncidentButton.enabled = !innerSelf->_overviewIncidents.empty();
                 if (!innerSelf->_overviewIncidents.empty()) {
                     [innerSelf->_overviewIncidentTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
@@ -2899,6 +3387,17 @@ struct InvestigationPaneModel {
                                          toPane:[innerSelf orderCasePaneModel]
                                     successText:@"Order case loaded."
                                syncArtifactField:YES];
+            if (result.ok()) {
+                [innerSelf recordRecentHistoryForPayloadKind:"order_case"
+                                                    targetId:descriptor
+                                                     payload:result.value
+                                               fallbackTitle:"Order case " + descriptor
+                                              fallbackDetail:"Reopen the recent order-case investigation."
+                                                    metadata:json{{"anchor_kind",
+                                                                    OrderAnchorTypeKey(OrderAnchorTypeFromIndex(innerSelf->_orderCaseAnchorTypePopup.indexOfSelectedItem))},
+                                                                  {"anchor_value",
+                                                                    ToStdString(innerSelf->_orderCaseAnchorInputField.stringValue)}}];
+            }
             innerSelf->_orderCaseTextView.string =
                 ToNSString(DescribeInvestigationPayload("order_case", descriptor, result));
         });
@@ -2950,6 +3449,15 @@ struct InvestigationPaneModel {
                                     successText:@"Durable order-case report scanned."
                                syncArtifactField:YES];
             if (result.ok()) {
+                const std::string artifactId = ExtractArtifactId(result.value);
+                if (!artifactId.empty()) {
+                    [innerSelf recordRecentHistoryForPayloadKind:"artifact"
+                                                        targetId:artifactId
+                                                         payload:result.value
+                                                   fallbackTitle:"Order-case report " + artifactId
+                                                  fallbackDetail:"Reopen the durable scanned order-case report."
+                                                        metadata:json{{"artifact_id", artifactId}}];
+                }
                 [innerSelf refreshReportInventory:nil];
             }
             innerSelf->_orderCaseTextView.string =
@@ -3080,6 +3588,14 @@ struct InvestigationPaneModel {
                                          toPane:[innerSelf incidentPaneModel]
                                     successText:@"Incident loaded."
                                syncArtifactField:YES];
+            if (result.ok()) {
+                [innerSelf recordRecentHistoryForPayloadKind:"incident"
+                                                    targetId:std::to_string(logicalIncidentId)
+                                                     payload:result.value
+                                               fallbackTitle:"Incident " + std::to_string(logicalIncidentId)
+                                              fallbackDetail:"Reopen the incident drilldown."
+                                                    metadata:json{{"logical_incident_id", logicalIncidentId}}];
+            }
             innerSelf->_incidentTextView.string =
                 ToNSString(DescribeInvestigationPayload("incident", "logical_incident_id=" + std::to_string(logicalIncidentId), result));
         });
@@ -3232,6 +3748,14 @@ struct InvestigationPaneModel {
                                          toPane:[innerSelf artifactPaneModel]
                                     successText:@"Artifact loaded."
                                syncArtifactField:NO];
+            if (result.ok()) {
+                [innerSelf recordRecentHistoryForPayloadKind:"artifact"
+                                                    targetId:artifactId
+                                                     payload:result.value
+                                               fallbackTitle:"Artifact " + artifactId
+                                              fallbackDetail:"Reopen the durable artifact envelope."
+                                                    metadata:json{{"artifact_id", artifactId}}];
+            }
             innerSelf->_artifactTextView.string =
                 ToNSString(DescribeInvestigationPayload("artifact_read", artifactId, result));
         });
@@ -3419,6 +3943,9 @@ struct InvestigationPaneModel {
     if (tableView == _liveTableView) {
         return static_cast<NSInteger>(_liveEvents.size());
     }
+    if (tableView == _recentTableView) {
+        return static_cast<NSInteger>(_recentHistoryItems.size());
+    }
     if (tableView == _overviewIncidentTableView) {
         return static_cast<NSInteger>(_overviewIncidents.size());
     }
@@ -3471,6 +3998,11 @@ struct InvestigationPaneModel {
             return nil;
         }
         item = &_liveEvents.at(static_cast<std::size_t>(row));
+    } else if (tableView == _recentTableView) {
+        if (static_cast<std::size_t>(row) >= _recentHistoryItems.size()) {
+            return nil;
+        }
+        item = &_recentHistoryItems.at(static_cast<std::size_t>(row));
     } else if (tableView == _overviewIncidentTableView) {
         if (static_cast<std::size_t>(row) >= _overviewIncidents.size()) {
             return nil;
@@ -3552,6 +4084,14 @@ struct InvestigationPaneModel {
             value = item->value("event_kind", std::string());
         } else {
             value = EventSummaryText(*item);
+        }
+    } else if (tableView == _recentTableView) {
+        if ([columnId isEqualToString:@"kind"]) {
+            value = item->value("kind", std::string());
+        } else if ([columnId isEqualToString:@"target_id"]) {
+            value = item->value("target_id", std::string());
+        } else {
+            value = item->value("headline", item->value("detail", std::string()));
         }
     } else if (tableView == _overviewIncidentTableView) {
         if ([columnId isEqualToString:@"logical_incident_id"]) {
@@ -3654,6 +4194,18 @@ struct InvestigationPaneModel {
         }
         const json& item = _liveEvents.at(static_cast<std::size_t>(selected));
         _liveTextView.string = ToNSString(item.dump(2));
+        return;
+    }
+
+    if (tableView == _recentTableView) {
+        const NSInteger selected = _recentTableView.selectedRow;
+        _recentOpenButton.enabled = (selected >= 0);
+        if (selected < 0 || static_cast<std::size_t>(selected) >= _recentHistoryItems.size()) {
+            _recentTextView.string = @"Select a recent-history row to inspect its summary and reopen it.";
+            return;
+        }
+        const json& item = _recentHistoryItems.at(static_cast<std::size_t>(selected));
+        _recentTextView.string = ToNSString(DescribeRecentHistoryEntry(item));
         return;
     }
 

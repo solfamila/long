@@ -109,6 +109,8 @@ TapeScope Phase-4 shell notes:
 - Actionable TapeScope tables now support double-click plus `Return` / `Space` keyboard activation for the common drilldown actions (`open selected incident`, `open selected evidence`, `open selected report`), which makes the shell usable with much less pointer travel.
 - Loading, empty, and error states are now calmer and more explicit across the shell: investigation panes show loading placeholders while requests are in flight, empty result sets explain what to try next, and report/incident inventory panes distinguish between “loaded but empty” and actual query failures.
 - TapeScope now also drops keyboard focus into the overview range field on launch, so a fresh session can be driven immediately from the keyboard without clicking into the first pane.
+- TapeScope now keeps a recent-history surface for reopened overviews, incidents, findings, anchors, order cases, and artifacts, so common investigations can be revisited without retyping ids or ranges.
+- TapeScope now restores its last selected pane, recent-history list, polling mode, and key investigation inputs across launches, so the shell comes back in the same working context instead of resetting to a blank session.
 - The header now includes `Refresh Now`, polling pause/resume, and a `Last updated` timestamp so live investigation can be paused deliberately, refreshed on demand, and checked for staleness at a glance.
 - `QualityPane` now exposes `read_session_quality`, and `RangePane` can hand its current replay window straight into that data-quality view.
 - `FindingPane` and `AnchorPane` now expose the engine’s direct `read_finding` and `read_order_anchor` investigation reads, including replay-window handoff and evidence-citation browsing.
