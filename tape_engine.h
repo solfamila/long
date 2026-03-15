@@ -9,6 +9,7 @@
 #include <deque>
 #include <filesystem>
 #include <future>
+#include <memory>
 #include <optional>
 #include <map>
 #include <mutex>
@@ -82,6 +83,7 @@ struct OrderAnchorRecord {
 struct ProtectedWindowRecord {
     std::uint64_t windowId = 0;
     std::uint64_t revisionId = 0;
+    std::uint64_t logicalIncidentId = 0;
     std::uint64_t anchorSessionSeq = 0;
     std::uint64_t startEngineNs = 0;
     std::uint64_t endEngineNs = 0;
@@ -93,6 +95,8 @@ struct ProtectedWindowRecord {
 struct FindingRecord {
     std::uint64_t findingId = 0;
     std::uint64_t revisionId = 0;
+    std::uint64_t logicalIncidentId = 0;
+    std::uint64_t incidentRevisionId = 0;
     std::string kind;
     std::string severity;
     double confidence = 0.0;
@@ -113,9 +117,12 @@ struct IncidentRecord {
     std::string kind;
     std::string severity;
     double confidence = 0.0;
+    double score = 0.0;
     std::uint64_t firstSessionSeq = 0;
     std::uint64_t lastSessionSeq = 0;
     std::uint64_t promotedByFindingId = 0;
+    std::uint64_t latestFindingId = 0;
+    std::uint64_t findingCount = 0;
     std::uint64_t tsEngineNs = 0;
     std::string instrumentId;
     std::string title;
@@ -200,7 +207,19 @@ private:
         std::vector<BookLevel> askBook;
         double lastEffectiveBid = 0.0;
         double lastEffectiveAsk = 0.0;
+        double lastEffectiveBidSize = 0.0;
+        double lastEffectiveAskSize = 0.0;
         bool hasInside = false;
+    };
+
+    struct DeferredAnalyzerTask {
+        std::string analyzerName;
+        std::uint64_t sourceRevisionId = 0;
+        std::uint64_t protectedWindowId = 0;
+        std::uint64_t logicalIncidentId = 0;
+        std::string instrumentId;
+        std::string reason;
+        BridgeAnchorIdentity anchor;
     };
 
     void acceptLoop();
@@ -208,6 +227,7 @@ private:
     void sequencerLoop();
     void replayLoop();
     void writerLoop();
+    void deferredAnalyzerLoop();
     IngestAck processIngestFrame(const std::vector<std::uint8_t>& frame);
     QueryResponse processQueryFrame(const std::vector<std::uint8_t>& frame);
     IngestAck rejectAck(std::uint64_t batchSeq,
@@ -220,6 +240,7 @@ private:
     bool restoreFrozenState(std::string* error);
     void writeSegment(const PendingSegment& segment);
     void enqueueSegment(PendingSegment segment);
+    void enqueueDeferredAnalyzerTask(DeferredAnalyzerTask task);
     std::string resolveInstrumentId(const BridgeOutboxRecord& record) const;
     void rememberSourceSeqUnlocked(ConnectionCursor& cursor, std::uint64_t sourceSeq);
     void resetSourceSeqWindowUnlocked(ConnectionCursor& cursor);
@@ -227,7 +248,8 @@ private:
     void recordOrderAnchorUnlocked(const EngineEvent& event);
     void addProtectedWindowUnlocked(const EngineEvent& event,
                                     const std::string& reason,
-                                    const BridgeAnchorIdentity& anchor);
+                                    const BridgeAnchorIdentity& anchor,
+                                    std::uint64_t logicalIncidentId = 0);
     void recordFindingUnlocked(const EngineEvent& event,
                                const std::string& kind,
                                const std::string& severity,
@@ -236,6 +258,18 @@ private:
                                const std::string& summary,
                                const BridgeAnchorIdentity& overlappingAnchor,
                                bool overlapsOrder);
+    void recordFindingRangeUnlocked(std::uint64_t revisionId,
+                                    const std::string& kind,
+                                    const std::string& severity,
+                                    double confidence,
+                                    std::uint64_t firstSessionSeq,
+                                    std::uint64_t lastSessionSeq,
+                                    std::uint64_t tsEngineNs,
+                                    const std::string& instrumentId,
+                                    const std::string& title,
+                                    const std::string& summary,
+                                    const BridgeAnchorIdentity& overlappingAnchor,
+                                    bool overlapsOrder);
     void recordIncidentUnlocked(const EngineEvent& event,
                                 const FindingRecord& finding,
                                 const BridgeAnchorIdentity& overlappingAnchor,
@@ -319,12 +353,17 @@ private:
     std::mutex clientThreadsMutex_;
     std::vector<std::thread> clientThreads_;
 
+    std::mutex deferredAnalyzerMutex_;
+    std::condition_variable deferredAnalyzerCv_;
+    std::deque<DeferredAnalyzerTask> deferredAnalyzerQueue_;
+
     std::atomic<bool> running_{false};
     int serverFd_ = -1;
     std::thread acceptThread_;
     std::thread sequencerThread_;
     std::thread replayThread_;
     std::thread writerThread_;
+    std::thread deferredAnalyzerThread_;
 };
 
 } // namespace tape_engine

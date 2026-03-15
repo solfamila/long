@@ -21,10 +21,12 @@ void printUsage() {
               << "  tape_engine_ctl read-range <from_session_seq> <to_session_seq> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl replay-snapshot <session_seq> [--revision N] [--include-live-tail] [--depth N]\n"
               << "  tape_engine_ctl find-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
+              << "  tape_engine_ctl seek-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-order-anchors [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-protected-windows [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl read-protected-window <window_id> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-findings [--revision N] [--include-live-tail] [--limit N]\n"
+              << "  tape_engine_ctl read-incident <logical_incident_id> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-incidents [--revision N] [--include-live-tail] [--limit N]\n";
 }
 
@@ -100,6 +102,26 @@ int main(int argc, char** argv) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
+    } else if (request.operation == "seek-order") {
+        request.operation = "seek_order_anchor";
+        for (int i = 2; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--trace-id" && i + 1 < argc) {
+                request.traceId = std::stoull(argv[++i]);
+            } else if (arg == "--order-id" && i + 1 < argc) {
+                request.orderId = std::stoll(argv[++i]);
+            } else if (arg == "--perm-id" && i + 1 < argc) {
+                request.permId = std::stoll(argv[++i]);
+            } else if (arg == "--exec-id" && i + 1 < argc) {
+                request.execId = argv[++i];
+            } else if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--include-live-tail") {
+                request.includeLiveTail = true;
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
     } else if (request.operation == "read-protected-window") {
         request.operation = "read_protected_window";
         if (argc < 3) {
@@ -107,6 +129,23 @@ int main(int argc, char** argv) {
             return 1;
         }
         request.windowId = std::stoull(argv[2]);
+        for (int i = 3; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--include-live-tail") {
+                request.includeLiveTail = true;
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
+    } else if (request.operation == "read-incident") {
+        request.operation = "read_incident";
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.logicalIncidentId = std::stoull(argv[2]);
         for (int i = 3; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--revision" && i + 1 < argc) {

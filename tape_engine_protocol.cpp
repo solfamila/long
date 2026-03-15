@@ -112,6 +112,7 @@ json queryRequestToJson(const QueryRequest& request) {
         {"include_live_tail", request.includeLiveTail},
         {"limit", request.limit},
         {"operation", request.operation},
+        {"logical_incident_id", request.logicalIncidentId},
         {"order_id", request.orderId},
         {"perm_id", request.permId},
         {"revision_id", request.revisionId},
@@ -140,6 +141,7 @@ QueryRequest queryRequestFromJson(const json& payload) {
     request.toSessionSeq = payload.value("to_session_seq", 0ULL);
     request.targetSessionSeq = payload.value("target_session_seq", 0ULL);
     request.windowId = payload.value("window_id", 0ULL);
+    request.logicalIncidentId = payload.value("logical_incident_id", 0ULL);
     request.limit = payload.value("limit", static_cast<std::size_t>(0));
     request.includeLiveTail = payload.value("include_live_tail", false);
     request.traceId = payload.value("trace_id", 0ULL);

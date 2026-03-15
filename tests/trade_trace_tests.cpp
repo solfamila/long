@@ -808,8 +808,8 @@ void testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments() {
 
     waitUntil([&]() {
         const auto snapshot = server.snapshot();
-        return snapshot.segments.size() == 1 && snapshot.latestFrozenRevisionId >= 1;
-    }, "tape-engine should freeze the accepted batch into one segment");
+        return snapshot.segments.size() >= 1 && snapshot.latestFrozenRevisionId >= 1;
+    }, "tape-engine should freeze the accepted batch into at least one segment");
 
     const tape_engine::EngineSnapshot snapshot = server.snapshot();
     expect(snapshot.nextSessionSeq == 3, "tape-engine should assign contiguous session_seq values to accepted records");
@@ -817,7 +817,7 @@ void testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments() {
     expect(snapshot.liveEvents.front().sessionSeq == 1, "tape-engine should assign the first session_seq");
     expect(snapshot.liveEvents.back().sessionSeq == 2, "tape-engine should assign the second session_seq");
     expect(snapshot.liveEvents.back().bridgeRecord.anchor.execId == "EXEC-71", "tape-engine should preserve bridge anchors");
-    expect(snapshot.segments.size() == 1, "tape-engine should emit one segment for the accepted batch");
+    expect(snapshot.segments.size() >= 1, "tape-engine should emit at least one segment for the accepted batch");
     expect(snapshot.segments.front().revisionId == 1, "tape-engine should assign a frozen revision id to the segment");
     expect(snapshot.segments.front().fileName.find(".events.msgpack") != std::string::npos,
            "tape-engine should freeze segment payloads as binary msgpack files");
@@ -834,7 +834,7 @@ void testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments() {
     expect(fs::exists(manifestPath), "tape-engine should append the manifest hash chain");
 
     const std::vector<json> manifestLines = readJsonLines(manifestPath.string());
-    expect(manifestLines.size() == 1, "tape-engine should append one manifest line for the accepted batch");
+    expect(manifestLines.size() >= 1, "tape-engine should append at least one manifest line for the accepted batch");
     expect(manifestLines.front().value("manifest_hash", std::string()) == snapshot.segments.front().manifestHash,
            "tape-engine manifest hash should match the in-memory segment metadata");
 
@@ -939,7 +939,7 @@ void testTapeEngineQueryStatusAndReads() {
 
     waitUntil([&]() {
         const auto snapshot = server.snapshot();
-        return snapshot.segments.size() == 2 && snapshot.latestFrozenRevisionId >= 2;
+        return snapshot.segments.size() >= 2 && snapshot.latestFrozenRevisionId >= 2;
     }, "tape-engine should freeze both query batches before frozen reads");
 
     tape_engine::Client client(socketPath.string());
@@ -949,8 +949,8 @@ void testTapeEngineQueryStatusAndReads() {
     statusRequest.requestId = "status-1";
     statusRequest.operation = "status";
     expect(client.query(statusRequest, &response, &error), "tape-engine status query should succeed: " + error);
-    expect(response.summary.value("segment_count", 0ULL) == 2, "status query should report the written segment count");
-    expect(response.summary.value("latest_frozen_revision_id", 0ULL) == 2, "status query should expose the latest frozen revision");
+    expect(response.summary.value("segment_count", 0ULL) >= 2, "status query should report at least the written segment count");
+    expect(response.summary.value("latest_frozen_revision_id", 0ULL) >= 2, "status query should expose a frozen revision at or beyond the ingest batches");
     expect(response.summary.value("latest_session_seq", 0ULL) == 4, "status query should report the latest accepted session_seq");
 
     tape_engine::QueryRequest rangeRequest;
@@ -960,7 +960,7 @@ void testTapeEngineQueryStatusAndReads() {
     rangeRequest.toSessionSeq = 4;
     expect(client.query(rangeRequest, &response, &error), "tape-engine range query should succeed: " + error);
     expect(response.events.is_array() && response.events.size() == 3, "range query should return the requested session_seq window");
-    expect(response.summary.value("served_revision_id", 0ULL) == 2, "range query should say which frozen revision served the read");
+    expect(response.summary.value("served_revision_id", 0ULL) >= 2, "range query should say which frozen revision served the read");
     expect(response.events.at(0).value("event_kind", std::string()) == "order_status", "range query should include the original order status event");
     expect(response.events.at(1).value("event_kind", std::string()) == "gap_marker", "range query should expose the explicit gap marker");
     expect(response.events.at(2).value("event_kind", std::string()) == "fill_execution", "range query should expose the later fill event");
@@ -982,6 +982,17 @@ void testTapeEngineQueryStatusAndReads() {
     expect(response.events.is_array() && response.events.size() == 3, "anchor query should return the order-anchored lifecycle events");
     expect(response.events.at(0).value("event_kind", std::string()) == "order_intent", "anchor query should begin with the queued order intent");
     expect(response.events.at(2).value("event_kind", std::string()) == "fill_execution", "anchor query should include the fill execution");
+
+    tape_engine::QueryRequest seekRequest;
+    seekRequest.requestId = "seek-1";
+    seekRequest.operation = "seek_order_anchor";
+    seekRequest.orderId = 701;
+    expect(client.query(seekRequest, &response, &error), "tape-engine seek-order query should succeed: " + error);
+    expect(response.summary.value("first_session_seq", 0ULL) == 1, "seek-order should report the first anchored session_seq");
+    expect(response.summary.value("last_session_seq", 0ULL) == 4, "seek-order should report the final anchored session_seq");
+    expect(response.summary.value("last_fill_session_seq", 0ULL) == 4, "seek-order should identify the fill session_seq as the replay target");
+    expect(response.summary.value("replay_target_session_seq", 0ULL) == 4, "seek-order should point replay at the fill when one exists");
+    expect(response.summary.contains("protected_window"), "seek-order should include protected-window context");
 
     server.stop();
 }
@@ -1021,7 +1032,7 @@ void testTapeEngineRevisionPinnedReadsCanOverlayMutableTail() {
 
     waitUntil([&]() {
         const auto snapshot = server.snapshot();
-        return snapshot.latestFrozenRevisionId >= 1 && snapshot.segments.size() == 1;
+        return snapshot.latestFrozenRevisionId >= 1 && snapshot.segments.size() >= 1;
     }, "tape-engine should freeze revision 1 before pinned reads");
 
     options.batchSeq = 72;
@@ -1119,7 +1130,7 @@ void testTapeEnginePhase3FindingsIncidentsAndProtectedWindows() {
 
     waitUntil([&]() {
         const auto snapshot = server.snapshot();
-        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() == 3;
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
     }, "tape-engine should freeze all phase 3 test batches");
 
     tape_engine::Client client(socketPath.string());
@@ -1151,16 +1162,28 @@ void testTapeEnginePhase3FindingsIncidentsAndProtectedWindows() {
     findingsRequest.operation = "list_findings";
     expect(client.query(findingsRequest, &response, &error), "phase 3 findings query should succeed: " + error);
     expect(response.events.is_array() && !response.events.empty(), "phase 3 should emit at least one finding");
-    expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "phase 3 should emit a spread_widened finding");
-    expect(response.events.at(0).value("overlaps_order", false), "phase 3 spread widening finding should overlap the order anchor window");
+    bool sawSpreadFinding = false;
+    bool sawOrderFlowFinding = false;
+    for (const auto& item : response.events) {
+        sawSpreadFinding = sawSpreadFinding || item.value("kind", std::string()) == "spread_widened";
+        sawOrderFlowFinding = sawOrderFlowFinding || item.value("kind", std::string()) == "order_flow_timeline";
+    }
+    expect(sawSpreadFinding, "phase 3 should emit a spread_widened finding");
+    expect(sawOrderFlowFinding, "phase 3 deferred lane should emit an order_flow_timeline finding");
 
     tape_engine::QueryRequest incidentsRequest;
     incidentsRequest.requestId = "incidents-phase3";
     incidentsRequest.operation = "list_incidents";
     expect(client.query(incidentsRequest, &response, &error), "phase 3 incidents query should succeed: " + error);
     expect(response.events.is_array() && !response.events.empty(), "phase 3 should emit at least one incident");
-    expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "phase 3 incident should inherit the finding kind");
-    expect(response.events.at(0).value("overlaps_order", false), "phase 3 incident should report order overlap");
+    bool sawSpreadIncident = false;
+    bool sawOrderOverlap = false;
+    for (const auto& item : response.events) {
+        sawSpreadIncident = sawSpreadIncident || item.value("kind", std::string()) == "spread_widened";
+        sawOrderOverlap = sawOrderOverlap || item.value("overlaps_order", false);
+    }
+    expect(sawSpreadIncident, "phase 3 incident list should include the spread_widened incident");
+    expect(sawOrderOverlap, "phase 3 incident list should report at least one order-overlapping incident");
 
     server.stop();
 }
@@ -1229,7 +1252,7 @@ void testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow() {
 
         waitUntil([&]() {
             const auto snapshot = server.snapshot();
-            return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() == 3;
+            return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
         }, "tape-engine should freeze restart phase 3 batches");
 
         tape_engine::Client client(socketPath.string());
@@ -1264,8 +1287,8 @@ void testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow() {
         std::string startError;
         expect(restarted.start(&startError), "tape-engine should restart and restore frozen phase 3 state: " + startError);
         const tape_engine::EngineSnapshot restoredSnapshot = restarted.snapshot();
-        expect(restoredSnapshot.latestFrozenRevisionId == 3, "restart should restore the latest frozen revision id");
-        expect(restoredSnapshot.segments.size() == 3, "restart should restore frozen segment metadata");
+        expect(restoredSnapshot.latestFrozenRevisionId >= 4, "restart should restore the latest frozen revision id");
+        expect(restoredSnapshot.segments.size() >= 4, "restart should restore frozen segment metadata");
 
         tape_engine::Client client(socketPath.string());
         tape_engine::QueryResponse response;
@@ -1276,7 +1299,14 @@ void testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow() {
         findingsRequest.operation = "list_findings";
         expect(client.query(findingsRequest, &response, &error), "restored phase 3 findings query should succeed: " + error);
         expect(response.events.is_array() && !response.events.empty(), "restart should restore frozen findings");
-        expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "restart should restore the spread_widened finding");
+        bool sawSpreadFinding = false;
+        bool sawOrderFlowFinding = false;
+        for (const auto& item : response.events) {
+            sawSpreadFinding = sawSpreadFinding || item.value("kind", std::string()) == "spread_widened";
+            sawOrderFlowFinding = sawOrderFlowFinding || item.value("kind", std::string()) == "order_flow_timeline";
+        }
+        expect(sawSpreadFinding, "restart should restore the spread_widened finding");
+        expect(sawOrderFlowFinding, "restart should restore deferred order-flow findings too");
 
         tape_engine::QueryRequest readWindowRequest;
         readWindowRequest.requestId = "window-phase3-restart-restored";
@@ -1312,7 +1342,8 @@ void testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow() {
 
         waitUntil([&]() {
             const auto snapshot = restarted.snapshot();
-            return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() == 4;
+            return snapshot.latestFrozenRevisionId > restoredSnapshot.latestFrozenRevisionId &&
+                   snapshot.segments.size() > restoredSnapshot.segments.size();
         }, "restarted tape-engine should freeze the post-restart anchor batch");
 
         tape_engine::QueryRequest anchorsRequest;
@@ -1325,6 +1356,235 @@ void testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow() {
 
         restarted.stop();
     }
+}
+
+void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-incidents";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-incidents.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for incident collapse test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-incidents";
+    options.runtimeSessionId = "runtime-engine-phase3-incidents";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8201, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      411, 3101, 0, "", "incident collapse anchor", "2026-03-14T09:42:00.100");
+    orderIntent.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+    options.batchSeq = 111;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the incident collapse anchor batch: " + error);
+
+    BridgeOutboxRecord bidTick = makeBridgeRecord(8202, "market_tick", "BrokerMarketData", "INTC", "BID",
+                                                  0, 0, 0, "", "collapse bid", "2026-03-14T09:42:00.120");
+    bidTick.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+    bidTick.marketField = 1;
+    bidTick.price = 45.30;
+
+    BridgeOutboxRecord askTick = makeBridgeRecord(8203, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                  0, 0, 0, "", "collapse ask", "2026-03-14T09:42:00.130");
+    askTick.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+    askTick.marketField = 2;
+    askTick.price = 45.31;
+
+    options.batchSeq = 112;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({bidTick, askTick}, options)), &error),
+           "tape-engine should accept the incident collapse seed market batch: " + error);
+
+    BridgeOutboxRecord widenedAskOne = makeBridgeRecord(8204, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                        0, 0, 0, "", "collapse widened ask one", "2026-03-14T09:42:00.140");
+    widenedAskOne.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+    widenedAskOne.marketField = 2;
+    widenedAskOne.price = 45.33;
+
+    options.batchSeq = 113;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAskOne}, options)), &error),
+           "tape-engine should accept the first widening batch: " + error);
+
+    BridgeOutboxRecord widenedAskTwo = makeBridgeRecord(8205, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                        0, 0, 0, "", "collapse widened ask two", "2026-03-14T09:42:00.150");
+    widenedAskTwo.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+    widenedAskTwo.marketField = 2;
+    widenedAskTwo.price = 45.35;
+
+    options.batchSeq = 114;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAskTwo}, options)), &error),
+           "tape-engine should accept the second widening batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+    }, "tape-engine should freeze repeated spread widening batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3-collapse";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 collapse findings query should succeed: " + error);
+    expect(response.events.is_array() && response.events.size() >= 2, "phase 3 collapse should retain multiple spread findings");
+    expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "latest collapse finding should be spread_widened");
+    expect(response.events.at(1).value("kind", std::string()) == "spread_widened", "second latest collapse finding should also be spread_widened");
+
+    tape_engine::QueryRequest incidentsRequest;
+    incidentsRequest.requestId = "incidents-phase3-collapse";
+    incidentsRequest.operation = "list_incidents";
+    expect(client.query(incidentsRequest, &response, &error), "phase 3 collapse incidents query should succeed: " + error);
+    expect(response.events.is_array() && !response.events.empty(), "phase 3 collapse should surface ranked logical incidents");
+    expect(response.summary.value("collapsed_logical_incidents", false), "phase 3 collapse should report logical incident collapsing");
+    json collapsedSpreadIncident = json::object();
+    for (const auto& item : response.events) {
+        if (item.value("kind", std::string()) == "spread_widened") {
+            collapsedSpreadIncident = item;
+            break;
+        }
+    }
+    expect(!collapsedSpreadIncident.is_null() && !collapsedSpreadIncident.empty(), "phase 3 collapse should preserve a spread_widened logical incident");
+    expect(collapsedSpreadIncident.value("finding_count", 0ULL) == 2ULL, "collapsed spread incident should count both findings");
+    expect(collapsedSpreadIncident.value("score", 0.0) > 2.0, "collapsed spread incident should accumulate a higher incident score");
+    expect(collapsedSpreadIncident.value("overlaps_order", false), "collapsed spread incident should preserve order overlap");
+
+    const std::uint64_t logicalIncidentId = collapsedSpreadIncident.value("logical_incident_id", 0ULL);
+    expect(logicalIncidentId > 0, "collapsed incident should expose a logical incident id for drilldown");
+
+    tape_engine::QueryRequest readIncidentRequest;
+    readIncidentRequest.requestId = "incident-phase3-collapse";
+    readIncidentRequest.operation = "read_incident";
+    readIncidentRequest.logicalIncidentId = logicalIncidentId;
+    expect(client.query(readIncidentRequest, &response, &error), "phase 3 collapse incident read should succeed: " + error);
+    expect(response.summary.value("logical_incident_id", 0ULL) == logicalIncidentId, "incident drilldown should preserve the requested logical incident id");
+    expect(response.summary.value("incident_revision_count", 0ULL) == 2ULL, "incident drilldown should report both incident revisions");
+    expect(response.summary.value("related_finding_count", 0ULL) == 2ULL, "incident drilldown should report both related findings");
+    expect(response.summary.contains("score_breakdown"), "incident drilldown should include a score breakdown");
+    expect(response.summary.contains("why_it_matters"), "incident drilldown should include a why-it-matters summary");
+    expect(response.summary.contains("protected_window"), "incident drilldown should include the incident protected window");
+    expect(response.events.is_array() && response.events.size() == 2, "incident drilldown should return the related findings as evidence");
+    expect(response.events.at(0).value("logical_incident_id", 0ULL) == logicalIncidentId, "incident drilldown findings should be linked to the logical incident");
+
+    server.stop();
+}
+
+void testTapeEnginePhase3DetectsInsideLiquiditySignals() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-liquidity";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-liquidity.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for liquidity signal test: " + startError);
+
+    auto marketRecord = [](std::uint64_t sourceSeq,
+                           const std::string& recordType,
+                           const std::string& side,
+                           int marketField,
+                           int bookPosition,
+                           int bookOperation,
+                           int bookSide,
+                           double price,
+                           double size,
+                           const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, recordType, "BrokerMarketData", "INTC", side,
+                                                     0, 0, 0, "", note, "2026-03-14T09:43:00.000");
+        record.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+        record.marketField = marketField;
+        record.bookPosition = bookPosition;
+        record.bookOperation = bookOperation;
+        record.bookSide = bookSide;
+        record.price = price;
+        record.size = size;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-liquidity";
+    options.runtimeSessionId = "runtime-engine-phase3-liquidity";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8301, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      511, 4101, 0, "", "liquidity anchor", "2026-03-14T09:43:00.050");
+    orderIntent.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+    options.batchSeq = 121;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the liquidity anchor batch: " + error);
+
+    options.batchSeq = 122;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketRecord(8302, "market_tick", "BID", 1, -1, -1, -1, 45.40, std::numeric_limits<double>::quiet_NaN(), "liquidity bid"),
+        marketRecord(8303, "market_tick", "ASK", 2, -1, -1, -1, 45.41, std::numeric_limits<double>::quiet_NaN(), "liquidity ask"),
+        marketRecord(8304, "market_depth", "ASK", -1, 0, 0, 0, 45.41, 400.0, "liquidity ask insert"),
+        marketRecord(8305, "market_depth", "BID", -1, 0, 0, 1, 45.40, 500.0, "liquidity bid insert")
+    }, options)), &error), "tape-engine should accept the liquidity seed batch: " + error);
+
+    options.batchSeq = 123;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketRecord(8306, "market_depth", "ASK", -1, 0, 1, 0, 45.41, 100.0, "liquidity ask thin"),
+        marketRecord(8307, "market_depth", "ASK", -1, 0, 1, 0, 45.41, 350.0, "liquidity ask refill")
+    }, options)), &error), "tape-engine should accept the liquidity change batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() >= 3;
+    }, "tape-engine should freeze liquidity signal batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3-liquidity";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 liquidity findings query should succeed: " + error);
+    bool sawAskThin = false;
+    bool sawAskRefill = false;
+    for (const auto& item : response.events) {
+        const std::string kind = item.value("kind", std::string());
+        sawAskThin = sawAskThin || kind == "ask_liquidity_thinned";
+        sawAskRefill = sawAskRefill || kind == "ask_liquidity_refilled";
+    }
+    expect(sawAskThin, "phase 3 liquidity should detect inside ask thinning");
+    expect(sawAskRefill, "phase 3 liquidity should detect inside ask refill");
+
+    tape_engine::QueryRequest incidentsRequest;
+    incidentsRequest.requestId = "incidents-phase3-liquidity";
+    incidentsRequest.operation = "list_incidents";
+    expect(client.query(incidentsRequest, &response, &error), "phase 3 liquidity incidents query should succeed: " + error);
+    bool sawRankedLiquidityIncident = false;
+    for (const auto& item : response.events) {
+        const std::string kind = item.value("kind", std::string());
+        if ((kind == "ask_liquidity_thinned" || kind == "ask_liquidity_refilled") &&
+            item.value("score", 0.0) > 0.5) {
+            sawRankedLiquidityIncident = true;
+        }
+    }
+    expect(sawRankedLiquidityIncident, "phase 3 liquidity incidents should surface ranked liquidity signals");
+
+    server.stop();
 }
 
 void testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity() {
@@ -1439,7 +1699,7 @@ void testTapeEngineReplaySnapshotRebuildsFrozenMarketState() {
 
     waitUntil([&]() {
         const auto snapshot = server.snapshot();
-        return snapshot.segments.size() == 1 && snapshot.latestFrozenRevisionId >= 1;
+        return snapshot.segments.size() >= 1 && snapshot.latestFrozenRevisionId >= 1;
     }, "tape-engine should freeze replay market data before rebuilding a frozen snapshot");
 
     tape_engine::Client client(socketPath.string());
@@ -2336,6 +2596,8 @@ int main() {
         testTapeEngineRevisionPinnedReadsCanOverlayMutableTail();
         testTapeEnginePhase3FindingsIncidentsAndProtectedWindows();
         testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();
+        testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
+        testTapeEnginePhase3DetectsInsideLiquiditySignals();
         testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity();
         testTapeEngineReplaySnapshotRebuildsFrozenMarketState();
         testBridgeMarketDataEmissionExpandsPublicEvents();

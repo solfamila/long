@@ -13,6 +13,7 @@
     "recorder",
     "revision",
     "replay",
+    "analyzer",
     "rpc",
     "ui",
     "metal",
@@ -75,6 +76,13 @@
       "label": "com.foxy.tape-engine.replay",
       "qos": "utility",
       "category": "replay"
+    },
+    {
+      "id": "engine_analyzer_deferred",
+      "subsystem": "tape_engine",
+      "label": "com.foxy.tape-engine.analyzer-deferred",
+      "qos": "utility",
+      "category": "analyzer"
     },
     {
       "id": "tapescope_main_ui",

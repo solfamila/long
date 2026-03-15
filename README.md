@@ -53,11 +53,13 @@ Query the engine daemon:
 ./build/tape_engine_ctl replay-snapshot 50 --depth 5
 ./build/tape_engine_ctl replay-snapshot 50 --depth 5 --revision 1 --include-live-tail
 ./build/tape_engine_ctl find-order --order-id 701 --revision 1
+./build/tape_engine_ctl seek-order --order-id 701 --revision 1
 ./build/tape_engine_ctl list-order-anchors --limit 20
 ./build/tape_engine_ctl list-protected-windows --limit 20
 ./build/tape_engine_ctl read-protected-window 1 --revision 3
 ./build/tape_engine_ctl list-findings --limit 20
 ./build/tape_engine_ctl list-incidents --limit 20
+./build/tape_engine_ctl read-incident 1 --revision 4
 ```
 
 Package a distributable zip:
@@ -105,13 +107,15 @@ Phase-1 bridge sender notes:
 - `tape_engine` writes per-batch binary MessagePack segment payloads plus JSON metadata and a hash-linked `manifest.jsonl` under `LONG_TAPE_ENGINE_DATA_DIR`.
 - If `LONG_TAPE_ENGINE_DATA_DIR` is unset, the daemon defaults to `/tmp/tape-engine`.
 - The daemon now answers `status`, `read_live_tail`, `read_range`, `replay_snapshot`, and `find_order_anchor` queries over the same framed MessagePack UDS transport.
+- `seek_order_anchor` now returns replay targets and protected-window context for order/fill investigations, so a client can jump straight to the right `session_seq` and replay window around a fill or order-state transition.
 - Frozen range/replay reads now snapshot engine state up front and use segment `session_seq` bounds to avoid holding the main engine lock across disk I/O and broad rescans.
 - Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.
 - `long` now emits normalized public market records (`market_tick`, `market_depth`) alongside widened private lifecycle records including `open_order`, `order_status`, `commission_report`, `cancel_request`, `broker_error`, and `order_reject`.
 - Bridge records now carry canonical `instrument_id`, receive/exchange timestamps, and vendor sequence placeholders so the engine can preserve stronger forensic provenance.
 - `replay_snapshot` rebuilds a deterministic bid/ask/last and depth snapshot from frozen `session_seq` history, with optional live-tail overlay.
-- Phase 3 has started in the native engine: hot-path spread-widening and source-quality findings now promote incidents, order-anchored protected windows are tracked, and `list-order-anchors`, `list-protected-windows`, `read-protected-window`, `list-findings`, and `list-incidents` are queryable through `tape_engine_ctl`.
+- Phase 3 now includes hot-path spread-widening, source-quality, and inside-liquidity findings. Repeated findings collapse into ranked logical incidents, so `list-incidents` surfaces the latest scored incident snapshot instead of one row per finding, and `read-incident` returns a report-style drilldown with score breakdown, related findings, and protected-window context.
 - Frozen revisions now persist Phase 3 artifact sidecars (`.artifacts.msgpack`) next to segment payloads, so anchors, protected windows, findings, and incidents survive daemon restart and remain revision-pinned evidence.
+- Analyzer execution is now split into hot-path analyzers and an explicit deferred analyzer lane. The deferred lane emits order-flow timeline findings from protected order/fill windows on its own background queue instead of keeping all analysis inline on the sequencer path.
 
 Runtime registry and QoS:
 
