@@ -263,7 +263,7 @@ void testDeferredAndUnsupportedEnvelopes() {
         .clientName = "tape-mcp-contract-tests"
     });
 
-    const json deferredEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_analyzer_run", json::object()));
+    const json deferredEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json::object()));
     expect(!deferredEnvelope.value("ok", true), "reserved deferred tool should return ok=false");
     expect(deferredEnvelope.value("result", json(nullptr)).is_null(), "reserved deferred tool should return result=null");
     expect(deferredEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_tool",
@@ -588,6 +588,198 @@ void testPhase6ReportAndCaseToolShaping() {
            "range-only export_range should set meta.deferred=true");
 }
 
+void testPhase7AnalyzerAndFindingsToolShaping() {
+    seedPhase6TraceFixture();
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{
+        .engineSocketPath = makeUniqueSocketPath("unused-phase7").string(),
+        .clientName = "tape-mcp-contract-tests"
+    });
+
+    const json caseEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_export_range", json{{"trace_id", 31}}));
+    expect(caseEnvelope.value("ok", false), "phase7 setup export_range should succeed");
+    const std::string caseManifestPath =
+        caseEnvelope.value("result", json::object())
+            .value("artifact", json::object())
+            .value("manifest_path", std::string());
+    expect(!caseManifestPath.empty(), "phase7 setup should return case manifest path");
+
+    const json analyzerEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{{"case_manifest_path", caseManifestPath}}));
+    expect(analyzerEnvelope.value("ok", false), "analyzer_run should return ok=true");
+    expect(analyzerEnvelope.value("meta", json::object()).value("supported", false),
+           "analyzer_run should set meta.supported=true");
+    expect(!analyzerEnvelope.value("meta", json::object()).value("deferred", true),
+           "analyzer_run should set meta.deferred=false");
+    expect(analyzerEnvelope.value("meta", json::object()).value("contract_version", std::string()) ==
+               "phase7-analyzer-playbook-v1",
+           "analyzer_run should use phase7 contract version");
+    expect(analyzerEnvelope.value("meta", json::object()).value("engine_command", std::string()) ==
+               "phase7_analyzer_run_local",
+           "analyzer_run should use the local phase7 engine marker");
+
+    const json analyzerResult = analyzerEnvelope.value("result", json::object());
+    const json sourceArtifact = analyzerResult.value("source_artifact", json::object());
+    expect(sourceArtifact.value("artifact_type", std::string()) == "phase6.case_bundle.v1",
+           "analyzer_run should preserve phase6 case source artifact type");
+    const json analysisArtifact = analyzerResult.value("analysis_artifact", json::object());
+    expect(analysisArtifact.value("artifact_type", std::string()) == "phase7.analysis_output.v1",
+           "analyzer_run should return phase7 analysis artifact type");
+    expect(analysisArtifact.value("contract_version", std::string()) == "phase7-analyzer-playbook-v1",
+           "analyzer_run analysis artifact should report phase7 contract");
+    const std::string analysisManifestPath = analysisArtifact.value("manifest_path", std::string());
+    expect(fs::exists(analysisManifestPath), "analyzer_run should write analysis manifest path");
+    const json analyzerFindings = analyzerResult.value("findings", json::array());
+    expect(analyzerFindings.is_array() && !analyzerFindings.empty(),
+           "analyzer_run should return persisted findings payload");
+
+    const json findingsFromPathEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_findings_list", json{{"analysis_manifest_path", analysisManifestPath}}));
+    expect(findingsFromPathEnvelope.value("ok", false), "findings_list by manifest path should return ok=true");
+    expect(findingsFromPathEnvelope.value("meta", json::object()).value("contract_version", std::string()) ==
+               "phase7-analyzer-playbook-v1",
+           "findings_list should use phase7 contract version");
+    expect(findingsFromPathEnvelope.value("meta", json::object()).value("engine_command", std::string()) ==
+               "phase7_findings_list_local",
+           "findings_list should use local phase7 engine marker");
+    const json findingsFromPath = findingsFromPathEnvelope.value("result", json::object()).value("findings", json::array());
+    expect(findingsFromPath == analyzerFindings,
+           "findings_list by manifest path should return stored findings payload");
+
+    const std::string analysisArtifactId = analysisArtifact.value("artifact_id", std::string());
+    const json findingsFromIdEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_findings_list", json{{"analysis_artifact_id", analysisArtifactId}}));
+    expect(findingsFromIdEnvelope.value("ok", false), "findings_list by artifact id should return ok=true");
+    const json findingsFromId = findingsFromIdEnvelope.value("result", json::object()).value("findings", json::array());
+    expect(findingsFromId == analyzerFindings,
+           "findings_list by artifact id should return stored findings payload");
+
+    const json deferredProfileEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"case_manifest_path", caseManifestPath},
+            {"analysis_profile", "phase7.unimplemented_profile.v1"}
+        }));
+    expect(!deferredProfileEnvelope.value("ok", true),
+           "unsupported analysis_profile should return ok=false");
+    expect(deferredProfileEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_behavior",
+           "unsupported analysis_profile should return deferred_behavior");
+    expect(deferredProfileEnvelope.value("meta", json::object()).value("supported", false),
+           "unsupported analysis_profile should keep meta.supported=true");
+    expect(deferredProfileEnvelope.value("meta", json::object()).value("deferred", false),
+           "unsupported analysis_profile should set meta.deferred=true");
+}
+
+void testPhase7AnalyzerAndFindingsFailureMapping() {
+    seedPhase6TraceFixture();
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{
+        .engineSocketPath = makeUniqueSocketPath("unused-phase7-errors").string(),
+        .clientName = "tape-mcp-contract-tests"
+    });
+
+    const json missingSourceEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"report_manifest_path", (testDataDir() / "missing-phase6-manifest.json").string()}
+        }));
+    expect(!missingSourceEnvelope.value("ok", true), "missing source manifest should return ok=false");
+    expect(missingSourceEnvelope.value("error", json::object()).value("code", std::string()) == "artifact_not_found",
+           "missing source manifest should map to artifact_not_found");
+
+    const fs::path malformedSourceManifestPath = testDataDir() / "malformed-phase6-manifest.json";
+    {
+        std::ofstream out(malformedSourceManifestPath, std::ios::binary);
+        expect(out.is_open(), "should open malformed source manifest path for write");
+        out << "{bad-json\n";
+    }
+    const json malformedSourceEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"report_manifest_path", malformedSourceManifestPath.string()}
+        }));
+    expect(!malformedSourceEnvelope.value("ok", true), "malformed source manifest should return ok=false");
+    expect(malformedSourceEnvelope.value("error", json::object()).value("code", std::string()) == "artifact_load_failed",
+           "malformed source manifest should map to artifact_load_failed");
+
+    const fs::path unsupportedContractPath = testDataDir() / "unsupported-phase6-contract.json";
+    {
+        std::ofstream out(unsupportedContractPath, std::ios::binary);
+        expect(out.is_open(), "should open unsupported contract manifest path for write");
+        out << json{
+            {"contract_version", "phase6-unknown-v1"},
+            {"artifact_type", "phase6.report_output.v1"},
+            {"artifact_id", "report-unsupported"}
+        }.dump(2);
+    }
+    const json unsupportedContractEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"report_manifest_path", unsupportedContractPath.string()}
+        }));
+    expect(!unsupportedContractEnvelope.value("ok", true), "unsupported source contract should return ok=false");
+    expect(unsupportedContractEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "unsupported_source_contract",
+           "unsupported source contract should map to unsupported_source_contract");
+
+    const fs::path analysisFailedPath = testDataDir() / "analysis-failed-source.json";
+    {
+        std::ofstream out(analysisFailedPath, std::ios::binary);
+        expect(out.is_open(), "should open analysis-failed source manifest path for write");
+        out << json{
+            {"contract_version", "phase6-case-report-v1"},
+            {"artifact_type", "phase6.report_output.v1"}
+        }.dump(2);
+    }
+    const json analysisFailedEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"report_manifest_path", analysisFailedPath.string()}
+        }));
+    expect(!analysisFailedEnvelope.value("ok", true), "analysis-failed source should return ok=false");
+    expect(analysisFailedEnvelope.value("error", json::object()).value("code", std::string()) == "analysis_failed",
+           "non-contract analyzer execution failure should map to analysis_failed");
+
+    const json missingAnalysisArtifactEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_findings_list", json{
+            {"analysis_artifact_id", "analysis-does-not-exist"}
+        }));
+    expect(!missingAnalysisArtifactEnvelope.value("ok", true),
+           "missing analysis artifact should return ok=false");
+    expect(missingAnalysisArtifactEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "artifact_not_found",
+           "missing analysis artifact should map to artifact_not_found");
+
+    const fs::path malformedAnalysisManifestPath = testDataDir() / "malformed-analysis-manifest.json";
+    {
+        std::ofstream out(malformedAnalysisManifestPath, std::ios::binary);
+        expect(out.is_open(), "should open malformed analysis manifest path for write");
+        out << "{bad-json\n";
+    }
+    const json malformedAnalysisEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_findings_list", json{
+            {"analysis_manifest_path", malformedAnalysisManifestPath.string()}
+        }));
+    expect(!malformedAnalysisEnvelope.value("ok", true), "malformed analysis manifest should return ok=false");
+    expect(malformedAnalysisEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "artifact_load_failed",
+           "malformed analysis manifest should map to artifact_load_failed");
+
+    const fs::path unsupportedAnalysisManifestPath = testDataDir() / "unsupported-analysis-manifest.json";
+    {
+        std::ofstream out(unsupportedAnalysisManifestPath, std::ios::binary);
+        expect(out.is_open(), "should open unsupported analysis manifest path for write");
+        out << json{
+            {"contract_version", "phase6-case-report-v1"},
+            {"artifact_type", "phase6.report_output.v1"},
+            {"artifact_id", "analysis-wrong-type"},
+            {"files", json{{"findings_json", "findings.json"}}}
+        }.dump(2);
+    }
+    const json unsupportedAnalysisEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_findings_list", json{
+            {"analysis_manifest_path", unsupportedAnalysisManifestPath.string()}
+        }));
+    expect(!unsupportedAnalysisEnvelope.value("ok", true), "unsupported analysis manifest should return ok=false");
+    expect(unsupportedAnalysisEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "unsupported_source_contract",
+           "unsupported analysis manifest should map to unsupported_source_contract");
+}
+
 void testErrorAndInvalidArgumentEnvelopes() {
     {
         tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{
@@ -814,6 +1006,19 @@ void stopProcess(const ChildProcess& child) {
 
 void testMcpStdioHarnessRegression() {
     seedPhase6TraceFixture();
+    tape_mcp::Adapter localAdapter(tape_mcp::AdapterConfig{
+        .engineSocketPath = makeUniqueSocketPath("unused-phase7-stdio").string(),
+        .clientName = "tape-mcp-contract-tests"
+    });
+    const json localCaseEnvelope = envelopeFromToolResult(
+        localAdapter.callTool("tapescript_export_range", json{{"trace_id", 31}}));
+    expect(localCaseEnvelope.value("ok", false),
+           "phase7 stdio setup should create a phase6 case manifest");
+    const std::string caseManifestPath = localCaseEnvelope.value("result", json::object())
+        .value("artifact", json::object())
+        .value("manifest_path", std::string());
+    expect(!caseManifestPath.empty(), "phase7 stdio setup should return case manifest path");
+
     const ChildProcess child = launchTapeMcp(makeUniqueSocketPath("stdio-engine-missing"));
 
     writeJsonRpcMessage(child.writeFd, json{
@@ -842,6 +1047,10 @@ void testMcpStdioHarnessRegression() {
            "tools/list should expose tapescript_report_generate in the phase6 slice");
     expect(toolsListContainsName(tools, "tapescript_export_range"),
            "tools/list should expose tapescript_export_range in the phase6 slice");
+    expect(toolsListContainsName(tools, "tapescript_analyzer_run"),
+           "tools/list should expose tapescript_analyzer_run in the phase7 slice");
+    expect(toolsListContainsName(tools, "tapescript_findings_list"),
+           "tools/list should expose tapescript_findings_list in the phase7 slice");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
@@ -849,18 +1058,57 @@ void testMcpStdioHarnessRegression() {
         {"method", "tools/call"},
         {"params", {
             {"name", "tapescript_analyzer_run"},
-            {"arguments", json::object()}
+            {"arguments", json{{"case_manifest_path", caseManifestPath}}}
         }}
     });
-    const json deferredResponse = readJsonRpcMessage(child.readFd);
-    const json deferredEnvelope = deferredResponse.value("result", json::object())
+    const json analyzerResponse = readJsonRpcMessage(child.readFd);
+    const json analyzerEnvelope = analyzerResponse.value("result", json::object())
         .value("structuredContent", json::object());
-    expect(deferredEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_tool",
-           "stdio tools/call should surface deferred_tool for reserved deferred tool IDs");
+    expect(analyzerEnvelope.value("ok", false),
+           "stdio analyzer_run should return ok=true with local artifact generation");
+    const json analysisArtifact = analyzerEnvelope.value("result", json::object())
+        .value("analysis_artifact", json::object());
+    expect(fs::exists(analysisArtifact.value("manifest_path", std::string())),
+           "stdio analyzer_run should write an analysis manifest path");
+    const std::string analysisArtifactId = analysisArtifact.value("artifact_id", std::string());
+    expect(!analysisArtifactId.empty(),
+           "stdio analyzer_run should return analysis artifact id");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
         {"id", 4},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_findings_list"},
+            {"arguments", json{{"analysis_artifact_id", analysisArtifactId}}}
+        }}
+    });
+    const json findingsResponse = readJsonRpcMessage(child.readFd);
+    const json findingsEnvelope = findingsResponse.value("result", json::object())
+        .value("structuredContent", json::object());
+    expect(findingsEnvelope.value("ok", false),
+           "stdio findings_list should return ok=true");
+    expect(findingsEnvelope.value("result", json::object()).value("findings", json::array()).is_array(),
+           "stdio findings_list should return findings array payload");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 5},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_playbook_apply"},
+            {"arguments", json::object()}
+        }}
+    });
+    const json playbookResponse = readJsonRpcMessage(child.readFd);
+    const json playbookEnvelope = playbookResponse.value("result", json::object())
+        .value("structuredContent", json::object());
+    expect(playbookEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_tool",
+           "stdio playbook_apply should remain explicitly deferred");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 6},
         {"method", "tools/call"},
         {"params", {
             {"name", "tapescript_report_generate"},
@@ -879,30 +1127,7 @@ void testMcpStdioHarnessRegression() {
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
-        {"id", 5},
-        {"method", "tools/call"},
-        {"params", {
-            {"name", "tapescript_export_range"},
-            {"arguments", json{
-                {"trace_id", 31},
-                {"first_session_seq", 30},
-                {"last_session_seq", 35}
-            }}
-        }}
-    });
-    const json exportResponse = readJsonRpcMessage(child.readFd);
-    const json exportEnvelope = exportResponse.value("result", json::object())
-        .value("structuredContent", json::object());
-    expect(exportEnvelope.value("ok", false),
-           "stdio export_range should return ok=true with local case bundle generation");
-    const json caseArtifact = exportEnvelope.value("result", json::object())
-        .value("artifact", json::object());
-    expect(fs::exists(caseArtifact.value("manifest_path", std::string())),
-           "stdio export_range should write a case manifest path");
-
-    writeJsonRpcMessage(child.writeFd, json{
-        {"jsonrpc", "2.0"},
-        {"id", 6},
+        {"id", 7},
         {"method", "tools/call"},
         {"params", {
             {"name", "tapescript_export_range"},
@@ -920,7 +1145,7 @@ void testMcpStdioHarnessRegression() {
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
-        {"id", 7},
+        {"id", 8},
         {"method", "tools/call"},
         {"params", {
             {"name", "tapescript_status"},
@@ -945,6 +1170,8 @@ int main() {
         testReadLiveTailDerivesRevisionFromEvents();
         testReadRangeAndFindAnchorShaping();
         testPhase6ReportAndCaseToolShaping();
+        testPhase7AnalyzerAndFindingsToolShaping();
+        testPhase7AnalyzerAndFindingsFailureMapping();
         testErrorAndInvalidArgumentEnvelopes();
         testMcpStdioHarnessRegression();
     } catch (const std::exception& error) {

@@ -28,6 +28,7 @@ struct ToolSpec {
     std::string description;
     json inputSchema;
     std::string engineCommand;
+    std::string contractVersion;
     bool supportedRead = false;
     bool reservedDeferred = false;
 };
@@ -52,13 +53,17 @@ private:
     [[nodiscard]] json invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReportGenerateTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeExportRangeTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeFindingsListTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReservedDeferredTool(const ToolSpec& tool) const;
     [[nodiscard]] json makeToolResult(const json& envelope) const;
-    [[nodiscard]] json makeSuccessEnvelope(const std::string& toolName,
+    [[nodiscard]] json makeSuccessEnvelope(const std::string& contractVersion,
+                                           const std::string& toolName,
                                            const std::string& engineCommand,
                                            json result,
                                            json revision) const;
-    [[nodiscard]] json makeErrorEnvelope(const std::string& toolName,
+    [[nodiscard]] json makeErrorEnvelope(const std::string& contractVersion,
+                                         const std::string& toolName,
                                          const std::string& engineCommand,
                                          bool supported,
                                          bool deferred,

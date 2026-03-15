@@ -18,7 +18,12 @@ namespace tape_mcp {
 
 namespace {
 
-constexpr const char* kContractVersion = "phase5-mcp-compat-v1";
+namespace fs = std::filesystem;
+
+constexpr const char* kLegacyContractVersion = "phase5-mcp-compat-v1";
+constexpr const char* kPhase7ContractVersion = "phase7-analyzer-playbook-v1";
+constexpr const char* kPhase7AnalysisArtifactType = "phase7.analysis_output.v1";
+constexpr const char* kPhase7DefaultAnalyzerPassId = "phase7.trace_fill_integrity.v1";
 constexpr const char* kServerVersion = "0.1.0";
 constexpr std::uint64_t kDefaultReadLiveTailLimit = 64;
 
@@ -91,6 +96,60 @@ json loadJsonFileOrNull(const std::string& pathText) {
         return nullptr;
     }
     return parsed;
+}
+
+bool readJsonFile(const fs::path& path, json* outJson, std::string* error) {
+    if (outJson == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output json container.";
+        }
+        return false;
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        if (error != nullptr) {
+            *error = "Failed to open json file: " + path.string();
+        }
+        return false;
+    }
+
+    const json parsed = json::parse(in, nullptr, false);
+    if (parsed.is_discarded()) {
+        if (error != nullptr) {
+            *error = "Failed to parse json file: " + path.string();
+        }
+        return false;
+    }
+
+    *outJson = parsed;
+    return true;
+}
+
+json analysisArtifactResult(const fs::path& manifestPath, const json& manifest) {
+    return json{
+        {"artifact_type", manifest.value("artifact_type", std::string())},
+        {"contract_version", manifest.value("contract_version", std::string())},
+        {"artifact_id", manifest.value("artifact_id", std::string())},
+        {"manifest_path", manifestPath.string()},
+        {"artifact_root_dir", manifestPath.parent_path().string()}
+    };
+}
+
+std::string mapAnalyzerFailureCode(const std::string& errorMessage) {
+    if (errorMessage.find("Unsupported source contract version:") != std::string::npos ||
+        errorMessage.find("Unsupported source artifact_type:") != std::string::npos ||
+        errorMessage.find("Case bundle references unsupported report_output manifest") != std::string::npos) {
+        return "unsupported_source_contract";
+    }
+    if (errorMessage.find("Failed to open") != std::string::npos ||
+        errorMessage.find("No such file") != std::string::npos) {
+        return "artifact_not_found";
+    }
+    if (errorMessage.find("Failed to parse json file:") != std::string::npos) {
+        return "artifact_load_failed";
+    }
+    return "analysis_failed";
 }
 
 json reportArtifactResult(const Phase6ReportOutputArtifact& artifact) {
@@ -474,6 +533,7 @@ std::vector<ToolSpec> buildToolSpecs() {
         "Return current engine status over the stable status seam.",
         emptyObjectSchema(),
         "status",
+        kLegacyContractVersion,
         true,
         false
     });
@@ -488,6 +548,7 @@ std::vector<ToolSpec> buildToolSpecs() {
             {"additionalProperties", false}
         },
         "read_live_tail",
+        kLegacyContractVersion,
         true,
         false
     });
@@ -504,6 +565,7 @@ std::vector<ToolSpec> buildToolSpecs() {
             {"additionalProperties", false}
         },
         "read_range",
+        kLegacyContractVersion,
         true,
         false
     });
@@ -527,6 +589,7 @@ std::vector<ToolSpec> buildToolSpecs() {
             {"additionalProperties", false}
         },
         "find_order_anchor",
+        kLegacyContractVersion,
         true,
         false
     });
@@ -550,6 +613,7 @@ std::vector<ToolSpec> buildToolSpecs() {
             {"additionalProperties", false}
         },
         "phase6_report_generate_local",
+        kLegacyContractVersion,
         true,
         false
     });
@@ -575,25 +639,60 @@ std::vector<ToolSpec> buildToolSpecs() {
             {"additionalProperties", false}
         },
         "phase6_export_range_local",
+        kLegacyContractVersion,
         true,
         false
     });
-
-    constexpr std::array<const char*, 3> deferredTools{
+    specs.push_back(ToolSpec{
         "tapescript_analyzer_run",
+        "Run a local Phase 7 analyzer pass over a Phase 6 source manifest.",
+        json{
+            {"type", "object"},
+            {"properties", json{
+                {"case_manifest_path", json{{"type", "string"}, {"minLength", 1}}},
+                {"report_manifest_path", json{{"type", "string"}, {"minLength", 1}}},
+                {"analysis_profile", json{{"type", "string"}, {"minLength", 1}}}
+            }},
+            {"oneOf", json::array({
+                json{{"required", json::array({"case_manifest_path"})}},
+                json{{"required", json::array({"report_manifest_path"})}}
+            })},
+            {"additionalProperties", false}
+        },
+        "phase7_analyzer_run_local",
+        kPhase7ContractVersion,
+        true,
+        false
+    });
+    specs.push_back(ToolSpec{
         "tapescript_findings_list",
-        "tapescript_playbook_apply"
-    };
-    for (const char* toolName : deferredTools) {
-        specs.push_back(ToolSpec{
-            toolName,
-            "Deferred tool placeholder (reserved by Phase 5 contract).",
-            emptyObjectSchema(),
-            "",
-            false,
-            true
-        });
-    }
+        "List persisted findings from a local Phase 7 analysis artifact.",
+        json{
+            {"type", "object"},
+            {"properties", json{
+                {"analysis_manifest_path", json{{"type", "string"}, {"minLength", 1}}},
+                {"analysis_artifact_id", json{{"type", "string"}, {"minLength", 1}}}
+            }},
+            {"oneOf", json::array({
+                json{{"required", json::array({"analysis_manifest_path"})}},
+                json{{"required", json::array({"analysis_artifact_id"})}}
+            })},
+            {"additionalProperties", false}
+        },
+        "phase7_findings_list_local",
+        kPhase7ContractVersion,
+        true,
+        false
+    });
+    specs.push_back(ToolSpec{
+        "tapescript_playbook_apply",
+        "Deferred tool placeholder for guarded playbook behavior.",
+        emptyObjectSchema(),
+        "phase7_playbook_apply_guarded_local",
+        kPhase7ContractVersion,
+        false,
+        true
+    });
 
     return specs;
 }
@@ -689,6 +788,7 @@ json Adapter::callTool(const std::string& toolName, const json& args) const {
     if (tool == nullptr) {
         const bool tapescriptPrefix = toolName.rfind("tapescript_", 0) == 0;
         return makeToolResult(makeErrorEnvelope(
+            kLegacyContractVersion,
             toolName,
             "",
             false,
@@ -709,6 +809,7 @@ json Adapter::callTool(const std::string& toolName, const json& args) const {
     }
 
     return makeToolResult(makeErrorEnvelope(
+        tool->contractVersion,
         tool->name,
         tool->engineCommand,
         false,
@@ -747,8 +848,15 @@ json Adapter::invokeSupportedReadTool(const ToolSpec& tool, const json& args) co
     if (tool.name == "tapescript_export_range") {
         return invokeExportRangeTool(tool, args);
     }
+    if (tool.name == "tapescript_analyzer_run") {
+        return invokeAnalyzerRunTool(tool, args);
+    }
+    if (tool.name == "tapescript_findings_list") {
+        return invokeFindingsListTool(tool, args);
+    }
 
     return makeToolResult(makeErrorEnvelope(
+        tool.contractVersion,
         tool.name,
         tool.engineCommand,
         true,
@@ -762,6 +870,7 @@ json Adapter::invokeSupportedReadTool(const ToolSpec& tool, const json& args) co
 json Adapter::invokeStatusTool(const ToolSpec& tool, const json& args) const {
     if (!args.is_object() || !args.empty()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -775,6 +884,7 @@ json Adapter::invokeStatusTool(const ToolSpec& tool, const json& args) const {
     const EngineRpcResult<json> response = engineRpc_.openSession().query(tool.engineCommand, json::object());
     if (!response.ok()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -787,6 +897,7 @@ json Adapter::invokeStatusTool(const ToolSpec& tool, const json& args) const {
 
     if (!response.value.is_object()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -821,6 +932,7 @@ json Adapter::invokeStatusTool(const ToolSpec& tool, const json& args) const {
     }
 
     return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
         tool.name,
         tool.engineCommand,
         response.value,
@@ -830,6 +942,7 @@ json Adapter::invokeStatusTool(const ToolSpec& tool, const json& args) const {
 json Adapter::invokeReadLiveTailTool(const ToolSpec& tool, const json& args) const {
     if (!args.is_object()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -841,6 +954,7 @@ json Adapter::invokeReadLiveTailTool(const ToolSpec& tool, const json& args) con
     }
     if (hasUnexpectedKeys(args, {"limit"})) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -856,6 +970,7 @@ json Adapter::invokeReadLiveTailTool(const ToolSpec& tool, const json& args) con
         const auto parsedLimit = asUint64(args.at("limit"));
         if (!parsedLimit.has_value() || *parsedLimit == 0) {
             return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
                 tool.name,
                 tool.engineCommand,
                 true,
@@ -872,6 +987,7 @@ json Adapter::invokeReadLiveTailTool(const ToolSpec& tool, const json& args) con
         engineRpc_.openSession().query(tool.engineCommand, json{{"limit", limit}});
     if (!response.ok()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -885,6 +1001,7 @@ json Adapter::invokeReadLiveTailTool(const ToolSpec& tool, const json& args) con
     const std::optional<std::vector<json>> events = extractEventArray(response.value);
     if (!events.has_value()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -908,6 +1025,7 @@ json Adapter::invokeReadLiveTailTool(const ToolSpec& tool, const json& args) con
     }
 
     return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
         tool.name,
         tool.engineCommand,
         json{
@@ -920,6 +1038,7 @@ json Adapter::invokeReadLiveTailTool(const ToolSpec& tool, const json& args) con
 json Adapter::invokeReadRangeTool(const ToolSpec& tool, const json& args) const {
     if (!args.is_object()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -931,6 +1050,7 @@ json Adapter::invokeReadRangeTool(const ToolSpec& tool, const json& args) const 
     }
     if (hasUnexpectedKeys(args, {"first_session_seq", "last_session_seq"})) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -951,6 +1071,7 @@ json Adapter::invokeReadRangeTool(const ToolSpec& tool, const json& args) const 
     if (!firstSessionSeq.has_value() || *firstSessionSeq == 0 ||
         !lastSessionSeq.has_value() || *lastSessionSeq == 0) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -962,6 +1083,7 @@ json Adapter::invokeReadRangeTool(const ToolSpec& tool, const json& args) const 
     }
     if (*firstSessionSeq > *lastSessionSeq) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -979,6 +1101,7 @@ json Adapter::invokeReadRangeTool(const ToolSpec& tool, const json& args) const 
     const EngineRpcResult<json> response = engineRpc_.openSession().query(tool.engineCommand, queryArgs);
     if (!response.ok()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -992,6 +1115,7 @@ json Adapter::invokeReadRangeTool(const ToolSpec& tool, const json& args) const 
     const std::optional<std::vector<json>> events = extractEventArray(response.value);
     if (!events.has_value()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1025,6 +1149,7 @@ json Adapter::invokeReadRangeTool(const ToolSpec& tool, const json& args) const 
     }
 
     return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
         tool.name,
         tool.engineCommand,
         std::move(result),
@@ -1034,6 +1159,7 @@ json Adapter::invokeReadRangeTool(const ToolSpec& tool, const json& args) const 
 json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) const {
     if (!args.is_object()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1045,6 +1171,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
     }
     if (hasUnexpectedKeys(args, {"trace_id", "order_id", "perm_id", "exec_id"})) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1062,6 +1189,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
         const auto traceId = asUint64(args.at("trace_id"));
         if (!traceId.has_value()) {
             return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
                 tool.name,
                 tool.engineCommand,
                 true,
@@ -1078,6 +1206,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
         const auto orderId = asInt64(args.at("order_id"));
         if (!orderId.has_value()) {
             return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
                 tool.name,
                 tool.engineCommand,
                 true,
@@ -1094,6 +1223,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
         const auto permId = asInt64(args.at("perm_id"));
         if (!permId.has_value()) {
             return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
                 tool.name,
                 tool.engineCommand,
                 true,
@@ -1110,6 +1240,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
         const auto execId = asNonEmptyString(args.at("exec_id"));
         if (!execId.has_value()) {
             return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
                 tool.name,
                 tool.engineCommand,
                 true,
@@ -1125,6 +1256,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
 
     if (provided != 1) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1138,6 +1270,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
     const EngineRpcResult<json> response = engineRpc_.openSession().query(tool.engineCommand, queryArgs);
     if (!response.ok()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1167,6 +1300,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
     }
 
     return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
         tool.name,
         tool.engineCommand,
         json{
@@ -1179,6 +1313,7 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
 json Adapter::invokeReportGenerateTool(const ToolSpec& tool, const json& args) const {
     if (!args.is_object()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1190,6 +1325,7 @@ json Adapter::invokeReportGenerateTool(const ToolSpec& tool, const json& args) c
     }
     if (hasUnexpectedKeys(args, {"trace_id", "order_id", "perm_id", "exec_id"})) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1206,6 +1342,7 @@ json Adapter::invokeReportGenerateTool(const ToolSpec& tool, const json& args) c
         resolvePhase6AnchorFromArgs(args, &anchorErrorCode, &anchorErrorMessage);
     if (!resolvedAnchor.has_value()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1225,6 +1362,7 @@ json Adapter::invokeReportGenerateTool(const ToolSpec& tool, const json& args) c
             artifactError.find("not found") != std::string::npos ||
             artifactError.find("No matching trace") != std::string::npos;
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1260,6 +1398,7 @@ json Adapter::invokeReportGenerateTool(const ToolSpec& tool, const json& args) c
     json revision = makeReadRevision("snapshot");
     revision["source"] = "artifact_manifest";
     return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
         tool.name,
         tool.engineCommand,
         std::move(result),
@@ -1269,6 +1408,7 @@ json Adapter::invokeReportGenerateTool(const ToolSpec& tool, const json& args) c
 json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) const {
     if (!args.is_object()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1282,6 +1422,7 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
                           {"trace_id", "order_id", "perm_id", "exec_id",
                            "first_session_seq", "last_session_seq"})) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1298,6 +1439,7 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
     std::optional<std::uint64_t> lastSessionSeq;
     if (hasFirst != hasLast) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1313,6 +1455,7 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
         if (!firstSessionSeq.has_value() || !lastSessionSeq.has_value() ||
             *firstSessionSeq == 0 || *lastSessionSeq == 0) {
             return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
                 tool.name,
                 tool.engineCommand,
                 true,
@@ -1324,6 +1467,7 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
         }
         if (*firstSessionSeq > *lastSessionSeq) {
             return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
                 tool.name,
                 tool.engineCommand,
                 true,
@@ -1340,6 +1484,7 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
         args.contains("perm_id") || args.contains("exec_id");
     if (!hasAnchor && hasFirst) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1356,6 +1501,7 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
         resolvePhase6AnchorFromArgs(args, &anchorErrorCode, &anchorErrorMessage);
     if (!resolvedAnchor.has_value()) {
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1375,6 +1521,7 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
             artifactError.find("not found") != std::string::npos ||
             artifactError.find("No matching trace") != std::string::npos;
         return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
             tool.name,
             tool.engineCommand,
             true,
@@ -1430,6 +1577,406 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
     json revision = makeReadRevision("snapshot");
     revision["source"] = "artifact_manifest";
     return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
+        tool.name,
+        tool.engineCommand,
+        std::move(result),
+        std::move(revision)));
+}
+
+json Adapter::invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_analyzer_run arguments must be an object.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+    if (hasUnexpectedKeys(args, {"case_manifest_path", "report_manifest_path", "analysis_profile"})) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_analyzer_run accepts only case_manifest_path, report_manifest_path, and analysis_profile.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const bool hasCaseManifest = args.contains("case_manifest_path");
+    const bool hasReportManifest = args.contains("report_manifest_path");
+    if (hasCaseManifest == hasReportManifest) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "Exactly one of case_manifest_path or report_manifest_path is required.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    std::optional<std::string> caseManifestPath;
+    if (hasCaseManifest) {
+        caseManifestPath = asNonEmptyString(args.at("case_manifest_path"));
+        if (!caseManifestPath.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "case_manifest_path must be a non-empty string.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+    }
+
+    std::optional<std::string> reportManifestPath;
+    if (hasReportManifest) {
+        reportManifestPath = asNonEmptyString(args.at("report_manifest_path"));
+        if (!reportManifestPath.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "report_manifest_path must be a non-empty string.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+    }
+
+    std::string analyzerPassId = kPhase7DefaultAnalyzerPassId;
+    if (args.contains("analysis_profile")) {
+        const std::optional<std::string> profile = asNonEmptyString(args.at("analysis_profile"));
+        if (!profile.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "analysis_profile must be a non-empty string when provided.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        if (*profile != kPhase7DefaultAnalyzerPassId) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                true,
+                "deferred_behavior",
+                "Requested analysis_profile is deferred in this Phase 7 slice.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        analyzerPassId = *profile;
+    }
+
+    const fs::path sourceManifestPath =
+        hasCaseManifest ? fs::path(*caseManifestPath) : fs::path(*reportManifestPath);
+    std::error_code existsEc;
+    if (!fs::exists(sourceManifestPath, existsEc)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_not_found",
+            "Source manifest path does not exist.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    Phase7AnalysisOutputArtifact artifact;
+    std::string analysisError;
+    if (!runPhase7AnalyzerFromPhase6Manifest(sourceManifestPath.string(),
+                                             "",
+                                             analyzerPassId,
+                                             &artifact,
+                                             &analysisError)) {
+        const std::string mappedCode = mapAnalyzerFailureCode(analysisError);
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            mappedCode,
+            analysisError.empty() ? "Phase 7 analyzer execution failed." : analysisError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    json analysisManifest;
+    std::string manifestError;
+    if (!readJsonFile(fs::path(artifact.manifestPath), &analysisManifest, &manifestError)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_load_failed",
+            manifestError.empty() ? "Failed to load generated analysis manifest." : manifestError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    json findings;
+    std::string findingsError;
+    if (!readJsonFile(fs::path(artifact.findingsPath), &findings, &findingsError) || !findings.is_array()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_load_failed",
+            findingsError.empty()
+                ? "Failed to load generated findings payload."
+                : findingsError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const json sourceManifest = loadJsonFileOrNull(artifact.sourceManifestPath);
+    const json sourceArtifact{
+        {"artifact_type", artifact.sourceArtifactType},
+        {"contract_version", sourceManifest.is_object()
+            ? sourceManifest.value("contract_version", std::string())
+            : std::string()},
+        {"artifact_id", artifact.sourceArtifactId},
+        {"manifest_path", artifact.sourceManifestPath}
+    };
+    const json analysisArtifact = analysisArtifactResult(fs::path(artifact.manifestPath), analysisManifest);
+    json result{
+        {"source_artifact", sourceArtifact},
+        {"analysis_artifact", analysisArtifact},
+        {"artifact", analysisArtifact},
+        {"generated_artifacts", json::array({
+            json{
+                {"artifact_type", artifact.artifactType},
+                {"artifact_id", artifact.artifactId},
+                {"manifest_path", artifact.manifestPath}
+            }
+        })},
+        {"replay_context", analysisManifest.value("replay_context", json::object())},
+        {"findings_summary", analysisManifest.value("findings_summary", json::object())},
+        {"findings", findings}
+    };
+    if (hasCaseManifest) {
+        result["case_manifest_path"] = *caseManifestPath;
+    }
+    if (hasReportManifest) {
+        result["report_manifest_path"] = *reportManifestPath;
+    }
+
+    json revision = makeReadRevision("snapshot");
+    revision["source"] = "artifact_manifest";
+    return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
+        tool.name,
+        tool.engineCommand,
+        std::move(result),
+        std::move(revision)));
+}
+
+json Adapter::invokeFindingsListTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_findings_list arguments must be an object.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+    if (hasUnexpectedKeys(args, {"analysis_manifest_path", "analysis_artifact_id"})) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_findings_list accepts only analysis_manifest_path or analysis_artifact_id.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const bool hasManifestPath = args.contains("analysis_manifest_path");
+    const bool hasArtifactId = args.contains("analysis_artifact_id");
+    if (hasManifestPath == hasArtifactId) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "Exactly one of analysis_manifest_path or analysis_artifact_id is required.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    fs::path manifestPath;
+    if (hasManifestPath) {
+        const std::optional<std::string> providedPath = asNonEmptyString(args.at("analysis_manifest_path"));
+        if (!providedPath.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "analysis_manifest_path must be a non-empty string.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        manifestPath = fs::path(*providedPath);
+    } else {
+        const std::optional<std::string> artifactId = asNonEmptyString(args.at("analysis_artifact_id"));
+        if (!artifactId.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "analysis_artifact_id must be a non-empty string.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        manifestPath = fs::path(appDataDirectory()) /
+            "phase7_artifacts" /
+            "analysis_output.v1" /
+            *artifactId /
+            "manifest.json";
+    }
+
+    std::error_code existsEc;
+    if (!fs::exists(manifestPath, existsEc)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_not_found",
+            "Analysis manifest path does not exist.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    json manifest;
+    std::string manifestError;
+    if (!readJsonFile(manifestPath, &manifest, &manifestError) || !manifest.is_object()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_load_failed",
+            manifestError.empty() ? "Failed to parse analysis manifest json." : manifestError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    if (manifest.value("artifact_type", std::string()) != kPhase7AnalysisArtifactType ||
+        manifest.value("contract_version", std::string()) != kPhase7ContractVersion) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "unsupported_source_contract",
+            "Analysis manifest artifact type or contract version is unsupported.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const json files = manifest.value("files", json::object());
+    const std::string findingsRelativePath = files.value("findings_json", std::string());
+    if (findingsRelativePath.empty()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_load_failed",
+            "Analysis manifest is missing files.findings_json.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const fs::path findingsPath = manifestPath.parent_path() / fs::path(findingsRelativePath);
+    if (!fs::exists(findingsPath, existsEc)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_not_found",
+            "Analysis findings payload path does not exist.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    json findings;
+    std::string findingsError;
+    if (!readJsonFile(findingsPath, &findings, &findingsError) || !findings.is_array()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_load_failed",
+            findingsError.empty() ? "Failed to parse findings payload json." : findingsError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const json analysisArtifact = analysisArtifactResult(manifestPath, manifest);
+    json result{
+        {"analysis_artifact", analysisArtifact},
+        {"artifact", analysisArtifact},
+        {"findings", findings},
+        {"replay_context", manifest.value("replay_context", json::object())},
+        {"findings_summary", manifest.value("findings_summary", json::object())}
+    };
+
+    json revision = makeReadRevision("snapshot");
+    revision["source"] = "artifact_manifest";
+    return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
         tool.name,
         tool.engineCommand,
         std::move(result),
@@ -1438,12 +1985,13 @@ json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) cons
 
 json Adapter::invokeReservedDeferredTool(const ToolSpec& tool) const {
     return makeToolResult(makeErrorEnvelope(
+        tool.contractVersion,
         tool.name,
         tool.engineCommand,
         false,
         true,
         "deferred_tool",
-        "Tool is explicitly deferred by the Phase 6 tool-slice contract.",
+        "Tool is explicitly deferred by the current adapter tool-slice contract.",
         false,
         revisionUnavailable()));
 }
@@ -1461,7 +2009,8 @@ json Adapter::makeToolResult(const json& envelope) const {
     };
 }
 
-json Adapter::makeSuccessEnvelope(const std::string& toolName,
+json Adapter::makeSuccessEnvelope(const std::string& contractVersion,
+                                  const std::string& toolName,
                                   const std::string& engineCommand,
                                   json result,
                                   json revision) const {
@@ -1469,7 +2018,7 @@ json Adapter::makeSuccessEnvelope(const std::string& toolName,
         {"ok", true},
         {"result", std::move(result)},
         {"meta", {
-            {"contract_version", kContractVersion},
+            {"contract_version", contractVersion},
             {"tool", toolName},
             {"engine_command", engineCommand.empty() ? json(nullptr) : json(engineCommand)},
             {"supported", true},
@@ -1480,7 +2029,8 @@ json Adapter::makeSuccessEnvelope(const std::string& toolName,
     };
 }
 
-json Adapter::makeErrorEnvelope(const std::string& toolName,
+json Adapter::makeErrorEnvelope(const std::string& contractVersion,
+                                const std::string& toolName,
                                 const std::string& engineCommand,
                                 const bool supported,
                                 const bool deferred,
@@ -1492,7 +2042,7 @@ json Adapter::makeErrorEnvelope(const std::string& toolName,
         {"ok", false},
         {"result", nullptr},
         {"meta", {
-            {"contract_version", kContractVersion},
+            {"contract_version", contractVersion},
             {"tool", toolName},
             {"engine_command", engineCommand.empty() ? json(nullptr) : json(engineCommand)},
             {"supported", supported},
