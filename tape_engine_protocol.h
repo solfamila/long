@@ -60,6 +60,8 @@ struct QueryRequest {
     long long orderId = 0;
     long long permId = 0;
     std::string execId;
+    std::string artifactId;
+    std::string exportFormat;
 };
 
 struct QueryResponse {

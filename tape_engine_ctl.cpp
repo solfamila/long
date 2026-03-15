@@ -22,7 +22,13 @@ void printUsage() {
               << "  tape_engine_ctl read-session-overview [--from N] [--to N] [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl scan-session-report [--from N] [--to N] [--revision N] [--limit N]\n"
               << "  tape_engine_ctl read-session-report <report_id>\n"
+              << "  tape_engine_ctl read-artifact <artifact_id> [--revision N] [--include-live-tail] [--limit N]\n"
+              << "  tape_engine_ctl export-artifact <artifact_id> <markdown|json-bundle> [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl list-session-reports [--revision N] [--limit N]\n"
+              << "  tape_engine_ctl scan-incident-report <logical_incident_id> [--revision N] [--limit N]\n"
+              << "  tape_engine_ctl scan-order-case-report [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--limit N]\n"
+              << "  tape_engine_ctl read-case-report <report_id>\n"
+              << "  tape_engine_ctl list-case-reports [--revision N] [--limit N]\n"
               << "  tape_engine_ctl read-session-quality [--from N] [--to N] [--revision N] [--include-live-tail]\n"
               << "  tape_engine_ctl replay-snapshot <session_seq> [--revision N] [--include-live-tail] [--depth N]\n"
               << "  tape_engine_ctl find-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
@@ -90,8 +96,93 @@ int main(int argc, char** argv) {
             return 1;
         }
         request.reportId = std::stoull(argv[2]);
+    } else if (request.operation == "read-artifact") {
+        request.operation = "read_artifact";
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.artifactId = argv[2];
+        for (int i = 3; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--include-live-tail") {
+                request.includeLiveTail = true;
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
+    } else if (request.operation == "export-artifact") {
+        request.operation = "export_artifact";
+        if (argc < 4) {
+            printUsage();
+            return 1;
+        }
+        request.artifactId = argv[2];
+        request.exportFormat = argv[3];
+        for (int i = 4; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--include-live-tail") {
+                request.includeLiveTail = true;
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
     } else if (request.operation == "list-session-reports") {
         request.operation = "list_session_reports";
+        for (int i = 2; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
+    } else if (request.operation == "scan-incident-report") {
+        request.operation = "scan_incident_report";
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.logicalIncidentId = std::stoull(argv[2]);
+        for (int i = 3; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
+    } else if (request.operation == "scan-order-case-report") {
+        request.operation = "scan_order_case_report";
+        for (int i = 2; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--trace-id" && i + 1 < argc) {
+                request.traceId = std::stoull(argv[++i]);
+            } else if (arg == "--order-id" && i + 1 < argc) {
+                request.orderId = std::stoll(argv[++i]);
+            } else if (arg == "--perm-id" && i + 1 < argc) {
+                request.permId = std::stoll(argv[++i]);
+            } else if (arg == "--exec-id" && i + 1 < argc) {
+                request.execId = argv[++i];
+            } else if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
+    } else if (request.operation == "read-case-report") {
+        request.operation = "read_case_report";
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.reportId = std::stoull(argv[2]);
+    } else if (request.operation == "list-case-reports") {
+        request.operation = "list_case_reports";
         for (int i = 2; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--revision" && i + 1 < argc) {

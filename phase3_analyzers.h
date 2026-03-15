@@ -80,6 +80,16 @@ struct HotAnalyzerInput {
     std::size_t absorptionPersistenceStableUpdates = 0;
     std::size_t absorptionPersistenceTouchTrades = 0;
     double absorptionPersistencePrice = 0.0;
+    bool genuineRefillTriggered = false;
+    std::string genuineRefillKind;
+    std::uint64_t genuineRefillFirstSessionSeq = 0;
+    std::size_t genuineRefillStableUpdates = 0;
+    double genuineRefillPrice = 0.0;
+    bool depletionAfterTradeTriggered = false;
+    std::string depletionAfterTradeKind;
+    std::uint64_t depletionAfterTradeFirstSessionSeq = 0;
+    double depletionAfterTradeTradePrice = 0.0;
+    double depletionAfterTradeRemainingSize = 0.0;
 };
 
 struct DeferredAnalyzerInput {

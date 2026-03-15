@@ -128,6 +128,12 @@ json queryRequestToJson(const QueryRequest& request) {
     if (!request.execId.empty()) {
         payload["exec_id"] = request.execId;
     }
+    if (!request.artifactId.empty()) {
+        payload["artifact_id"] = request.artifactId;
+    }
+    if (!request.exportFormat.empty()) {
+        payload["export_format"] = request.exportFormat;
+    }
     return payload;
 }
 
@@ -150,6 +156,8 @@ QueryRequest queryRequestFromJson(const json& payload) {
     request.orderId = payload.value("order_id", 0LL);
     request.permId = payload.value("perm_id", 0LL);
     request.execId = payload.value("exec_id", std::string());
+    request.artifactId = payload.value("artifact_id", std::string());
+    request.exportFormat = payload.value("export_format", std::string());
     return request;
 }
 

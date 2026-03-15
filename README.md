@@ -55,6 +55,10 @@ Query the engine daemon:
 ./build/tape_engine_ctl scan-session-report --revision 1
 ./build/tape_engine_ctl list-session-reports --limit 20
 ./build/tape_engine_ctl read-session-report 1
+./build/tape_engine_ctl scan-incident-report 1 --revision 1
+./build/tape_engine_ctl scan-order-case-report --order-id 701 --revision 1
+./build/tape_engine_ctl list-case-reports --limit 20
+./build/tape_engine_ctl read-case-report 1
 ./build/tape_engine_ctl find-order --order-id 701 --revision 1
 ./build/tape_engine_ctl seek-order --order-id 701 --revision 1
 ./build/tape_engine_ctl read-order-case --order-id 701 --revision 1
@@ -116,19 +120,26 @@ Phase-1 bridge sender notes:
 - `read_order_case` and `read_incident` now include merged investigation timelines and timeline highlights, so clients can render case/incident narratives instead of stitching raw events together themselves.
 - `read_session_overview` now returns a ranked session-level investigation summary with top incidents, top findings, protected-window coverage, timeline highlights, and data-quality scoring for any requested `session_seq` range.
 - `scan_session_report` now turns that same session-level investigation summary into a canonical durable report artifact pinned to a frozen revision and `session_seq` range, and `read_session_report` / `list_session_reports` let clients reopen those persisted summaries later.
+- `scan_incident_report` and `scan_order_case_report` now persist revision-pinned durable case reports for incident drilldowns and order/fill investigations, and `read_case_report` / `list_case_reports` reopen those artifacts later without rebuilding the narrative from live query logic.
+- `read_artifact` and `export_artifact` now give the engine a stable artifact-facing surface for future MCP/tool clients. Durable reports expose stable IDs like `session-report:<id>` and `case-report:<id>`, while incident and protected-window reads expose `incident:<id>` / `window:<id>` references.
+- Investigation/report responses now share a cleaner envelope with `artifact`, `entity`, `report`, and `evidence` sections, so session, incident, and order-case outputs line up structurally instead of only sharing ad hoc summary fields.
+- `export_artifact` supports Markdown summaries and JSON bundles, which makes durable report artifacts easier to hand to future native UI and MCP clients without rebuilding them from live query code.
 - `read_session_quality` now summarizes evidence trust for the whole frozen session or any requested `session_seq` range, and case/incident/protected-window reads now surface a `data_quality` block alongside their narrative output.
 - Frozen range/replay reads now snapshot engine state up front and use segment `session_seq` bounds to avoid holding the main engine lock across disk I/O and broad rescans.
 - Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.
 - `long` now emits normalized public market records (`market_tick`, `market_depth`) alongside widened private lifecycle records including `open_order`, `order_status`, `commission_report`, `cancel_request`, `broker_error`, and `order_reject`.
 - Bridge records now carry canonical `instrument_id`, receive/exchange timestamps, and vendor sequence placeholders so the engine can preserve stronger forensic provenance.
 - `replay_snapshot` rebuilds a deterministic bid/ask/last and depth snapshot from frozen `session_seq` history, with optional live-tail overlay.
-- Phase 3 now includes hot-path spread-widening, source-quality, trade-pressure, display-instability, pull-follow-through, quote-flicker cadence, trade-after-depletion, post-fill invalidation, absorption/refill-persistence, and inside-liquidity findings, plus deferred order-window market-impact and richer order/fill-context analysis. Repeated findings collapse into ranked logical incidents, so `list-incidents` surfaces the latest scored incident snapshot instead of one row per finding, and `read-incident` returns a report-style drilldown with score breakdown, related findings, protected-window context, and why-it-matters explanations.
+- Phase 3 now includes hot-path spread-widening, source-quality, trade-pressure, display-instability, pull-follow-through, quote-flicker cadence, trade-after-depletion, depletion-after-trade, post-fill invalidation, genuine-refill vs absorption discrimination, and inside-liquidity findings, plus deferred order-window market-impact, passive-fill queue-position proxies, post-fill adverse-selection analysis, and richer order/fill-context analysis. Repeated findings collapse into ranked logical incidents, so `list-incidents` surfaces the latest scored incident snapshot instead of one row per finding, and `read-incident` returns a report-style drilldown with score breakdown, related findings, protected-window context, uncertainty, and why-it-matters explanations.
 - Frozen revisions now persist Phase 3 artifact sidecars (`.artifacts.msgpack`) next to segment payloads, so anchors, protected windows, findings, and incidents survive daemon restart and remain revision-pinned evidence.
 - Protected windows now materialize `first_session_seq` / `last_session_seq` bounds in addition to timestamp bounds, so replay, export, and protected-window evidence reads can stay deterministic and segment-bounded.
 - Analyzer execution is now split into hot-path analyzers and an explicit deferred analyzer lane owned by the engine runtime. The deferred lane emits both order-flow timeline and order/fill-context findings from protected order/fill windows on its own background queue instead of keeping all analysis inline on the sequencer path.
 - Query and deferred-analysis artifact reads now build indexed views from the captured engine snapshot instead of reloading frozen artifact sidecars from disk on every request.
+- Query lookups now use selector indexes for anchors/findings/incidents plus a frozen segment event cache, which keeps incident/window/order-case reads cheaper as sessions grow.
+- Frozen segments now also persist `.index.msgpack` selector indexes and `.checkpoint.msgpack` replay checkpoints, so anchor reads can skip non-matching segments and `replay_snapshot` can resume from the latest frozen checkpoint instead of rebuilding the whole session from scratch.
 - Data-quality scoring is now a first-class Phase 3 output. Query surfaces report gaps, resets, weak instrument identity, timestamp coverage, vendor-sequence coverage, and mutable-tail caveats so investigations can say how strong the evidence is, not just what happened.
-- Incident ranking now applies clearer score factors for severity, overlap, kind, and range, and it can penalize confidence and score when incident-local data quality is weak.
+- Canonical instrument identity now prefers strong bridged or configured `ib:conid:...` identities, and any last-resort fallback is surfaced explicitly as `ib:heuristic:...` with `instrument_identity_strength` and `instrument_identity_status` in query output and data-quality summaries. Mismatched symbol-vs-identity events are flagged explicitly instead of being treated as ordinary canonical evidence.
+- Incident ranking now applies clearer score factors for severity, overlap, kind, range, evidence breadth, corroboration, and uncertainty penalties driven by incident-local data quality.
 
 Runtime registry and QoS:
 

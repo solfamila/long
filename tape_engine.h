@@ -54,6 +54,8 @@ struct SegmentInfo {
     std::uint64_t lastSessionSeq = 0;
     std::uint64_t eventCount = 0;
     std::string fileName;
+    std::string indexFileName;
+    std::string checkpointFileName;
     std::string metadataFileName;
     std::string artifactsFileName;
     std::string payloadSha256;
@@ -74,6 +76,21 @@ struct SessionReportRecord {
     std::string payloadSha256;
 };
 
+struct CaseReportRecord {
+    std::uint64_t reportId = 0;
+    std::uint64_t revisionId = 0;
+    std::string reportType;
+    std::uint64_t logicalIncidentId = 0;
+    BridgeAnchorIdentity anchor;
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    std::uint64_t createdTsEngineNs = 0;
+    std::string instrumentId;
+    std::string headline;
+    std::string fileName;
+    std::string payloadSha256;
+};
+
 struct EngineSnapshot {
     std::uint64_t nextSessionSeq = 1;
     std::uint64_t nextSegmentId = 1;
@@ -84,6 +101,7 @@ struct EngineSnapshot {
     std::vector<EngineEvent> liveEvents;
     std::vector<SegmentInfo> segments;
     std::vector<SessionReportRecord> sessionReports;
+    std::vector<CaseReportRecord> caseReports;
 };
 
 struct OrderAnchorRecord {
@@ -210,6 +228,7 @@ private:
         std::vector<FindingRecord> findings;
         std::vector<IncidentRecord> incidents;
         std::vector<SessionReportRecord> sessionReports;
+        std::vector<CaseReportRecord> caseReports;
     };
 
     struct FrozenArtifacts {
@@ -226,9 +245,32 @@ private:
         std::vector<IncidentRecord> incidents;
         std::unordered_multimap<std::string, std::size_t> orderAnchorsBySelector;
         std::unordered_multimap<std::string, std::size_t> protectedWindowsBySelector;
+        std::unordered_multimap<std::string, std::size_t> findingsBySelector;
+        std::unordered_multimap<std::string, std::size_t> incidentsBySelector;
         std::unordered_multimap<std::uint64_t, std::size_t> findingsByIncident;
         std::unordered_multimap<std::uint64_t, std::size_t> incidentsByLogicalIncident;
+        std::unordered_multimap<std::uint64_t, std::size_t> protectedWindowsByIncident;
         std::unordered_map<std::uint64_t, std::size_t> latestProtectedWindowById;
+        std::unordered_map<std::uint64_t, std::size_t> latestIncidentByLogicalIncident;
+    };
+
+    struct SegmentArtifactIndex {
+        std::uint64_t revisionId = 0;
+        std::uint64_t firstSessionSeq = 0;
+        std::uint64_t lastSessionSeq = 0;
+        std::unordered_set<std::string> eventAnchorSelectors;
+    };
+
+    struct ReplayCheckpointRecord {
+        std::uint64_t revisionId = 0;
+        std::uint64_t sessionSeq = 0;
+        double bidPrice = 0.0;
+        double askPrice = 0.0;
+        double lastPrice = 0.0;
+        std::vector<BookLevel> bidBook;
+        std::vector<BookLevel> askBook;
+        std::size_t appliedEvents = 0;
+        std::size_t gapMarkers = 0;
     };
 
     struct AnalyzerBookState {
@@ -268,6 +310,12 @@ private:
             std::size_t touchTradeCount = 0;
         };
 
+        struct RecentTouchTrade {
+            double price = 0.0;
+            std::uint64_t sessionSeq = 0;
+            std::uint64_t tsEngineNs = 0;
+        };
+
         struct QuoteFlickerSideState {
             double lastPrice = 0.0;
             std::uint64_t firstChangeSessionSeq = 0;
@@ -296,6 +344,8 @@ private:
         std::optional<RecentTouchLiquidityShift> recentBidThinning;
         std::optional<RecentTouchRefillWatch> recentAskRefill;
         std::optional<RecentTouchRefillWatch> recentBidRefill;
+        std::optional<RecentTouchTrade> recentAskTouchTrade;
+        std::optional<RecentTouchTrade> recentBidTouchTrade;
         QuoteFlickerSideState askQuoteFlicker;
         QuoteFlickerSideState bidQuoteFlicker;
         bool hasInside = false;
@@ -380,15 +430,21 @@ private:
     QueryArtifacts buildQueryArtifacts(const QuerySnapshot& snapshot,
                                        std::uint64_t frozenRevisionId,
                                        bool includeLiveTail) const;
+    SegmentArtifactIndex loadSegmentArtifactIndex(const QuerySnapshot& snapshot,
+                                                  const SegmentInfo& segment) const;
+    std::optional<ReplayCheckpointRecord> loadReplayCheckpoint(const QuerySnapshot& snapshot,
+                                                               const SegmentInfo& segment) const;
     std::vector<json> loadEvents(const QuerySnapshot& snapshot,
                                  std::uint64_t frozenRevisionId,
                                  std::uint64_t fromSessionSeq,
-                                 std::uint64_t throughSessionSeq) const;
+                                 std::uint64_t throughSessionSeq,
+                                 const std::unordered_set<std::string>* selectorFilter = nullptr) const;
     std::vector<json> mergedEvents(const QuerySnapshot& snapshot,
                                    std::uint64_t frozenRevisionId,
                                    bool includeLiveTail,
                                    std::uint64_t fromSessionSeq,
-                                   std::uint64_t throughSessionSeq) const;
+                                   std::uint64_t throughSessionSeq,
+                                   const std::unordered_set<std::string>* selectorFilter = nullptr) const;
     std::vector<json> filterEventsByRange(const QuerySnapshot& snapshot,
                                           std::uint64_t fromSessionSeq,
                                           std::uint64_t toSessionSeq,
@@ -421,7 +477,8 @@ private:
                                          std::uint64_t frozenRevisionId,
                                          bool includeLiveTail) const;
     IncidentRecord applyIncidentDataQualityPenalty(const IncidentRecord& incident,
-                                                   const json& dataQuality) const;
+                                                   const json& dataQuality,
+                                                   const std::vector<FindingRecord>& relatedFindings) const;
     std::vector<IncidentRecord> collapseAdjustedIncidents(const QuerySnapshot& snapshot,
                                                           const QueryArtifacts& artifacts,
                                                           const std::vector<IncidentRecord>& records,
@@ -453,6 +510,24 @@ private:
                                              std::uint64_t fromSessionSeq,
                                              std::uint64_t toSessionSeq,
                                              const QueryResponse& response);
+    std::optional<CaseReportRecord> findCaseReport(const QuerySnapshot& snapshot,
+                                                   std::uint64_t reportId) const;
+    std::optional<CaseReportRecord> findOrderCaseReport(const QuerySnapshot& snapshot,
+                                                        std::uint64_t revisionId,
+                                                        const BridgeAnchorIdentity& anchor) const;
+    std::optional<CaseReportRecord> findIncidentCaseReport(const QuerySnapshot& snapshot,
+                                                           std::uint64_t revisionId,
+                                                           std::uint64_t logicalIncidentId) const;
+    QueryResponse loadCaseReportResponse(const QuerySnapshot& snapshot,
+                                         const CaseReportRecord& report) const;
+    CaseReportRecord persistCaseReport(const QuerySnapshot& snapshot,
+                                       std::uint64_t revisionId,
+                                       const std::string& reportType,
+                                       std::uint64_t logicalIncidentId,
+                                       const BridgeAnchorIdentity& anchor,
+                                       std::uint64_t firstSessionSeq,
+                                       std::uint64_t lastSessionSeq,
+                                       const QueryResponse& response);
 
     EngineConfig config_;
     mutable std::mutex stateMutex_;
@@ -472,12 +547,14 @@ private:
     std::vector<FindingRecord> findings_;
     std::vector<IncidentRecord> incidents_;
     std::vector<SessionReportRecord> sessionReports_;
+    std::vector<CaseReportRecord> caseReports_;
     std::uint64_t nextOrderAnchorId_ = 1;
     std::uint64_t nextProtectedWindowId_ = 1;
     std::uint64_t nextFindingId_ = 1;
     std::uint64_t nextLogicalIncidentId_ = 1;
     std::uint64_t nextIncidentRevisionId_ = 1;
     std::uint64_t nextSessionReportId_ = 1;
+    std::uint64_t nextCaseReportId_ = 1;
     std::unique_ptr<AnalyzerRuntime> analyzerRuntime_;
 
     std::mutex ingestQueueMutex_;
@@ -492,6 +569,12 @@ private:
     std::condition_variable writerCv_;
     std::deque<PendingSegment> writerQueue_;
     mutable std::mutex reportPersistMutex_;
+    mutable std::mutex segmentCacheMutex_;
+    mutable std::unordered_map<std::string, std::vector<json>> segmentEventCache_;
+    mutable std::unordered_map<std::string, SegmentArtifactIndex> segmentIndexCache_;
+    mutable std::unordered_map<std::string, ReplayCheckpointRecord> replayCheckpointCache_;
+    mutable std::unordered_map<std::string, QueryResponse> reportResponseCache_;
+    ReplayCheckpointRecord frozenReplayCheckpointState_;
 
     std::mutex clientThreadsMutex_;
     std::vector<std::thread> clientThreads_;
