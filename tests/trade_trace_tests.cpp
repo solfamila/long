@@ -1,6 +1,7 @@
 #include "app_shared.h"
 #include "bridge_batch_codec.h"
 #include "bridge_batch_transport.h"
+#include "tapescope_client.h"
 #include "tape_engine.h"
 #include "tape_engine_protocol.h"
 #include "trace_exporter.h"
@@ -15,8 +16,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -203,6 +206,85 @@ void writeAllToFd(int fd, const std::vector<std::uint8_t>& bytes) {
         }
         offset += static_cast<std::size_t>(wrote);
     }
+}
+
+std::vector<std::uint8_t> encodeJsonFrame(const json& payload) {
+    const std::vector<std::uint8_t> body = json::to_msgpack(payload);
+    expect(body.size() < static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()),
+           "test response frame should fit the framing prefix");
+
+    const auto size = static_cast<std::uint32_t>(body.size());
+    std::vector<std::uint8_t> frame;
+    frame.reserve(4 + body.size());
+    frame.push_back(static_cast<std::uint8_t>((size >> 24) & 0xffU));
+    frame.push_back(static_cast<std::uint8_t>((size >> 16) & 0xffU));
+    frame.push_back(static_cast<std::uint8_t>((size >> 8) & 0xffU));
+    frame.push_back(static_cast<std::uint8_t>(size & 0xffU));
+    frame.insert(frame.end(), body.begin(), body.end());
+    return frame;
+}
+
+json decodeJsonFrame(const std::vector<std::uint8_t>& frame) {
+    expect(frame.size() >= 4, "test request frame should include a size prefix");
+    const std::uint32_t payloadSize =
+        (static_cast<std::uint32_t>(frame[0]) << 24) |
+        (static_cast<std::uint32_t>(frame[1]) << 16) |
+        (static_cast<std::uint32_t>(frame[2]) << 8) |
+        static_cast<std::uint32_t>(frame[3]);
+    expect(frame.size() == 4 + static_cast<std::size_t>(payloadSize),
+           "test request frame size prefix should match the payload length");
+    return json::from_msgpack(std::vector<std::uint8_t>(frame.begin() + 4, frame.end()));
+}
+
+fs::path makeUniqueSocketPath(const std::string& prefix) {
+    static std::size_t counter = 0;
+    return testDataDir() / (prefix + "-" + std::to_string(++counter) + ".sock");
+}
+
+json exchangeTapeScopeRequest(const fs::path& socketPath,
+                              const json& responsePayload,
+                              const std::function<void(const tapescope::QueryClient&)>& invoke) {
+    std::error_code ec;
+    fs::remove(socketPath, ec);
+
+    const int serverFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    expect(serverFd >= 0, "tapescope test server should create a socket");
+
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socketPath.c_str(), sizeof(address.sun_path) - 1);
+    expect(::bind(serverFd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0,
+           "tapescope test server should bind successfully");
+    expect(::listen(serverFd, 1) == 0, "tapescope test server should listen successfully");
+
+    json requestPayload;
+    std::string serverError;
+    std::thread server([&]() {
+        const int clientFd = ::accept(serverFd, nullptr, nullptr);
+        if (clientFd < 0) {
+            serverError = "accept failed: " + std::string(std::strerror(errno));
+            return;
+        }
+        try {
+            requestPayload = decodeJsonFrame(readAllFromFd(clientFd));
+            writeAllToFd(clientFd, encodeJsonFrame(responsePayload));
+        } catch (const std::exception& error) {
+            serverError = error.what();
+        }
+        ::close(clientFd);
+    });
+
+    tapescope::ClientConfig config;
+    config.socketPath = socketPath.string();
+    config.clientName = "tapescope-tests";
+    const tapescope::QueryClient client(config);
+    invoke(client);
+
+    server.join();
+    ::close(serverFd);
+    fs::remove(socketPath, ec);
+    expect(serverError.empty(), serverError);
+    return requestPayload;
 }
 
 void testReplayPrefersRichLiveTrace() {
@@ -859,6 +941,124 @@ void testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq() {
     expect(snapshot.liveEvents.at(2).sourceSeq == 2003, "tape-engine should still accept the later source_seq");
 
     server.stop();
+}
+
+void testTapeScopeClientParsesStatusPayload() {
+    tapescope::QueryResult<tapescope::StatusSnapshot> result;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-status"),
+        json{
+            {"ok", true},
+            {"result", {
+                {"socket_path", "/tmp/tape-engine.sock"},
+                {"data_dir", "/tmp/tape-engine"},
+                {"instrument", "INTC"},
+                {"latest_session_seq", 42},
+                {"live_event_count", 7},
+                {"segment_count", 3},
+                {"manifest_hash", "manifest-42"}
+            }}
+        },
+        [&](const tapescope::QueryClient& client) {
+            result = client.status();
+        });
+
+    expect(request.value("command", std::string()) == "status", "tapescope status should issue the status command");
+    expect(request.value("args", json::object()).empty(), "tapescope status should send an empty args object");
+    expect(result.ok(), "tapescope status should parse a successful response");
+    expect(result.value.latestSessionSeq == 42, "tapescope status should preserve the latest session sequence");
+    expect(result.value.liveEventCount == 7, "tapescope status should preserve the live event count");
+    expect(result.value.segmentCount == 3, "tapescope status should preserve the segment count");
+    expect(result.value.manifestHash == "manifest-42", "tapescope status should preserve the manifest hash");
+}
+
+void testTapeScopeClientMarksAckResponsesAsSeamUnavailable() {
+    tape_engine::IngestAck ack;
+    ack.status = "rejected";
+    ack.error = "bridge batch runtime_session_id is required";
+
+    tapescope::QueryResult<tapescope::StatusSnapshot> result;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-seam"),
+        tape_engine::ackToJson(ack),
+        [&](const tapescope::QueryClient& client) {
+            result = client.status();
+        });
+
+    expect(request.value("command", std::string()) == "status", "tapescope status probe should still issue the status command");
+    expect(!result.ok(), "tapescope status should reject ingest ack payloads as query responses");
+    expect(result.error.kind == tapescope::QueryErrorKind::SeamUnavailable,
+           "tapescope status should classify ingest ack payloads as a missing query seam");
+}
+
+void testTapeScopeClientBuildsCommandRequestsForLiveRangeAndLookup() {
+    tapescope::QueryResult<std::vector<tapescope::json>> liveTail;
+    const json liveRequest = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-live"),
+        json{
+            {"ok", true},
+            {"result", json::array({
+                json{{"session_seq", 9}, {"event_kind", "fill_execution"}}
+            })}
+        },
+        [&](const tapescope::QueryClient& client) {
+            liveTail = client.readLiveTail(15);
+        });
+    expect(liveRequest.value("command", std::string()) == "read_live_tail",
+           "tapescope live tail should issue the read_live_tail command");
+    expect(liveRequest.at("args").value("limit", 0) == 15, "tapescope live tail should preserve the requested limit");
+    expect(liveTail.ok() && liveTail.value.size() == 1, "tapescope live tail should parse an event array response");
+
+    tapescope::RangeQuery rangeQuery;
+    rangeQuery.firstSessionSeq = 10;
+    rangeQuery.lastSessionSeq = 20;
+
+    tapescope::QueryResult<std::vector<tapescope::json>> range;
+    const json rangeRequest = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-range"),
+        json{
+            {"ok", true},
+            {"result", {
+                {"events", json::array({
+                    json{{"session_seq", 10}, {"event_kind", "order_intent"}}
+                })}
+            }}
+        },
+        [&](const tapescope::QueryClient& client) {
+            range = client.readRange(rangeQuery);
+        });
+    expect(rangeRequest.value("command", std::string()) == "read_range",
+           "tapescope range should issue the read_range command");
+    expect(rangeRequest.at("args").value("first_session_seq", 0ULL) == 10ULL,
+           "tapescope range should preserve the first requested session sequence");
+    expect(rangeRequest.at("args").value("last_session_seq", 0ULL) == 20ULL,
+           "tapescope range should preserve the last requested session sequence");
+    expect(range.ok() && range.value.size() == 1, "tapescope range should parse an events payload");
+
+    tapescope::OrderAnchorQuery anchorQuery;
+    anchorQuery.execId = std::string("EXEC-71");
+
+    tapescope::QueryResult<tapescope::json> lookup;
+    const json lookupRequest = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-lookup"),
+        json{
+            {"ok", true},
+            {"result", {
+                {"trace_id", 71},
+                {"events", json::array({
+                    json{{"exec_id", "EXEC-71"}}
+                })}
+            }}
+        },
+        [&](const tapescope::QueryClient& client) {
+            lookup = client.findOrderAnchor(anchorQuery);
+        });
+    expect(lookupRequest.value("command", std::string()) == "find_order_anchor",
+           "tapescope lookup should issue the find_order_anchor command");
+    expect(lookupRequest.at("args").value("exec_id", std::string()) == "EXEC-71",
+           "tapescope lookup should preserve the requested anchor selector");
+    expect(lookup.ok(), "tapescope lookup should preserve a successful lookup payload");
+    expect(lookup.value.value("trace_id", 0ULL) == 71ULL, "tapescope lookup should preserve the raw lookup payload");
 }
 
 void testBridgeOutboxOverflowWritesExplicitLossMarker() {
@@ -1567,6 +1767,9 @@ int main() {
         testUnixDomainSocketTransportSendsFramedBatch();
         testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments();
         testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq();
+        testTapeScopeClientParsesStatusPayload();
+        testTapeScopeClientMarksAckResponsesAsSeamUnavailable();
+        testTapeScopeClientBuildsCommandRequestsForLiveRangeAndLookup();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
