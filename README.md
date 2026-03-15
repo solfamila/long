@@ -118,7 +118,9 @@ Phase-1 bridge sender notes:
 - `replay_snapshot` rebuilds a deterministic bid/ask/last and depth snapshot from frozen `session_seq` history, with optional live-tail overlay.
 - Phase 3 now includes hot-path spread-widening, source-quality, trade-pressure, display-instability, post-fill invalidation, and inside-liquidity findings. Repeated findings collapse into ranked logical incidents, so `list-incidents` surfaces the latest scored incident snapshot instead of one row per finding, and `read-incident` returns a report-style drilldown with score breakdown, related findings, and protected-window context.
 - Frozen revisions now persist Phase 3 artifact sidecars (`.artifacts.msgpack`) next to segment payloads, so anchors, protected windows, findings, and incidents survive daemon restart and remain revision-pinned evidence.
-- Analyzer execution is now split into hot-path analyzers and an explicit deferred analyzer lane. The deferred lane emits order-flow timeline findings from protected order/fill windows on its own background queue instead of keeping all analysis inline on the sequencer path.
+- Protected windows now materialize `first_session_seq` / `last_session_seq` bounds in addition to timestamp bounds, so replay, export, and protected-window evidence reads can stay deterministic and segment-bounded.
+- Analyzer execution is now split into hot-path analyzers and an explicit deferred analyzer lane owned by the engine runtime. The deferred lane emits both order-flow timeline and order/fill-context findings from protected order/fill windows on its own background queue instead of keeping all analysis inline on the sequencer path.
+- Query and deferred-analysis artifact reads now build indexed views from the captured engine snapshot instead of reloading frozen artifact sidecars from disk on every request.
 
 Runtime registry and QoS:
 

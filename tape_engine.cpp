@@ -155,6 +155,39 @@ bool matchesAnchorSelector(const BridgeAnchorIdentity& anchor,
     return matchesTrace || matchesOrder || matchesPerm || matchesExec;
 }
 
+std::vector<std::string> anchorSelectorKeys(const BridgeAnchorIdentity& anchor) {
+    std::vector<std::string> keys;
+    if (anchor.traceId > 0) {
+        keys.push_back("trace:" + std::to_string(anchor.traceId));
+    }
+    if (anchor.orderId > 0) {
+        keys.push_back("order:" + std::to_string(static_cast<long long>(anchor.orderId)));
+    }
+    if (anchor.permId > 0) {
+        keys.push_back("perm:" + std::to_string(anchor.permId));
+    }
+    if (!anchor.execId.empty()) {
+        keys.push_back("exec:" + anchor.execId);
+    }
+    return keys;
+}
+
+std::vector<std::string> anchorSelectorKeys(std::uint64_t traceId,
+                                            long long orderId,
+                                            long long permId,
+                                            const std::string& execId) {
+    BridgeAnchorIdentity anchor;
+    anchor.traceId = traceId;
+    anchor.orderId = static_cast<OrderId>(orderId);
+    anchor.permId = permId;
+    anchor.execId = execId;
+    return anchorSelectorKeys(anchor);
+}
+
+bool isStrongInstrumentId(const std::string& instrumentId) {
+    return instrumentId.rfind("ib:conid:", 0) == 0;
+}
+
 int classifyTradePressureSide(const EngineEvent& event,
                               double effectiveBid,
                               double effectiveAsk,
@@ -917,20 +950,121 @@ public:
     }
 };
 
-const std::vector<std::unique_ptr<Phase3Analyzer>>& allPhase3Analyzers() {
-    static const std::vector<std::unique_ptr<Phase3Analyzer>> analyzers = [] {
-        std::vector<std::unique_ptr<Phase3Analyzer>> built;
-        built.push_back(std::make_unique<SourceContinuityAnalyzer>());
-        built.push_back(std::make_unique<SpreadWideningAnalyzer>());
-        built.push_back(std::make_unique<InsideLiquidityAnalyzer>());
-        built.push_back(std::make_unique<TradePressureAnalyzer>());
-        built.push_back(std::make_unique<DisplayInstabilityAnalyzer>());
-        built.push_back(std::make_unique<FillInvalidationAnalyzer>());
-        built.push_back(std::make_unique<OrderFlowTimelineAnalyzer>());
-        return built;
-    }();
-    return analyzers;
-}
+class OrderFillContextAnalyzer final : public Phase3Analyzer {
+public:
+    const char* name() const override { return "order_fill_context"; }
+    AnalyzerLane lane() const override { return AnalyzerLane::Deferred; }
+
+    void analyzeDeferred(const DeferredAnalyzerInput& input,
+                         std::vector<AnalyzerFindingSpec>* findings) const override {
+        if (!hasAnchorIdentity(input.protectedWindow.anchor) || input.windowEvents.empty()) {
+            return;
+        }
+
+        std::size_t fillCount = 0;
+        std::size_t marketEventCount = 0;
+        std::size_t errorCount = 0;
+        std::uint64_t firstSessionSeq = 0;
+        std::uint64_t lastSessionSeq = 0;
+        std::uint64_t tsEngineNs = 0;
+        double firstFillPrice = std::numeric_limits<double>::quiet_NaN();
+        double lastFillPrice = std::numeric_limits<double>::quiet_NaN();
+        double bestBidLow = std::numeric_limits<double>::quiet_NaN();
+        double bestBidHigh = std::numeric_limits<double>::quiet_NaN();
+        double bestAskLow = std::numeric_limits<double>::quiet_NaN();
+        double bestAskHigh = std::numeric_limits<double>::quiet_NaN();
+
+        for (const auto& event : input.windowEvents) {
+            const std::string kind = event.value("event_kind", std::string());
+            const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+            if (firstSessionSeq == 0 || sessionSeq < firstSessionSeq) {
+                firstSessionSeq = sessionSeq;
+            }
+            lastSessionSeq = std::max(lastSessionSeq, sessionSeq);
+            tsEngineNs = std::max(tsEngineNs, event.value("ts_engine_ns", 0ULL));
+
+            if (kind == "fill_execution") {
+                ++fillCount;
+                const double fillPrice = numberOrDefault(event, "price", std::numeric_limits<double>::quiet_NaN());
+                if (std::isfinite(fillPrice)) {
+                    if (!std::isfinite(firstFillPrice)) {
+                        firstFillPrice = fillPrice;
+                    }
+                    lastFillPrice = fillPrice;
+                }
+            } else if (kind == "market_tick" || kind == "market_depth") {
+                ++marketEventCount;
+            } else if (kind == "order_reject" || kind == "broker_error") {
+                ++errorCount;
+            }
+
+            const int marketField = event.value("market_field", -1);
+            const double price = numberOrDefault(event, "price", std::numeric_limits<double>::quiet_NaN());
+            if (!std::isfinite(price)) {
+                continue;
+            }
+            if (kind == "market_tick" && marketField == 1) {
+                bestBidLow = std::isfinite(bestBidLow) ? std::min(bestBidLow, price) : price;
+                bestBidHigh = std::isfinite(bestBidHigh) ? std::max(bestBidHigh, price) : price;
+            } else if (kind == "market_tick" && marketField == 2) {
+                bestAskLow = std::isfinite(bestAskLow) ? std::min(bestAskLow, price) : price;
+                bestAskHigh = std::isfinite(bestAskHigh) ? std::max(bestAskHigh, price) : price;
+            }
+        }
+
+        if (fillCount == 0 && marketEventCount == 0) {
+            return;
+        }
+
+        AnalyzerFindingSpec finding;
+        finding.kind = "order_fill_context";
+        finding.severity = errorCount > 0 ? "warning" : (fillCount > 0 ? "info" : "warning");
+        finding.confidence = fillCount > 0 ? 0.84 : 0.73;
+        finding.firstSessionSeq = firstSessionSeq;
+        finding.lastSessionSeq = lastSessionSeq;
+        finding.tsEngineNs = tsEngineNs;
+        finding.instrumentId = input.protectedWindow.instrumentId;
+        finding.overlapsOrder = true;
+        finding.overlappingAnchor = input.protectedWindow.anchor;
+
+        std::ostringstream title;
+        title << "Order/fill context captured " << marketEventCount << " market updates";
+        if (fillCount > 0) {
+            title << " around " << fillCount << " fills";
+        }
+        finding.title = title.str();
+
+        std::ostringstream summary;
+        summary << "Protected order window " << input.protectedWindow.windowId
+                << " spans session_seq " << firstSessionSeq << " to " << lastSessionSeq
+                << " with " << marketEventCount << " market updates";
+        if (fillCount > 0) {
+            summary << ", " << fillCount << " fills";
+            if (std::isfinite(firstFillPrice)) {
+                summary << ", first fill " << std::fixed << std::setprecision(2) << firstFillPrice;
+            }
+            if (std::isfinite(lastFillPrice) &&
+                (!std::isfinite(firstFillPrice) || std::fabs(lastFillPrice - firstFillPrice) > kTouchTradeTolerance)) {
+                summary << ", last fill " << std::fixed << std::setprecision(2) << lastFillPrice;
+            }
+        }
+        if (std::isfinite(bestBidLow) && std::isfinite(bestBidHigh)) {
+            summary << ", bid range " << std::fixed << std::setprecision(2) << bestBidLow
+                    << "-" << bestBidHigh;
+        }
+        if (std::isfinite(bestAskLow) && std::isfinite(bestAskHigh)) {
+            summary << ", ask range " << std::fixed << std::setprecision(2) << bestAskLow
+                    << "-" << bestAskHigh;
+        }
+        if (errorCount > 0) {
+            summary << ". The window also contains " << errorCount << " error/reject events.";
+        } else {
+            summary << '.';
+        }
+        finding.summary = summary.str();
+        findings->push_back(std::move(finding));
+    }
+};
 
 json anchorToJson(const BridgeAnchorIdentity& anchor) {
     json payload = json::object();
@@ -977,6 +1111,8 @@ json protectedWindowToJson(const ProtectedWindowRecord& record) {
         {"revision_id", record.revisionId},
         {"logical_incident_id", record.logicalIncidentId},
         {"anchor_session_seq", record.anchorSessionSeq},
+        {"first_session_seq", record.firstSessionSeq},
+        {"last_session_seq", record.lastSessionSeq},
         {"start_engine_ns", record.startEngineNs},
         {"end_engine_ns", record.endEngineNs},
         {"reason", record.reason},
@@ -1047,6 +1183,8 @@ ProtectedWindowRecord protectedWindowFromJson(const json& payload) {
     record.revisionId = payload.value("revision_id", 0ULL);
     record.logicalIncidentId = payload.value("logical_incident_id", 0ULL);
     record.anchorSessionSeq = payload.value("anchor_session_seq", 0ULL);
+    record.firstSessionSeq = payload.value("first_session_seq", record.anchorSessionSeq);
+    record.lastSessionSeq = payload.value("last_session_seq", record.anchorSessionSeq);
     record.startEngineNs = payload.value("start_engine_ns", 0ULL);
     record.endEngineNs = payload.value("end_engine_ns", 0ULL);
     record.reason = payload.value("reason", std::string());
@@ -1186,8 +1324,54 @@ RequestKind classifyRequestKind(const std::vector<std::uint8_t>& frame) {
 
 } // namespace
 
+struct Server::AnalyzerRuntime {
+    std::vector<std::unique_ptr<Phase3Analyzer>> analyzers;
+    std::vector<const Phase3Analyzer*> hotAnalyzers;
+    std::vector<const Phase3Analyzer*> deferredAnalyzers;
+
+    AnalyzerRuntime() {
+        registerAnalyzer(std::make_unique<SourceContinuityAnalyzer>());
+        registerAnalyzer(std::make_unique<SpreadWideningAnalyzer>());
+        registerAnalyzer(std::make_unique<InsideLiquidityAnalyzer>());
+        registerAnalyzer(std::make_unique<TradePressureAnalyzer>());
+        registerAnalyzer(std::make_unique<DisplayInstabilityAnalyzer>());
+        registerAnalyzer(std::make_unique<FillInvalidationAnalyzer>());
+        registerAnalyzer(std::make_unique<OrderFlowTimelineAnalyzer>());
+        registerAnalyzer(std::make_unique<OrderFillContextAnalyzer>());
+    }
+
+    void registerAnalyzer(std::unique_ptr<Phase3Analyzer> analyzer) {
+        const Phase3Analyzer* raw = analyzer.get();
+        if (raw->lane() == AnalyzerLane::Hot) {
+            hotAnalyzers.push_back(raw);
+        } else {
+            deferredAnalyzers.push_back(raw);
+        }
+        analyzers.push_back(std::move(analyzer));
+    }
+
+    void analyzeHot(const HotAnalyzerInput& input,
+                    std::vector<AnalyzerFindingSpec>* findings) const {
+        for (const Phase3Analyzer* analyzer : hotAnalyzers) {
+            analyzer->analyzeHot(input, findings);
+        }
+    }
+
+    void analyzeDeferred(const Server::DeferredAnalyzerTask& task,
+                         const DeferredAnalyzerInput& input,
+                         std::vector<AnalyzerFindingSpec>* findings) const {
+        for (const Phase3Analyzer* analyzer : deferredAnalyzers) {
+            if (!task.analyzerName.empty() && task.analyzerName != analyzer->name()) {
+                continue;
+            }
+            analyzer->analyzeDeferred(input, findings);
+        }
+    }
+};
+
 Server::Server(EngineConfig config)
-    : config_(std::move(config)) {}
+    : config_(std::move(config)),
+      analyzerRuntime_(std::make_unique<AnalyzerRuntime>()) {}
 
 Server::~Server() {
     stop();
@@ -1590,22 +1774,12 @@ void Server::deferredAnalyzerLoop() {
 
         QuerySnapshot snapshot = captureQuerySnapshot();
         const std::uint64_t frozenRevisionId = snapshot.latestFrozenRevisionId;
-        const FrozenArtifacts frozenArtifacts = loadFrozenArtifacts(snapshot, frozenRevisionId);
-
-        std::vector<ProtectedWindowRecord> windows = frozenArtifacts.protectedWindows;
-        for (const auto& record : snapshot.protectedWindows) {
-            if (record.revisionId > frozenRevisionId) {
-                windows.push_back(record);
-            }
-        }
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, true);
 
         std::optional<ProtectedWindowRecord> selectedWindow;
-        for (const auto& window : windows) {
-            if (window.windowId == task.protectedWindowId) {
-                if (!selectedWindow.has_value() || selectedWindow->revisionId < window.revisionId) {
-                    selectedWindow = window;
-                }
-            }
+        const auto windowIt = artifacts.latestProtectedWindowById.find(task.protectedWindowId);
+        if (windowIt != artifacts.latestProtectedWindowById.end()) {
+            selectedWindow = artifacts.protectedWindows[windowIt->second];
         }
         if (!selectedWindow.has_value()) {
             continue;
@@ -1615,6 +1789,7 @@ void Server::deferredAnalyzerLoop() {
         std::vector<json> windowEvents;
         try {
             windowEvents = filterEventsByProtectedWindow(snapshot,
+                                                        artifacts,
                                                         selectedWindow->windowId,
                                                         0,
                                                         frozenRevisionId,
@@ -1630,15 +1805,7 @@ void Server::deferredAnalyzerLoop() {
         input.windowEvents = std::move(windowEvents);
 
         std::vector<AnalyzerFindingSpec> findings;
-        for (const auto& analyzer : allPhase3Analyzers()) {
-            if (analyzer->lane() != AnalyzerLane::Deferred) {
-                continue;
-            }
-            if (!task.analyzerName.empty() && task.analyzerName != analyzer->name()) {
-                continue;
-            }
-            analyzer->analyzeDeferred(input, &findings);
-        }
+        analyzerRuntime_->analyzeDeferred(task, input, &findings);
         if (findings.empty()) {
             continue;
         }
@@ -1699,6 +1866,18 @@ std::string Server::resolveInstrumentId(const BridgeOutboxRecord& record) const 
     if (!record.instrumentId.empty()) {
         return record.instrumentId;
     }
+    if (!config_.instrumentId.empty()) {
+        if (record.symbol.empty()) {
+            return config_.instrumentId;
+        }
+        const std::string configured = config_.instrumentId;
+        const std::string symbol = record.symbol;
+        if (isStrongInstrumentId(configured) ||
+            configured.size() >= symbol.size() + 1 &&
+                configured.compare(configured.size() - symbol.size(), symbol.size(), symbol) == 0) {
+            return configured;
+        }
+    }
     if (!record.symbol.empty()) {
         return "ib:STK:SMART:USD:" + record.symbol;
     }
@@ -1746,30 +1925,86 @@ void Server::addProtectedWindowUnlocked(const EngineEvent& event,
     record.revisionId = event.revisionId;
     record.logicalIncidentId = logicalIncidentId;
     record.anchorSessionSeq = event.sessionSeq;
+    record.firstSessionSeq = event.sessionSeq;
+    record.lastSessionSeq = event.sessionSeq;
     record.startEngineNs = event.tsEngineNs > kProtectedWindowPreNs ? event.tsEngineNs - kProtectedWindowPreNs : 0;
     record.endEngineNs = event.tsEngineNs + kProtectedWindowPostNs;
     record.reason = reason;
     record.instrumentId = event.instrumentId;
     record.anchor = anchor;
+
+    for (auto it = liveRing_.rbegin(); it != liveRing_.rend(); ++it) {
+        if (!record.instrumentId.empty() && it->instrumentId != record.instrumentId) {
+            continue;
+        }
+        if (it->tsEngineNs < record.startEngineNs) {
+            break;
+        }
+        if (it->tsEngineNs <= record.endEngineNs) {
+            record.firstSessionSeq = std::min(record.firstSessionSeq, it->sessionSeq);
+            record.lastSessionSeq = std::max(record.lastSessionSeq, it->sessionSeq);
+        }
+    }
     protectedWindows_.push_back(std::move(record));
 
-    if (logicalIncidentId == 0 &&
-        hasAnchorIdentity(anchor) &&
-        (reason == "order_intent" ||
-         reason == "open_order" ||
-         reason == "order_status" ||
-         reason == "fill_execution" ||
-         reason == "cancel_request" ||
-         reason == "order_reject" ||
-         reason == "broker_error")) {
-        DeferredAnalyzerTask task;
-        task.analyzerName = "order_flow_timeline";
-        task.sourceRevisionId = event.revisionId;
-        task.protectedWindowId = protectedWindows_.back().windowId;
-        task.instrumentId = event.instrumentId;
-        task.reason = reason;
-        task.anchor = anchor;
-        enqueueDeferredAnalyzerTask(std::move(task));
+}
+
+void Server::updateProtectedWindowBoundsUnlocked(const EngineEvent& event) {
+    std::unordered_set<std::uint64_t> seenWindowIds;
+    std::vector<ProtectedWindowRecord> updatedRecords;
+    for (auto it = protectedWindows_.rbegin(); it != protectedWindows_.rend(); ++it) {
+        if (!seenWindowIds.insert(it->windowId).second) {
+            continue;
+        }
+        if (!it->instrumentId.empty() && it->instrumentId != event.instrumentId) {
+            continue;
+        }
+        if (event.tsEngineNs > it->endEngineNs) {
+            if (it->instrumentId == event.instrumentId) {
+                break;
+            }
+            continue;
+        }
+        if (event.tsEngineNs < it->startEngineNs) {
+            continue;
+        }
+        const std::uint64_t updatedFirstSessionSeq =
+            it->firstSessionSeq == 0 ? event.sessionSeq : std::min(it->firstSessionSeq, event.sessionSeq);
+        const std::uint64_t updatedLastSessionSeq = std::max(it->lastSessionSeq, event.sessionSeq);
+        if (updatedFirstSessionSeq == it->firstSessionSeq && updatedLastSessionSeq == it->lastSessionSeq) {
+            continue;
+        }
+
+        ProtectedWindowRecord updated = *it;
+        const std::uint64_t previousLastSessionSeq = updated.lastSessionSeq;
+        updated.revisionId = event.revisionId;
+        updated.firstSessionSeq = updatedFirstSessionSeq;
+        updated.lastSessionSeq = updatedLastSessionSeq;
+        updatedRecords.push_back(updated);
+
+        if (updated.logicalIncidentId == 0 &&
+            hasAnchorIdentity(updated.anchor) &&
+            previousLastSessionSeq <= updated.anchorSessionSeq &&
+            updated.lastSessionSeq > updated.anchorSessionSeq &&
+            (updated.reason == "order_intent" ||
+             updated.reason == "open_order" ||
+             updated.reason == "order_status" ||
+             updated.reason == "fill_execution" ||
+             updated.reason == "cancel_request" ||
+             updated.reason == "order_reject" ||
+             updated.reason == "broker_error")) {
+            DeferredAnalyzerTask task;
+            task.sourceRevisionId = event.revisionId;
+            task.protectedWindowId = updated.windowId;
+            task.logicalIncidentId = updated.logicalIncidentId;
+            task.instrumentId = updated.instrumentId;
+            task.reason = updated.reason;
+            task.anchor = updated.anchor;
+            enqueueDeferredAnalyzerTask(std::move(task));
+        }
+    }
+    for (auto& updated : updatedRecords) {
+        protectedWindows_.push_back(std::move(updated));
     }
 }
 
@@ -1950,6 +2185,8 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
             addProtectedWindowUnlocked(event, event.eventKind, event.bridgeRecord.anchor);
         }
     }
+
+    updateProtectedWindowBoundsUnlocked(event);
 
     const double previousBid = analyzerBookState_.lastEffectiveBid;
     const double previousAsk = analyzerBookState_.lastEffectiveAsk;
@@ -2209,12 +2446,7 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
     };
 
     std::vector<AnalyzerFindingSpec> analyzerFindings;
-    for (const auto& analyzer : allPhase3Analyzers()) {
-        if (analyzer->lane() != AnalyzerLane::Hot) {
-            continue;
-        }
-        analyzer->analyzeHot(input, &analyzerFindings);
-    }
+    analyzerRuntime_->analyzeHot(input, &analyzerFindings);
 
     for (const auto& finding : analyzerFindings) {
         recordFindingRangeUnlocked(event.revisionId,
@@ -2361,8 +2593,12 @@ void Server::writeSegment(const PendingSegment& segment) {
         lastSessionSeq = std::max(lastSessionSeq, record.sessionSeq);
     }
     for (const auto& record : segment.protectedWindows) {
-        firstSessionSeq = std::min(firstSessionSeq, record.anchorSessionSeq);
-        lastSessionSeq = std::max(lastSessionSeq, record.anchorSessionSeq);
+        if (record.firstSessionSeq > 0) {
+            firstSessionSeq = std::min(firstSessionSeq, record.firstSessionSeq);
+        }
+        if (record.lastSessionSeq > 0) {
+            lastSessionSeq = std::max(lastSessionSeq, record.lastSessionSeq);
+        }
     }
     for (const auto& record : segment.findings) {
         firstSessionSeq = std::min(firstSessionSeq, record.firstSessionSeq);
@@ -2510,6 +2746,81 @@ Server::FrozenArtifacts Server::loadFrozenArtifacts(const QuerySnapshot& snapsho
     return artifacts;
 }
 
+Server::QueryArtifacts Server::buildQueryArtifacts(const QuerySnapshot& snapshot,
+                                                   std::uint64_t frozenRevisionId,
+                                                   bool includeLiveTail) const {
+    QueryArtifacts artifacts;
+
+    for (const auto& record : snapshot.orderAnchors) {
+        if (record.revisionId <= frozenRevisionId || (includeLiveTail && record.revisionId > frozenRevisionId)) {
+            artifacts.orderAnchors.push_back(record);
+        }
+    }
+    for (const auto& record : snapshot.protectedWindows) {
+        if (record.revisionId <= frozenRevisionId || (includeLiveTail && record.revisionId > frozenRevisionId)) {
+            artifacts.protectedWindows.push_back(record);
+        }
+    }
+    for (const auto& record : snapshot.findings) {
+        if (record.revisionId <= frozenRevisionId || (includeLiveTail && record.revisionId > frozenRevisionId)) {
+            artifacts.findings.push_back(record);
+        }
+    }
+    for (const auto& record : snapshot.incidents) {
+        if (record.revisionId <= frozenRevisionId || (includeLiveTail && record.revisionId > frozenRevisionId)) {
+            artifacts.incidents.push_back(record);
+        }
+    }
+
+    std::sort(artifacts.orderAnchors.begin(), artifacts.orderAnchors.end(), [](const OrderAnchorRecord& left,
+                                                                                const OrderAnchorRecord& right) {
+        return std::tie(left.sessionSeq, left.anchorId) < std::tie(right.sessionSeq, right.anchorId);
+    });
+    std::sort(artifacts.protectedWindows.begin(), artifacts.protectedWindows.end(), [](const ProtectedWindowRecord& left,
+                                                                                        const ProtectedWindowRecord& right) {
+        return std::tie(left.firstSessionSeq, left.revisionId, left.windowId) <
+               std::tie(right.firstSessionSeq, right.revisionId, right.windowId);
+    });
+    std::sort(artifacts.findings.begin(), artifacts.findings.end(), [](const FindingRecord& left,
+                                                                        const FindingRecord& right) {
+        return std::tie(left.lastSessionSeq, left.findingId) < std::tie(right.lastSessionSeq, right.findingId);
+    });
+    std::sort(artifacts.incidents.begin(), artifacts.incidents.end(), [](const IncidentRecord& left,
+                                                                          const IncidentRecord& right) {
+        return std::tie(left.lastSessionSeq, left.incidentRevisionId) <
+               std::tie(right.lastSessionSeq, right.incidentRevisionId);
+    });
+
+    for (std::size_t i = 0; i < artifacts.orderAnchors.size(); ++i) {
+        for (const auto& key : anchorSelectorKeys(artifacts.orderAnchors[i].anchor)) {
+            artifacts.orderAnchorsBySelector.emplace(key, i);
+        }
+    }
+    for (std::size_t i = 0; i < artifacts.protectedWindows.size(); ++i) {
+        const auto& window = artifacts.protectedWindows[i];
+        for (const auto& key : anchorSelectorKeys(window.anchor)) {
+            artifacts.protectedWindowsBySelector.emplace(key, i);
+        }
+        auto existing = artifacts.latestProtectedWindowById.find(window.windowId);
+        if (existing == artifacts.latestProtectedWindowById.end() ||
+            artifacts.protectedWindows[existing->second].revisionId < window.revisionId) {
+            artifacts.latestProtectedWindowById[window.windowId] = i;
+        }
+    }
+    for (std::size_t i = 0; i < artifacts.findings.size(); ++i) {
+        if (artifacts.findings[i].logicalIncidentId > 0) {
+            artifacts.findingsByIncident.emplace(artifacts.findings[i].logicalIncidentId, i);
+        }
+    }
+    for (std::size_t i = 0; i < artifacts.incidents.size(); ++i) {
+        if (artifacts.incidents[i].logicalIncidentId > 0) {
+            artifacts.incidentsByLogicalIncident.emplace(artifacts.incidents[i].logicalIncidentId, i);
+        }
+    }
+
+    return artifacts;
+}
+
 std::vector<json> Server::loadEvents(const QuerySnapshot& snapshot,
                                      std::uint64_t frozenRevisionId,
                                      std::uint64_t fromSessionSeq,
@@ -2626,6 +2937,7 @@ std::vector<json> Server::filterEventsByRange(const QuerySnapshot& snapshot,
 }
 
 std::vector<json> Server::filterEventsByAnchor(const QuerySnapshot& snapshot,
+                                               const QueryArtifacts& artifacts,
                                                std::uint64_t traceId,
                                                long long orderId,
                                                long long permId,
@@ -2633,8 +2945,53 @@ std::vector<json> Server::filterEventsByAnchor(const QuerySnapshot& snapshot,
                                                std::size_t limit,
                                                std::uint64_t frozenRevisionId,
                                                bool includeLiveTail) const {
+    const std::vector<std::string> selectorKeys = anchorSelectorKeys(traceId, orderId, permId, execId);
+    if (selectorKeys.empty()) {
+        return {};
+    }
+
+    std::unordered_set<std::size_t> matchedAnchorIndexes;
+    std::uint64_t fromSessionSeq = 0;
+    std::uint64_t throughSessionSeq = 0;
+    for (const auto& key : selectorKeys) {
+        const auto range = artifacts.orderAnchorsBySelector.equal_range(key);
+        for (auto it = range.first; it != range.second; ++it) {
+            const OrderAnchorRecord& record = artifacts.orderAnchors[it->second];
+            if (!matchesAnchorSelector(record.anchor, traceId, orderId, permId, execId) ||
+                !matchedAnchorIndexes.insert(it->second).second) {
+                continue;
+            }
+            fromSessionSeq = fromSessionSeq == 0 ? record.sessionSeq : std::min(fromSessionSeq, record.sessionSeq);
+            throughSessionSeq = std::max(throughSessionSeq, record.sessionSeq);
+        }
+    }
+
+    std::unordered_set<std::size_t> matchedWindowIndexes;
+    for (const auto& key : selectorKeys) {
+        const auto range = artifacts.protectedWindowsBySelector.equal_range(key);
+        for (auto it = range.first; it != range.second; ++it) {
+            const ProtectedWindowRecord& window = artifacts.protectedWindows[it->second];
+            if (!matchesAnchorSelector(window.anchor, traceId, orderId, permId, execId) ||
+                !matchedWindowIndexes.insert(it->second).second) {
+                continue;
+            }
+            const std::uint64_t windowFirst = window.firstSessionSeq > 0 ? window.firstSessionSeq : window.anchorSessionSeq;
+            const std::uint64_t windowLast = window.lastSessionSeq > 0 ? window.lastSessionSeq : window.anchorSessionSeq;
+            fromSessionSeq = fromSessionSeq == 0 ? windowFirst : std::min(fromSessionSeq, windowFirst);
+            throughSessionSeq = std::max(throughSessionSeq, windowLast);
+        }
+    }
+
+    if (matchedAnchorIndexes.empty() && matchedWindowIndexes.empty()) {
+        return {};
+    }
+
     std::vector<json> results;
-    const auto allEvents = mergedEvents(snapshot, frozenRevisionId, includeLiveTail, 0, 0);
+    const auto allEvents = mergedEvents(snapshot,
+                                        frozenRevisionId,
+                                        includeLiveTail,
+                                        fromSessionSeq,
+                                        throughSessionSeq);
     for (const auto& event : allEvents) {
         const json anchor = event.value("anchor", json::object());
         if (!matchesAnchorSelector(anchorFromJson(anchor), traceId, orderId, permId, execId)) {
@@ -2649,6 +3006,7 @@ std::vector<json> Server::filterEventsByAnchor(const QuerySnapshot& snapshot,
 }
 
 json Server::buildOrderCaseSummary(const QuerySnapshot& snapshot,
+                                   const QueryArtifacts& artifacts,
                                    const std::vector<json>& events,
                                    std::uint64_t traceId,
                                    long long orderId,
@@ -2686,22 +3044,22 @@ json Server::buildOrderCaseSummary(const QuerySnapshot& snapshot,
     }
 
     const json anchor = events.front().value("anchor", json::object());
-    std::vector<ProtectedWindowRecord> windows = loadFrozenArtifacts(snapshot, frozenRevisionId).protectedWindows;
-    if (includeLiveTail) {
-        for (const auto& record : snapshot.protectedWindows) {
-            if (record.revisionId > frozenRevisionId) {
-                windows.push_back(record);
-            }
-        }
-    }
-
     std::optional<ProtectedWindowRecord> selectedWindow;
-    for (const auto& window : windows) {
-        if (!matchesAnchorSelector(window.anchor, traceId, orderId, permId, execId)) {
-            continue;
-        }
-        if (!selectedWindow.has_value() || selectedWindow->revisionId < window.revisionId) {
-            selectedWindow = window;
+    const std::vector<std::string> selectorKeys = anchorSelectorKeys(traceId, orderId, permId, execId);
+    std::unordered_set<std::size_t> matchedWindowIndexes;
+    for (const auto& key : selectorKeys) {
+        const auto range = artifacts.protectedWindowsBySelector.equal_range(key);
+        for (auto it = range.first; it != range.second; ++it) {
+            if (!matchedWindowIndexes.insert(it->second).second) {
+                continue;
+            }
+            const auto& window = artifacts.protectedWindows[it->second];
+            if (!matchesAnchorSelector(window.anchor, traceId, orderId, permId, execId)) {
+                continue;
+            }
+            if (!selectedWindow.has_value() || selectedWindow->revisionId < window.revisionId) {
+                selectedWindow = window;
+            }
         }
     }
 
@@ -2734,24 +3092,16 @@ json Server::buildOrderCaseSummary(const QuerySnapshot& snapshot,
 }
 
 std::vector<json> Server::filterEventsByProtectedWindow(const QuerySnapshot& snapshot,
+                                                        const QueryArtifacts& artifacts,
                                                         std::uint64_t windowId,
                                                         std::size_t limit,
                                                         std::uint64_t frozenRevisionId,
                                                         bool includeLiveTail,
                                                         json* selectedWindowSummary) const {
     std::optional<ProtectedWindowRecord> selectedWindow;
-    const FrozenArtifacts frozenArtifacts = loadFrozenArtifacts(snapshot, frozenRevisionId);
-    for (const auto& record : frozenArtifacts.protectedWindows) {
-        if (record.windowId == windowId) {
-            selectedWindow = record;
-        }
-    }
-    if (includeLiveTail) {
-        for (const auto& record : snapshot.protectedWindows) {
-            if (record.revisionId > frozenRevisionId && record.windowId == windowId) {
-                selectedWindow = record;
-            }
-        }
+    const auto it = artifacts.latestProtectedWindowById.find(windowId);
+    if (it != artifacts.latestProtectedWindowById.end()) {
+        selectedWindow = artifacts.protectedWindows[it->second];
     }
 
     if (!selectedWindow.has_value()) {
@@ -2763,8 +3113,25 @@ std::vector<json> Server::filterEventsByProtectedWindow(const QuerySnapshot& sna
     }
 
     std::vector<json> results;
-    const std::vector<json> allEvents = mergedEvents(snapshot, frozenRevisionId, includeLiveTail, 0, 0);
+    const std::uint64_t fromSessionSeq = selectedWindow->firstSessionSeq > 0
+        ? selectedWindow->firstSessionSeq
+        : selectedWindow->anchorSessionSeq;
+    const std::uint64_t throughSessionSeq = selectedWindow->lastSessionSeq > 0
+        ? selectedWindow->lastSessionSeq
+        : selectedWindow->anchorSessionSeq;
+    const std::vector<json> allEvents = mergedEvents(snapshot,
+                                                     frozenRevisionId,
+                                                     includeLiveTail,
+                                                     fromSessionSeq,
+                                                     throughSessionSeq);
     for (const auto& event : allEvents) {
+        const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+        if (selectedWindow->firstSessionSeq > 0 && sessionSeq < selectedWindow->firstSessionSeq) {
+            continue;
+        }
+        if (selectedWindow->lastSessionSeq > 0 && sessionSeq > selectedWindow->lastSessionSeq) {
+            continue;
+        }
         const std::uint64_t tsEngineNs = event.value("ts_engine_ns", 0ULL);
         if (tsEngineNs < selectedWindow->startEngineNs || tsEngineNs > selectedWindow->endEngineNs) {
             continue;
@@ -3087,60 +3454,32 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         const std::size_t limit = request.limit == 0 ? 100 : request.limit;
-        const FrozenArtifacts frozenArtifacts = loadFrozenArtifacts(snapshot, frozenRevisionId);
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
         response.events = json::array();
 
         if (request.operation == "list_order_anchors") {
-            std::vector<OrderAnchorRecord> records = frozenArtifacts.orderAnchors;
-            if (request.includeLiveTail) {
-                for (const auto& record : snapshot.orderAnchors) {
-                    if (record.revisionId > frozenRevisionId) {
-                        records.push_back(record);
-                    }
-                }
-            }
+            const std::vector<OrderAnchorRecord>& records = artifacts.orderAnchors;
             for (auto it = records.rbegin();
                  it != records.rend() && response.events.size() < limit;
                  ++it) {
                 response.events.push_back(orderAnchorToJson(*it));
             }
         } else if (request.operation == "list_protected_windows") {
-            std::vector<ProtectedWindowRecord> records = frozenArtifacts.protectedWindows;
-            if (request.includeLiveTail) {
-                for (const auto& record : snapshot.protectedWindows) {
-                    if (record.revisionId > frozenRevisionId) {
-                        records.push_back(record);
-                    }
-                }
-            }
+            const std::vector<ProtectedWindowRecord>& records = artifacts.protectedWindows;
             for (auto it = records.rbegin();
                  it != records.rend() && response.events.size() < limit;
                  ++it) {
                 response.events.push_back(protectedWindowToJson(*it));
             }
         } else if (request.operation == "list_findings") {
-            std::vector<FindingRecord> records = frozenArtifacts.findings;
-            if (request.includeLiveTail) {
-                for (const auto& record : snapshot.findings) {
-                    if (record.revisionId > frozenRevisionId) {
-                        records.push_back(record);
-                    }
-                }
-            }
+            const std::vector<FindingRecord>& records = artifacts.findings;
             for (auto it = records.rbegin();
                  it != records.rend() && response.events.size() < limit;
                  ++it) {
                 response.events.push_back(findingToJson(*it));
             }
         } else if (request.operation == "list_incidents") {
-            std::vector<IncidentRecord> records = frozenArtifacts.incidents;
-            if (request.includeLiveTail) {
-                for (const auto& record : snapshot.incidents) {
-                    if (record.revisionId > frozenRevisionId) {
-                        records.push_back(record);
-                    }
-                }
-            }
+            const std::vector<IncidentRecord>& records = artifacts.incidents;
             const std::vector<IncidentRecord> collapsed = collapseLatestIncidentRevisions(records);
             for (const auto& record : collapsed) {
                 if (response.events.size() >= limit) {
@@ -3171,34 +3510,19 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             return rejectResponse(request, error.what());
         }
 
-        const FrozenArtifacts frozenArtifacts = loadFrozenArtifacts(snapshot, frozenRevisionId);
-        std::vector<IncidentRecord> incidentRevisions = frozenArtifacts.incidents;
-        std::vector<FindingRecord> relatedFindings = frozenArtifacts.findings;
-        std::vector<ProtectedWindowRecord> protectedWindows = frozenArtifacts.protectedWindows;
-        if (request.includeLiveTail) {
-            for (const auto& record : snapshot.incidents) {
-                if (record.revisionId > frozenRevisionId) {
-                    incidentRevisions.push_back(record);
-                }
-            }
-            for (const auto& record : snapshot.findings) {
-                if (record.revisionId > frozenRevisionId) {
-                    relatedFindings.push_back(record);
-                }
-            }
-            for (const auto& record : snapshot.protectedWindows) {
-                if (record.revisionId > frozenRevisionId) {
-                    protectedWindows.push_back(record);
-                }
-            }
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
+        std::vector<IncidentRecord> incidentRevisions;
+        std::vector<FindingRecord> relatedFindings;
+        std::vector<ProtectedWindowRecord> protectedWindows = artifacts.protectedWindows;
+        const auto incidentRange = artifacts.incidentsByLogicalIncident.equal_range(request.logicalIncidentId);
+        for (auto it = incidentRange.first; it != incidentRange.second; ++it) {
+            incidentRevisions.push_back(artifacts.incidents[it->second]);
+        }
+        const auto findingRange = artifacts.findingsByIncident.equal_range(request.logicalIncidentId);
+        for (auto it = findingRange.first; it != findingRange.second; ++it) {
+            relatedFindings.push_back(artifacts.findings[it->second]);
         }
 
-        incidentRevisions.erase(std::remove_if(incidentRevisions.begin(),
-                                               incidentRevisions.end(),
-                                               [&](const IncidentRecord& record) {
-                                                   return record.logicalIncidentId != request.logicalIncidentId;
-                                               }),
-                                incidentRevisions.end());
         if (incidentRevisions.empty()) {
             return rejectResponse(request, "logical_incident_id not found");
         }
@@ -3252,6 +3576,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         json timeline = json::array();
         if (incidentWindow.has_value()) {
             std::vector<json> windowEvents = filterEventsByProtectedWindow(snapshot,
+                                                                          artifacts,
                                                                           incidentWindow->windowId,
                                                                           32,
                                                                           frozenRevisionId,
@@ -3300,10 +3625,12 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         const std::size_t limit = request.limit == 0 ? 200 : request.limit;
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
         json selectedWindowSummary = json::object();
         std::vector<json> events;
         try {
             events = filterEventsByProtectedWindow(snapshot,
+                                                  artifacts,
                                                   request.windowId,
                                                   limit,
                                                   frozenRevisionId,
@@ -3368,8 +3695,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             return rejectResponse(request, error.what());
         }
         const std::size_t limit = request.limit == 0 ? 100 : request.limit;
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
         const std::vector<json> events =
             filterEventsByAnchor(snapshot,
+                                 artifacts,
                                  request.traceId,
                                  request.orderId,
                                  request.permId,
@@ -3402,8 +3731,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         const std::size_t limit = request.limit == 0 ? 200 : request.limit;
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
         const std::vector<json> events =
             filterEventsByAnchor(snapshot,
+                                 artifacts,
                                  request.traceId,
                                  request.orderId,
                                  request.permId,
@@ -3414,6 +3745,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         json orderCaseSummary = json::object();
         try {
             orderCaseSummary = buildOrderCaseSummary(snapshot,
+                                                    artifacts,
                                                     events,
                                                     request.traceId,
                                                     request.orderId,
@@ -3427,21 +3759,8 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
 
         const json anchorJson = orderCaseSummary.value("anchor", json::object());
         const BridgeAnchorIdentity anchor = anchorFromJson(anchorJson);
-        const FrozenArtifacts frozenArtifacts = loadFrozenArtifacts(snapshot, frozenRevisionId);
-        std::vector<FindingRecord> relatedFindings = frozenArtifacts.findings;
-        std::vector<IncidentRecord> relatedIncidents = frozenArtifacts.incidents;
-        if (request.includeLiveTail) {
-            for (const auto& record : snapshot.findings) {
-                if (record.revisionId > frozenRevisionId) {
-                    relatedFindings.push_back(record);
-                }
-            }
-            for (const auto& record : snapshot.incidents) {
-                if (record.revisionId > frozenRevisionId) {
-                    relatedIncidents.push_back(record);
-                }
-            }
-        }
+        std::vector<FindingRecord> relatedFindings = artifacts.findings;
+        std::vector<IncidentRecord> relatedIncidents = artifacts.incidents;
 
         relatedFindings.erase(std::remove_if(relatedFindings.begin(),
                                              relatedFindings.end(),
@@ -3500,6 +3819,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             const std::uint64_t protectedWindowId = orderCaseSummary["protected_window"].value("window_id", 0ULL);
             if (protectedWindowId > 0) {
                 std::vector<json> windowEvents = filterEventsByProtectedWindow(snapshot,
+                                                                              artifacts,
                                                                               protectedWindowId,
                                                                               48,
                                                                               frozenRevisionId,
@@ -3556,8 +3876,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         const std::size_t limit = request.limit == 0 ? 100 : request.limit;
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
         const std::vector<json> events =
             filterEventsByAnchor(snapshot,
+                                 artifacts,
                                  request.traceId,
                                  request.orderId,
                                  request.permId,
@@ -3574,6 +3896,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             response.events.push_back(event);
         }
         response.summary = buildOrderCaseSummary(snapshot,
+                                                artifacts,
                                                 events,
                                                 request.traceId,
                                                 request.orderId,

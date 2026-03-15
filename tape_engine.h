@@ -10,11 +10,12 @@
 #include <filesystem>
 #include <future>
 #include <memory>
-#include <optional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -85,6 +86,8 @@ struct ProtectedWindowRecord {
     std::uint64_t revisionId = 0;
     std::uint64_t logicalIncidentId = 0;
     std::uint64_t anchorSessionSeq = 0;
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
     std::uint64_t startEngineNs = 0;
     std::uint64_t endEngineNs = 0;
     std::string reason;
@@ -199,6 +202,18 @@ private:
         std::vector<IncidentRecord> incidents;
     };
 
+    struct QueryArtifacts {
+        std::vector<OrderAnchorRecord> orderAnchors;
+        std::vector<ProtectedWindowRecord> protectedWindows;
+        std::vector<FindingRecord> findings;
+        std::vector<IncidentRecord> incidents;
+        std::unordered_multimap<std::string, std::size_t> orderAnchorsBySelector;
+        std::unordered_multimap<std::string, std::size_t> protectedWindowsBySelector;
+        std::unordered_multimap<std::uint64_t, std::size_t> findingsByIncident;
+        std::unordered_multimap<std::uint64_t, std::size_t> incidentsByLogicalIncident;
+        std::unordered_map<std::uint64_t, std::size_t> latestProtectedWindowById;
+    };
+
     struct AnalyzerBookState {
         struct DisplayInstabilitySideState {
             double trackedPrice = 0.0;
@@ -247,6 +262,8 @@ private:
         std::string reason;
         BridgeAnchorIdentity anchor;
     };
+
+    struct AnalyzerRuntime;
 
     void acceptLoop();
     void handleClientConnection(int clientFd);
@@ -301,11 +318,15 @@ private:
                                 const BridgeAnchorIdentity& overlappingAnchor,
                                 bool overlapsOrder);
     void updateAnalyzerBookUnlocked(const EngineEvent& event);
+    void updateProtectedWindowBoundsUnlocked(const EngineEvent& event);
     BridgeAnchorIdentity findOverlappingOrderAnchorUnlocked(std::uint64_t tsEngineNs) const;
     QuerySnapshot captureQuerySnapshot() const;
     std::uint64_t resolveFrozenRevision(const QuerySnapshot& snapshot, std::uint64_t requestedRevisionId) const;
     FrozenArtifacts loadFrozenArtifacts(const QuerySnapshot& snapshot,
                                         std::uint64_t frozenRevisionId) const;
+    QueryArtifacts buildQueryArtifacts(const QuerySnapshot& snapshot,
+                                       std::uint64_t frozenRevisionId,
+                                       bool includeLiveTail) const;
     std::vector<json> loadEvents(const QuerySnapshot& snapshot,
                                  std::uint64_t frozenRevisionId,
                                  std::uint64_t fromSessionSeq,
@@ -322,6 +343,7 @@ private:
                                           std::uint64_t frozenRevisionId,
                                           bool includeLiveTail) const;
     std::vector<json> filterEventsByAnchor(const QuerySnapshot& snapshot,
+                                           const QueryArtifacts& artifacts,
                                            std::uint64_t traceId,
                                            long long orderId,
                                            long long permId,
@@ -330,6 +352,7 @@ private:
                                            std::uint64_t frozenRevisionId,
                                            bool includeLiveTail) const;
     json buildOrderCaseSummary(const QuerySnapshot& snapshot,
+                               const QueryArtifacts& artifacts,
                                const std::vector<json>& events,
                                std::uint64_t traceId,
                                long long orderId,
@@ -338,6 +361,7 @@ private:
                                std::uint64_t frozenRevisionId,
                                bool includeLiveTail) const;
     std::vector<json> filterEventsByProtectedWindow(const QuerySnapshot& snapshot,
+                                                    const QueryArtifacts& artifacts,
                                                     std::uint64_t windowId,
                                                     std::size_t limit,
                                                     std::uint64_t frozenRevisionId,
@@ -371,6 +395,7 @@ private:
     std::uint64_t nextFindingId_ = 1;
     std::uint64_t nextLogicalIncidentId_ = 1;
     std::uint64_t nextIncidentRevisionId_ = 1;
+    std::unique_ptr<AnalyzerRuntime> analyzerRuntime_;
 
     std::mutex ingestQueueMutex_;
     std::condition_variable ingestQueueCv_;

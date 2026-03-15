@@ -1156,6 +1156,10 @@ void testTapeEnginePhase3FindingsIncidentsAndProtectedWindows() {
     expect(std::find(windowReasons.begin(), windowReasons.end(), "order_intent") != windowReasons.end() ||
            std::find(windowReasons.begin(), windowReasons.end(), "incident_promotion") != windowReasons.end(),
            "phase 3 protected windows should include anchor or incident reasons");
+    expect(response.events.at(0).value("first_session_seq", 0ULL) > 0ULL,
+           "phase 3 protected windows should materialize a first session_seq bound");
+    expect(response.events.at(0).value("last_session_seq", 0ULL) >= response.events.at(0).value("first_session_seq", 0ULL),
+           "phase 3 protected windows should materialize a last session_seq bound");
 
     tape_engine::QueryRequest findingsRequest;
     findingsRequest.requestId = "findings-phase3";
@@ -1164,12 +1168,15 @@ void testTapeEnginePhase3FindingsIncidentsAndProtectedWindows() {
     expect(response.events.is_array() && !response.events.empty(), "phase 3 should emit at least one finding");
     bool sawSpreadFinding = false;
     bool sawOrderFlowFinding = false;
+    bool sawOrderFillContextFinding = false;
     for (const auto& item : response.events) {
         sawSpreadFinding = sawSpreadFinding || item.value("kind", std::string()) == "spread_widened";
         sawOrderFlowFinding = sawOrderFlowFinding || item.value("kind", std::string()) == "order_flow_timeline";
+        sawOrderFillContextFinding = sawOrderFillContextFinding || item.value("kind", std::string()) == "order_fill_context";
     }
     expect(sawSpreadFinding, "phase 3 should emit a spread_widened finding");
     expect(sawOrderFlowFinding, "phase 3 deferred lane should emit an order_flow_timeline finding");
+    expect(sawOrderFillContextFinding, "phase 3 deferred lane should emit an order_fill_context finding");
 
     tape_engine::QueryRequest incidentsRequest;
     incidentsRequest.requestId = "incidents-phase3";
@@ -1917,10 +1924,13 @@ void testTapeEnginePhase3BuildsTradePressureOrderCase() {
            "order-case case report should include timeline highlights");
 
     bool sawTradePressureRelatedFinding = false;
+    bool sawOrderFillContext = false;
     for (const auto& item : response.summary.value("related_findings", json::array())) {
         sawTradePressureRelatedFinding = sawTradePressureRelatedFinding || item.value("kind", std::string()) == "buy_trade_pressure";
+        sawOrderFillContext = sawOrderFillContext || item.value("kind", std::string()) == "order_fill_context";
     }
     expect(sawTradePressureRelatedFinding, "order-case related findings should include the trade-pressure signal");
+    expect(sawOrderFillContext, "order-case related findings should include the deferred order-fill context analysis");
 
     bool sawTradePressureIncident = false;
     for (const auto& item : response.summary.value("related_incidents", json::array())) {
