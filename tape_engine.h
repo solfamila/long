@@ -61,6 +61,19 @@ struct SegmentInfo {
     std::string manifestHash;
 };
 
+struct SessionReportRecord {
+    std::uint64_t reportId = 0;
+    std::uint64_t revisionId = 0;
+    std::uint64_t fromSessionSeq = 0;
+    std::uint64_t toSessionSeq = 0;
+    std::uint64_t createdTsEngineNs = 0;
+    std::size_t incidentCount = 0;
+    std::string instrumentId;
+    std::string headline;
+    std::string fileName;
+    std::string payloadSha256;
+};
+
 struct EngineSnapshot {
     std::uint64_t nextSessionSeq = 1;
     std::uint64_t nextSegmentId = 1;
@@ -70,6 +83,7 @@ struct EngineSnapshot {
     std::size_t writerBacklogSegments = 0;
     std::vector<EngineEvent> liveEvents;
     std::vector<SegmentInfo> segments;
+    std::vector<SessionReportRecord> sessionReports;
 };
 
 struct OrderAnchorRecord {
@@ -195,6 +209,7 @@ private:
         std::vector<ProtectedWindowRecord> protectedWindows;
         std::vector<FindingRecord> findings;
         std::vector<IncidentRecord> incidents;
+        std::vector<SessionReportRecord> sessionReports;
     };
 
     struct FrozenArtifacts {
@@ -424,6 +439,20 @@ private:
                              std::size_t depthLimit,
                              std::uint64_t frozenRevisionId,
                              bool includeLiveTail) const;
+    QueryResponse buildSessionOverviewResponse(const QueryRequest& request,
+                                               const QuerySnapshot& snapshot,
+                                               std::uint64_t frozenRevisionId) const;
+    std::optional<SessionReportRecord> findSessionReport(const QuerySnapshot& snapshot,
+                                                         std::uint64_t revisionId,
+                                                         std::uint64_t fromSessionSeq,
+                                                         std::uint64_t toSessionSeq) const;
+    QueryResponse loadSessionReportResponse(const QuerySnapshot& snapshot,
+                                            const SessionReportRecord& report) const;
+    SessionReportRecord persistSessionReport(const QuerySnapshot& snapshot,
+                                             std::uint64_t revisionId,
+                                             std::uint64_t fromSessionSeq,
+                                             std::uint64_t toSessionSeq,
+                                             const QueryResponse& response);
 
     EngineConfig config_;
     mutable std::mutex stateMutex_;
@@ -442,11 +471,13 @@ private:
     std::vector<ProtectedWindowRecord> protectedWindows_;
     std::vector<FindingRecord> findings_;
     std::vector<IncidentRecord> incidents_;
+    std::vector<SessionReportRecord> sessionReports_;
     std::uint64_t nextOrderAnchorId_ = 1;
     std::uint64_t nextProtectedWindowId_ = 1;
     std::uint64_t nextFindingId_ = 1;
     std::uint64_t nextLogicalIncidentId_ = 1;
     std::uint64_t nextIncidentRevisionId_ = 1;
+    std::uint64_t nextSessionReportId_ = 1;
     std::unique_ptr<AnalyzerRuntime> analyzerRuntime_;
 
     std::mutex ingestQueueMutex_;
@@ -460,6 +491,7 @@ private:
     mutable std::mutex writerMutex_;
     std::condition_variable writerCv_;
     std::deque<PendingSegment> writerQueue_;
+    mutable std::mutex reportPersistMutex_;
 
     std::mutex clientThreadsMutex_;
     std::vector<std::thread> clientThreads_;

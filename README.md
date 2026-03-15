@@ -52,6 +52,9 @@ Query the engine daemon:
 ./build/tape_engine_ctl read-range 1 50 --revision 1
 ./build/tape_engine_ctl replay-snapshot 50 --depth 5
 ./build/tape_engine_ctl replay-snapshot 50 --depth 5 --revision 1 --include-live-tail
+./build/tape_engine_ctl scan-session-report --revision 1
+./build/tape_engine_ctl list-session-reports --limit 20
+./build/tape_engine_ctl read-session-report 1
 ./build/tape_engine_ctl find-order --order-id 701 --revision 1
 ./build/tape_engine_ctl seek-order --order-id 701 --revision 1
 ./build/tape_engine_ctl read-order-case --order-id 701 --revision 1
@@ -112,6 +115,7 @@ Phase-1 bridge sender notes:
 - `read_order_case` now returns a report-style order/fill investigation summary with replay targets, protected-window context, related findings, and ranked incidents for the selected anchor.
 - `read_order_case` and `read_incident` now include merged investigation timelines and timeline highlights, so clients can render case/incident narratives instead of stitching raw events together themselves.
 - `read_session_overview` now returns a ranked session-level investigation summary with top incidents, top findings, protected-window coverage, timeline highlights, and data-quality scoring for any requested `session_seq` range.
+- `scan_session_report` now turns that same session-level investigation summary into a canonical durable report artifact pinned to a frozen revision and `session_seq` range, and `read_session_report` / `list_session_reports` let clients reopen those persisted summaries later.
 - `read_session_quality` now summarizes evidence trust for the whole frozen session or any requested `session_seq` range, and case/incident/protected-window reads now surface a `data_quality` block alongside their narrative output.
 - Frozen range/replay reads now snapshot engine state up front and use segment `session_seq` bounds to avoid holding the main engine lock across disk I/O and broad rescans.
 - Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.

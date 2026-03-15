@@ -912,6 +912,21 @@ json incidentToJson(const IncidentRecord& record) {
     };
 }
 
+json sessionReportToJson(const SessionReportRecord& record) {
+    return {
+        {"report_id", record.reportId},
+        {"revision_id", record.revisionId},
+        {"from_session_seq", record.fromSessionSeq},
+        {"to_session_seq", record.toSessionSeq},
+        {"created_ts_engine_ns", record.createdTsEngineNs},
+        {"incident_count", record.incidentCount},
+        {"instrument_id", record.instrumentId},
+        {"headline", record.headline},
+        {"file_name", record.fileName},
+        {"payload_sha256", record.payloadSha256}
+    };
+}
+
 OrderAnchorRecord orderAnchorFromJson(const json& payload) {
     OrderAnchorRecord record;
     record.anchorId = payload.value("anchor_id", 0ULL);
@@ -981,6 +996,21 @@ IncidentRecord incidentFromJson(const json& payload) {
     record.summary = payload.value("summary", std::string());
     record.overlapsOrder = payload.value("overlaps_order", false);
     record.overlappingAnchor = anchorFromJson(payload.value("overlapping_anchor", json::object()));
+    return record;
+}
+
+SessionReportRecord sessionReportFromJson(const json& payload) {
+    SessionReportRecord record;
+    record.reportId = payload.value("report_id", 0ULL);
+    record.revisionId = payload.value("revision_id", 0ULL);
+    record.fromSessionSeq = payload.value("from_session_seq", 0ULL);
+    record.toSessionSeq = payload.value("to_session_seq", 0ULL);
+    record.createdTsEngineNs = payload.value("created_ts_engine_ns", 0ULL);
+    record.incidentCount = payload.value("incident_count", static_cast<std::size_t>(0));
+    record.instrumentId = payload.value("instrument_id", std::string());
+    record.headline = payload.value("headline", std::string());
+    record.fileName = payload.value("file_name", std::string());
+    record.payloadSha256 = payload.value("payload_sha256", std::string());
     return record;
 }
 
@@ -1089,6 +1119,7 @@ bool Server::restoreFrozenState(std::string* error) {
     protectedWindows_.clear();
     findings_.clear();
     incidents_.clear();
+    sessionReports_.clear();
     writerFailure_.clear();
     lastManifestHash_.clear();
     analyzerBookState_ = {};
@@ -1102,6 +1133,7 @@ bool Server::restoreFrozenState(std::string* error) {
     nextFindingId_ = 1;
     nextLogicalIncidentId_ = 1;
     nextIncidentRevisionId_ = 1;
+    nextSessionReportId_ = 1;
 
     const std::filesystem::path manifestPath = config_.dataDir / "manifest.jsonl";
     if (!std::filesystem::exists(manifestPath)) {
@@ -1191,6 +1223,37 @@ bool Server::restoreFrozenState(std::string* error) {
         }
     }
 
+    const std::filesystem::path reportsManifestPath = config_.dataDir / "session-reports.jsonl";
+    if (!std::filesystem::exists(reportsManifestPath)) {
+        return true;
+    }
+
+    std::ifstream reportsIn(reportsManifestPath);
+    if (!reportsIn.is_open()) {
+        if (error != nullptr) {
+            *error = "failed to open tape-engine session reports manifest for restore";
+        }
+        return false;
+    }
+
+    while (std::getline(reportsIn, line)) {
+        if (line.empty()) {
+            continue;
+        }
+
+        const json entry = json::parse(line, nullptr, false);
+        if (entry.is_discarded()) {
+            if (error != nullptr) {
+                *error = "failed to parse tape-engine session reports manifest during restore";
+            }
+            return false;
+        }
+
+        SessionReportRecord record = sessionReportFromJson(entry);
+        sessionReports_.push_back(record);
+        nextSessionReportId_ = std::max(nextSessionReportId_, record.reportId + 1);
+    }
+
     return true;
 }
 
@@ -1204,6 +1267,13 @@ bool Server::start(std::string* error) {
     if (ec) {
         if (error != nullptr) {
             *error = "failed to create tape-engine data dir: " + ec.message();
+        }
+        return false;
+    }
+    std::filesystem::create_directories(config_.dataDir / "reports", ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "failed to create tape-engine reports dir: " + ec.message();
         }
         return false;
     }
@@ -1318,6 +1388,7 @@ EngineSnapshot Server::snapshot() const {
     snapshot.writerBacklogSegments = writerBacklog;
     snapshot.liveEvents.assign(liveRing_.begin(), liveRing_.end());
     snapshot.segments = segments_;
+    snapshot.sessionReports = sessionReports_;
     return snapshot;
 }
 
@@ -2797,6 +2868,7 @@ Server::QuerySnapshot Server::captureQuerySnapshot() const {
     snapshot.latestFrozenRevisionId = latestFrozenRevisionId_;
     snapshot.latestFrozenSessionSeq = latestFrozenSessionSeq_;
     snapshot.segments = segments_;
+    snapshot.sessionReports = sessionReports_;
     snapshot.liveEvents.assign(liveRing_.begin(), liveRing_.end());
     snapshot.orderAnchors = orderAnchors_;
     snapshot.protectedWindows = protectedWindows_;
@@ -2943,6 +3015,243 @@ Server::QueryArtifacts Server::buildQueryArtifacts(const QuerySnapshot& snapshot
     }
 
     return artifacts;
+}
+
+QueryResponse Server::buildSessionOverviewResponse(const QueryRequest& request,
+                                                   const QuerySnapshot& snapshot,
+                                                   std::uint64_t frozenRevisionId) const {
+    QueryResponse response;
+    response.requestId = request.requestId;
+    response.operation = request.operation;
+
+    const std::uint64_t from = request.fromSessionSeq;
+    const std::uint64_t to = request.toSessionSeq == 0
+        ? (snapshot.nextSessionSeq == 0 ? 0 : snapshot.nextSessionSeq - 1)
+        : request.toSessionSeq;
+    const std::size_t limit = request.limit == 0 ? 5 : request.limit;
+    const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
+    const std::vector<json> allEvents = mergedEvents(snapshot,
+                                                     frozenRevisionId,
+                                                     request.includeLiveTail,
+                                                     from,
+                                                     to);
+    const std::vector<json> timelineEvents = filterEventsByRange(snapshot,
+                                                                 from == 0 ? 1 : from,
+                                                                 to,
+                                                                 std::min<std::size_t>(32, std::max<std::size_t>(12, limit * 4)),
+                                                                 frozenRevisionId,
+                                                                 request.includeLiveTail);
+
+    std::vector<IncidentRecord> topIncidents;
+    for (const auto& incident : collapseAdjustedIncidents(snapshot,
+                                                          artifacts,
+                                                          artifacts.incidents,
+                                                          frozenRevisionId,
+                                                          request.includeLiveTail)) {
+        if (rangeOverlaps(incident.firstSessionSeq, incident.lastSessionSeq, from, to)) {
+            topIncidents.push_back(incident);
+        }
+    }
+
+    std::vector<FindingRecord> topFindings;
+    for (const auto& finding : artifacts.findings) {
+        if (rangeOverlaps(finding.firstSessionSeq, finding.lastSessionSeq, from, to)) {
+            topFindings.push_back(finding);
+        }
+    }
+    std::sort(topFindings.begin(), topFindings.end(), [](const FindingRecord& left,
+                                                         const FindingRecord& right) {
+        if (left.lastSessionSeq != right.lastSessionSeq) {
+            return left.lastSessionSeq > right.lastSessionSeq;
+        }
+        return left.findingId > right.findingId;
+    });
+
+    std::vector<ProtectedWindowRecord> protectedWindows;
+    for (const auto& window : collapseLatestProtectedWindowRevisions(artifacts.protectedWindows)) {
+        if (rangeOverlaps(window.firstSessionSeq, window.lastSessionSeq, from, to)) {
+            protectedWindows.push_back(window);
+        }
+    }
+
+    std::vector<OrderAnchorRecord> orderAnchors;
+    for (const auto& anchor : artifacts.orderAnchors) {
+        if (rangeOverlaps(anchor.sessionSeq, anchor.sessionSeq, from, to)) {
+            orderAnchors.push_back(anchor);
+        }
+    }
+    std::sort(orderAnchors.begin(), orderAnchors.end(), [](const OrderAnchorRecord& left,
+                                                           const OrderAnchorRecord& right) {
+        if (left.sessionSeq != right.sessionSeq) {
+            return left.sessionSeq > right.sessionSeq;
+        }
+        return left.anchorId > right.anchorId;
+    });
+
+    json timeline = json::array();
+    for (const auto& event : timelineEvents) {
+        timeline.push_back(timelineEntryFromEvent(event));
+    }
+    for (std::size_t i = 0; i < topFindings.size() && i < limit; ++i) {
+        timeline.push_back(timelineEntryFromFinding(topFindings[i]));
+    }
+    for (std::size_t i = 0; i < topIncidents.size() && i < limit; ++i) {
+        timeline.push_back(timelineEntryFromIncident(topIncidents[i]));
+    }
+    timeline = sortAndTrimTimeline(std::move(timeline), 24);
+    const json timelineSummary = buildTimelineSummary(timeline);
+
+    response.events = json::array();
+    for (std::size_t i = 0; i < topIncidents.size() && i < limit; ++i) {
+        response.events.push_back(incidentToJson(topIncidents[i]));
+    }
+
+    json topFindingsJson = json::array();
+    for (std::size_t i = 0; i < topFindings.size() && i < limit; ++i) {
+        topFindingsJson.push_back(findingToJson(topFindings[i]));
+    }
+
+    json topWindowsJson = json::array();
+    for (std::size_t i = 0; i < protectedWindows.size() && i < limit; ++i) {
+        topWindowsJson.push_back(protectedWindowToJson(protectedWindows[i]));
+    }
+
+    json topAnchorsJson = json::array();
+    for (std::size_t i = 0; i < orderAnchors.size() && i < limit; ++i) {
+        topAnchorsJson.push_back(orderAnchorToJson(orderAnchors[i]));
+    }
+
+    json reportSummary{
+        {"headline", "Session overview"},
+        {"summary", "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range."},
+        {"timeline_highlights", buildTimelineHighlights(timeline, 5)},
+        {"top_incident_kind", topIncidents.empty() ? std::string() : topIncidents.front().kind},
+        {"top_incident_title", topIncidents.empty() ? std::string() : topIncidents.front().title},
+        {"top_incident_why_it_matters", topIncidents.empty() ? std::string() : incidentWhyItMatters(topIncidents.front())}
+    };
+
+    response.summary = {
+        {"from_session_seq", from},
+        {"to_session_seq", to},
+        {"served_revision_id", frozenRevisionId},
+        {"includes_mutable_tail", request.includeLiveTail},
+        {"returned_events", response.events.size()},
+        {"incident_count", topIncidents.size()},
+        {"finding_count", topFindings.size()},
+        {"protected_window_count", protectedWindows.size()},
+        {"order_anchor_count", orderAnchors.size()},
+        {"incident_kind_counts", buildCountSummary(topIncidents, [](const IncidentRecord& record) { return record.kind; })},
+        {"finding_kind_counts", buildCountSummary(topFindings, [](const FindingRecord& record) { return record.kind; })},
+        {"protected_window_reason_counts", buildCountSummary(protectedWindows, [](const ProtectedWindowRecord& record) { return record.reason; })},
+        {"top_findings", topFindingsJson},
+        {"top_protected_windows", topWindowsJson},
+        {"top_order_anchors", topAnchorsJson},
+        {"timeline", timeline},
+        {"timeline_summary", timelineSummary},
+        {"report_summary", reportSummary},
+        {"data_quality", buildDataQualitySummary(allEvents, request.includeLiveTail, snapshot.instrumentId)}
+    };
+    return response;
+}
+
+std::optional<SessionReportRecord> Server::findSessionReport(const QuerySnapshot& snapshot,
+                                                             std::uint64_t revisionId,
+                                                             std::uint64_t fromSessionSeq,
+                                                             std::uint64_t toSessionSeq) const {
+    for (auto it = snapshot.sessionReports.rbegin(); it != snapshot.sessionReports.rend(); ++it) {
+        if (it->revisionId == revisionId &&
+            it->fromSessionSeq == fromSessionSeq &&
+            it->toSessionSeq == toSessionSeq) {
+            return *it;
+        }
+    }
+    return std::nullopt;
+}
+
+QueryResponse Server::loadSessionReportResponse(const QuerySnapshot& snapshot,
+                                                const SessionReportRecord& report) const {
+    const std::filesystem::path reportPath = snapshot.dataDir / "reports" / report.fileName;
+    std::ifstream in(reportPath, std::ios::binary);
+    if (!in.is_open()) {
+        throw std::runtime_error("failed to open session report artifact");
+    }
+
+    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                          std::istreambuf_iterator<char>());
+    if (bytes.empty()) {
+        throw std::runtime_error("session report artifact is empty");
+    }
+
+    QueryResponse response = queryResponseFromJson(json::from_msgpack(bytes, true, false));
+    response.summary["session_report"] = sessionReportToJson(report);
+    response.summary["is_durable_report"] = true;
+    return response;
+}
+
+SessionReportRecord Server::persistSessionReport(const QuerySnapshot& snapshot,
+                                                 std::uint64_t revisionId,
+                                                 std::uint64_t fromSessionSeq,
+                                                 std::uint64_t toSessionSeq,
+                                                 const QueryResponse& response) {
+    std::lock_guard<std::mutex> persistLock(reportPersistMutex_);
+
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        for (auto it = sessionReports_.rbegin(); it != sessionReports_.rend(); ++it) {
+            if (it->revisionId == revisionId &&
+                it->fromSessionSeq == fromSessionSeq &&
+                it->toSessionSeq == toSessionSeq) {
+                return *it;
+            }
+        }
+    }
+
+    SessionReportRecord record;
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        record.reportId = nextSessionReportId_++;
+    }
+    record.revisionId = revisionId;
+    record.fromSessionSeq = fromSessionSeq;
+    record.toSessionSeq = toSessionSeq;
+    record.createdTsEngineNs = nowEngineNs();
+    record.incidentCount = response.summary.value("incident_count", static_cast<std::size_t>(0));
+    record.instrumentId = snapshot.instrumentId;
+    record.headline = response.summary.value("report_summary", json::object()).value("headline", std::string("Session report"));
+
+    std::ostringstream fileName;
+    fileName << "session-report-" << std::setw(6) << std::setfill('0') << record.reportId << ".msgpack";
+    record.fileName = fileName.str();
+
+    QueryResponse payloadResponse = response;
+    payloadResponse.summary["session_report"] = sessionReportToJson(record);
+    payloadResponse.summary["is_durable_report"] = true;
+    const std::vector<std::uint8_t> payload = json::to_msgpack(queryResponseToJson(payloadResponse));
+    record.payloadSha256 = sha256Hex(payload);
+
+    const std::filesystem::path reportPath = snapshot.dataDir / "reports" / record.fileName;
+    {
+        std::ofstream out(reportPath, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("failed to open session report artifact for write");
+        }
+        out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+    }
+
+    const std::filesystem::path manifestPath = snapshot.dataDir / "session-reports.jsonl";
+    {
+        std::ofstream manifestOut(manifestPath, std::ios::app);
+        if (!manifestOut.is_open()) {
+            throw std::runtime_error("failed to open tape-engine session report manifest for append");
+        }
+        manifestOut << sessionReportToJson(record).dump() << '\n';
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        sessionReports_.push_back(record);
+    }
+    return record;
 }
 
 std::vector<json> Server::loadEvents(const QuerySnapshot& snapshot,
@@ -3615,8 +3924,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"latest_session_seq", snapshot.nextSessionSeq > 0 ? snapshot.nextSessionSeq - 1 : 0},
             {"live_event_count", snapshot.liveEvents.size()},
             {"next_revision_id", snapshot.nextRevisionId},
+            {"next_session_report_id", snapshot.sessionReports.empty() ? 1ULL : snapshot.sessionReports.back().reportId + 1},
             {"next_segment_id", snapshot.nextSegmentId},
             {"next_session_seq", snapshot.nextSessionSeq},
+            {"session_report_count", snapshot.sessionReports.size()},
             {"segment_count", snapshot.segments.size()},
             {"socket_path", snapshot.socketPath},
             {"writer_backlog_segments", writerBacklog}
@@ -3674,133 +3985,81 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         } catch (const std::exception& error) {
             return rejectResponse(request, error.what());
         }
+        return buildSessionOverviewResponse(request, snapshot, frozenRevisionId);
+    }
 
-        const std::uint64_t from = request.fromSessionSeq;
-        const std::uint64_t to = request.toSessionSeq == 0
-            ? (snapshot.nextSessionSeq == 0 ? 0 : snapshot.nextSessionSeq - 1)
-            : request.toSessionSeq;
-        const std::size_t limit = request.limit == 0 ? 5 : request.limit;
-        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
-        const std::vector<json> allEvents = mergedEvents(snapshot,
-                                                         frozenRevisionId,
-                                                         request.includeLiveTail,
-                                                         from,
-                                                         to);
-        const std::vector<json> timelineEvents = filterEventsByRange(snapshot,
-                                                                     from == 0 ? 1 : from,
-                                                                     to,
-                                                                     std::min<std::size_t>(32, std::max<std::size_t>(12, limit * 4)),
-                                                                     frozenRevisionId,
-                                                                     request.includeLiveTail);
+    if (request.operation == "scan_session_report") {
+        if (request.includeLiveTail) {
+            return rejectResponse(request, "scan_session_report only supports frozen revision evidence");
+        }
 
-        std::vector<IncidentRecord> topIncidents;
-        for (const auto& incident : collapseAdjustedIncidents(snapshot,
-                                                              artifacts,
-                                                              artifacts.incidents,
-                                                              frozenRevisionId,
-                                                              request.includeLiveTail)) {
-            if (rangeOverlaps(incident.firstSessionSeq, incident.lastSessionSeq, from, to)) {
-                topIncidents.push_back(incident);
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        QueryRequest overviewRequest = request;
+        overviewRequest.operation = "scan_session_report";
+        QueryResponse reportResponse = buildSessionOverviewResponse(overviewRequest, snapshot, frozenRevisionId);
+        const std::uint64_t from = reportResponse.summary.value("from_session_seq", 0ULL);
+        const std::uint64_t to = reportResponse.summary.value("to_session_seq", 0ULL);
+        const SessionReportRecord report = persistSessionReport(snapshot, frozenRevisionId, from, to, reportResponse);
+        reportResponse.summary["session_report"] = sessionReportToJson(report);
+        reportResponse.summary["is_durable_report"] = true;
+        reportResponse.summary["scan_status"] = "persisted";
+        return reportResponse;
+    }
+
+    if (request.operation == "read_session_report") {
+        std::optional<SessionReportRecord> report;
+        if (request.reportId > 0) {
+            for (const auto& item : snapshot.sessionReports) {
+                if (item.reportId == request.reportId) {
+                    report = item;
+                }
             }
-        }
-
-        std::vector<FindingRecord> topFindings;
-        for (const auto& finding : artifacts.findings) {
-            if (rangeOverlaps(finding.firstSessionSeq, finding.lastSessionSeq, from, to)) {
-                topFindings.push_back(finding);
+        } else {
+            std::uint64_t frozenRevisionId = 0;
+            try {
+                frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+            } catch (const std::exception& error) {
+                return rejectResponse(request, error.what());
             }
+            const std::uint64_t from = request.fromSessionSeq;
+            const std::uint64_t to = request.toSessionSeq == 0
+                ? (snapshot.latestFrozenSessionSeq == 0 ? 0 : snapshot.latestFrozenSessionSeq)
+                : request.toSessionSeq;
+            report = findSessionReport(snapshot, frozenRevisionId, from, to);
         }
-        std::sort(topFindings.begin(), topFindings.end(), [](const FindingRecord& left,
-                                                             const FindingRecord& right) {
-            if (left.lastSessionSeq != right.lastSessionSeq) {
-                return left.lastSessionSeq > right.lastSessionSeq;
-            }
-            return left.findingId > right.findingId;
-        });
+        if (!report.has_value()) {
+            return rejectResponse(request, "session report not found");
+        }
+        try {
+            QueryResponse stored = loadSessionReportResponse(snapshot, *report);
+            stored.requestId = request.requestId;
+            stored.operation = request.operation;
+            return stored;
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+    }
 
-        std::vector<ProtectedWindowRecord> protectedWindows;
-        for (const auto& window : collapseLatestProtectedWindowRevisions(artifacts.protectedWindows)) {
-            if (rangeOverlaps(window.firstSessionSeq, window.lastSessionSeq, from, to)) {
-                protectedWindows.push_back(window);
-            }
-        }
-
-        std::vector<OrderAnchorRecord> orderAnchors;
-        for (const auto& anchor : artifacts.orderAnchors) {
-            if (rangeOverlaps(anchor.sessionSeq, anchor.sessionSeq, from, to)) {
-                orderAnchors.push_back(anchor);
-            }
-        }
-        std::sort(orderAnchors.begin(), orderAnchors.end(), [](const OrderAnchorRecord& left,
-                                                               const OrderAnchorRecord& right) {
-            if (left.sessionSeq != right.sessionSeq) {
-                return left.sessionSeq > right.sessionSeq;
-            }
-            return left.anchorId > right.anchorId;
-        });
-
-        json timeline = json::array();
-        for (const auto& event : timelineEvents) {
-            timeline.push_back(timelineEntryFromEvent(event));
-        }
-        for (std::size_t i = 0; i < topFindings.size() && i < limit; ++i) {
-            timeline.push_back(timelineEntryFromFinding(topFindings[i]));
-        }
-        for (std::size_t i = 0; i < topIncidents.size() && i < limit; ++i) {
-            timeline.push_back(timelineEntryFromIncident(topIncidents[i]));
-        }
-        timeline = sortAndTrimTimeline(std::move(timeline), 24);
-        const json timelineSummary = buildTimelineSummary(timeline);
-
+    if (request.operation == "list_session_reports") {
         response.events = json::array();
-        for (std::size_t i = 0; i < topIncidents.size() && i < limit; ++i) {
-            response.events.push_back(incidentToJson(topIncidents[i]));
+        const std::size_t limit = request.limit == 0 ? 20 : request.limit;
+        for (auto it = snapshot.sessionReports.rbegin();
+             it != snapshot.sessionReports.rend() && response.events.size() < limit;
+             ++it) {
+            if (request.revisionId > 0 && it->revisionId != request.revisionId) {
+                continue;
+            }
+            response.events.push_back(sessionReportToJson(*it));
         }
-
-        json topFindingsJson = json::array();
-        for (std::size_t i = 0; i < topFindings.size() && i < limit; ++i) {
-            topFindingsJson.push_back(findingToJson(topFindings[i]));
-        }
-
-        json topWindowsJson = json::array();
-        for (std::size_t i = 0; i < protectedWindows.size() && i < limit; ++i) {
-            topWindowsJson.push_back(protectedWindowToJson(protectedWindows[i]));
-        }
-
-        json topAnchorsJson = json::array();
-        for (std::size_t i = 0; i < orderAnchors.size() && i < limit; ++i) {
-            topAnchorsJson.push_back(orderAnchorToJson(orderAnchors[i]));
-        }
-
-        json reportSummary{
-            {"headline", "Session overview"},
-            {"summary", "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range."},
-            {"timeline_highlights", buildTimelineHighlights(timeline, 5)},
-            {"top_incident_kind", topIncidents.empty() ? std::string() : topIncidents.front().kind},
-            {"top_incident_title", topIncidents.empty() ? std::string() : topIncidents.front().title},
-            {"top_incident_why_it_matters", topIncidents.empty() ? std::string() : incidentWhyItMatters(topIncidents.front())}
-        };
-
         response.summary = {
-            {"from_session_seq", from},
-            {"to_session_seq", to},
-            {"served_revision_id", frozenRevisionId},
-            {"includes_mutable_tail", request.includeLiveTail},
             {"returned_events", response.events.size()},
-            {"incident_count", topIncidents.size()},
-            {"finding_count", topFindings.size()},
-            {"protected_window_count", protectedWindows.size()},
-            {"order_anchor_count", orderAnchors.size()},
-            {"incident_kind_counts", buildCountSummary(topIncidents, [](const IncidentRecord& record) { return record.kind; })},
-            {"finding_kind_counts", buildCountSummary(topFindings, [](const FindingRecord& record) { return record.kind; })},
-            {"protected_window_reason_counts", buildCountSummary(protectedWindows, [](const ProtectedWindowRecord& record) { return record.reason; })},
-            {"top_findings", topFindingsJson},
-            {"top_protected_windows", topWindowsJson},
-            {"top_order_anchors", topAnchorsJson},
-            {"timeline", timeline},
-            {"timeline_summary", timelineSummary},
-            {"report_summary", reportSummary},
-            {"data_quality", buildDataQualitySummary(allEvents, request.includeLiveTail, snapshot.instrumentId)}
+            {"session_report_count", snapshot.sessionReports.size()}
         };
         return response;
     }

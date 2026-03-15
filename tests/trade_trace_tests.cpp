@@ -1407,6 +1407,141 @@ void testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow() {
     }
 }
 
+void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-session-report";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-session-report.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    std::uint64_t reportId = 0;
+    std::uint64_t servedRevisionId = 0;
+
+    {
+        tape_engine::Server server(config);
+        std::string startError;
+        expect(server.start(&startError), "tape-engine should start for session-report scan test: " + startError);
+
+        bridge_batch::BuildOptions options;
+        options.appSessionId = "app-engine-phase3-session-report";
+        options.runtimeSessionId = "runtime-engine-phase3-session-report";
+        options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+        bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+        std::string error;
+
+        BridgeOutboxRecord orderIntent = makeBridgeRecord(8201, "order_intent", "WebSocket", "INTC", "BUY",
+                                                          411, 2201, 0, "", "session report anchor", "2026-03-14T09:41:30.100");
+        orderIntent.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+        options.batchSeq = 201;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+               "tape-engine should accept the session-report anchor batch: " + error);
+
+        BridgeOutboxRecord bidTick = makeBridgeRecord(8202, "market_tick", "BrokerMarketData", "INTC", "BID",
+                                                      0, 0, 0, "", "session report bid", "2026-03-14T09:41:30.120");
+        bidTick.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+        bidTick.marketField = 1;
+        bidTick.price = 45.20;
+
+        BridgeOutboxRecord askTick = makeBridgeRecord(8203, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                      0, 0, 0, "", "session report ask", "2026-03-14T09:41:30.130");
+        askTick.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+        askTick.marketField = 2;
+        askTick.price = 45.21;
+
+        options.batchSeq = 202;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({bidTick, askTick}, options)), &error),
+               "tape-engine should accept the session-report seed batch: " + error);
+
+        BridgeOutboxRecord widenedAsk = makeBridgeRecord(8204, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                         0, 0, 0, "", "session report widened ask", "2026-03-14T09:41:30.150");
+        widenedAsk.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+        widenedAsk.marketField = 2;
+        widenedAsk.price = 45.24;
+
+        options.batchSeq = 203;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAsk}, options)), &error),
+               "tape-engine should accept the session-report widening batch: " + error);
+
+        waitUntil([&]() {
+            const auto snapshot = server.snapshot();
+            return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+        }, "tape-engine should freeze session-report batches");
+
+        tape_engine::Client client(socketPath.string());
+        tape_engine::QueryResponse response;
+
+        tape_engine::QueryRequest scanRequest;
+        scanRequest.requestId = "scan-phase3-session-report";
+        scanRequest.operation = "scan_session_report";
+        expect(client.query(scanRequest, &response, &error), "phase 3 session report scan should succeed: " + error);
+        expect(response.summary.value("is_durable_report", false),
+               "session report scan should mark the result as a durable report");
+        expect(response.summary.contains("session_report"),
+               "session report scan should return persisted artifact metadata");
+        reportId = response.summary.value("session_report", json::object()).value("report_id", 0ULL);
+        servedRevisionId = response.summary.value("served_revision_id", 0ULL);
+        expect(reportId > 0, "session report scan should assign a durable report id");
+        expect(servedRevisionId > 0, "session report scan should pin the report to a frozen revision");
+        expect(response.summary.value("incident_count", 0ULL) >= 1ULL,
+               "session report scan should summarize at least one major incident");
+        expect(response.summary.value("report_summary", json::object()).contains("top_incident_why_it_matters"),
+               "session report scan should include top-incident explanations");
+
+        tape_engine::QueryRequest rescanRequest = scanRequest;
+        rescanRequest.requestId = "scan-phase3-session-report-again";
+        expect(client.query(rescanRequest, &response, &error), "phase 3 repeated session report scan should succeed: " + error);
+        expect(response.summary.value("session_report", json::object()).value("report_id", 0ULL) == reportId,
+               "repeated session scans over the same frozen range should reuse the canonical report artifact");
+
+        tape_engine::QueryRequest listReportsRequest;
+        listReportsRequest.requestId = "list-phase3-session-reports";
+        listReportsRequest.operation = "list_session_reports";
+        expect(client.query(listReportsRequest, &response, &error), "phase 3 session report listing should succeed: " + error);
+        expect(response.events.is_array() && !response.events.empty(), "session report listing should return the durable artifact");
+        expect(response.events.at(0).value("report_id", 0ULL) == reportId,
+               "session report listing should include the newly scanned report");
+
+        expect(fs::exists(rootDir / "session-reports.jsonl"), "session report scanning should persist a report manifest");
+
+        server.stop();
+    }
+
+    {
+        tape_engine::Server restarted(config);
+        std::string startError;
+        expect(restarted.start(&startError), "tape-engine should restart and restore session report artifacts: " + startError);
+
+        tape_engine::Client client(socketPath.string());
+        tape_engine::QueryResponse response;
+        std::string error;
+
+        tape_engine::QueryRequest readReportRequest;
+        readReportRequest.requestId = "read-phase3-session-report";
+        readReportRequest.operation = "read_session_report";
+        readReportRequest.reportId = reportId;
+        expect(client.query(readReportRequest, &response, &error), "restored session report read should succeed: " + error);
+        expect(response.summary.value("session_report", json::object()).value("report_id", 0ULL) == reportId,
+               "restored session report should return the requested durable report id");
+        expect(response.summary.value("session_report", json::object()).value("revision_id", 0ULL) == servedRevisionId,
+               "restored session report should stay pinned to its frozen revision");
+        expect(response.summary.value("is_durable_report", false),
+               "restored session report should still be marked durable");
+        expect(response.summary.contains("timeline"), "restored session report should keep the investigation timeline");
+        expect(response.summary.contains("data_quality"), "restored session report should keep the data-quality block");
+        expect(response.events.is_array() && !response.events.empty(),
+               "restored session report should retain ranked incident rows");
+
+        restarted.stop();
+    }
+}
+
 void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
     const fs::path rootDir = testDataDir() / "tape-engine-phase3-incidents";
     const fs::path socketPath = testDataDir() / "tape-engine-phase3-incidents.sock";
@@ -3390,6 +3525,7 @@ int main() {
         testTapeEngineRevisionPinnedReadsCanOverlayMutableTail();
         testTapeEnginePhase3FindingsIncidentsAndProtectedWindows();
         testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();
+        testTapeEnginePhase3ScansSessionIntoDurableReportArtifact();
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
         testTapeEnginePhase3DetectsInsideLiquiditySignals();
         testTapeEnginePhase3DetectsDisplayInstabilitySignals();
