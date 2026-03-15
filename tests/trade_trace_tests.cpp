@@ -21,6 +21,7 @@
 #include <iterator>
 #include <mutex>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <thread>
 #include <sys/socket.h>
@@ -1445,9 +1446,19 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
     expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAskTwo}, options)), &error),
            "tape-engine should accept the second widening batch: " + error);
 
+    BridgeOutboxRecord widenedAskThree = makeBridgeRecord(8206, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                          0, 0, 0, "", "collapse widened ask three", "2026-03-14T09:42:06.250");
+    widenedAskThree.instrumentId = "ib:conid:9201:STK:SMART:USD:INTC";
+    widenedAskThree.marketField = 2;
+    widenedAskThree.price = 45.37;
+
+    options.batchSeq = 115;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAskThree}, options)), &error),
+           "tape-engine should accept the third widening batch after the merge window: " + error);
+
     waitUntil([&]() {
         const auto snapshot = server.snapshot();
-        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+        return snapshot.latestFrozenRevisionId >= 5 && snapshot.segments.size() >= 5;
     }, "tape-engine should freeze repeated spread widening batches");
 
     tape_engine::Client client(socketPath.string());
@@ -1457,7 +1468,7 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
     findingsRequest.requestId = "findings-phase3-collapse";
     findingsRequest.operation = "list_findings";
     expect(client.query(findingsRequest, &response, &error), "phase 3 collapse findings query should succeed: " + error);
-    expect(response.events.is_array() && response.events.size() >= 2, "phase 3 collapse should retain multiple spread findings");
+    expect(response.events.is_array() && response.events.size() >= 3, "phase 3 collapse should retain multiple spread findings");
     expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "latest collapse finding should be spread_widened");
     expect(response.events.at(1).value("kind", std::string()) == "spread_widened", "second latest collapse finding should also be spread_widened");
 
@@ -1475,8 +1486,8 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
         }
     }
     expect(!collapsedSpreadIncident.is_null() && !collapsedSpreadIncident.empty(), "phase 3 collapse should preserve a spread_widened logical incident");
-    expect(collapsedSpreadIncident.value("finding_count", 0ULL) == 2ULL, "collapsed spread incident should count both findings");
-    expect(collapsedSpreadIncident.value("score", 0.0) > 2.0, "collapsed spread incident should accumulate a higher incident score");
+    expect(collapsedSpreadIncident.value("finding_count", 0ULL) == 3ULL, "collapsed spread incident should count all repeated findings");
+    expect(collapsedSpreadIncident.value("score", 0.0) > 3.0, "collapsed spread incident should accumulate a higher incident score");
     expect(collapsedSpreadIncident.value("overlaps_order", false), "collapsed spread incident should preserve order overlap");
 
     const std::uint64_t logicalIncidentId = collapsedSpreadIncident.value("logical_incident_id", 0ULL);
@@ -1488,8 +1499,8 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
     readIncidentRequest.logicalIncidentId = logicalIncidentId;
     expect(client.query(readIncidentRequest, &response, &error), "phase 3 collapse incident read should succeed: " + error);
     expect(response.summary.value("logical_incident_id", 0ULL) == logicalIncidentId, "incident drilldown should preserve the requested logical incident id");
-    expect(response.summary.value("incident_revision_count", 0ULL) == 2ULL, "incident drilldown should report both incident revisions");
-    expect(response.summary.value("related_finding_count", 0ULL) == 2ULL, "incident drilldown should report both related findings");
+    expect(response.summary.value("incident_revision_count", 0ULL) == 3ULL, "incident drilldown should report all incident revisions");
+    expect(response.summary.value("related_finding_count", 0ULL) == 3ULL, "incident drilldown should report all related findings");
     expect(response.summary.contains("score_breakdown"), "incident drilldown should include a score breakdown");
     expect(response.summary.contains("why_it_matters"), "incident drilldown should include a why-it-matters summary");
     expect(response.summary.contains("protected_window"), "incident drilldown should include the incident protected window");
@@ -1500,8 +1511,30 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
            "incident drilldown timeline summary should include at least the incident entry");
     expect(response.summary.value("report_summary", json::object()).contains("timeline_highlights"),
            "incident drilldown report summary should include timeline highlights");
-    expect(response.events.is_array() && response.events.size() == 2, "incident drilldown should return the related findings as evidence");
+    expect(response.events.is_array() && response.events.size() == 3, "incident drilldown should return the related findings as evidence");
     expect(response.events.at(0).value("logical_incident_id", 0ULL) == logicalIncidentId, "incident drilldown findings should be linked to the logical incident");
+    const json incidentWindow = response.summary.value("protected_window", json::object());
+    expect(incidentWindow.value("first_session_seq", 0ULL) < incidentWindow.value("last_session_seq", 0ULL),
+           "incident protected window should widen its session-seq bounds across repeated promotions");
+
+    tape_engine::QueryRequest windowsRequest;
+    windowsRequest.requestId = "windows-phase3-collapse";
+    windowsRequest.operation = "list_protected_windows";
+    expect(client.query(windowsRequest, &response, &error), "phase 3 collapse windows query should succeed: " + error);
+    std::set<std::uint64_t> incidentWindowIds;
+    std::size_t incidentWindowRevisionCount = 0;
+    for (const auto& item : response.events) {
+        if (item.value("reason", std::string()) != "incident_promotion") {
+            continue;
+        }
+        if (item.value("logical_incident_id", 0ULL) != logicalIncidentId) {
+            continue;
+        }
+        incidentWindowIds.insert(item.value("window_id", 0ULL));
+        ++incidentWindowRevisionCount;
+    }
+    expect(incidentWindowIds.size() == 1, "repeated promotions should keep one stable incident protected-window identity");
+    expect(incidentWindowRevisionCount >= 2, "stable incident protected window should accumulate revisions as evidence widens");
 
     server.stop();
 }

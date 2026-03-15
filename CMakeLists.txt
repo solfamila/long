@@ -117,6 +117,7 @@ set(TAPE_ENGINE_SOURCES
     tape_engine.cpp
     tape_engine_client.cpp
     tape_engine_protocol.cpp
+    phase3_analyzers.cpp
     bridge_batch_codec.cpp
     runtime_qos.cpp
 )
@@ -416,6 +417,7 @@ if(BUILD_TESTING)
         app_shared.cpp
         bridge_batch_codec.cpp
         bridge_batch_transport.cpp
+        phase3_analyzers.cpp
         runtime_qos.cpp
         tape_engine.cpp
         tape_engine_client.cpp

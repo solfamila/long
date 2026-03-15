@@ -21,6 +21,8 @@
 
 namespace tape_engine {
 
+class AnalyzerRuntime;
+
 struct EngineConfig {
     std::string socketPath = "/tmp/tape-engine.sock";
     std::filesystem::path dataDir = std::filesystem::temp_directory_path() / "tape-engine";
@@ -263,8 +265,6 @@ private:
         BridgeAnchorIdentity anchor;
     };
 
-    struct AnalyzerRuntime;
-
     void acceptLoop();
     void handleClientConnection(int clientFd);
     void sequencerLoop();
@@ -317,6 +317,13 @@ private:
                                 const FindingRecord& finding,
                                 const BridgeAnchorIdentity& overlappingAnchor,
                                 bool overlapsOrder);
+    std::optional<std::uint64_t> findReusableLogicalIncidentIdUnlocked(const EngineEvent& event,
+                                                                       const FindingRecord& finding,
+                                                                       const BridgeAnchorIdentity& overlappingAnchor,
+                                                                       bool overlapsOrder) const;
+    void upsertIncidentProtectedWindowUnlocked(const EngineEvent& event,
+                                               const BridgeAnchorIdentity& anchor,
+                                               std::uint64_t logicalIncidentId);
     void updateAnalyzerBookUnlocked(const EngineEvent& event);
     void updateProtectedWindowBoundsUnlocked(const EngineEvent& event);
     BridgeAnchorIdentity findOverlappingOrderAnchorUnlocked(std::uint64_t tsEngineNs) const;
