@@ -28,7 +28,7 @@ struct ToolSpec {
     std::string description;
     json inputSchema;
     std::string engineCommand;
-    bool scaffoldRead = false;
+    bool supportedRead = false;
     bool reservedDeferred = false;
 };
 
@@ -45,16 +45,25 @@ public:
 
 private:
     [[nodiscard]] const ToolSpec* findTool(std::string_view toolName) const;
-    [[nodiscard]] json invokeScaffoldReadTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeSupportedReadTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeStatusTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadLiveTailTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadRangeTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReservedDeferredTool(const ToolSpec& tool) const;
     [[nodiscard]] json makeToolResult(const json& envelope) const;
-    [[nodiscard]] json makeEnvelope(const std::string& toolName,
-                                    const std::string& engineCommand,
-                                    bool supported,
-                                    bool deferred,
-                                    const std::string& errorCode,
-                                    const std::string& errorMessage,
-                                    bool retryable) const;
+    [[nodiscard]] json makeSuccessEnvelope(const std::string& toolName,
+                                           const std::string& engineCommand,
+                                           json result,
+                                           json revision) const;
+    [[nodiscard]] json makeErrorEnvelope(const std::string& toolName,
+                                         const std::string& engineCommand,
+                                         bool supported,
+                                         bool deferred,
+                                         const std::string& errorCode,
+                                         const std::string& errorMessage,
+                                         bool retryable,
+                                         json revision) const;
 
     std::vector<ToolSpec> tools_;
     EngineRpcClient engineRpc_;

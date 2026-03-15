@@ -489,6 +489,27 @@ if(NOT TAPESCOPE_ISOLATED_BUILD AND BUILD_TESTING)
     endif()
 
     add_test(NAME tws_gui_trace_tests COMMAND tws_gui_tests)
+
+    add_executable(tape_mcp_contract_tests
+        tests/tape_mcp_contract_tests.cpp
+        tape_mcp_adapter.cpp
+        tape_mcp_engine_rpc.cpp
+        tapescope_client.cpp
+    )
+
+    target_include_directories(tape_mcp_contract_tests PRIVATE
+        "${CMAKE_SOURCE_DIR}"
+        "${NLOHMANN_JSON_INCLUDE_DIR}"
+    )
+    target_compile_definitions(tape_mcp_contract_tests PRIVATE
+        TAPE_MCP_EXECUTABLE_PATH="$<TARGET_FILE:tape_mcp>"
+    )
+    target_link_libraries(tape_mcp_contract_tests PRIVATE
+        Threads::Threads
+    )
+    add_dependencies(tape_mcp_contract_tests tape_mcp)
+
+    add_test(NAME tape_mcp_contract_tests COMMAND tape_mcp_contract_tests)
 endif()
 
 set_source_files_properties(
