@@ -200,6 +200,14 @@ private:
     };
 
     struct AnalyzerBookState {
+        struct DisplayInstabilitySideState {
+            double trackedPrice = 0.0;
+            bool sawRecentRemoval = false;
+            std::uint64_t removalSessionSeq = 0;
+            std::uint64_t firstCycleSessionSeq = 0;
+            std::size_t completedCycles = 0;
+        };
+
         double bidTickPrice = 0.0;
         double askTickPrice = 0.0;
         double lastTradePrice = 0.0;
@@ -214,6 +222,8 @@ private:
         std::uint64_t tradePressureFirstSessionSeq = 0;
         std::uint64_t tradePressureLastSessionSeq = 0;
         double tradePressureReferencePrice = 0.0;
+        DisplayInstabilitySideState askDisplayInstability;
+        DisplayInstabilitySideState bidDisplayInstability;
         bool hasInside = false;
     };
 

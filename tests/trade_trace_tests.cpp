@@ -1593,6 +1593,110 @@ void testTapeEnginePhase3DetectsInsideLiquiditySignals() {
     server.stop();
 }
 
+void testTapeEnginePhase3DetectsDisplayInstabilitySignals() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-display-instability";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-display-instability.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9351:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for display-instability signal test: " + startError);
+
+    auto marketRecord = [](std::uint64_t sourceSeq,
+                           const std::string& recordType,
+                           const std::string& side,
+                           int marketField,
+                           int bookPosition,
+                           int bookOperation,
+                           int bookSide,
+                           double price,
+                           double size,
+                           const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, recordType, "BrokerMarketData", "INTC", side,
+                                                     0, 0, 0, "", note, "2026-03-14T09:43:30.000");
+        record.instrumentId = "ib:conid:9351:STK:SMART:USD:INTC";
+        record.marketField = marketField;
+        record.bookPosition = bookPosition;
+        record.bookOperation = bookOperation;
+        record.bookSide = bookSide;
+        record.price = price;
+        record.size = size;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-display";
+    options.runtimeSessionId = "runtime-engine-phase3-display";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8351, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      531, 4301, 0, "", "display instability anchor", "2026-03-14T09:43:30.050");
+    orderIntent.instrumentId = "ib:conid:9351:STK:SMART:USD:INTC";
+    options.batchSeq = 124;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the display-instability anchor batch: " + error);
+
+    options.batchSeq = 125;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketRecord(8352, "market_tick", "BID", 1, -1, -1, -1, 45.45, std::numeric_limits<double>::quiet_NaN(), "display bid"),
+        marketRecord(8353, "market_tick", "ASK", 2, -1, -1, -1, 45.46, std::numeric_limits<double>::quiet_NaN(), "display ask"),
+        marketRecord(8354, "market_depth", "ASK", -1, 0, 0, 0, 45.46, 400.0, "display ask insert"),
+        marketRecord(8355, "market_depth", "BID", -1, 0, 0, 1, 45.45, 500.0, "display bid insert")
+    }, options)), &error), "tape-engine should accept the display-instability seed batch: " + error);
+
+    options.batchSeq = 126;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketRecord(8356, "market_depth", "ASK", -1, 0, 1, 0, 45.46, 100.0, "display ask remove one"),
+        marketRecord(8357, "market_depth", "ASK", -1, 0, 1, 0, 45.46, 360.0, "display ask readd one"),
+        marketRecord(8358, "market_depth", "ASK", -1, 0, 1, 0, 45.46, 120.0, "display ask remove two"),
+        marketRecord(8359, "market_depth", "ASK", -1, 0, 1, 0, 45.46, 350.0, "display ask readd two")
+    }, options)), &error), "tape-engine should accept the display-instability change batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() >= 3;
+    }, "tape-engine should freeze display-instability signal batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3-display";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 display-instability findings query should succeed: " + error);
+    bool sawDisplayInstabilityFinding = false;
+    for (const auto& item : response.events) {
+        sawDisplayInstabilityFinding = sawDisplayInstabilityFinding || item.value("kind", std::string()) == "ask_display_instability";
+    }
+    expect(sawDisplayInstabilityFinding, "phase 3 should detect repeated ask display instability at the touch");
+
+    tape_engine::QueryRequest incidentsRequest;
+    incidentsRequest.requestId = "incidents-phase3-display";
+    incidentsRequest.operation = "list_incidents";
+    expect(client.query(incidentsRequest, &response, &error), "phase 3 display-instability incidents query should succeed: " + error);
+    bool sawDisplayInstabilityIncident = false;
+    for (const auto& item : response.events) {
+        if (item.value("kind", std::string()) == "ask_display_instability" &&
+            item.value("score", 0.0) > 0.5) {
+            sawDisplayInstabilityIncident = true;
+        }
+    }
+    expect(sawDisplayInstabilityIncident, "phase 3 display-instability incidents should surface a ranked instability incident");
+
+    server.stop();
+}
+
 void testTapeEnginePhase3BuildsTradePressureOrderCase() {
     const fs::path rootDir = testDataDir() / "tape-engine-phase3-trade-pressure";
     const fs::path socketPath = testDataDir() / "tape-engine-phase3-trade-pressure.sock";
@@ -2748,6 +2852,7 @@ int main() {
         testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
         testTapeEnginePhase3DetectsInsideLiquiditySignals();
+        testTapeEnginePhase3DetectsDisplayInstabilitySignals();
         testTapeEnginePhase3BuildsTradePressureOrderCase();
         testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity();
         testTapeEngineReplaySnapshotRebuildsFrozenMarketState();

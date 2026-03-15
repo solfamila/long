@@ -121,6 +121,8 @@ constexpr double kLiquidityChangeMinShares = 100.0;
 constexpr double kLiquidityChangeMinRatio = 0.50;
 constexpr std::size_t kTradePressureMinStreak = 3;
 constexpr double kTouchTradeTolerance = 1e-6;
+constexpr std::size_t kDisplayInstabilityMinCycles = 2;
+constexpr std::uint64_t kDisplayInstabilitySeqWindow = 8;
 
 bool hasAnchorIdentity(const BridgeAnchorIdentity& anchor) {
     return anchor.traceId > 0 || anchor.orderId > 0 || anchor.permId > 0 || !anchor.execId.empty();
@@ -164,6 +166,13 @@ int classifyTradePressureSide(const EngineEvent& event,
     return 0;
 }
 
+struct DisplayInstabilityResult {
+    bool triggered = false;
+    std::size_t completedCycles = 0;
+    std::uint64_t firstCycleSessionSeq = 0;
+    double price = 0.0;
+};
+
 int severityRank(const std::string& severity) {
     if (severity == "critical") {
         return 4;
@@ -202,6 +211,9 @@ std::string incidentWhyItMatters(const IncidentRecord& incident) {
         return incident.kind == "buy_trade_pressure"
             ? "Repeated prints lifted the ask, which can indicate buyers pressing the offer and raising short-term execution risk for passive buys."
             : "Repeated prints hit the bid, which can indicate sellers pressing the bid and weakening short-term support for passive sells.";
+    }
+    if (incident.kind == "ask_display_instability" || incident.kind == "bid_display_instability") {
+        return "Displayed touch liquidity repeatedly disappeared and reappeared at the same price, which can make the visible book less trustworthy for queue and fill decisions.";
     }
     if (incident.kind == "source_gap" || incident.kind == "source_reset") {
         return "Source continuity changed, so any interpretation around this window needs to account for data-quality risk.";
@@ -499,6 +511,11 @@ struct HotAnalyzerInput {
     std::size_t tradePressureStreakCount = 0;
     std::uint64_t tradePressureFirstSessionSeq = 0;
     double tradePressureReferencePrice = 0.0;
+    bool displayInstabilityTriggered = false;
+    std::string displayInstabilityKind;
+    std::size_t displayInstabilityCycles = 0;
+    std::uint64_t displayInstabilityFirstSessionSeq = 0;
+    double displayInstabilityPrice = 0.0;
 };
 
 struct DeferredAnalyzerInput {
@@ -715,6 +732,46 @@ public:
     }
 };
 
+class DisplayInstabilityAnalyzer final : public Phase3Analyzer {
+public:
+    const char* name() const override { return "display_instability"; }
+    AnalyzerLane lane() const override { return AnalyzerLane::Hot; }
+
+    void analyzeHot(const HotAnalyzerInput& input,
+                    std::vector<AnalyzerFindingSpec>* findings) const override {
+        if (!input.displayInstabilityTriggered || input.displayInstabilityKind.empty()) {
+            return;
+        }
+
+        const bool askSide = input.displayInstabilityKind == "ask_display_instability";
+        std::ostringstream title;
+        title << (askSide ? "Ask" : "Bid")
+              << " display instability at "
+              << std::fixed << std::setprecision(2) << input.displayInstabilityPrice;
+
+        std::ostringstream summary;
+        summary << input.displayInstabilityCycles
+                << " rapid remove/readd cycles occurred at the same inside "
+                << (askSide ? "ask" : "bid")
+                << " price from session_seq " << input.displayInstabilityFirstSessionSeq
+                << " through " << input.event.sessionSeq << ".";
+
+        AnalyzerFindingSpec finding;
+        finding.kind = input.displayInstabilityKind;
+        finding.severity = input.overlapsOrder ? "warning" : "info";
+        finding.confidence = input.displayInstabilityCycles >= 3 ? 0.84 : 0.79;
+        finding.firstSessionSeq = input.displayInstabilityFirstSessionSeq;
+        finding.lastSessionSeq = input.event.sessionSeq;
+        finding.tsEngineNs = input.event.tsEngineNs;
+        finding.instrumentId = input.event.instrumentId;
+        finding.title = title.str();
+        finding.summary = summary.str();
+        finding.overlapsOrder = input.overlapsOrder;
+        finding.overlappingAnchor = input.overlappingAnchor;
+        findings->push_back(std::move(finding));
+    }
+};
+
 class OrderFlowTimelineAnalyzer final : public Phase3Analyzer {
 public:
     const char* name() const override { return "order_flow_timeline"; }
@@ -798,6 +855,7 @@ const std::vector<std::unique_ptr<Phase3Analyzer>>& allPhase3Analyzers() {
         built.push_back(std::make_unique<SpreadWideningAnalyzer>());
         built.push_back(std::make_unique<InsideLiquidityAnalyzer>());
         built.push_back(std::make_unique<TradePressureAnalyzer>());
+        built.push_back(std::make_unique<DisplayInstabilityAnalyzer>());
         built.push_back(std::make_unique<OrderFlowTimelineAnalyzer>());
         return built;
     }();
@@ -1869,6 +1927,122 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         }
     }
 
+    auto resetDisplaySide = [](auto* state, double trackedPrice) {
+        state->trackedPrice = trackedPrice;
+        state->sawRecentRemoval = false;
+        state->removalSessionSeq = 0;
+        state->firstCycleSessionSeq = 0;
+        state->completedCycles = 0;
+    };
+
+    auto updateDisplaySide = [&](auto* state,
+                                 const std::string& kind,
+                                 double previousPrice,
+                                 double currentPrice,
+                                 double previousSize,
+                                 double currentSize) {
+        DisplayInstabilityResult result;
+        if (previousPrice <= 0.0 || currentPrice <= 0.0) {
+            resetDisplaySide(state, currentPrice);
+            return std::pair<std::string, DisplayInstabilityResult>{std::string(), result};
+        }
+        if (state->trackedPrice <= 0.0 || std::fabs(state->trackedPrice - currentPrice) > kTouchTradeTolerance) {
+            resetDisplaySide(state, currentPrice);
+        }
+        if (std::fabs(previousPrice - currentPrice) > kTouchTradeTolerance) {
+            resetDisplaySide(state, currentPrice);
+            return std::pair<std::string, DisplayInstabilityResult>{std::string(), result};
+        }
+
+        const double delta = currentSize - previousSize;
+        const double ratio = previousSize > 0.0 ? std::fabs(delta) / previousSize : 0.0;
+        const bool removal = previousSize >= kLiquidityChangeMinShares &&
+                             delta <= -kLiquidityChangeMinShares &&
+                             ratio >= kLiquidityChangeMinRatio;
+        const bool refill = previousSize > 0.0 &&
+                            delta >= kLiquidityChangeMinShares &&
+                            ratio >= kLiquidityChangeMinRatio;
+
+        if (removal) {
+            state->sawRecentRemoval = true;
+            state->removalSessionSeq = event.sessionSeq;
+            if (state->firstCycleSessionSeq == 0) {
+                state->firstCycleSessionSeq = event.sessionSeq;
+            }
+            return std::pair<std::string, DisplayInstabilityResult>{std::string(), result};
+        }
+
+        if (state->sawRecentRemoval &&
+            refill &&
+            event.sessionSeq >= state->removalSessionSeq &&
+            event.sessionSeq - state->removalSessionSeq <= kDisplayInstabilitySeqWindow) {
+            state->completedCycles += 1;
+            state->sawRecentRemoval = false;
+            if (state->firstCycleSessionSeq == 0) {
+                state->firstCycleSessionSeq = state->removalSessionSeq;
+            }
+            if (state->completedCycles >= kDisplayInstabilityMinCycles) {
+                result.triggered = true;
+                result.completedCycles = state->completedCycles;
+                result.firstCycleSessionSeq = state->firstCycleSessionSeq;
+                result.price = currentPrice;
+                return std::pair<std::string, DisplayInstabilityResult>{kind, result};
+            }
+            return std::pair<std::string, DisplayInstabilityResult>{std::string(), result};
+        }
+
+        if (state->sawRecentRemoval &&
+            event.sessionSeq > state->removalSessionSeq + kDisplayInstabilitySeqWindow) {
+            state->sawRecentRemoval = false;
+        }
+        return std::pair<std::string, DisplayInstabilityResult>{std::string(), result};
+    };
+
+    bool displayInstabilityTriggered = false;
+    std::string displayInstabilityKind;
+    std::size_t displayInstabilityCycles = 0;
+    std::uint64_t displayInstabilityFirstSessionSeq = 0;
+    double displayInstabilityPrice = 0.0;
+    if (event.eventKind == "market_depth" && hadInside && hasInside) {
+        if (previousAsk > 0.0 && std::fabs(previousAsk - effectiveAsk) <= kTouchTradeTolerance) {
+            const auto [kind, result] = updateDisplaySide(&analyzerBookState_.askDisplayInstability,
+                                                          "ask_display_instability",
+                                                          previousAsk,
+                                                          effectiveAsk,
+                                                          previousAskSize,
+                                                          effectiveAskSize);
+            if (result.triggered) {
+                displayInstabilityTriggered = true;
+                displayInstabilityKind = kind;
+                displayInstabilityCycles = result.completedCycles;
+                displayInstabilityFirstSessionSeq = result.firstCycleSessionSeq;
+                displayInstabilityPrice = result.price;
+            }
+        } else if (effectiveAsk > 0.0) {
+            resetDisplaySide(&analyzerBookState_.askDisplayInstability, effectiveAsk);
+        }
+
+        if (!displayInstabilityTriggered &&
+            previousBid > 0.0 &&
+            std::fabs(previousBid - effectiveBid) <= kTouchTradeTolerance) {
+            const auto [kind, result] = updateDisplaySide(&analyzerBookState_.bidDisplayInstability,
+                                                          "bid_display_instability",
+                                                          previousBid,
+                                                          effectiveBid,
+                                                          previousBidSize,
+                                                          effectiveBidSize);
+            if (result.triggered) {
+                displayInstabilityTriggered = true;
+                displayInstabilityKind = kind;
+                displayInstabilityCycles = result.completedCycles;
+                displayInstabilityFirstSessionSeq = result.firstCycleSessionSeq;
+                displayInstabilityPrice = result.price;
+            }
+        } else if (effectiveBid > 0.0) {
+            resetDisplaySide(&analyzerBookState_.bidDisplayInstability, effectiveBid);
+        }
+    }
+
     analyzerBookState_.lastEffectiveBid = effectiveBid;
     analyzerBookState_.lastEffectiveAsk = effectiveAsk;
     analyzerBookState_.lastEffectiveBidSize = effectiveBidSize;
@@ -1896,7 +2070,12 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         .tradePressureKind = tradePressureKind,
         .tradePressureStreakCount = analyzerBookState_.tradePressureStreakCount,
         .tradePressureFirstSessionSeq = analyzerBookState_.tradePressureFirstSessionSeq,
-        .tradePressureReferencePrice = analyzerBookState_.tradePressureReferencePrice
+        .tradePressureReferencePrice = analyzerBookState_.tradePressureReferencePrice,
+        .displayInstabilityTriggered = displayInstabilityTriggered,
+        .displayInstabilityKind = displayInstabilityKind,
+        .displayInstabilityCycles = displayInstabilityCycles,
+        .displayInstabilityFirstSessionSeq = displayInstabilityFirstSessionSeq,
+        .displayInstabilityPrice = displayInstabilityPrice
     };
 
     std::vector<AnalyzerFindingSpec> analyzerFindings;
