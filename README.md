@@ -53,6 +53,11 @@ Query the engine daemon:
 ./build/tape_engine_ctl replay-snapshot 50 --depth 5
 ./build/tape_engine_ctl replay-snapshot 50 --depth 5 --revision 1 --include-live-tail
 ./build/tape_engine_ctl find-order --order-id 701 --revision 1
+./build/tape_engine_ctl list-order-anchors --limit 20
+./build/tape_engine_ctl list-protected-windows --limit 20
+./build/tape_engine_ctl read-protected-window 1 --revision 3
+./build/tape_engine_ctl list-findings --limit 20
+./build/tape_engine_ctl list-incidents --limit 20
 ```
 
 Package a distributable zip:
@@ -105,6 +110,8 @@ Phase-1 bridge sender notes:
 - `long` now emits normalized public market records (`market_tick`, `market_depth`) alongside widened private lifecycle records including `open_order`, `order_status`, `commission_report`, `cancel_request`, `broker_error`, and `order_reject`.
 - Bridge records now carry canonical `instrument_id`, receive/exchange timestamps, and vendor sequence placeholders so the engine can preserve stronger forensic provenance.
 - `replay_snapshot` rebuilds a deterministic bid/ask/last and depth snapshot from frozen `session_seq` history, with optional live-tail overlay.
+- Phase 3 has started in the native engine: hot-path spread-widening and source-quality findings now promote incidents, order-anchored protected windows are tracked, and `list-order-anchors`, `list-protected-windows`, `read-protected-window`, `list-findings`, and `list-incidents` are queryable through `tape_engine_ctl`.
+- Frozen revisions now persist Phase 3 artifact sidecars (`.artifacts.msgpack`) next to segment payloads, so anchors, protected windows, findings, and incidents survive daemon restart and remain revision-pinned evidence.
 
 Runtime registry and QoS:
 

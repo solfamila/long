@@ -15,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <tuple>
 #include <unordered_set>
 
 #include <sys/socket.h>
@@ -112,6 +113,168 @@ struct ReplayBookState {
     std::size_t gapMarkers = 0;
 };
 
+constexpr std::uint64_t kProtectedWindowPreNs = 30ULL * 1000ULL * 1000ULL * 1000ULL;
+constexpr std::uint64_t kProtectedWindowPostNs = 90ULL * 1000ULL * 1000ULL * 1000ULL;
+constexpr double kSpreadWideningMinAbsolute = 0.01;
+
+bool hasAnchorIdentity(const BridgeAnchorIdentity& anchor) {
+    return anchor.traceId > 0 || anchor.orderId > 0 || anchor.permId > 0 || !anchor.execId.empty();
+}
+
+json anchorToJson(const BridgeAnchorIdentity& anchor) {
+    json payload = json::object();
+    if (anchor.traceId > 0) {
+        payload["trace_id"] = anchor.traceId;
+    }
+    if (anchor.orderId > 0) {
+        payload["order_id"] = static_cast<long long>(anchor.orderId);
+    }
+    if (anchor.permId > 0) {
+        payload["perm_id"] = anchor.permId;
+    }
+    if (!anchor.execId.empty()) {
+        payload["exec_id"] = anchor.execId;
+    }
+    return payload;
+}
+
+BridgeAnchorIdentity anchorFromJson(const json& payload) {
+    BridgeAnchorIdentity anchor;
+    anchor.traceId = payload.value("trace_id", 0ULL);
+    anchor.orderId = static_cast<OrderId>(payload.value("order_id", 0LL));
+    anchor.permId = payload.value("perm_id", 0LL);
+    anchor.execId = payload.value("exec_id", std::string());
+    return anchor;
+}
+
+json orderAnchorToJson(const OrderAnchorRecord& record) {
+    return {
+        {"anchor_id", record.anchorId},
+        {"revision_id", record.revisionId},
+        {"session_seq", record.sessionSeq},
+        {"ts_engine_ns", record.tsEngineNs},
+        {"event_kind", record.eventKind},
+        {"instrument_id", record.instrumentId},
+        {"note", record.note},
+        {"anchor", anchorToJson(record.anchor)}
+    };
+}
+
+json protectedWindowToJson(const ProtectedWindowRecord& record) {
+    return {
+        {"window_id", record.windowId},
+        {"revision_id", record.revisionId},
+        {"anchor_session_seq", record.anchorSessionSeq},
+        {"start_engine_ns", record.startEngineNs},
+        {"end_engine_ns", record.endEngineNs},
+        {"reason", record.reason},
+        {"instrument_id", record.instrumentId},
+        {"anchor", anchorToJson(record.anchor)}
+    };
+}
+
+json findingToJson(const FindingRecord& record) {
+    return {
+        {"finding_id", record.findingId},
+        {"revision_id", record.revisionId},
+        {"kind", record.kind},
+        {"severity", record.severity},
+        {"confidence", record.confidence},
+        {"first_session_seq", record.firstSessionSeq},
+        {"last_session_seq", record.lastSessionSeq},
+        {"ts_engine_ns", record.tsEngineNs},
+        {"instrument_id", record.instrumentId},
+        {"title", record.title},
+        {"summary", record.summary},
+        {"overlaps_order", record.overlapsOrder},
+        {"overlapping_anchor", anchorToJson(record.overlappingAnchor)}
+    };
+}
+
+json incidentToJson(const IncidentRecord& record) {
+    return {
+        {"logical_incident_id", record.logicalIncidentId},
+        {"incident_revision_id", record.incidentRevisionId},
+        {"revision_id", record.revisionId},
+        {"kind", record.kind},
+        {"severity", record.severity},
+        {"confidence", record.confidence},
+        {"first_session_seq", record.firstSessionSeq},
+        {"last_session_seq", record.lastSessionSeq},
+        {"promoted_by_finding_id", record.promotedByFindingId},
+        {"ts_engine_ns", record.tsEngineNs},
+        {"instrument_id", record.instrumentId},
+        {"title", record.title},
+        {"summary", record.summary},
+        {"overlaps_order", record.overlapsOrder},
+        {"overlapping_anchor", anchorToJson(record.overlappingAnchor)}
+    };
+}
+
+OrderAnchorRecord orderAnchorFromJson(const json& payload) {
+    OrderAnchorRecord record;
+    record.anchorId = payload.value("anchor_id", 0ULL);
+    record.revisionId = payload.value("revision_id", 0ULL);
+    record.sessionSeq = payload.value("session_seq", 0ULL);
+    record.tsEngineNs = payload.value("ts_engine_ns", 0ULL);
+    record.eventKind = payload.value("event_kind", std::string());
+    record.instrumentId = payload.value("instrument_id", std::string());
+    record.note = payload.value("note", std::string());
+    record.anchor = anchorFromJson(payload.value("anchor", json::object()));
+    return record;
+}
+
+ProtectedWindowRecord protectedWindowFromJson(const json& payload) {
+    ProtectedWindowRecord record;
+    record.windowId = payload.value("window_id", 0ULL);
+    record.revisionId = payload.value("revision_id", 0ULL);
+    record.anchorSessionSeq = payload.value("anchor_session_seq", 0ULL);
+    record.startEngineNs = payload.value("start_engine_ns", 0ULL);
+    record.endEngineNs = payload.value("end_engine_ns", 0ULL);
+    record.reason = payload.value("reason", std::string());
+    record.instrumentId = payload.value("instrument_id", std::string());
+    record.anchor = anchorFromJson(payload.value("anchor", json::object()));
+    return record;
+}
+
+FindingRecord findingFromJson(const json& payload) {
+    FindingRecord record;
+    record.findingId = payload.value("finding_id", 0ULL);
+    record.revisionId = payload.value("revision_id", 0ULL);
+    record.kind = payload.value("kind", std::string());
+    record.severity = payload.value("severity", std::string());
+    record.confidence = payload.value("confidence", 0.0);
+    record.firstSessionSeq = payload.value("first_session_seq", 0ULL);
+    record.lastSessionSeq = payload.value("last_session_seq", 0ULL);
+    record.tsEngineNs = payload.value("ts_engine_ns", 0ULL);
+    record.instrumentId = payload.value("instrument_id", std::string());
+    record.title = payload.value("title", std::string());
+    record.summary = payload.value("summary", std::string());
+    record.overlapsOrder = payload.value("overlaps_order", false);
+    record.overlappingAnchor = anchorFromJson(payload.value("overlapping_anchor", json::object()));
+    return record;
+}
+
+IncidentRecord incidentFromJson(const json& payload) {
+    IncidentRecord record;
+    record.logicalIncidentId = payload.value("logical_incident_id", 0ULL);
+    record.incidentRevisionId = payload.value("incident_revision_id", 0ULL);
+    record.revisionId = payload.value("revision_id", 0ULL);
+    record.kind = payload.value("kind", std::string());
+    record.severity = payload.value("severity", std::string());
+    record.confidence = payload.value("confidence", 0.0);
+    record.firstSessionSeq = payload.value("first_session_seq", 0ULL);
+    record.lastSessionSeq = payload.value("last_session_seq", 0ULL);
+    record.promotedByFindingId = payload.value("promoted_by_finding_id", 0ULL);
+    record.tsEngineNs = payload.value("ts_engine_ns", 0ULL);
+    record.instrumentId = payload.value("instrument_id", std::string());
+    record.title = payload.value("title", std::string());
+    record.summary = payload.value("summary", std::string());
+    record.overlapsOrder = payload.value("overlaps_order", false);
+    record.overlappingAnchor = anchorFromJson(payload.value("overlapping_anchor", json::object()));
+    return record;
+}
+
 json eventToJson(const EngineEvent& event) {
     json payload{
         {"adapter_id", event.adapterId},
@@ -207,6 +370,120 @@ Server::~Server() {
     stop();
 }
 
+bool Server::restoreFrozenState(std::string* error) {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    liveRing_.clear();
+    cursors_.clear();
+    segments_.clear();
+    orderAnchors_.clear();
+    protectedWindows_.clear();
+    findings_.clear();
+    incidents_.clear();
+    writerFailure_.clear();
+    lastManifestHash_.clear();
+    analyzerBookState_ = {};
+    nextSessionSeq_ = 1;
+    nextSegmentId_ = 1;
+    nextRevisionId_ = 1;
+    latestFrozenRevisionId_ = 0;
+    latestFrozenSessionSeq_ = 0;
+    nextOrderAnchorId_ = 1;
+    nextProtectedWindowId_ = 1;
+    nextFindingId_ = 1;
+    nextLogicalIncidentId_ = 1;
+    nextIncidentRevisionId_ = 1;
+
+    const std::filesystem::path manifestPath = config_.dataDir / "manifest.jsonl";
+    if (!std::filesystem::exists(manifestPath)) {
+        return true;
+    }
+
+    std::ifstream manifestIn(manifestPath);
+    if (!manifestIn.is_open()) {
+        if (error != nullptr) {
+            *error = "failed to open tape-engine manifest for restore";
+        }
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(manifestIn, line)) {
+        if (line.empty()) {
+            continue;
+        }
+
+        const json entry = json::parse(line, nullptr, false);
+        if (entry.is_discarded()) {
+            if (error != nullptr) {
+                *error = "failed to parse tape-engine manifest during restore";
+            }
+            return false;
+        }
+
+        SegmentInfo info;
+        info.segmentId = entry.value("segment_id", 0ULL);
+        info.revisionId = entry.value("revision_id", 0ULL);
+        info.firstSessionSeq = entry.value("first_session_seq", 0ULL);
+        info.lastSessionSeq = entry.value("last_session_seq", 0ULL);
+        info.eventCount = entry.value("event_count", 0ULL);
+        info.fileName = entry.value("file_name", std::string());
+        info.metadataFileName = entry.value("metadata_file_name", std::string());
+        info.artifactsFileName = entry.value("artifacts_file_name", std::string());
+        info.payloadSha256 = entry.value("payload_sha256", std::string());
+        info.prevManifestHash = entry.value("prev_manifest_hash", std::string());
+        info.manifestHash = entry.value("manifest_hash", std::string());
+        segments_.push_back(info);
+
+        lastManifestHash_ = info.manifestHash;
+        latestFrozenRevisionId_ = std::max(latestFrozenRevisionId_, info.revisionId);
+        latestFrozenSessionSeq_ = std::max(latestFrozenSessionSeq_, info.lastSessionSeq);
+        nextSessionSeq_ = std::max(nextSessionSeq_, info.lastSessionSeq + 1);
+        nextSegmentId_ = std::max(nextSegmentId_, info.segmentId + 1);
+        nextRevisionId_ = std::max(nextRevisionId_, info.revisionId + 1);
+
+        if (info.artifactsFileName.empty()) {
+            continue;
+        }
+
+        const std::filesystem::path artifactsPath = config_.dataDir / "segments" / info.artifactsFileName;
+        std::ifstream artifactsIn(artifactsPath, std::ios::binary);
+        if (!artifactsIn.is_open()) {
+            continue;
+        }
+
+        const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(artifactsIn)),
+                                              std::istreambuf_iterator<char>());
+        if (bytes.empty()) {
+            continue;
+        }
+
+        const json artifacts = json::from_msgpack(bytes, true, false);
+        for (const auto& item : artifacts.value("order_anchors", json::array())) {
+            OrderAnchorRecord record = orderAnchorFromJson(item);
+            orderAnchors_.push_back(record);
+            nextOrderAnchorId_ = std::max(nextOrderAnchorId_, record.anchorId + 1);
+        }
+        for (const auto& item : artifacts.value("protected_windows", json::array())) {
+            ProtectedWindowRecord record = protectedWindowFromJson(item);
+            protectedWindows_.push_back(record);
+            nextProtectedWindowId_ = std::max(nextProtectedWindowId_, record.windowId + 1);
+        }
+        for (const auto& item : artifacts.value("findings", json::array())) {
+            FindingRecord record = findingFromJson(item);
+            findings_.push_back(record);
+            nextFindingId_ = std::max(nextFindingId_, record.findingId + 1);
+        }
+        for (const auto& item : artifacts.value("incidents", json::array())) {
+            IncidentRecord record = incidentFromJson(item);
+            incidents_.push_back(record);
+            nextLogicalIncidentId_ = std::max(nextLogicalIncidentId_, record.logicalIncidentId + 1);
+            nextIncidentRevisionId_ = std::max(nextIncidentRevisionId_, record.incidentRevisionId + 1);
+        }
+    }
+
+    return true;
+}
+
 bool Server::start(std::string* error) {
     if (running_.load(std::memory_order_acquire)) {
         return true;
@@ -218,6 +495,10 @@ bool Server::start(std::string* error) {
         if (error != nullptr) {
             *error = "failed to create tape-engine data dir: " + ec.message();
         }
+        return false;
+    }
+
+    if (!restoreFrozenState(error)) {
         return false;
     }
 
@@ -488,6 +769,198 @@ void Server::resetSourceSeqWindowUnlocked(ConnectionCursor& cursor) {
     cursor.recentSourceSeqSet.clear();
 }
 
+void Server::recordOrderAnchorUnlocked(const EngineEvent& event) {
+    if (!hasAnchorIdentity(event.bridgeRecord.anchor)) {
+        return;
+    }
+
+    OrderAnchorRecord record;
+    record.anchorId = nextOrderAnchorId_++;
+    record.revisionId = event.revisionId;
+    record.sessionSeq = event.sessionSeq;
+    record.tsEngineNs = event.tsEngineNs;
+    record.eventKind = event.eventKind;
+    record.instrumentId = event.instrumentId;
+    record.anchor = event.bridgeRecord.anchor;
+    record.note = event.bridgeRecord.note;
+    orderAnchors_.push_back(std::move(record));
+}
+
+void Server::addProtectedWindowUnlocked(const EngineEvent& event,
+                                        const std::string& reason,
+                                        const BridgeAnchorIdentity& anchor) {
+    ProtectedWindowRecord record;
+    record.windowId = nextProtectedWindowId_++;
+    record.revisionId = event.revisionId;
+    record.anchorSessionSeq = event.sessionSeq;
+    record.startEngineNs = event.tsEngineNs > kProtectedWindowPreNs ? event.tsEngineNs - kProtectedWindowPreNs : 0;
+    record.endEngineNs = event.tsEngineNs + kProtectedWindowPostNs;
+    record.reason = reason;
+    record.instrumentId = event.instrumentId;
+    record.anchor = anchor;
+    protectedWindows_.push_back(std::move(record));
+}
+
+BridgeAnchorIdentity Server::findOverlappingOrderAnchorUnlocked(std::uint64_t tsEngineNs) const {
+    for (auto it = protectedWindows_.rbegin(); it != protectedWindows_.rend(); ++it) {
+        if (!hasAnchorIdentity(it->anchor)) {
+            continue;
+        }
+        if (tsEngineNs >= it->startEngineNs && tsEngineNs <= it->endEngineNs) {
+            return it->anchor;
+        }
+    }
+    return {};
+}
+
+void Server::recordFindingUnlocked(const EngineEvent& event,
+                                   const std::string& kind,
+                                   const std::string& severity,
+                                   double confidence,
+                                   const std::string& title,
+                                   const std::string& summary,
+                                   const BridgeAnchorIdentity& overlappingAnchor,
+                                   bool overlapsOrder) {
+    FindingRecord finding;
+    finding.findingId = nextFindingId_++;
+    finding.revisionId = event.revisionId;
+    finding.kind = kind;
+    finding.severity = severity;
+    finding.confidence = confidence;
+    finding.firstSessionSeq = event.sessionSeq;
+    finding.lastSessionSeq = event.sessionSeq;
+    finding.tsEngineNs = event.tsEngineNs;
+    finding.instrumentId = event.instrumentId;
+    finding.title = title;
+    finding.summary = summary;
+    finding.overlapsOrder = overlapsOrder;
+    finding.overlappingAnchor = overlappingAnchor;
+    findings_.push_back(std::move(finding));
+}
+
+void Server::recordIncidentUnlocked(const EngineEvent& event,
+                                    const FindingRecord& finding,
+                                    const BridgeAnchorIdentity& overlappingAnchor,
+                                    bool overlapsOrder) {
+    IncidentRecord incident;
+    incident.logicalIncidentId = nextLogicalIncidentId_++;
+    incident.incidentRevisionId = nextIncidentRevisionId_++;
+    incident.revisionId = finding.revisionId;
+    incident.kind = finding.kind;
+    incident.severity = finding.severity;
+    incident.confidence = finding.confidence;
+    incident.firstSessionSeq = finding.firstSessionSeq;
+    incident.lastSessionSeq = finding.lastSessionSeq;
+    incident.promotedByFindingId = finding.findingId;
+    incident.tsEngineNs = finding.tsEngineNs;
+    incident.instrumentId = finding.instrumentId;
+    incident.title = finding.title;
+    incident.summary = finding.summary;
+    incident.overlapsOrder = overlapsOrder;
+    incident.overlappingAnchor = overlappingAnchor;
+    incidents_.push_back(std::move(incident));
+
+    addProtectedWindowUnlocked(event, "incident_promotion", overlappingAnchor);
+}
+
+void Server::updateAnalyzerBookUnlocked(const EngineEvent& event) {
+    if (event.eventKind == "market_tick") {
+        const int marketField = event.bridgeRecord.marketField;
+        const double price = event.bridgeRecord.price;
+        if (std::isfinite(price)) {
+            if (marketField == 1) {
+                analyzerBookState_.bidTickPrice = price;
+            } else if (marketField == 2) {
+                analyzerBookState_.askTickPrice = price;
+            } else if (marketField == 4) {
+                analyzerBookState_.lastTradePrice = price;
+            }
+        }
+        return;
+    }
+
+    if (event.eventKind == "market_depth") {
+        const int bookSide = event.bridgeRecord.bookSide;
+        const int position = event.bridgeRecord.bookPosition;
+        const int operation = event.bridgeRecord.bookOperation;
+        const double price = event.bridgeRecord.price;
+        const double size = event.bridgeRecord.size;
+        if (bookSide == 0) {
+            applyDepthDelta(analyzerBookState_.askBook, position, operation, price, size);
+        } else if (bookSide == 1) {
+            applyDepthDelta(analyzerBookState_.bidBook, position, operation, price, size);
+        }
+    }
+}
+
+void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
+    if (hasAnchorIdentity(event.bridgeRecord.anchor)) {
+        recordOrderAnchorUnlocked(event);
+
+        if (event.eventKind == "order_intent" ||
+            event.eventKind == "fill_execution" ||
+            event.eventKind == "cancel_request" ||
+            event.eventKind == "order_reject" ||
+            event.eventKind == "broker_error") {
+            addProtectedWindowUnlocked(event, event.eventKind, event.bridgeRecord.anchor);
+        }
+    }
+
+    if (event.eventKind == "gap_marker" || event.eventKind == "reset_marker") {
+        const BridgeAnchorIdentity overlap = findOverlappingOrderAnchorUnlocked(event.tsEngineNs);
+        const bool overlapsOrder = hasAnchorIdentity(overlap);
+        const std::string kind = event.eventKind == "gap_marker" ? "source_gap" : "source_reset";
+        const std::string title = event.eventKind == "gap_marker" ? "Feed gap detected" : "Source sequence reset detected";
+        const std::string summary = event.eventKind == "gap_marker"
+            ? "A discontinuity was recorded in the bridge source sequence."
+            : "An out-of-order bridge source sequence forced a reset marker.";
+        recordFindingUnlocked(event, kind, "warning", 0.95, title, summary, overlap, overlapsOrder);
+        recordIncidentUnlocked(event, findings_.back(), overlap, overlapsOrder);
+        return;
+    }
+
+    const double previousBid = analyzerBookState_.lastEffectiveBid;
+    const double previousAsk = analyzerBookState_.lastEffectiveAsk;
+    const bool hadInside = analyzerBookState_.hasInside;
+    updateAnalyzerBookUnlocked(event);
+
+    const double effectiveBid = !analyzerBookState_.bidBook.empty()
+        ? analyzerBookState_.bidBook.front().price
+        : analyzerBookState_.bidTickPrice;
+    const double effectiveAsk = !analyzerBookState_.askBook.empty()
+        ? analyzerBookState_.askBook.front().price
+        : analyzerBookState_.askTickPrice;
+    const bool hasInside = effectiveBid > 0.0 && effectiveAsk > 0.0 && effectiveAsk >= effectiveBid;
+
+    analyzerBookState_.lastEffectiveBid = effectiveBid;
+    analyzerBookState_.lastEffectiveAsk = effectiveAsk;
+    analyzerBookState_.hasInside = hasInside;
+
+    if (!hadInside || !hasInside) {
+        return;
+    }
+
+    const double previousSpread = previousAsk - previousBid;
+    const double currentSpread = effectiveAsk - effectiveBid;
+    if (currentSpread + 1e-9 < previousSpread + kSpreadWideningMinAbsolute) {
+        return;
+    }
+
+    if (event.eventKind != "market_tick" && event.eventKind != "market_depth") {
+        return;
+    }
+
+    const BridgeAnchorIdentity overlap = findOverlappingOrderAnchorUnlocked(event.tsEngineNs);
+    const bool overlapsOrder = hasAnchorIdentity(overlap);
+    std::ostringstream title;
+    title << "Spread widened to " << std::fixed << std::setprecision(2) << currentSpread;
+    std::ostringstream summary;
+    summary << "Inside spread widened from " << std::fixed << std::setprecision(2)
+            << previousSpread << " to " << currentSpread << ".";
+    recordFindingUnlocked(event, "spread_widened", "info", 0.82, title.str(), summary.str(), overlap, overlapsOrder);
+    recordIncidentUnlocked(event, findings_.back(), overlap, overlapsOrder);
+}
+
 IngestAck Server::rejectAck(std::uint64_t batchSeq,
                             const std::string& adapterId,
                             const std::string& connectionId,
@@ -540,6 +1013,7 @@ void Server::writeSegment(const PendingSegment& segment) {
     const std::string baseName = name.str();
     const std::filesystem::path segmentPath = config_.dataDir / "segments" / (baseName + ".events.msgpack");
     const std::filesystem::path metadataPath = config_.dataDir / "segments" / (baseName + ".meta.json");
+    const std::filesystem::path artifactsPath = config_.dataDir / "segments" / (baseName + ".artifacts.msgpack");
     const std::filesystem::path manifestPath = config_.dataDir / "manifest.jsonl";
 
     json payloadJson = json::array();
@@ -556,6 +1030,35 @@ void Server::writeSegment(const PendingSegment& segment) {
         out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
     }
 
+    json artifactsJson{
+        {"findings", json::array()},
+        {"incidents", json::array()},
+        {"order_anchors", json::array()},
+        {"protected_windows", json::array()}
+    };
+    for (const auto& record : segment.orderAnchors) {
+        artifactsJson["order_anchors"].push_back(orderAnchorToJson(record));
+    }
+    for (const auto& record : segment.protectedWindows) {
+        artifactsJson["protected_windows"].push_back(protectedWindowToJson(record));
+    }
+    for (const auto& record : segment.findings) {
+        artifactsJson["findings"].push_back(findingToJson(record));
+    }
+    for (const auto& record : segment.incidents) {
+        artifactsJson["incidents"].push_back(incidentToJson(record));
+    }
+    const std::vector<std::uint8_t> artifactsPayload = json::to_msgpack(artifactsJson);
+
+    {
+        std::ofstream artifactsOut(artifactsPath, std::ios::binary);
+        if (!artifactsOut.is_open()) {
+            throw std::runtime_error("failed to open tape-engine segment artifacts for write");
+        }
+        artifactsOut.write(reinterpret_cast<const char*>(artifactsPayload.data()),
+                           static_cast<std::streamsize>(artifactsPayload.size()));
+    }
+
     SegmentInfo info;
     info.segmentId = segmentId;
     info.revisionId = segment.revisionId;
@@ -564,6 +1067,7 @@ void Server::writeSegment(const PendingSegment& segment) {
     info.eventCount = static_cast<std::uint64_t>(segment.events.size());
     info.fileName = segmentPath.filename().string();
     info.metadataFileName = metadataPath.filename().string();
+    info.artifactsFileName = artifactsPath.filename().string();
     info.payloadSha256 = sha256Hex(payload);
     info.prevManifestHash = previousManifestHash;
 
@@ -572,6 +1076,7 @@ void Server::writeSegment(const PendingSegment& segment) {
         {"file_name", info.fileName},
         {"first_session_seq", info.firstSessionSeq},
         {"last_session_seq", info.lastSessionSeq},
+        {"artifacts_file_name", info.artifactsFileName},
         {"metadata_file_name", info.metadataFileName},
         {"payload_sha256", info.payloadSha256},
         {"prev_manifest_hash", info.prevManifestHash},
@@ -620,6 +1125,10 @@ Server::QuerySnapshot Server::captureQuerySnapshot() const {
     snapshot.latestFrozenSessionSeq = latestFrozenSessionSeq_;
     snapshot.segments = segments_;
     snapshot.liveEvents.assign(liveRing_.begin(), liveRing_.end());
+    snapshot.orderAnchors = orderAnchors_;
+    snapshot.protectedWindows = protectedWindows_;
+    snapshot.findings = findings_;
+    snapshot.incidents = incidents_;
     return snapshot;
 }
 
@@ -632,6 +1141,60 @@ std::uint64_t Server::resolveFrozenRevision(const QuerySnapshot& snapshot,
         throw std::runtime_error("requested revision_id is not frozen yet");
     }
     return requestedRevisionId;
+}
+
+Server::FrozenArtifacts Server::loadFrozenArtifacts(const QuerySnapshot& snapshot,
+                                                    std::uint64_t frozenRevisionId) const {
+    FrozenArtifacts artifacts;
+    for (const auto& segment : snapshot.segments) {
+        if (segment.revisionId > frozenRevisionId || segment.artifactsFileName.empty()) {
+            continue;
+        }
+
+        const std::filesystem::path artifactsPath = snapshot.dataDir / "segments" / segment.artifactsFileName;
+        std::ifstream in(artifactsPath, std::ios::binary);
+        if (!in.is_open()) {
+            continue;
+        }
+
+        const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                              std::istreambuf_iterator<char>());
+        if (bytes.empty()) {
+            continue;
+        }
+
+        const json payload = json::from_msgpack(bytes, true, false);
+        for (const auto& item : payload.value("order_anchors", json::array())) {
+            artifacts.orderAnchors.push_back(orderAnchorFromJson(item));
+        }
+        for (const auto& item : payload.value("protected_windows", json::array())) {
+            artifacts.protectedWindows.push_back(protectedWindowFromJson(item));
+        }
+        for (const auto& item : payload.value("findings", json::array())) {
+            artifacts.findings.push_back(findingFromJson(item));
+        }
+        for (const auto& item : payload.value("incidents", json::array())) {
+            artifacts.incidents.push_back(incidentFromJson(item));
+        }
+    }
+
+    std::sort(artifacts.orderAnchors.begin(), artifacts.orderAnchors.end(), [](const OrderAnchorRecord& left,
+                                                                                const OrderAnchorRecord& right) {
+        return std::tie(left.revisionId, left.anchorId) < std::tie(right.revisionId, right.anchorId);
+    });
+    std::sort(artifacts.protectedWindows.begin(), artifacts.protectedWindows.end(), [](const ProtectedWindowRecord& left,
+                                                                                        const ProtectedWindowRecord& right) {
+        return std::tie(left.revisionId, left.windowId) < std::tie(right.revisionId, right.windowId);
+    });
+    std::sort(artifacts.findings.begin(), artifacts.findings.end(), [](const FindingRecord& left,
+                                                                        const FindingRecord& right) {
+        return std::tie(left.revisionId, left.findingId) < std::tie(right.revisionId, right.findingId);
+    });
+    std::sort(artifacts.incidents.begin(), artifacts.incidents.end(), [](const IncidentRecord& left,
+                                                                          const IncidentRecord& right) {
+        return std::tie(left.revisionId, left.incidentRevisionId) < std::tie(right.revisionId, right.incidentRevisionId);
+    });
+    return artifacts;
 }
 
 std::vector<json> Server::loadEvents(const QuerySnapshot& snapshot,
@@ -776,6 +1339,54 @@ std::vector<json> Server::filterEventsByAnchor(const QuerySnapshot& snapshot,
     return results;
 }
 
+std::vector<json> Server::filterEventsByProtectedWindow(const QuerySnapshot& snapshot,
+                                                        std::uint64_t windowId,
+                                                        std::size_t limit,
+                                                        std::uint64_t frozenRevisionId,
+                                                        bool includeLiveTail,
+                                                        json* selectedWindowSummary) const {
+    std::optional<ProtectedWindowRecord> selectedWindow;
+    const FrozenArtifacts frozenArtifacts = loadFrozenArtifacts(snapshot, frozenRevisionId);
+    for (const auto& record : frozenArtifacts.protectedWindows) {
+        if (record.windowId == windowId) {
+            selectedWindow = record;
+        }
+    }
+    if (includeLiveTail) {
+        for (const auto& record : snapshot.protectedWindows) {
+            if (record.revisionId > frozenRevisionId && record.windowId == windowId) {
+                selectedWindow = record;
+            }
+        }
+    }
+
+    if (!selectedWindow.has_value()) {
+        throw std::runtime_error("protected window not found");
+    }
+
+    if (selectedWindowSummary != nullptr) {
+        *selectedWindowSummary = protectedWindowToJson(*selectedWindow);
+    }
+
+    std::vector<json> results;
+    const std::vector<json> allEvents = mergedEvents(snapshot, frozenRevisionId, includeLiveTail, 0, 0);
+    for (const auto& event : allEvents) {
+        const std::uint64_t tsEngineNs = event.value("ts_engine_ns", 0ULL);
+        if (tsEngineNs < selectedWindow->startEngineNs || tsEngineNs > selectedWindow->endEngineNs) {
+            continue;
+        }
+        if (!selectedWindow->instrumentId.empty() &&
+            event.value("instrument_id", std::string()) != selectedWindow->instrumentId) {
+            continue;
+        }
+        results.push_back(event);
+        if (limit > 0 && results.size() >= limit) {
+            break;
+        }
+    }
+    return results;
+}
+
 json Server::buildReplaySnapshot(const QuerySnapshot& snapshot,
                                  std::uint64_t targetSessionSeq,
                                  std::size_t depthLimit,
@@ -890,7 +1501,7 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
         }
     }
 
-    std::vector<EngineEvent> writtenEvents;
+    PendingSegment pendingSegment;
     std::uint64_t assignedRevisionId = 0;
 
     {
@@ -922,7 +1533,8 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
                 reset.resetPreviousSourceSeq = cursor.lastAcceptedSourceSeq;
                 reset.resetSourceSeq = record.sourceSeq;
                 appendLiveEvent(reset);
-                writtenEvents.push_back(reset);
+                pendingSegment.events.push_back(reset);
+                updatePhase3StateUnlocked(reset);
                 resetSourceSeqWindowUnlocked(cursor);
                 cursor.lastAcceptedSourceSeq = 0;
                 cursor.hasLastAccepted = false;
@@ -945,7 +1557,8 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
                 gap.gapStartSourceSeq = cursor.lastAcceptedSourceSeq + 1;
                 gap.gapEndSourceSeq = record.sourceSeq - 1;
                 appendLiveEvent(gap);
-                writtenEvents.push_back(gap);
+                pendingSegment.events.push_back(gap);
+                updatePhase3StateUnlocked(gap);
                 ++ack.gapMarkers;
                 if (ack.firstSessionSeq == 0) {
                     ack.firstSessionSeq = gap.sessionSeq;
@@ -965,7 +1578,8 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
             event.bridgeRecord = record;
 
             appendLiveEvent(event);
-            writtenEvents.push_back(event);
+            pendingSegment.events.push_back(event);
+            updatePhase3StateUnlocked(event);
             rememberSourceSeqUnlocked(cursor, record.sourceSeq);
             cursor.lastAcceptedSourceSeq = std::max(cursor.lastAcceptedSourceSeq, record.sourceSeq);
             cursor.hasLastAccepted = true;
@@ -976,10 +1590,33 @@ IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
             }
             ack.lastSessionSeq = event.sessionSeq;
         }
+        pendingSegment.revisionId = assignedRevisionId;
+        if (assignedRevisionId > 0) {
+            for (const auto& record : orderAnchors_) {
+                if (record.revisionId == assignedRevisionId) {
+                    pendingSegment.orderAnchors.push_back(record);
+                }
+            }
+            for (const auto& record : protectedWindows_) {
+                if (record.revisionId == assignedRevisionId) {
+                    pendingSegment.protectedWindows.push_back(record);
+                }
+            }
+            for (const auto& record : findings_) {
+                if (record.revisionId == assignedRevisionId) {
+                    pendingSegment.findings.push_back(record);
+                }
+            }
+            for (const auto& record : incidents_) {
+                if (record.revisionId == assignedRevisionId) {
+                    pendingSegment.incidents.push_back(record);
+                }
+            }
+        }
         ack.assignedRevisionId = assignedRevisionId;
     }
 
-    enqueueSegment(PendingSegment{assignedRevisionId, std::move(writtenEvents)});
+    enqueueSegment(std::move(pendingSegment));
 
     return ack;
 }
@@ -1041,6 +1678,123 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             response.events.push_back(eventToJson(snapshot.liveEvents[i]));
         }
         response.summary["returned_events"] = response.events.size();
+        return response;
+    }
+
+    if (request.operation == "list_order_anchors" ||
+        request.operation == "list_protected_windows" ||
+        request.operation == "list_findings" ||
+        request.operation == "list_incidents") {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        const std::size_t limit = request.limit == 0 ? 100 : request.limit;
+        const FrozenArtifacts frozenArtifacts = loadFrozenArtifacts(snapshot, frozenRevisionId);
+        response.events = json::array();
+
+        if (request.operation == "list_order_anchors") {
+            std::vector<OrderAnchorRecord> records = frozenArtifacts.orderAnchors;
+            if (request.includeLiveTail) {
+                for (const auto& record : snapshot.orderAnchors) {
+                    if (record.revisionId > frozenRevisionId) {
+                        records.push_back(record);
+                    }
+                }
+            }
+            for (auto it = records.rbegin();
+                 it != records.rend() && response.events.size() < limit;
+                 ++it) {
+                response.events.push_back(orderAnchorToJson(*it));
+            }
+        } else if (request.operation == "list_protected_windows") {
+            std::vector<ProtectedWindowRecord> records = frozenArtifacts.protectedWindows;
+            if (request.includeLiveTail) {
+                for (const auto& record : snapshot.protectedWindows) {
+                    if (record.revisionId > frozenRevisionId) {
+                        records.push_back(record);
+                    }
+                }
+            }
+            for (auto it = records.rbegin();
+                 it != records.rend() && response.events.size() < limit;
+                 ++it) {
+                response.events.push_back(protectedWindowToJson(*it));
+            }
+        } else if (request.operation == "list_findings") {
+            std::vector<FindingRecord> records = frozenArtifacts.findings;
+            if (request.includeLiveTail) {
+                for (const auto& record : snapshot.findings) {
+                    if (record.revisionId > frozenRevisionId) {
+                        records.push_back(record);
+                    }
+                }
+            }
+            for (auto it = records.rbegin();
+                 it != records.rend() && response.events.size() < limit;
+                 ++it) {
+                response.events.push_back(findingToJson(*it));
+            }
+        } else if (request.operation == "list_incidents") {
+            std::vector<IncidentRecord> records = frozenArtifacts.incidents;
+            if (request.includeLiveTail) {
+                for (const auto& record : snapshot.incidents) {
+                    if (record.revisionId > frozenRevisionId) {
+                        records.push_back(record);
+                    }
+                }
+            }
+            for (auto it = records.rbegin();
+                 it != records.rend() && response.events.size() < limit;
+                 ++it) {
+                response.events.push_back(incidentToJson(*it));
+            }
+        }
+
+        response.summary = {
+            {"includes_mutable_tail", request.includeLiveTail},
+            {"returned_events", response.events.size()},
+            {"served_revision_id", frozenRevisionId}
+        };
+        return response;
+    }
+
+    if (request.operation == "read_protected_window") {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        const std::size_t limit = request.limit == 0 ? 200 : request.limit;
+        json selectedWindowSummary = json::object();
+        std::vector<json> events;
+        try {
+            events = filterEventsByProtectedWindow(snapshot,
+                                                  request.windowId,
+                                                  limit,
+                                                  frozenRevisionId,
+                                                  request.includeLiveTail,
+                                                  &selectedWindowSummary);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        response.events = json::array();
+        for (const auto& event : events) {
+            response.events.push_back(event);
+        }
+        response.summary = {
+            {"includes_mutable_tail", request.includeLiveTail},
+            {"protected_window", selectedWindowSummary},
+            {"returned_events", response.events.size()},
+            {"served_revision_id", frozenRevisionId},
+            {"window_id", request.windowId}
+        };
         return response;
     }
 

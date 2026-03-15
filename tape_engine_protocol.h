@@ -51,6 +51,7 @@ struct QueryRequest {
     std::uint64_t fromSessionSeq = 0;
     std::uint64_t toSessionSeq = 0;
     std::uint64_t targetSessionSeq = 0;
+    std::uint64_t windowId = 0;
     std::size_t limit = 0;
     bool includeLiveTail = false;
     std::uint64_t traceId = 0;

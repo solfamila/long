@@ -51,6 +51,7 @@ struct SegmentInfo {
     std::uint64_t eventCount = 0;
     std::string fileName;
     std::string metadataFileName;
+    std::string artifactsFileName;
     std::string payloadSha256;
     std::string prevManifestHash;
     std::string manifestHash;
@@ -65,6 +66,62 @@ struct EngineSnapshot {
     std::size_t writerBacklogSegments = 0;
     std::vector<EngineEvent> liveEvents;
     std::vector<SegmentInfo> segments;
+};
+
+struct OrderAnchorRecord {
+    std::uint64_t anchorId = 0;
+    std::uint64_t revisionId = 0;
+    std::uint64_t sessionSeq = 0;
+    std::uint64_t tsEngineNs = 0;
+    std::string eventKind;
+    std::string instrumentId;
+    BridgeAnchorIdentity anchor;
+    std::string note;
+};
+
+struct ProtectedWindowRecord {
+    std::uint64_t windowId = 0;
+    std::uint64_t revisionId = 0;
+    std::uint64_t anchorSessionSeq = 0;
+    std::uint64_t startEngineNs = 0;
+    std::uint64_t endEngineNs = 0;
+    std::string reason;
+    std::string instrumentId;
+    BridgeAnchorIdentity anchor;
+};
+
+struct FindingRecord {
+    std::uint64_t findingId = 0;
+    std::uint64_t revisionId = 0;
+    std::string kind;
+    std::string severity;
+    double confidence = 0.0;
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    std::uint64_t tsEngineNs = 0;
+    std::string instrumentId;
+    std::string title;
+    std::string summary;
+    bool overlapsOrder = false;
+    BridgeAnchorIdentity overlappingAnchor;
+};
+
+struct IncidentRecord {
+    std::uint64_t logicalIncidentId = 0;
+    std::uint64_t incidentRevisionId = 0;
+    std::uint64_t revisionId = 0;
+    std::string kind;
+    std::string severity;
+    double confidence = 0.0;
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    std::uint64_t promotedByFindingId = 0;
+    std::uint64_t tsEngineNs = 0;
+    std::string instrumentId;
+    std::string title;
+    std::string summary;
+    bool overlapsOrder = false;
+    BridgeAnchorIdentity overlappingAnchor;
 };
 
 enum class RequestKind {
@@ -96,6 +153,10 @@ private:
     struct PendingSegment {
         std::uint64_t revisionId = 0;
         std::vector<EngineEvent> events;
+        std::vector<OrderAnchorRecord> orderAnchors;
+        std::vector<ProtectedWindowRecord> protectedWindows;
+        std::vector<FindingRecord> findings;
+        std::vector<IncidentRecord> incidents;
     };
 
     struct ConnectionCursor {
@@ -118,6 +179,28 @@ private:
         std::uint64_t latestFrozenSessionSeq = 0;
         std::vector<SegmentInfo> segments;
         std::vector<EngineEvent> liveEvents;
+        std::vector<OrderAnchorRecord> orderAnchors;
+        std::vector<ProtectedWindowRecord> protectedWindows;
+        std::vector<FindingRecord> findings;
+        std::vector<IncidentRecord> incidents;
+    };
+
+    struct FrozenArtifacts {
+        std::vector<OrderAnchorRecord> orderAnchors;
+        std::vector<ProtectedWindowRecord> protectedWindows;
+        std::vector<FindingRecord> findings;
+        std::vector<IncidentRecord> incidents;
+    };
+
+    struct AnalyzerBookState {
+        double bidTickPrice = 0.0;
+        double askTickPrice = 0.0;
+        double lastTradePrice = 0.0;
+        std::vector<BookLevel> bidBook;
+        std::vector<BookLevel> askBook;
+        double lastEffectiveBid = 0.0;
+        double lastEffectiveAsk = 0.0;
+        bool hasInside = false;
     };
 
     void acceptLoop();
@@ -134,13 +217,35 @@ private:
     QueryResponse rejectResponse(const QueryRequest& request,
                                  const std::string& error) const;
     void appendLiveEvent(const EngineEvent& event);
+    bool restoreFrozenState(std::string* error);
     void writeSegment(const PendingSegment& segment);
     void enqueueSegment(PendingSegment segment);
     std::string resolveInstrumentId(const BridgeOutboxRecord& record) const;
     void rememberSourceSeqUnlocked(ConnectionCursor& cursor, std::uint64_t sourceSeq);
     void resetSourceSeqWindowUnlocked(ConnectionCursor& cursor);
+    void updatePhase3StateUnlocked(const EngineEvent& event);
+    void recordOrderAnchorUnlocked(const EngineEvent& event);
+    void addProtectedWindowUnlocked(const EngineEvent& event,
+                                    const std::string& reason,
+                                    const BridgeAnchorIdentity& anchor);
+    void recordFindingUnlocked(const EngineEvent& event,
+                               const std::string& kind,
+                               const std::string& severity,
+                               double confidence,
+                               const std::string& title,
+                               const std::string& summary,
+                               const BridgeAnchorIdentity& overlappingAnchor,
+                               bool overlapsOrder);
+    void recordIncidentUnlocked(const EngineEvent& event,
+                                const FindingRecord& finding,
+                                const BridgeAnchorIdentity& overlappingAnchor,
+                                bool overlapsOrder);
+    void updateAnalyzerBookUnlocked(const EngineEvent& event);
+    BridgeAnchorIdentity findOverlappingOrderAnchorUnlocked(std::uint64_t tsEngineNs) const;
     QuerySnapshot captureQuerySnapshot() const;
     std::uint64_t resolveFrozenRevision(const QuerySnapshot& snapshot, std::uint64_t requestedRevisionId) const;
+    FrozenArtifacts loadFrozenArtifacts(const QuerySnapshot& snapshot,
+                                        std::uint64_t frozenRevisionId) const;
     std::vector<json> loadEvents(const QuerySnapshot& snapshot,
                                  std::uint64_t frozenRevisionId,
                                  std::uint64_t fromSessionSeq,
@@ -164,6 +269,12 @@ private:
                                            std::size_t limit,
                                            std::uint64_t frozenRevisionId,
                                            bool includeLiveTail) const;
+    std::vector<json> filterEventsByProtectedWindow(const QuerySnapshot& snapshot,
+                                                    std::uint64_t windowId,
+                                                    std::size_t limit,
+                                                    std::uint64_t frozenRevisionId,
+                                                    bool includeLiveTail,
+                                                    json* selectedWindowSummary) const;
     json buildReplaySnapshot(const QuerySnapshot& snapshot,
                              std::uint64_t targetSessionSeq,
                              std::size_t depthLimit,
@@ -182,6 +293,16 @@ private:
     std::uint64_t latestFrozenSessionSeq_ = 0;
     std::string lastManifestHash_;
     std::string writerFailure_;
+    AnalyzerBookState analyzerBookState_;
+    std::vector<OrderAnchorRecord> orderAnchors_;
+    std::vector<ProtectedWindowRecord> protectedWindows_;
+    std::vector<FindingRecord> findings_;
+    std::vector<IncidentRecord> incidents_;
+    std::uint64_t nextOrderAnchorId_ = 1;
+    std::uint64_t nextProtectedWindowId_ = 1;
+    std::uint64_t nextFindingId_ = 1;
+    std::uint64_t nextLogicalIncidentId_ = 1;
+    std::uint64_t nextIncidentRevisionId_ = 1;
 
     std::mutex ingestQueueMutex_;
     std::condition_variable ingestQueueCv_;

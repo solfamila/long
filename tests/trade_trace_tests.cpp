@@ -1059,6 +1059,274 @@ void testTapeEngineRevisionPinnedReadsCanOverlayMutableTail() {
     server.stop();
 }
 
+void testTapeEnginePhase3FindingsIncidentsAndProtectedWindows() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:8101:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for phase 3 findings test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3";
+    options.runtimeSessionId = "runtime-engine-phase3";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(7001, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      211, 1101, 0, "", "phase 3 anchor", "2026-03-14T09:40:00.100");
+    orderIntent.instrumentId = "ib:conid:8101:STK:SMART:USD:INTC";
+    options.batchSeq = 91;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the anchor batch for phase 3: " + error);
+
+    BridgeOutboxRecord bidTick = makeBridgeRecord(7002, "market_tick", "BrokerMarketData", "INTC", "BID",
+                                                  0, 0, 0, "", "bid tick", "2026-03-14T09:40:00.120");
+    bidTick.instrumentId = "ib:conid:8101:STK:SMART:USD:INTC";
+    bidTick.marketField = 1;
+    bidTick.price = 45.10;
+
+    BridgeOutboxRecord askTick = makeBridgeRecord(7003, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                  0, 0, 0, "", "ask tick", "2026-03-14T09:40:00.130");
+    askTick.instrumentId = "ib:conid:8101:STK:SMART:USD:INTC";
+    askTick.marketField = 2;
+    askTick.price = 45.11;
+
+    options.batchSeq = 92;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({bidTick, askTick}, options)), &error),
+           "tape-engine should accept the initial market ticks for phase 3: " + error);
+
+    BridgeOutboxRecord widenedAsk = makeBridgeRecord(7004, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                     0, 0, 0, "", "ask widened", "2026-03-14T09:40:00.150");
+    widenedAsk.instrumentId = "ib:conid:8101:STK:SMART:USD:INTC";
+    widenedAsk.marketField = 2;
+    widenedAsk.price = 45.13;
+
+    options.batchSeq = 93;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAsk}, options)), &error),
+           "tape-engine should accept the widening market tick for phase 3: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() == 3;
+    }, "tape-engine should freeze all phase 3 test batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest anchorsRequest;
+    anchorsRequest.requestId = "anchors-phase3";
+    anchorsRequest.operation = "list_order_anchors";
+    expect(client.query(anchorsRequest, &response, &error), "phase 3 anchor query should succeed: " + error);
+    expect(response.events.is_array() && response.events.size() == 1, "phase 3 should record the order anchor");
+    expect(response.events.at(0).value("event_kind", std::string()) == "order_intent", "phase 3 anchor list should preserve the order intent event kind");
+    expect(response.events.at(0).value("instrument_id", std::string()) == "ib:conid:8101:STK:SMART:USD:INTC", "phase 3 anchor list should preserve canonical instrument identity");
+
+    tape_engine::QueryRequest windowsRequest;
+    windowsRequest.requestId = "windows-phase3";
+    windowsRequest.operation = "list_protected_windows";
+    expect(client.query(windowsRequest, &response, &error), "phase 3 protected window query should succeed: " + error);
+    expect(response.events.is_array() && response.events.size() >= 2, "phase 3 should create protected windows for anchors and incident promotion");
+    const std::vector<std::string> windowReasons = {
+        response.events.at(0).value("reason", std::string()),
+        response.events.at(1).value("reason", std::string())
+    };
+    expect(std::find(windowReasons.begin(), windowReasons.end(), "order_intent") != windowReasons.end() ||
+           std::find(windowReasons.begin(), windowReasons.end(), "incident_promotion") != windowReasons.end(),
+           "phase 3 protected windows should include anchor or incident reasons");
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 findings query should succeed: " + error);
+    expect(response.events.is_array() && !response.events.empty(), "phase 3 should emit at least one finding");
+    expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "phase 3 should emit a spread_widened finding");
+    expect(response.events.at(0).value("overlaps_order", false), "phase 3 spread widening finding should overlap the order anchor window");
+
+    tape_engine::QueryRequest incidentsRequest;
+    incidentsRequest.requestId = "incidents-phase3";
+    incidentsRequest.operation = "list_incidents";
+    expect(client.query(incidentsRequest, &response, &error), "phase 3 incidents query should succeed: " + error);
+    expect(response.events.is_array() && !response.events.empty(), "phase 3 should emit at least one incident");
+    expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "phase 3 incident should inherit the finding kind");
+    expect(response.events.at(0).value("overlaps_order", false), "phase 3 incident should report order overlap");
+
+    server.stop();
+}
+
+void testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-restart";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-restart.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9101:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    std::uint64_t persistedWindowId = 0;
+    std::uint64_t persistedAnchorId = 0;
+
+    {
+        tape_engine::Server server(config);
+        std::string startError;
+        expect(server.start(&startError), "tape-engine should start for phase 3 restart persistence test: " + startError);
+
+        bridge_batch::BuildOptions options;
+        options.appSessionId = "app-engine-phase3-restart";
+        options.runtimeSessionId = "runtime-engine-phase3-restart";
+        options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+        bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+        std::string error;
+
+        BridgeOutboxRecord orderIntent = makeBridgeRecord(8101, "order_intent", "WebSocket", "INTC", "BUY",
+                                                          311, 2101, 0, "", "phase 3 restart anchor", "2026-03-14T09:41:00.100");
+        orderIntent.instrumentId = "ib:conid:9101:STK:SMART:USD:INTC";
+        options.batchSeq = 101;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+               "tape-engine should accept the restart anchor batch: " + error);
+
+        BridgeOutboxRecord bidTick = makeBridgeRecord(8102, "market_tick", "BrokerMarketData", "INTC", "BID",
+                                                      0, 0, 0, "", "restart bid", "2026-03-14T09:41:00.120");
+        bidTick.instrumentId = "ib:conid:9101:STK:SMART:USD:INTC";
+        bidTick.marketField = 1;
+        bidTick.price = 45.20;
+
+        BridgeOutboxRecord askTick = makeBridgeRecord(8103, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                      0, 0, 0, "", "restart ask", "2026-03-14T09:41:00.130");
+        askTick.instrumentId = "ib:conid:9101:STK:SMART:USD:INTC";
+        askTick.marketField = 2;
+        askTick.price = 45.21;
+
+        options.batchSeq = 102;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({bidTick, askTick}, options)), &error),
+               "tape-engine should accept the restart market seed batch: " + error);
+
+        BridgeOutboxRecord widenedAsk = makeBridgeRecord(8104, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                         0, 0, 0, "", "restart widened ask", "2026-03-14T09:41:00.150");
+        widenedAsk.instrumentId = "ib:conid:9101:STK:SMART:USD:INTC";
+        widenedAsk.marketField = 2;
+        widenedAsk.price = 45.24;
+
+        options.batchSeq = 103;
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAsk}, options)), &error),
+               "tape-engine should accept the restart widening batch: " + error);
+
+        waitUntil([&]() {
+            const auto snapshot = server.snapshot();
+            return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() == 3;
+        }, "tape-engine should freeze restart phase 3 batches");
+
+        tape_engine::Client client(socketPath.string());
+        tape_engine::QueryResponse response;
+
+        tape_engine::QueryRequest anchorsRequest;
+        anchorsRequest.requestId = "anchors-phase3-restart-initial";
+        anchorsRequest.operation = "list_order_anchors";
+        expect(client.query(anchorsRequest, &response, &error), "initial phase 3 restart anchor query should succeed: " + error);
+        expect(response.events.is_array() && !response.events.empty(), "restart phase 3 setup should persist at least one anchor");
+        persistedAnchorId = response.events.at(0).value("anchor_id", 0ULL);
+        expect(persistedAnchorId > 0, "restart phase 3 setup should expose a persisted anchor id");
+
+        tape_engine::QueryRequest windowsRequest;
+        windowsRequest.requestId = "windows-phase3-restart-initial";
+        windowsRequest.operation = "list_protected_windows";
+        expect(client.query(windowsRequest, &response, &error), "initial phase 3 restart protected window query should succeed: " + error);
+        expect(response.events.is_array() && !response.events.empty(), "restart phase 3 setup should persist protected windows");
+        for (const auto& item : response.events) {
+            if (item.value("reason", std::string()) == "order_intent") {
+                persistedWindowId = item.value("window_id", 0ULL);
+                break;
+            }
+        }
+        expect(persistedWindowId > 0, "restart phase 3 setup should include an order_intent protected window");
+
+        server.stop();
+    }
+
+    {
+        tape_engine::Server restarted(config);
+        std::string startError;
+        expect(restarted.start(&startError), "tape-engine should restart and restore frozen phase 3 state: " + startError);
+        const tape_engine::EngineSnapshot restoredSnapshot = restarted.snapshot();
+        expect(restoredSnapshot.latestFrozenRevisionId == 3, "restart should restore the latest frozen revision id");
+        expect(restoredSnapshot.segments.size() == 3, "restart should restore frozen segment metadata");
+
+        tape_engine::Client client(socketPath.string());
+        tape_engine::QueryResponse response;
+        std::string error;
+
+        tape_engine::QueryRequest findingsRequest;
+        findingsRequest.requestId = "findings-phase3-restart-restored";
+        findingsRequest.operation = "list_findings";
+        expect(client.query(findingsRequest, &response, &error), "restored phase 3 findings query should succeed: " + error);
+        expect(response.events.is_array() && !response.events.empty(), "restart should restore frozen findings");
+        expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "restart should restore the spread_widened finding");
+
+        tape_engine::QueryRequest readWindowRequest;
+        readWindowRequest.requestId = "window-phase3-restart-restored";
+        readWindowRequest.operation = "read_protected_window";
+        readWindowRequest.windowId = persistedWindowId;
+        expect(client.query(readWindowRequest, &response, &error), "restored protected window read should succeed: " + error);
+        expect(response.summary.value("protected_window", json::object()).value("window_id", 0ULL) == persistedWindowId,
+               "restored protected window read should return the requested window id");
+        expect(response.events.is_array() && response.events.size() >= 3,
+               "restored protected window read should return the anchored evidence window");
+        bool sawOrderIntent = false;
+        bool sawMarketTick = false;
+        for (const auto& item : response.events) {
+            const std::string kind = item.value("event_kind", std::string());
+            sawOrderIntent = sawOrderIntent || kind == "order_intent";
+            sawMarketTick = sawMarketTick || kind == "market_tick";
+        }
+        expect(sawOrderIntent, "restored protected window read should include the anchored order intent");
+        expect(sawMarketTick, "restored protected window read should include surrounding market evidence");
+
+        bridge_batch::BuildOptions options;
+        options.appSessionId = "app-engine-phase3-restart";
+        options.runtimeSessionId = "runtime-engine-phase3-restart";
+        options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+        options.batchSeq = 104;
+
+        bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+        BridgeOutboxRecord secondOrderIntent = makeBridgeRecord(8105, "order_intent", "WebSocket", "INTC", "BUY",
+                                                               312, 2102, 0, "", "phase 3 restart second anchor", "2026-03-14T09:41:01.100");
+        secondOrderIntent.instrumentId = "ib:conid:9101:STK:SMART:USD:INTC";
+        expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({secondOrderIntent}, options)), &error),
+               "restarted tape-engine should accept a new anchored order batch: " + error);
+
+        waitUntil([&]() {
+            const auto snapshot = restarted.snapshot();
+            return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() == 4;
+        }, "restarted tape-engine should freeze the post-restart anchor batch");
+
+        tape_engine::QueryRequest anchorsRequest;
+        anchorsRequest.requestId = "anchors-phase3-restart-restored";
+        anchorsRequest.operation = "list_order_anchors";
+        expect(client.query(anchorsRequest, &response, &error), "restored phase 3 anchor query should succeed after new ingest: " + error);
+        expect(response.events.is_array() && response.events.size() >= 2, "restart should preserve prior anchors and append new ones");
+        expect(response.events.at(0).value("anchor_id", 0ULL) > persistedAnchorId,
+               "post-restart anchors should continue incrementing anchor ids");
+
+        restarted.stop();
+    }
+}
+
 void testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity() {
     const fs::path rootDir = testDataDir() / "tape-engine-reset-marker";
     const fs::path socketPath = testDataDir() / "tape-engine-reset-marker.sock";
@@ -2066,6 +2334,8 @@ int main() {
         testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq();
         testTapeEngineQueryStatusAndReads();
         testTapeEngineRevisionPinnedReadsCanOverlayMutableTail();
+        testTapeEnginePhase3FindingsIncidentsAndProtectedWindows();
+        testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();
         testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity();
         testTapeEngineReplaySnapshotRebuildsFrozenMarketState();
         testBridgeMarketDataEmissionExpandsPublicEvents();
