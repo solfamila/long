@@ -96,6 +96,7 @@ set(APP_SOURCES
 set(TAPE_ENGINE_SOURCES
     tape_engine_main.cpp
     tape_engine.cpp
+    tape_engine_client.cpp
     tape_engine_protocol.cpp
     bridge_batch_codec.cpp
 )
@@ -107,6 +108,11 @@ add_subdirectory("${IXWEBSOCKET_DIR}" "${CMAKE_BINARY_DIR}/third_party/ixwebsock
 
 add_executable(tws_gui MACOSX_BUNDLE ${APP_SOURCES})
 add_executable(tape_engine ${TAPE_ENGINE_SOURCES})
+add_executable(tape_engine_ctl
+    tape_engine_ctl.cpp
+    tape_engine_client.cpp
+    tape_engine_protocol.cpp
+)
 
 target_include_directories(tws_gui PRIVATE
     "${CMAKE_SOURCE_DIR}"
@@ -120,12 +126,22 @@ target_include_directories(tape_engine PRIVATE
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
+target_include_directories(tape_engine_ctl PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${IXWEBSOCKET_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
 target_link_libraries(tws_gui PRIVATE
     Threads::Threads
     ixwebsocket::ixwebsocket
 )
 
 target_link_libraries(tape_engine PRIVATE
+    Threads::Threads
+)
+
+target_link_libraries(tape_engine_ctl PRIVATE
     Threads::Threads
 )
 
@@ -262,21 +278,33 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
         "${VENDORED_IB_API_DIR}"
         ${IB_API_EXTRA_INCLUDE_DIRS}
     )
+    target_include_directories(tape_engine_ctl PRIVATE
+        "${VENDORED_IB_API_DIR}"
+        ${IB_API_EXTRA_INCLUDE_DIRS}
+    )
     target_compile_definitions(tape_engine PRIVATE ${IB_API_COMPILE_DEFINITIONS})
+    target_compile_definitions(tape_engine_ctl PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     message(STATUS "Using vendored Interactive Brokers API sources from ${VENDORED_IB_API_DIR}")
 elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
     target_include_directories(tws_gui PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_engine PRIVATE "${IB_API_INCLUDE_DIR}")
+    target_include_directories(tape_engine_ctl PRIVATE "${IB_API_INCLUDE_DIR}")
     message(STATUS "Using Interactive Brokers API from ${IB_API_INCLUDE_DIR}")
 else()
     target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+    target_include_directories(tape_engine_ctl PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_compile_definitions(tws_gui PRIVATE
         TWS_GUI_MOCK_IBAPI=1
         TWS_HAS_PROTOBUF_API=1
         TWS_HAS_ORDER_CANCEL_OBJECT=1
     )
     target_compile_definitions(tape_engine PRIVATE
+        TWS_GUI_MOCK_IBAPI=1
+        TWS_HAS_PROTOBUF_API=1
+        TWS_HAS_ORDER_CANCEL_OBJECT=1
+    )
+    target_compile_definitions(tape_engine_ctl PRIVATE
         TWS_GUI_MOCK_IBAPI=1
         TWS_HAS_PROTOBUF_API=1
         TWS_HAS_ORDER_CANCEL_OBJECT=1
@@ -362,6 +390,7 @@ if(BUILD_TESTING)
         bridge_batch_codec.cpp
         bridge_batch_transport.cpp
         tape_engine.cpp
+        tape_engine_client.cpp
         tape_engine_protocol.cpp
         trace_exporter.cpp
         trading_ui_format.cpp

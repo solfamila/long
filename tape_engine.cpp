@@ -2,6 +2,7 @@
 
 #include <CommonCrypto/CommonDigest.h>
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -246,8 +247,7 @@ void Server::acceptLoop() {
                 queue_.push_back(std::move(request));
             }
             queueCv_.notify_one();
-            const IngestAck ack = future.get();
-            writeAll(clientFd, encodeAckFrame(ack));
+            writeAll(clientFd, future.get());
         } catch (...) {
         }
 
@@ -271,9 +271,9 @@ void Server::sequencerLoop() {
         }
 
         try {
-            request->promise.set_value(processFrame(request->frame));
+            request->promise.set_value(processRequest(request->frame));
         } catch (const std::exception& error) {
-            request->promise.set_value(rejectAck(0, "", "", error.what()));
+            request->promise.set_value(encodeAckFrame(rejectAck(0, "", "", error.what())));
         }
     }
 }
@@ -370,7 +370,111 @@ void Server::writeSegment(const std::vector<EngineEvent>& events) {
     segments_.push_back(std::move(info));
 }
 
-IngestAck Server::processFrame(const std::vector<std::uint8_t>& frame) {
+std::vector<json> Server::loadAllEventsUnlocked() const {
+    std::vector<json> events;
+    for (const auto& segment : segments_) {
+        const std::filesystem::path segmentPath = config_.dataDir / "segments" / segment.fileName;
+        std::ifstream in(segmentPath);
+        if (!in.is_open()) {
+            continue;
+        }
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty()) {
+                continue;
+            }
+            json parsed = json::parse(line, nullptr, false);
+            if (!parsed.is_discarded()) {
+                events.push_back(std::move(parsed));
+            }
+        }
+    }
+    return events;
+}
+
+std::vector<json> Server::filterEventsByRangeUnlocked(std::uint64_t fromSessionSeq,
+                                                      std::uint64_t toSessionSeq,
+                                                      std::size_t limit,
+                                                      bool includeLiveTail) const {
+    std::vector<json> results;
+    const auto allEvents = loadAllEventsUnlocked();
+    for (const auto& event : allEvents) {
+        const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+        if (sessionSeq < fromSessionSeq) {
+            continue;
+        }
+        if (toSessionSeq > 0 && sessionSeq > toSessionSeq) {
+            continue;
+        }
+        results.push_back(event);
+        if (limit > 0 && results.size() >= limit) {
+            return results;
+        }
+    }
+
+    if (includeLiveTail) {
+        for (const auto& event : liveRing_) {
+            if (event.sessionSeq < fromSessionSeq) {
+                continue;
+            }
+            if (toSessionSeq > 0 && event.sessionSeq > toSessionSeq) {
+                continue;
+            }
+            const bool alreadyPresent = std::any_of(results.begin(), results.end(), [&](const json& existing) {
+                return existing.value("session_seq", 0ULL) == event.sessionSeq;
+            });
+            if (!alreadyPresent) {
+                results.push_back(eventToJson(event));
+                if (limit > 0 && results.size() >= limit) {
+                    return results;
+                }
+            }
+        }
+    }
+
+    return results;
+}
+
+std::vector<json> Server::filterEventsByAnchorUnlocked(std::uint64_t traceId,
+                                                       long long orderId,
+                                                       long long permId,
+                                                       const std::string& execId,
+                                                       std::size_t limit) const {
+    std::vector<json> results;
+    const auto allEvents = loadAllEventsUnlocked();
+    for (const auto& event : allEvents) {
+        const json anchor = event.value("anchor", json::object());
+        const bool matchesTrace = traceId > 0 && anchor.value("trace_id", 0ULL) == traceId;
+        const bool matchesOrder = orderId > 0 && anchor.value("order_id", 0LL) == orderId;
+        const bool matchesPerm = permId > 0 && anchor.value("perm_id", 0LL) == permId;
+        const bool matchesExec = !execId.empty() && anchor.value("exec_id", std::string()) == execId;
+        if (!matchesTrace && !matchesOrder && !matchesPerm && !matchesExec) {
+            continue;
+        }
+        results.push_back(event);
+        if (limit > 0 && results.size() >= limit) {
+            break;
+        }
+    }
+    return results;
+}
+
+std::vector<std::uint8_t> Server::processRequest(const std::vector<std::uint8_t>& frame) {
+    const json payload = decodeFramedJson(frame);
+    const std::string schema = payload.value("schema", std::string());
+    if (schema == bridge_batch::kSchemaName) {
+        return encodeAckFrame(processIngestFrame(frame));
+    }
+    if (schema == kQueryRequestSchema) {
+        return encodeQueryResponseFrame(processQueryFrame(frame));
+    }
+
+    QueryRequest request;
+    request.operation = "unknown";
+    return encodeQueryResponseFrame(rejectResponse(request, "unknown tape-engine request schema"));
+}
+
+IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
     const bridge_batch::Batch batch = bridge_batch::decodeFrame(frame);
     IngestAck ack;
     ack.batchSeq = batch.header.batchSeq;
@@ -460,6 +564,96 @@ IngestAck Server::processFrame(const std::vector<std::uint8_t>& frame) {
     }
 
     return ack;
+}
+
+QueryResponse Server::rejectResponse(const QueryRequest& request,
+                                     const std::string& error) const {
+    QueryResponse response;
+    response.requestId = request.requestId;
+    response.operation = request.operation;
+    response.status = "error";
+    response.error = error;
+    return response;
+}
+
+QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) {
+    const QueryRequest request = decodeQueryRequestFrame(frame);
+    QueryResponse response;
+    response.requestId = request.requestId;
+    response.operation = request.operation;
+
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    if (request.operation == "status") {
+        response.summary = {
+            {"data_dir", config_.dataDir.string()},
+            {"instrument_id", config_.instrumentId},
+            {"last_manifest_hash", lastManifestHash_},
+            {"latest_session_seq", nextSessionSeq_ > 0 ? nextSessionSeq_ - 1 : 0},
+            {"live_event_count", liveRing_.size()},
+            {"next_segment_id", nextSegmentId_},
+            {"next_session_seq", nextSessionSeq_},
+            {"segment_count", segments_.size()},
+            {"socket_path", config_.socketPath}
+        };
+        return response;
+    }
+
+    if (request.operation == "read_live_tail") {
+        const std::size_t limit = request.limit == 0 ? 50 : request.limit;
+        response.summary = {
+            {"includes_mutable_tail", true},
+            {"live_tail_high_water_seq", liveRing_.empty() ? 0 : liveRing_.back().sessionSeq},
+            {"returned_events", 0}
+        };
+        std::size_t start = liveRing_.size() > limit ? liveRing_.size() - limit : 0;
+        response.events = json::array();
+        for (std::size_t i = start; i < liveRing_.size(); ++i) {
+            response.events.push_back(eventToJson(liveRing_[i]));
+        }
+        response.summary["returned_events"] = response.events.size();
+        return response;
+    }
+
+    if (request.operation == "read_range") {
+        const std::uint64_t from = request.fromSessionSeq == 0 ? 1 : request.fromSessionSeq;
+        const std::uint64_t to = request.toSessionSeq;
+        const std::size_t limit = request.limit == 0 ? 200 : request.limit;
+        const std::vector<json> events = filterEventsByRangeUnlocked(from, to, limit, request.includeLiveTail);
+        response.events = json::array();
+        for (const auto& event : events) {
+            response.events.push_back(event);
+        }
+        response.summary = {
+            {"from_session_seq", from},
+            {"includes_mutable_tail", request.includeLiveTail},
+            {"returned_events", response.events.size()},
+            {"to_session_seq", to}
+        };
+        if (request.includeLiveTail) {
+            response.summary["live_tail_high_water_seq"] = liveRing_.empty() ? 0 : liveRing_.back().sessionSeq;
+        }
+        return response;
+    }
+
+    if (request.operation == "find_order_anchor") {
+        const std::size_t limit = request.limit == 0 ? 100 : request.limit;
+        const std::vector<json> events =
+            filterEventsByAnchorUnlocked(request.traceId, request.orderId, request.permId, request.execId, limit);
+        response.events = json::array();
+        for (const auto& event : events) {
+            response.events.push_back(event);
+        }
+        response.summary = {
+            {"exec_id", request.execId},
+            {"order_id", request.orderId},
+            {"perm_id", request.permId},
+            {"returned_events", response.events.size()},
+            {"trace_id", request.traceId}
+        };
+        return response;
+    }
+
+    return rejectResponse(request, "unknown tape-engine operation");
 }
 
 } // namespace tape_engine

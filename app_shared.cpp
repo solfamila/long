@@ -4269,6 +4269,59 @@ void flushTraceMutationResult(const trading_engine::TraceMutationResult& result)
     emitMacTraceObservation(result.traceId, result.type, result.stage, result.details);
 }
 
+void enqueueBridgeLifecycleRecord(const std::string& recordType,
+                                  const std::string& source,
+                                  std::uint64_t traceId,
+                                  OrderId orderId,
+                                  long long permId,
+                                  const std::string& execId,
+                                  const std::string& note,
+                                  const std::string& symbol = {},
+                                  const std::string& side = {}) {
+    const auto published = ensurePublishedSharedDataSnapshot();
+
+    BridgeOutboxRecordInput bridgeRecord;
+    bridgeRecord.recordType = recordType;
+    bridgeRecord.source = source;
+    bridgeRecord.traceId = traceId;
+    bridgeRecord.orderId = orderId;
+    bridgeRecord.permId = permId;
+    bridgeRecord.execId = execId;
+    bridgeRecord.note = note;
+    bridgeRecord.symbol = symbol;
+    bridgeRecord.side = side;
+
+    if ((bridgeRecord.traceId == 0 || bridgeRecord.symbol.empty() || bridgeRecord.side.empty() || bridgeRecord.permId == 0) &&
+        orderId > 0) {
+        const auto traceIdIt = published->traceIdByOrderId.find(orderId);
+        if (bridgeRecord.traceId == 0 && traceIdIt != published->traceIdByOrderId.end()) {
+            bridgeRecord.traceId = traceIdIt->second;
+        }
+    }
+
+    const auto traceIt = published->traces.find(bridgeRecord.traceId);
+    if (traceIt != published->traces.end()) {
+        if (bridgeRecord.symbol.empty()) {
+            bridgeRecord.symbol = traceIt->second.symbol;
+        }
+        if (bridgeRecord.side.empty()) {
+            bridgeRecord.side = traceIt->second.side;
+        }
+        if (bridgeRecord.permId == 0 && traceIt->second.permId > 0) {
+            bridgeRecord.permId = traceIt->second.permId;
+        }
+        if (bridgeRecord.orderId == 0 && traceIt->second.orderId > 0) {
+            bridgeRecord.orderId = traceIt->second.orderId;
+        }
+    }
+
+    if (bridgeRecord.traceId == 0 && bridgeRecord.orderId == 0 && bridgeRecord.permId == 0 && bridgeRecord.execId.empty()) {
+        return;
+    }
+
+    enqueueBridgeOutboxRecord(bridgeRecord);
+}
+
 std::uint64_t beginTradeTrace(const SubmitIntent& intent) {
     auto result = invokeSharedDataMutation([&]() {
         return trading_engine::reduce(appState(), trading_engine::BeginTradeTraceEvent{intent});
@@ -4351,6 +4404,17 @@ void recordTraceOpenOrder(OrderId orderId, const Contract& contract, const Order
         });
     });
     flushTraceMutationResult(result);
+    if (result.traceId != 0) {
+        enqueueBridgeLifecycleRecord("open_order",
+                                     "BrokerOpenOrder",
+                                     result.traceId,
+                                     orderId,
+                                     static_cast<long long>(order.permId),
+                                     {},
+                                     result.stage + ": " + result.details,
+                                     contract.symbol,
+                                     order.action);
+    }
 }
 
 void recordTraceOrderStatus(OrderId orderId,
@@ -4367,6 +4431,15 @@ void recordTraceOrderStatus(OrderId orderId,
         });
     });
     flushTraceMutationResult(result.mutation);
+    if (result.mutation.traceId != 0) {
+        enqueueBridgeLifecycleRecord("order_status",
+                                     "BrokerOrderStatus",
+                                     result.mutation.traceId,
+                                     result.orderId,
+                                     permId,
+                                     {},
+                                     result.mutation.stage + ": " + result.mutation.details);
+    }
     if (result.appendCancelAck) {
         appendTraceEventByOrderId(result.orderId, TradeEventType::CancelAck,
                                   "Cancel", "Broker acknowledged cancellation",
@@ -4402,6 +4475,15 @@ void recordTraceCommission(const CommissionReport& commissionReport) {
         return trading_engine::reduce(appState(), trading_engine::TraceCommissionRecordedEvent{commissionReport});
     });
     flushTraceMutationResult(result);
+    if (result.traceId != 0) {
+        enqueueBridgeLifecycleRecord("commission_report",
+                                     "BrokerCommission",
+                                     result.traceId,
+                                     0,
+                                     0,
+                                     commissionReport.execId,
+                                     result.stage + ": " + result.details);
+    }
 }
 
 void recordTraceError(int id, int errorCode, const std::string& errorString) {
@@ -4409,6 +4491,15 @@ void recordTraceError(int id, int errorCode, const std::string& errorString) {
         return trading_engine::reduce(appState(), trading_engine::TraceErrorRecordedEvent{id, errorCode, errorString});
     });
     flushTraceMutationResult(result.mutation);
+    if (result.mutation.traceId != 0) {
+        enqueueBridgeLifecycleRecord(errorCode == 201 ? "order_reject" : "broker_error",
+                                     "BrokerError",
+                                     result.mutation.traceId,
+                                     result.orderId,
+                                     0,
+                                     {},
+                                     result.mutation.details);
+    }
     if (result.appendCancelAck) {
         appendTraceEventByOrderId(result.orderId, TradeEventType::CancelAck,
                                   "Cancel", errorString, -1.0, -1.0, 0.0, 0, result.errorCode);
@@ -4421,6 +4512,13 @@ void recordTraceError(int id, int errorCode, const std::string& errorString) {
 void recordTraceCancelRequest(OrderId orderId) {
     appendTraceEventByOrderId(orderId, TradeEventType::CancelRequestSent,
                               "Cancel", "Cancel request sent to TWS");
+    enqueueBridgeLifecycleRecord("cancel_request",
+                                 "LocalCancel",
+                                 0,
+                                 orderId,
+                                 0,
+                                 {},
+                                 "Cancel request sent to TWS");
 }
 
 std::uint64_t findTraceIdByOrderId(OrderId orderId) {

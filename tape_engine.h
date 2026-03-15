@@ -9,6 +9,7 @@
 #include <deque>
 #include <filesystem>
 #include <future>
+#include <optional>
 #include <map>
 #include <mutex>
 #include <string>
@@ -73,7 +74,7 @@ public:
 private:
     struct PendingRequest {
         std::vector<std::uint8_t> frame;
-        std::promise<IngestAck> promise;
+        std::promise<std::vector<std::uint8_t>> promise;
     };
 
     struct ConnectionCursor {
@@ -84,13 +85,27 @@ private:
 
     void acceptLoop();
     void sequencerLoop();
-    IngestAck processFrame(const std::vector<std::uint8_t>& frame);
+    std::vector<std::uint8_t> processRequest(const std::vector<std::uint8_t>& frame);
+    IngestAck processIngestFrame(const std::vector<std::uint8_t>& frame);
+    QueryResponse processQueryFrame(const std::vector<std::uint8_t>& frame);
     IngestAck rejectAck(std::uint64_t batchSeq,
                         const std::string& adapterId,
                         const std::string& connectionId,
                         const std::string& error) const;
+    QueryResponse rejectResponse(const QueryRequest& request,
+                                 const std::string& error) const;
     void appendLiveEvent(const EngineEvent& event);
     void writeSegment(const std::vector<EngineEvent>& events);
+    std::vector<json> loadAllEventsUnlocked() const;
+    std::vector<json> filterEventsByRangeUnlocked(std::uint64_t fromSessionSeq,
+                                                  std::uint64_t toSessionSeq,
+                                                  std::size_t limit,
+                                                  bool includeLiveTail) const;
+    std::vector<json> filterEventsByAnchorUnlocked(std::uint64_t traceId,
+                                                   long long orderId,
+                                                   long long permId,
+                                                   const std::string& execId,
+                                                   std::size_t limit) const;
 
     EngineConfig config_;
     mutable std::mutex stateMutex_;

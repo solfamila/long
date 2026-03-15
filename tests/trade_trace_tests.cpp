@@ -1,6 +1,7 @@
 #include "app_shared.h"
 #include "bridge_batch_codec.h"
 #include "bridge_batch_transport.h"
+#include "tape_engine_client.h"
 #include "tape_engine.h"
 #include "tape_engine_protocol.h"
 #include "trace_exporter.h"
@@ -861,6 +862,176 @@ void testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq() {
     server.stop();
 }
 
+void testTapeEngineQueryStatusAndReads() {
+    const fs::path rootDir = testDataDir() / "tape-engine-query";
+    const fs::path socketPath = testDataDir() / "tape-engine-query.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for query test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-query";
+    options.runtimeSessionId = "runtime-engine-query";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    options.batchSeq = 51;
+    const bridge_batch::Batch first = bridge_batch::buildBatch({
+        makeBridgeRecord(3001, "order_intent", "WebSocket", "INTC", "BUY",
+                         91, 701, 0, "", "accepted order intent", "2026-03-14T09:38:00.100"),
+        makeBridgeRecord(3002, "order_status", "BrokerOrderStatus", "INTC", "BUY",
+                         91, 701, 9801, "", "Submitted: filled=0 remaining=1", "2026-03-14T09:38:00.150")
+    }, options);
+    expect(transport.sendFrame(bridge_batch::encodeFrame(first), &error),
+           "tape-engine should accept the first query batch: " + error);
+
+    options.batchSeq = 52;
+    const bridge_batch::Batch second = bridge_batch::buildBatch({
+        makeBridgeRecord(3004, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                         91, 701, 9801, "EXEC-91", "execution details observed", "2026-03-14T09:38:00.250")
+    }, options);
+    expect(transport.sendFrame(bridge_batch::encodeFrame(second), &error),
+           "tape-engine should accept the second query batch: " + error);
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest statusRequest;
+    statusRequest.requestId = "status-1";
+    statusRequest.operation = "status";
+    expect(client.query(statusRequest, &response, &error), "tape-engine status query should succeed: " + error);
+    expect(response.summary.value("segment_count", 0ULL) == 2, "status query should report the written segment count");
+    expect(response.summary.value("latest_session_seq", 0ULL) == 4, "status query should report the latest accepted session_seq");
+
+    tape_engine::QueryRequest rangeRequest;
+    rangeRequest.requestId = "range-1";
+    rangeRequest.operation = "read_range";
+    rangeRequest.fromSessionSeq = 2;
+    rangeRequest.toSessionSeq = 4;
+    expect(client.query(rangeRequest, &response, &error), "tape-engine range query should succeed: " + error);
+    expect(response.events.is_array() && response.events.size() == 3, "range query should return the requested session_seq window");
+    expect(response.events.at(0).value("event_kind", std::string()) == "order_status", "range query should include the original order status event");
+    expect(response.events.at(1).value("event_kind", std::string()) == "gap_marker", "range query should expose the explicit gap marker");
+    expect(response.events.at(2).value("event_kind", std::string()) == "fill_execution", "range query should expose the later fill event");
+
+    tape_engine::QueryRequest liveTailRequest;
+    liveTailRequest.requestId = "tail-1";
+    liveTailRequest.operation = "read_live_tail";
+    liveTailRequest.limit = 2;
+    expect(client.query(liveTailRequest, &response, &error), "tape-engine live tail query should succeed: " + error);
+    expect(response.events.is_array() && response.events.size() == 2, "live tail query should honor the requested limit");
+    expect(response.events.at(0).value("event_kind", std::string()) == "gap_marker", "live tail query should expose the penultimate live event");
+    expect(response.events.at(1).value("event_kind", std::string()) == "fill_execution", "live tail query should expose the latest live event");
+
+    tape_engine::QueryRequest anchorRequest;
+    anchorRequest.requestId = "anchor-1";
+    anchorRequest.operation = "find_order_anchor";
+    anchorRequest.orderId = 701;
+    expect(client.query(anchorRequest, &response, &error), "tape-engine anchor query should succeed: " + error);
+    expect(response.events.is_array() && response.events.size() == 3, "anchor query should return the order-anchored lifecycle events");
+    expect(response.events.at(0).value("event_kind", std::string()) == "order_intent", "anchor query should begin with the queued order intent");
+    expect(response.events.at(2).value("event_kind", std::string()) == "fill_execution", "anchor query should include the fill execution");
+
+    server.stop();
+}
+
+void testBridgeLifecycleEmissionExpandsPrivateOrderEvents() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    SubmitIntent intent;
+    intent.source = "WebSocket";
+    intent.symbol = "INTC";
+    intent.side = "BUY";
+    intent.requestedQty = 1;
+    intent.limitPrice = 45.70;
+    intent.notes = "accepted order intent";
+
+    const std::uint64_t traceId = beginTradeTrace(intent);
+    bindTraceToOrder(traceId, 701);
+    bindTraceToPermId(701, 9801);
+
+    Contract contract;
+    contract.symbol = "INTC";
+
+    Order order;
+    order.orderId = 701;
+    order.permId = 9801;
+    order.action = "BUY";
+    order.totalQuantity = DecimalFunctions::doubleToDecimal(1.0);
+    order.lmtPrice = 45.70;
+    order.account = "U23154741";
+
+    OrderState orderState;
+    orderState.status = "Submitted";
+    recordTraceOpenOrder(701, contract, order, orderState);
+    recordTraceOrderStatus(701, "Submitted", 0.0, 1.0, 0.0, 9801, 0.0, 0.0);
+
+    Execution execution;
+    execution.orderId = 701;
+    execution.permId = 9801;
+    execution.execId = "EXEC-91";
+    execution.side = "BOT";
+    execution.shares = DecimalFunctions::doubleToDecimal(1.0);
+    execution.price = 45.70;
+    execution.exchange = "SMART";
+    execution.cumQty = DecimalFunctions::doubleToDecimal(1.0);
+    execution.avgPrice = 45.70;
+    execution.time = "20260314 09:38:00";
+    recordTraceExecution(contract, execution);
+
+    CommissionReport commission;
+    commission.execId = "EXEC-91";
+    commission.commission = 0.45;
+    commission.currency = "USD";
+    recordTraceCommission(commission);
+
+    recordTraceCancelRequest(701);
+    recordTraceError(701, 399, "warning path");
+    recordTraceError(701, 201, "rejected path");
+
+    const BridgeDispatchSnapshot dispatch = captureBridgeDispatchSnapshot(20);
+    expect(dispatch.records.size() >= 7, "expanded lifecycle emission should enqueue the widened private-event set");
+
+    std::vector<std::string> recordTypes;
+    recordTypes.reserve(dispatch.records.size());
+    for (const auto& record : dispatch.records) {
+        recordTypes.push_back(record.recordType);
+    }
+
+    expect(std::find(recordTypes.begin(), recordTypes.end(), "open_order") != recordTypes.end(),
+           "bridge outbox should include open_order records");
+    expect(std::find(recordTypes.begin(), recordTypes.end(), "order_status") != recordTypes.end(),
+           "bridge outbox should include order_status records");
+    expect(std::find(recordTypes.begin(), recordTypes.end(), "fill_execution") != recordTypes.end(),
+           "bridge outbox should include fill_execution records");
+    expect(std::find(recordTypes.begin(), recordTypes.end(), "commission_report") != recordTypes.end(),
+           "bridge outbox should include commission_report records");
+    expect(std::find(recordTypes.begin(), recordTypes.end(), "cancel_request") != recordTypes.end(),
+           "bridge outbox should include cancel_request records");
+    expect(std::find(recordTypes.begin(), recordTypes.end(), "broker_error") != recordTypes.end(),
+           "bridge outbox should include general broker_error records");
+    expect(std::find(recordTypes.begin(), recordTypes.end(), "order_reject") != recordTypes.end(),
+           "bridge outbox should include rejection-specific order_reject records");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 void testBridgeOutboxOverflowWritesExplicitLossMarker() {
     clearTestFiles();
 
@@ -1567,6 +1738,8 @@ int main() {
         testUnixDomainSocketTransportSendsFramedBatch();
         testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments();
         testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq();
+        testTapeEngineQueryStatusAndReads();
+        testBridgeLifecycleEmissionExpandsPrivateOrderEvents();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();

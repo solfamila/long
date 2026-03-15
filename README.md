@@ -43,6 +43,15 @@ Run the Phase-1 engine daemon:
 ./build/tape_engine
 ```
 
+Query the engine daemon:
+
+```bash
+./build/tape_engine_ctl status
+./build/tape_engine_ctl read-live-tail 20
+./build/tape_engine_ctl read-range 1 50 --include-live-tail
+./build/tape_engine_ctl find-order --order-id 701
+```
+
 Package a distributable zip:
 
 ```bash
@@ -85,6 +94,8 @@ Phase-1 bridge sender notes:
 - If that env var is unset, the sender defaults to `/tmp/tape-engine.sock`.
 - `tape_engine` writes per-batch segments and a hash-linked `manifest.jsonl` under `LONG_TAPE_ENGINE_DATA_DIR`.
 - If `LONG_TAPE_ENGINE_DATA_DIR` is unset, the daemon defaults to `/tmp/tape-engine`.
+- The daemon now answers `status`, `read_live_tail`, `read_range`, and `find_order_anchor` queries over the same framed MessagePack UDS transport.
+- `long` now emits widened private lifecycle records including `open_order`, `order_status`, `commission_report`, `cancel_request`, `broker_error`, and `order_reject`.
 
 Packaging notes:
 - The app is built as a real macOS `.app` bundle.
