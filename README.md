@@ -96,7 +96,8 @@ Phase-1 bridge sender notes:
 - The sender uses the Unix domain socket path from `LONG_TAPE_ENGINE_SOCKET` when set.
 - If that env var is unset, the sender defaults to `/tmp/tape-engine.sock`.
 - `tape_engine` now assigns ordered `session_seq` values on accept and freezes accepted batches into revisioned segments on a dedicated writer thread.
-- `tape_engine` writes per-batch segments and a hash-linked `manifest.jsonl` under `LONG_TAPE_ENGINE_DATA_DIR`.
+- `tape_engine` now routes ingest and query/replay work through separate worker queues so investigative reads do not share the ingest sequencer path.
+- `tape_engine` writes per-batch binary MessagePack segment payloads plus JSON metadata and a hash-linked `manifest.jsonl` under `LONG_TAPE_ENGINE_DATA_DIR`.
 - If `LONG_TAPE_ENGINE_DATA_DIR` is unset, the daemon defaults to `/tmp/tape-engine`.
 - The daemon now answers `status`, `read_live_tail`, `read_range`, `replay_snapshot`, and `find_order_anchor` queries over the same framed MessagePack UDS transport.
 - Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.
@@ -107,7 +108,9 @@ Phase-1 bridge sender notes:
 Runtime registry and QoS:
 
 - Queue labels, categories, and QoS names are generated from `config/runtime/queues.yaml` into `runtime_registry.generated.h` at build time.
+- The generated registry now covers `long`, `tape_engine`, `TapeScope`, and `tape-mcp` queue identities from one checked-in source of truth.
 - `runtime_qos` applies the generated queue spec to bridge and engine threads on macOS, including pthread QoS classes and thread names.
+- `tape_engine` now waits on POSIX signals for shutdown instead of polling in a timed sleep loop.
 
 Packaging notes:
 - The app is built as a real macOS `.app` bundle.

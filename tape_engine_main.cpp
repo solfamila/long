@@ -1,21 +1,12 @@
 #include "tape_engine.h"
 
-#include <chrono>
-#include <atomic>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <pthread.h>
+#include <signal.h>
 #include <string>
-#include <thread>
-
-namespace {
-
-std::atomic<bool> g_running{true};
-
-void handleSignal(int) {
-    g_running.store(false, std::memory_order_relaxed);
-}
 
 std::string envOrDefault(const char* key, const std::string& fallback) {
     const char* value = std::getenv(key);
@@ -24,8 +15,6 @@ std::string envOrDefault(const char* key, const std::string& fallback) {
     }
     return fallback;
 }
-
-} // namespace
 
 int main(int argc, char** argv) {
     (void)argc;
@@ -36,6 +25,15 @@ int main(int argc, char** argv) {
     config.dataDir = envOrDefault("LONG_TAPE_ENGINE_DATA_DIR",
                                   (std::filesystem::temp_directory_path() / "tape-engine").string());
 
+    sigset_t signals;
+    sigemptyset(&signals);
+    sigaddset(&signals, SIGINT);
+    sigaddset(&signals, SIGTERM);
+    if (pthread_sigmask(SIG_BLOCK, &signals, nullptr) != 0) {
+        std::cerr << "Failed to configure tape_engine signal mask\n";
+        return 1;
+    }
+
     tape_engine::Server server(config);
     std::string error;
     if (!server.start(&error)) {
@@ -43,14 +41,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::signal(SIGINT, handleSignal);
-    std::signal(SIGTERM, handleSignal);
-
     std::cout << "tape_engine listening on " << config.socketPath << '\n';
     std::cout << "tape_engine data dir " << config.dataDir.string() << '\n';
 
-    while (g_running.load(std::memory_order_relaxed)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    int signalNumber = 0;
+    if (sigwait(&signals, &signalNumber) != 0) {
+        std::cerr << "Failed while waiting for shutdown signal\n";
+        server.stop();
+        return 1;
     }
 
     server.stop();

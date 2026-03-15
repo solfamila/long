@@ -75,6 +75,62 @@
       "label": "com.foxy.tape-engine.replay",
       "qos": "utility",
       "category": "replay"
+    },
+    {
+      "id": "tapescope_main_ui",
+      "subsystem": "tapescope",
+      "label": "com.foxy.tapescope.main",
+      "qos": "userInteractive",
+      "category": "ui"
+    },
+    {
+      "id": "tapescope_snapshot_decode",
+      "subsystem": "tapescope",
+      "label": "com.foxy.tapescope.snapshot-decode",
+      "qos": "userInitiated",
+      "category": "ui"
+    },
+    {
+      "id": "tapescope_replay_scrub",
+      "subsystem": "tapescope",
+      "label": "com.foxy.tapescope.replay-scrub",
+      "qos": "userInitiated",
+      "category": "replay"
+    },
+    {
+      "id": "tapescope_metal_prep",
+      "subsystem": "tapescope",
+      "label": "com.foxy.tapescope.metal-prep",
+      "qos": "utility",
+      "category": "metal"
+    },
+    {
+      "id": "tapescope_report_render",
+      "subsystem": "tapescope",
+      "label": "com.foxy.tapescope.report-render",
+      "qos": "utility",
+      "category": "export"
+    },
+    {
+      "id": "tape_mcp_request_loop",
+      "subsystem": "tape_mcp",
+      "label": "com.foxy.tape-mcp.request-loop",
+      "qos": "utility",
+      "category": "rpc"
+    },
+    {
+      "id": "tape_mcp_reads",
+      "subsystem": "tape_mcp",
+      "label": "com.foxy.tape-mcp.reads",
+      "qos": "userInitiated",
+      "category": "rpc"
+    },
+    {
+      "id": "tape_mcp_exports",
+      "subsystem": "tape_mcp",
+      "label": "com.foxy.tape-mcp.exports",
+      "qos": "utility",
+      "category": "export"
     }
   ]
 }

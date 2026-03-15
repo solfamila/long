@@ -67,6 +67,11 @@ struct EngineSnapshot {
     std::vector<SegmentInfo> segments;
 };
 
+enum class RequestKind {
+    Ingest,
+    Query,
+};
+
 class Server {
 public:
     explicit Server(EngineConfig config);
@@ -83,6 +88,7 @@ public:
 
 private:
     struct PendingRequest {
+        RequestKind kind = RequestKind::Ingest;
         std::vector<std::uint8_t> frame;
         std::promise<std::vector<std::uint8_t>> promise;
     };
@@ -100,9 +106,10 @@ private:
     };
 
     void acceptLoop();
+    void handleClientConnection(int clientFd);
     void sequencerLoop();
+    void replayLoop();
     void writerLoop();
-    std::vector<std::uint8_t> processRequest(const std::vector<std::uint8_t>& frame);
     IngestAck processIngestFrame(const std::vector<std::uint8_t>& frame);
     QueryResponse processQueryFrame(const std::vector<std::uint8_t>& frame);
     IngestAck rejectAck(std::uint64_t batchSeq,
@@ -150,18 +157,26 @@ private:
     std::string lastManifestHash_;
     std::string writerFailure_;
 
-    std::mutex queueMutex_;
-    std::condition_variable queueCv_;
-    std::deque<std::shared_ptr<PendingRequest>> queue_;
+    std::mutex ingestQueueMutex_;
+    std::condition_variable ingestQueueCv_;
+    std::deque<std::shared_ptr<PendingRequest>> ingestQueue_;
+
+    std::mutex queryQueueMutex_;
+    std::condition_variable queryQueueCv_;
+    std::deque<std::shared_ptr<PendingRequest>> queryQueue_;
 
     mutable std::mutex writerMutex_;
     std::condition_variable writerCv_;
     std::deque<PendingSegment> writerQueue_;
 
+    std::mutex clientThreadsMutex_;
+    std::vector<std::thread> clientThreads_;
+
     std::atomic<bool> running_{false};
     int serverFd_ = -1;
     std::thread acceptThread_;
     std::thread sequencerThread_;
+    std::thread replayThread_;
     std::thread writerThread_;
 };
 

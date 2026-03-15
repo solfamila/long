@@ -819,6 +819,8 @@ void testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments() {
     expect(snapshot.liveEvents.back().bridgeRecord.anchor.execId == "EXEC-71", "tape-engine should preserve bridge anchors");
     expect(snapshot.segments.size() == 1, "tape-engine should emit one segment for the accepted batch");
     expect(snapshot.segments.front().revisionId == 1, "tape-engine should assign a frozen revision id to the segment");
+    expect(snapshot.segments.front().fileName.find(".events.msgpack") != std::string::npos,
+           "tape-engine should freeze segment payloads as binary msgpack files");
     expect(snapshot.segments.front().firstSessionSeq == 1, "tape-engine segment metadata should preserve the first session_seq");
     expect(snapshot.segments.front().lastSessionSeq == 2, "tape-engine segment metadata should preserve the last session_seq");
     expect(!snapshot.segments.front().payloadSha256.empty(), "tape-engine segment metadata should include a payload checksum");
@@ -1255,6 +1257,14 @@ void testGeneratedRuntimeRegistryMatchesPhase15QueueSpec() {
     expect(engineWriter.label == "com.foxy.tape-engine.segment-writer", "generated runtime registry should preserve the engine writer label");
     expect(engineWriter.qosName == "utility", "generated runtime registry should preserve engine writer QoS");
     expect(runtime_registry::subsystemName(engineWriter.subsystem) == "com.foxy.tape-engine", "generated runtime registry should preserve the engine subsystem name");
+
+    const auto tapescopeMain = runtime_registry::queueSpec(runtime_registry::QueueId::TapescopeMainUi);
+    expect(tapescopeMain.label == "com.foxy.tapescope.main", "generated runtime registry should include the TapeScope main UI queue");
+    expect(tapescopeMain.qosName == "userInteractive", "generated runtime registry should preserve TapeScope UI QoS");
+
+    const auto tapeMcpReads = runtime_registry::queueSpec(runtime_registry::QueueId::TapeMcpReads);
+    expect(tapeMcpReads.label == "com.foxy.tape-mcp.reads", "generated runtime registry should include the MCP read worker queue");
+    expect(runtime_registry::subsystemName(tapeMcpReads.subsystem) == "com.foxy.tape-mcp", "generated runtime registry should preserve the MCP subsystem name");
 }
 
 void testBridgeLifecycleEmissionExpandsPrivateOrderEvents() {

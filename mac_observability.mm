@@ -18,6 +18,15 @@ os_log_t bridgeLog() {
     return log;
 }
 
+runtime_registry::SubsystemId resolveSubsystem(const std::string& category) {
+    for (const auto spec : runtime_registry::kQueueSpecs) {
+        if (runtime_registry::logCategoryName(spec.category) == category) {
+            return spec.subsystem;
+        }
+    }
+    return runtime_registry::SubsystemId::LongBridge;
+}
+
 runtime_registry::LogCategory resolveCategory(const std::string& category) {
     for (const auto spec : runtime_registry::kQueueSpecs) {
         if (runtime_registry::logCategoryName(spec.category) == category) {
@@ -48,15 +57,17 @@ os_log_t logForCategory(const std::string& category) {
     static std::unordered_map<std::string, os_log_t> logs;
     const auto resolved = resolveCategory(category);
     const std::string categoryName(runtime_registry::logCategoryName(resolved));
+    const auto subsystemId = resolveSubsystem(category);
+    const std::string logKey = std::string(runtime_registry::subsystemName(subsystemId)) + "|" + categoryName;
 
     std::lock_guard<std::mutex> lock(mutex);
-    const auto it = logs.find(categoryName);
+    const auto it = logs.find(logKey);
     if (it != logs.end()) {
         return it->second;
     }
-    const auto subsystem = runtime_registry::subsystemName(runtime_registry::SubsystemId::LongBridge);
+    const auto subsystem = runtime_registry::subsystemName(subsystemId);
     const os_log_t log = os_log_create(subsystem.data(), categoryName.c_str());
-    logs.emplace(categoryName, log);
+    logs.emplace(logKey, log);
     return log;
 }
 

@@ -34,9 +34,9 @@ std::uint64_t nowEngineNs() {
         std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
-std::string sha256Hex(const std::string& input) {
+std::string sha256Hex(const std::uint8_t* data, std::size_t size) {
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(input.data(), static_cast<CC_LONG>(input.size()), digest);
+    CC_SHA256(data, static_cast<CC_LONG>(size), digest);
 
     static constexpr char kHex[] = "0123456789abcdef";
     std::string output;
@@ -46,6 +46,14 @@ std::string sha256Hex(const std::string& input) {
         output.push_back(kHex[byte & 0x0fU]);
     }
     return output;
+}
+
+std::string sha256Hex(const std::string& input) {
+    return sha256Hex(reinterpret_cast<const std::uint8_t*>(input.data()), input.size());
+}
+
+std::string sha256Hex(const std::vector<std::uint8_t>& input) {
+    return sha256Hex(input.data(), input.size());
 }
 
 bool hasFiniteNumber(const json& payload, const char* key) {
@@ -178,6 +186,18 @@ std::string connectionKey(const std::string& adapterId, const std::string& conne
     return adapterId + "|" + connectionId;
 }
 
+RequestKind classifyRequestKind(const std::vector<std::uint8_t>& frame) {
+    const json payload = decodeFramedJson(frame);
+    const std::string schema = payload.value("schema", std::string());
+    if (schema == bridge_batch::kSchemaName) {
+        return RequestKind::Ingest;
+    }
+    if (schema == kQueryRequestSchema) {
+        return RequestKind::Query;
+    }
+    throw std::runtime_error("unknown tape-engine request schema");
+}
+
 } // namespace
 
 Server::Server(EngineConfig config)
@@ -240,6 +260,7 @@ bool Server::start(std::string* error) {
 
     running_.store(true, std::memory_order_release);
     writerThread_ = std::thread(&Server::writerLoop, this);
+    replayThread_ = std::thread(&Server::replayLoop, this);
     sequencerThread_ = std::thread(&Server::sequencerLoop, this);
     acceptThread_ = std::thread(&Server::acceptLoop, this);
     return true;
@@ -255,14 +276,28 @@ void Server::stop() {
         ::close(serverFd_);
         serverFd_ = -1;
     }
-    queueCv_.notify_all();
+    ingestQueueCv_.notify_all();
+    queryQueueCv_.notify_all();
     writerCv_.notify_all();
 
     if (acceptThread_.joinable()) {
         acceptThread_.join();
     }
+    std::vector<std::thread> clientThreads;
+    {
+        std::lock_guard<std::mutex> lock(clientThreadsMutex_);
+        clientThreads.swap(clientThreads_);
+    }
+    for (auto& thread : clientThreads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
     if (sequencerThread_.joinable()) {
         sequencerThread_.join();
+    }
+    if (replayThread_.joinable()) {
+        replayThread_.join();
     }
     if (writerThread_.joinable()) {
         writerThread_.join();
@@ -309,57 +344,111 @@ void Server::acceptLoop() {
         }
 
         try {
-            auto request = std::make_shared<PendingRequest>();
-            request->frame = readFramedMessage(clientFd);
-            auto future = request->promise.get_future();
-            {
-                std::lock_guard<std::mutex> lock(queueMutex_);
-                queue_.push_back(std::move(request));
-            }
-            queueCv_.notify_one();
-            writeAll(clientFd, future.get());
+            std::lock_guard<std::mutex> lock(clientThreadsMutex_);
+            clientThreads_.emplace_back(&Server::handleClientConnection, this, clientFd);
         } catch (...) {
+            ::close(clientFd);
+        }
+    }
+}
+
+void Server::handleClientConnection(int clientFd) {
+    runtime_qos::applyCurrentThreadSpec(runtime_registry::QueueId::EngineAcceptLoop);
+    try {
+        auto request = std::make_shared<PendingRequest>();
+        request->frame = readFramedMessage(clientFd);
+        request->kind = classifyRequestKind(request->frame);
+        auto future = request->promise.get_future();
+
+        if (request->kind == RequestKind::Ingest) {
+            {
+                std::lock_guard<std::mutex> lock(ingestQueueMutex_);
+                ingestQueue_.push_back(std::move(request));
+            }
+            ingestQueueCv_.notify_one();
+        } else {
+            {
+                std::lock_guard<std::mutex> lock(queryQueueMutex_);
+                queryQueue_.push_back(std::move(request));
+            }
+            queryQueueCv_.notify_one();
         }
 
-        ::close(clientFd);
+        writeAll(clientFd, future.get());
+    } catch (const std::exception& error) {
+        QueryRequest request;
+        request.operation = "unknown";
+        try {
+            writeAll(clientFd, encodeQueryResponseFrame(rejectResponse(request, error.what())));
+        } catch (...) {
+        }
+    } catch (...) {
     }
+
+    ::close(clientFd);
 }
 
 void Server::sequencerLoop() {
     runtime_qos::applyCurrentThreadSpec(runtime_registry::QueueId::EngineSequencer);
-    while (running_.load(std::memory_order_acquire) || !queue_.empty()) {
+    while (true) {
         std::shared_ptr<PendingRequest> request;
         {
-            std::unique_lock<std::mutex> lock(queueMutex_);
-            queueCv_.wait(lock, [&]() {
-                return !running_.load(std::memory_order_acquire) || !queue_.empty();
+            std::unique_lock<std::mutex> lock(ingestQueueMutex_);
+            ingestQueueCv_.wait(lock, [&]() {
+                return !running_.load(std::memory_order_acquire) || !ingestQueue_.empty();
             });
-            if (queue_.empty()) {
-                continue;
+            if (!running_.load(std::memory_order_acquire) && ingestQueue_.empty()) {
+                break;
             }
-            request = std::move(queue_.front());
-            queue_.pop_front();
+            request = std::move(ingestQueue_.front());
+            ingestQueue_.pop_front();
         }
 
         try {
-            request->promise.set_value(processRequest(request->frame));
+            request->promise.set_value(encodeAckFrame(processIngestFrame(request->frame)));
         } catch (const std::exception& error) {
             request->promise.set_value(encodeAckFrame(rejectAck(0, "", "", error.what())));
         }
     }
 }
 
+void Server::replayLoop() {
+    runtime_qos::applyCurrentThreadSpec(runtime_registry::QueueId::EngineReplay);
+    while (true) {
+        std::shared_ptr<PendingRequest> request;
+        {
+            std::unique_lock<std::mutex> lock(queryQueueMutex_);
+            queryQueueCv_.wait(lock, [&]() {
+                return !running_.load(std::memory_order_acquire) || !queryQueue_.empty();
+            });
+            if (!running_.load(std::memory_order_acquire) && queryQueue_.empty()) {
+                break;
+            }
+            request = std::move(queryQueue_.front());
+            queryQueue_.pop_front();
+        }
+
+        try {
+            request->promise.set_value(encodeQueryResponseFrame(processQueryFrame(request->frame)));
+        } catch (const std::exception& error) {
+            QueryRequest failedRequest;
+            failedRequest.operation = "unknown";
+            request->promise.set_value(encodeQueryResponseFrame(rejectResponse(failedRequest, error.what())));
+        }
+    }
+}
+
 void Server::writerLoop() {
     runtime_qos::applyCurrentThreadSpec(runtime_registry::QueueId::EngineSegmentWriter);
-    while (running_.load(std::memory_order_acquire) || !writerQueue_.empty()) {
+    while (true) {
         PendingSegment segment;
         {
             std::unique_lock<std::mutex> lock(writerMutex_);
             writerCv_.wait(lock, [&]() {
                 return !running_.load(std::memory_order_acquire) || !writerQueue_.empty();
             });
-            if (writerQueue_.empty()) {
-                continue;
+            if (!running_.load(std::memory_order_acquire) && writerQueue_.empty()) {
+                break;
             }
             segment = std::move(writerQueue_.front());
             writerQueue_.pop_front();
@@ -449,22 +538,22 @@ void Server::writeSegment(const PendingSegment& segment) {
     std::ostringstream name;
     name << "segment-" << std::setw(6) << std::setfill('0') << segmentId;
     const std::string baseName = name.str();
-    const std::filesystem::path segmentPath = config_.dataDir / "segments" / (baseName + ".events.jsonl");
+    const std::filesystem::path segmentPath = config_.dataDir / "segments" / (baseName + ".events.msgpack");
     const std::filesystem::path metadataPath = config_.dataDir / "segments" / (baseName + ".meta.json");
     const std::filesystem::path manifestPath = config_.dataDir / "manifest.jsonl";
 
-    std::ostringstream payloadBuilder;
+    json payloadJson = json::array();
     for (const auto& event : segment.events) {
-        payloadBuilder << eventToJson(event).dump() << '\n';
+        payloadJson.push_back(eventToJson(event));
     }
-    const std::string payload = payloadBuilder.str();
+    const std::vector<std::uint8_t> payload = json::to_msgpack(payloadJson);
 
     {
-        std::ofstream out(segmentPath);
+        std::ofstream out(segmentPath, std::ios::binary);
         if (!out.is_open()) {
             throw std::runtime_error("failed to open tape-engine segment for write");
         }
-        out << payload;
+        out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
     }
 
     SegmentInfo info;
@@ -533,10 +622,28 @@ std::vector<json> Server::loadAllEventsUnlocked(std::uint64_t frozenRevisionId) 
             continue;
         }
         const std::filesystem::path segmentPath = config_.dataDir / "segments" / segment.fileName;
-        std::ifstream in(segmentPath);
+        std::ifstream in(segmentPath, std::ios::binary);
         if (!in.is_open()) {
             continue;
         }
+
+        if (segmentPath.extension() == ".msgpack") {
+            const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                                  std::istreambuf_iterator<char>());
+            if (bytes.empty()) {
+                continue;
+            }
+            json parsed = json::from_msgpack(bytes, true, false);
+            if (parsed.is_array()) {
+                for (auto& entry : parsed) {
+                    if (entry.is_object()) {
+                        events.push_back(std::move(entry));
+                    }
+                }
+            }
+            continue;
+        }
+
         std::string line;
         while (std::getline(in, line)) {
             if (line.empty()) {
@@ -703,21 +810,6 @@ json Server::buildReplaySnapshotUnlocked(std::uint64_t targetSessionSeq,
         {"replayed_through_session_seq", replay.replayedThroughSessionSeq},
         {"target_session_seq", targetSessionSeq}
     };
-}
-
-std::vector<std::uint8_t> Server::processRequest(const std::vector<std::uint8_t>& frame) {
-    const json payload = decodeFramedJson(frame);
-    const std::string schema = payload.value("schema", std::string());
-    if (schema == bridge_batch::kSchemaName) {
-        return encodeAckFrame(processIngestFrame(frame));
-    }
-    if (schema == kQueryRequestSchema) {
-        return encodeQueryResponseFrame(processQueryFrame(frame));
-    }
-
-    QueryRequest request;
-    request.operation = "unknown";
-    return encodeQueryResponseFrame(rejectResponse(request, "unknown tape-engine request schema"));
 }
 
 IngestAck Server::processIngestFrame(const std::vector<std::uint8_t>& frame) {
