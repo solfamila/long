@@ -69,6 +69,14 @@ public:
                 {
                     std::lock_guard<std::recursive_mutex> clientLock(state.clientMutex);
                     if (client == currentClient() && client->isConnected()) {
+#if !defined(TWS_GUI_MOCK_IBAPI)
+                        client->reqMarketDataType(2); // Request frozen data when the market is closed.
+                        appendRuntimeJournalEvent("market_data_type_requested", {
+                            {"type", 2},
+                            {"label", "frozen"},
+                            {"phase", "post_next_valid_id"}
+                        });
+#endif
                         client->reqPositions();
                         client->reqOpenOrders();
                         ExecutionFilter executionFilter;

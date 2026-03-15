@@ -409,10 +409,6 @@ bool TradingRuntime::start() {
     }
 
     if (twsConnected) {
-#ifndef TWS_GUI_MOCK_IBAPI
-        impl_->client->reqMarketDataType(2); // Request frozen data when the market is closed.
-        appendRuntimeJournalEvent("market_data_type_requested", {{"type", 2}, {"label", "frozen"}});
-#endif
         impl_->reader = std::make_unique<EReader>(impl_->client.get(), impl_->osSignal.get());
         impl_->readerRunning.store(true, std::memory_order_relaxed);
         impl_->reader->start();
