@@ -1,13 +1,314 @@
 #include "trace_exporter.h"
 #include "trading_ui_format.h"
 
+#include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <map>
 #include <optional>
 #include <set>
+#include <system_error>
 
 namespace {
+
+namespace fs = std::filesystem;
+
+constexpr const char* kPhase6ContractVersion = "phase6-case-report-v1";
+constexpr const char* kPhase6ReportArtifactType = "phase6.report_output.v1";
+constexpr const char* kPhase6CaseBundleArtifactType = "phase6.case_bundle.v1";
+
+std::string utcTimestampForId() {
+    const auto now = std::chrono::system_clock::now();
+    const auto timeT = std::chrono::system_clock::to_time_t(now);
+    std::tm tmUtc{};
+#if defined(_WIN32)
+    gmtime_s(&tmUtc, &timeT);
+#else
+    gmtime_r(&timeT, &tmUtc);
+#endif
+
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    std::ostringstream oss;
+    oss << std::put_time(&tmUtc, "%Y%m%dT%H%M%S")
+        << std::setfill('0') << std::setw(3) << millis.count()
+        << 'Z';
+    return oss.str();
+}
+
+std::string utcTimestampIso8601() {
+    const auto now = std::chrono::system_clock::now();
+    const auto timeT = std::chrono::system_clock::to_time_t(now);
+    std::tm tmUtc{};
+#if defined(_WIN32)
+    gmtime_s(&tmUtc, &timeT);
+#else
+    gmtime_r(&timeT, &tmUtc);
+#endif
+
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    std::ostringstream oss;
+    oss << std::put_time(&tmUtc, "%Y-%m-%dT%H:%M:%S")
+        << '.'
+        << std::setfill('0') << std::setw(3) << millis.count()
+        << 'Z';
+    return oss.str();
+}
+
+std::string phase6ArtifactId(const std::string& prefix, std::uint64_t traceId) {
+    std::ostringstream oss;
+    oss << prefix << '-' << traceId << '-' << utcTimestampForId();
+    return oss.str();
+}
+
+fs::path resolvePhase6ArtifactsRoot(const std::string& artifactRootDirectory) {
+    if (!artifactRootDirectory.empty()) {
+        return fs::path(artifactRootDirectory);
+    }
+    return fs::path(appDataDirectory()) / "phase6_artifacts";
+}
+
+bool ensureDirectoryExists(const fs::path& path, std::string* error) {
+    std::error_code ec;
+    fs::create_directories(path, ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "Failed to create artifact directory at " + path.string() + ": " + ec.message();
+        }
+        return false;
+    }
+    return true;
+}
+
+bool writeTextFile(const fs::path& path, const std::string& content, std::string* error) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out.is_open()) {
+        if (error != nullptr) {
+            *error = "Failed to open file for write: " + path.string();
+        }
+        return false;
+    }
+    out << content;
+    if (!out.good()) {
+        if (error != nullptr) {
+            *error = "Failed to write file: " + path.string();
+        }
+        return false;
+    }
+    return true;
+}
+
+json fileSizeOrNull(const std::string& pathText) {
+    std::error_code ec;
+    const std::uintmax_t size = fs::file_size(fs::path(pathText), ec);
+    if (ec) {
+        return nullptr;
+    }
+    return size;
+}
+
+json traceAnchorJson(const TradeTrace& trace) {
+    json anchor{
+        {"trace_id", trace.traceId},
+        {"order_id", static_cast<long long>(trace.orderId)},
+        {"perm_id", trace.permId},
+        {"exec_id", nullptr}
+    };
+    for (const auto& fill : trace.fills) {
+        if (!fill.execId.empty()) {
+            anchor["exec_id"] = fill.execId;
+            break;
+        }
+    }
+    return anchor;
+}
+
+json phase6SourceBoundaries(const std::string& workflowWriter) {
+    return json{
+        {"current_trading_export_surface", {
+            {"bundle_builder", "buildTraceExportBundle"},
+            {"bundle_schema", "TraceExportBundle"},
+            {"summary_builder", "buildAllTradesSummaryCsv"}
+        }},
+        {"phase6_local_artifact_workflow", {
+            {"writer", workflowWriter},
+            {"filesystem_backed", true}
+        }},
+        {"tapescope_tape_mcp_surface", {
+            {"used_in_core_workflow", false},
+            {"status", "deferred_to_phase6_mcp_tool_slice"}
+        }}
+    };
+}
+
+bool resolveTradeSnapshotForArtifact(std::uint64_t traceId,
+                                     TradeTraceSnapshot* outSnapshot,
+                                     std::string* error) {
+    if (outSnapshot == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output snapshot";
+        }
+        return false;
+    }
+
+    TradeTraceSnapshot snapshot = captureTradeTraceSnapshot(traceId);
+    if (!snapshot.found) {
+        if (!replayTradeTraceSnapshotFromLog(traceId, &snapshot, error)) {
+            return false;
+        }
+    } else {
+        enrichTradeTraceSnapshotFromLog(&snapshot, nullptr);
+    }
+    if (!snapshot.found) {
+        if (error != nullptr) {
+            *error = "Trace not found";
+        }
+        return false;
+    }
+
+    *outSnapshot = std::move(snapshot);
+    return true;
+}
+
+bool writePhase6ReportPayloadFiles(const TraceExportBundle& bundle,
+                                   const fs::path& artifactDir,
+                                   Phase6ReportOutputArtifact* outArtifact,
+                                   std::string* error) {
+    const fs::path reportPath = artifactDir / "report.txt";
+    const fs::path summaryPath = artifactDir / "summary.csv";
+    const fs::path fillsPath = artifactDir / "fills.csv";
+    const fs::path timelinePath = artifactDir / "timeline.csv";
+
+    if (!writeTextFile(reportPath, bundle.reportText, error) ||
+        !writeTextFile(summaryPath, bundle.summaryCsv, error) ||
+        !writeTextFile(fillsPath, bundle.fillsCsv, error) ||
+        !writeTextFile(timelinePath, bundle.timelineCsv, error)) {
+        return false;
+    }
+
+    if (outArtifact != nullptr) {
+        outArtifact->reportPath = reportPath.string();
+        outArtifact->summaryPath = summaryPath.string();
+        outArtifact->fillsPath = fillsPath.string();
+        outArtifact->timelinePath = timelinePath.string();
+    }
+    return true;
+}
+
+json bridgeRecordJson(const BridgeOutboxRecord& record) {
+    json payload{
+        {"source_seq", record.sourceSeq},
+        {"record_type", record.recordType},
+        {"source", record.source},
+        {"symbol", record.symbol},
+        {"side", record.side},
+        {"fallback_state", record.fallbackState},
+        {"fallback_reason", record.fallbackReason},
+        {"note", record.note},
+        {"wall_time", record.wallTime},
+        {"anchor", {
+            {"trace_id", record.anchor.traceId},
+            {"order_id", static_cast<long long>(record.anchor.orderId)},
+            {"perm_id", record.anchor.permId},
+            {"exec_id", record.anchor.execId}
+        }}
+    };
+    return payload;
+}
+
+bool writeBridgeRecordsJsonl(const std::vector<BridgeOutboxRecord>& records,
+                             const fs::path& outputPath,
+                             std::string* error) {
+    std::ofstream out(outputPath, std::ios::binary);
+    if (!out.is_open()) {
+        if (error != nullptr) {
+            *error = "Failed to open bridge payload file for write: " + outputPath.string();
+        }
+        return false;
+    }
+    for (const auto& record : records) {
+        out << bridgeRecordJson(record).dump() << '\n';
+    }
+    if (!out.good()) {
+        if (error != nullptr) {
+            *error = "Failed to write bridge payload file: " + outputPath.string();
+        }
+        return false;
+    }
+    return true;
+}
+
+bool writePhase6ReportOutputArtifactAtPath(std::uint64_t traceId,
+                                           const std::string& artifactId,
+                                           const fs::path& artifactDir,
+                                           const std::string& workflowWriter,
+                                           Phase6ReportOutputArtifact* outArtifact,
+                                           std::string* error) {
+    if (outArtifact == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output artifact";
+        }
+        return false;
+    }
+
+    TraceExportBundle bundle;
+    if (!buildTraceExportBundle(traceId, &bundle, error)) {
+        return false;
+    }
+
+    TradeTraceSnapshot snapshot;
+    if (!resolveTradeSnapshotForArtifact(traceId, &snapshot, error)) {
+        return false;
+    }
+
+    if (!ensureDirectoryExists(artifactDir, error)) {
+        return false;
+    }
+
+    Phase6ReportOutputArtifact artifact;
+    artifact.artifactType = kPhase6ReportArtifactType;
+    artifact.contractVersion = kPhase6ContractVersion;
+    artifact.artifactId = artifactId;
+    artifact.artifactRootDir = artifactDir.string();
+    if (!writePhase6ReportPayloadFiles(bundle, artifactDir, &artifact, error)) {
+        return false;
+    }
+
+    const std::string tracePath = tradeTraceLogPath();
+    const std::string runtimePath = runtimeJournalLogPath();
+    json manifest{
+        {"contract_version", kPhase6ContractVersion},
+        {"artifact_type", kPhase6ReportArtifactType},
+        {"artifact_id", artifactId},
+        {"generated_at_utc", utcTimestampIso8601()},
+        {"trace_anchor", traceAnchorJson(snapshot.trace)},
+        {"source_boundaries", phase6SourceBoundaries(workflowWriter)},
+        {"evidence", {
+            {"trade_trace_log_path", tracePath},
+            {"runtime_journal_log_path", runtimePath}
+        }},
+        {"revision_context", {
+            {"trace_event_count", snapshot.trace.events.size()},
+            {"trace_fill_count", snapshot.trace.fills.size()},
+            {"trace_log_size_bytes", fileSizeOrNull(tracePath)},
+            {"runtime_journal_size_bytes", fileSizeOrNull(runtimePath)}
+        }},
+        {"files", {
+            {"report_txt", "report.txt"},
+            {"summary_csv", "summary.csv"},
+            {"fills_csv", "fills.csv"},
+            {"timeline_csv", "timeline.csv"}
+        }}
+    };
+
+    const fs::path manifestPath = artifactDir / "manifest.json";
+    if (!writeTextFile(manifestPath, manifest.dump(2) + "\n", error)) {
+        return false;
+    }
+    artifact.manifestPath = manifestPath.string();
+    *outArtifact = std::move(artifact);
+    return true;
+}
 
 std::string csvEscape(const std::string& value) {
     bool needsQuotes = value.find_first_of(",\"\n") != std::string::npos;
@@ -740,4 +1041,139 @@ std::string buildAllTradesSummaryCsv(std::size_t maxItems) {
             << durationMs(trace.triggerMono, trace.fullFillMono) << '\n';
     }
     return out.str();
+}
+
+bool generatePhase6ReportOutputArtifact(std::uint64_t traceId,
+                                        const std::string& artifactRootDirectory,
+                                        Phase6ReportOutputArtifact* outArtifact,
+                                        std::string* error) {
+    if (outArtifact == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output artifact";
+        }
+        return false;
+    }
+
+    const std::string artifactId = phase6ArtifactId("report-trace", traceId);
+    const fs::path artifactDir =
+        resolvePhase6ArtifactsRoot(artifactRootDirectory) /
+        "report_output.v1" /
+        artifactId;
+
+    return writePhase6ReportOutputArtifactAtPath(traceId,
+                                                 artifactId,
+                                                 artifactDir,
+                                                 "generatePhase6ReportOutputArtifact",
+                                                 outArtifact,
+                                                 error);
+}
+
+bool generatePhase6CaseBundleArtifact(std::uint64_t traceId,
+                                      const std::string& artifactRootDirectory,
+                                      Phase6CaseBundleArtifact* outArtifact,
+                                      std::string* error) {
+    if (outArtifact == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output artifact";
+        }
+        return false;
+    }
+
+    TradeTraceSnapshot snapshot;
+    if (!resolveTradeSnapshotForArtifact(traceId, &snapshot, error)) {
+        return false;
+    }
+
+    const std::string caseId = phase6ArtifactId("case-trace", traceId);
+    const fs::path caseDir =
+        resolvePhase6ArtifactsRoot(artifactRootDirectory) /
+        "case_bundle.v1" /
+        caseId;
+    const fs::path reportDir = caseDir / "report_output";
+    if (!ensureDirectoryExists(reportDir, error)) {
+        return false;
+    }
+
+    Phase6ReportOutputArtifact reportArtifact;
+    if (!writePhase6ReportOutputArtifactAtPath(traceId,
+                                               caseId + "-report",
+                                               reportDir,
+                                               "generatePhase6CaseBundleArtifact",
+                                               &reportArtifact,
+                                               error)) {
+        return false;
+    }
+
+    const BridgeDispatchSnapshot bridgeDispatch = captureBridgeDispatchSnapshot();
+    const BridgeOutboxSnapshot bridgeOutbox = captureBridgeOutboxSnapshot(0);
+    std::string bridgeRecordsPath;
+    if (!bridgeDispatch.records.empty()) {
+        const fs::path bridgeDir = caseDir / "bridge_payload";
+        if (!ensureDirectoryExists(bridgeDir, error)) {
+            return false;
+        }
+        const fs::path bridgePath = bridgeDir / "outbox_records.jsonl";
+        if (!writeBridgeRecordsJsonl(bridgeDispatch.records, bridgePath, error)) {
+            return false;
+        }
+        bridgeRecordsPath = bridgePath.string();
+    }
+
+    const std::string tracePath = tradeTraceLogPath();
+    const std::string runtimePath = runtimeJournalLogPath();
+    const bool bridgeIncluded = !bridgeDispatch.records.empty();
+    json caseManifest{
+        {"contract_version", kPhase6ContractVersion},
+        {"artifact_type", kPhase6CaseBundleArtifactType},
+        {"artifact_id", caseId},
+        {"generated_at_utc", utcTimestampIso8601()},
+        {"trace_anchor", traceAnchorJson(snapshot.trace)},
+        {"source_boundaries", phase6SourceBoundaries("generatePhase6CaseBundleArtifact")},
+        {"evidence", {
+            {"trade_trace_log_path", tracePath},
+            {"runtime_journal_log_path", runtimePath}
+        }},
+        {"revision_context", {
+            {"trace_event_count", snapshot.trace.events.size()},
+            {"trace_fill_count", snapshot.trace.fills.size()},
+            {"trace_log_size_bytes", fileSizeOrNull(tracePath)},
+            {"runtime_journal_size_bytes", fileSizeOrNull(runtimePath)}
+        }},
+        {"report_output", {
+            {"artifact_type", kPhase6ReportArtifactType},
+            {"path", "report_output"},
+            {"manifest_path", (fs::path("report_output") / "manifest.json").generic_string()}
+        }},
+        {"bridge_payload", {
+            {"included", bridgeIncluded},
+            {"records_path", bridgeIncluded
+                ? json((fs::path("bridge_payload") / "outbox_records.jsonl").generic_string())
+                : json(nullptr)},
+            {"record_count", bridgeDispatch.records.size()},
+            {"app_session_id", bridgeDispatch.appSessionId.empty() ? json(nullptr) : json(bridgeDispatch.appSessionId)},
+            {"runtime_session_id", bridgeDispatch.runtimeSessionId.empty() ? json(nullptr) : json(bridgeDispatch.runtimeSessionId)},
+            {"fallback_state", bridgeOutbox.fallbackState},
+            {"fallback_reason", bridgeOutbox.fallbackReason},
+            {"recovery_required", bridgeOutbox.recoveryRequired},
+            {"pending_count", bridgeOutbox.pendingCount},
+            {"loss_count", bridgeOutbox.lossCount},
+            {"last_source_seq", bridgeOutbox.lastSourceSeq}
+        }}
+    };
+
+    const fs::path caseManifestPath = caseDir / "manifest.json";
+    if (!writeTextFile(caseManifestPath, caseManifest.dump(2) + "\n", error)) {
+        return false;
+    }
+
+    Phase6CaseBundleArtifact artifact;
+    artifact.artifactType = kPhase6CaseBundleArtifactType;
+    artifact.contractVersion = kPhase6ContractVersion;
+    artifact.artifactId = caseId;
+    artifact.artifactRootDir = caseDir.string();
+    artifact.manifestPath = caseManifestPath.string();
+    artifact.reportOutput = std::move(reportArtifact);
+    artifact.bridgeRecordsPath = std::move(bridgeRecordsPath);
+    *outArtifact = std::move(artifact);
+    return true;
 }

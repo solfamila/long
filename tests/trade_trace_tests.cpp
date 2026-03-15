@@ -453,6 +453,89 @@ void testReplayHandlesPartialFillsAndCommission() {
     expectContains(bundle.summaryCsv, "1740", "summary should contain trigger-to-fill latency");
 }
 
+void testPhase6CaseAndReportArtifactsGenerateStableFilesystemOutputs() {
+    clearTestFiles();
+
+    appendTraceLine(makeTraceLine(31, 221, 7001, "Controller", "INTC", "BUY",
+                                  "Trigger", "Controller", "BUY 1 INTC @ 45.70", 0.0));
+    appendTraceLine(makeTraceLine(31, 221, 7001, "Controller", "INTC", "BUY",
+                                  "OrderStatusSeen", "Submitted", "submitted", 20.0));
+    appendTraceLine(makeTraceLine(31, 221, 7001, "Controller", "INTC", "BUY",
+                                  "ExecDetailsSeen", "execDetails", "exch=SMART execId=E31 time=20260315 09:35:01",
+                                  1200.0, 45.70, 1, 1.0));
+    appendTraceLine(makeTraceLine(31, 221, 7001, "Controller", "INTC", "BUY",
+                                  "FinalState", "Terminal", "Filled: order complete", 1201.0));
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    BridgeOutboxRecordInput bridgeRecord;
+    bridgeRecord.recordType = "order_intent";
+    bridgeRecord.source = "WebSocket";
+    bridgeRecord.symbol = "INTC";
+    bridgeRecord.side = "BUY";
+    bridgeRecord.traceId = 31;
+    bridgeRecord.orderId = 221;
+    bridgeRecord.permId = 7001;
+    bridgeRecord.execId = "E31";
+    bridgeRecord.note = "phase6 artifact smoke";
+    const BridgeOutboxEnqueueResult queued = enqueueBridgeOutboxRecord(bridgeRecord);
+    expect(queued.queued, "phase6 artifact smoke should queue a bridge payload record");
+
+    std::string error;
+    Phase6ReportOutputArtifact reportArtifact;
+    expect(generatePhase6ReportOutputArtifact(31, "", &reportArtifact, &error),
+           "phase6 report artifact generation should succeed: " + error);
+
+    Phase6CaseBundleArtifact caseArtifact;
+    expect(generatePhase6CaseBundleArtifact(31, "", &caseArtifact, &error),
+           "phase6 case artifact generation should succeed: " + error);
+
+    expect(fs::exists(reportArtifact.artifactRootDir), "phase6 report artifact directory should exist");
+    expect(fs::exists(reportArtifact.manifestPath), "phase6 report manifest should exist");
+    expect(fs::exists(reportArtifact.reportPath), "phase6 report.txt should exist");
+    expect(fs::exists(reportArtifact.summaryPath), "phase6 summary.csv should exist");
+    expect(fs::exists(reportArtifact.fillsPath), "phase6 fills.csv should exist");
+    expect(fs::exists(reportArtifact.timelinePath), "phase6 timeline.csv should exist");
+    expect(fs::exists(caseArtifact.artifactRootDir), "phase6 case artifact directory should exist");
+    expect(fs::exists(caseArtifact.manifestPath), "phase6 case manifest should exist");
+    expect(fs::exists(caseArtifact.reportOutput.manifestPath), "phase6 case report manifest should exist");
+    expect(!caseArtifact.bridgeRecordsPath.empty(), "phase6 case artifact should include bridge records when queued");
+    expect(fs::exists(caseArtifact.bridgeRecordsPath), "phase6 bridge records payload should exist");
+
+    const json reportManifest = json::parse(readTextFile(reportArtifact.manifestPath));
+    expect(reportManifest.value("artifact_type", std::string()) == "phase6.report_output.v1",
+           "phase6 report manifest should declare report_output artifact type");
+    expect(reportManifest.value("contract_version", std::string()) == "phase6-case-report-v1",
+           "phase6 report manifest should declare contract version");
+    expect(reportManifest["trace_anchor"].value("trace_id", 0ULL) == 31,
+           "phase6 report manifest should preserve trace anchor");
+    expect(reportManifest["source_boundaries"]["current_trading_export_surface"].value("bundle_builder", std::string()) ==
+               "buildTraceExportBundle",
+           "phase6 report manifest should declare reuse boundary");
+    expect(!reportManifest["source_boundaries"]["tapescope_tape_mcp_surface"].value("used_in_core_workflow", true),
+           "phase6 report manifest should mark tape_mcp as out-of-band in this workflow");
+
+    const json caseManifest = json::parse(readTextFile(caseArtifact.manifestPath));
+    expect(caseManifest.value("artifact_type", std::string()) == "phase6.case_bundle.v1",
+           "phase6 case manifest should declare case_bundle artifact type");
+    expect(caseManifest["bridge_payload"].value("included", false),
+           "phase6 case manifest should mark bridge payload as included when records are queued");
+    expect(caseManifest["bridge_payload"].value("record_count", 0) >= 1,
+           "phase6 case manifest should report bridge payload record count");
+
+    expectContains(readTextFile(reportArtifact.reportPath), "Trade Trace 31",
+                   "phase6 report artifact should contain trace report text");
+    expectContains(readTextFile(caseArtifact.bridgeRecordsPath), "\"source_seq\":",
+                   "phase6 case bridge payload should contain serialized bridge records");
+
+    std::cout << "PHASE6_ARTIFACT_SMOKE report=" << reportArtifact.artifactRootDir
+              << " case=" << caseArtifact.artifactRootDir << '\n';
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 void testWebSocketRuntimeGuards() {
     clearTestFiles();
 
@@ -2025,6 +2108,7 @@ int main() {
         testReplayPrefersRichLiveTrace();
         testTraceIdFloorRecoversFromLog();
         testReplayHandlesPartialFillsAndCommission();
+        testPhase6CaseAndReportArtifactsGenerateStableFilesystemOutputs();
         testWebSocketRuntimeGuards();
         testRecoverySnapshotReportsAbnormalShutdown();
         testBridgeOutboxSourceSeqPreservesAcceptanceOrderingAndAnchors();
