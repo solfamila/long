@@ -1474,6 +1474,12 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
     expect(response.summary.contains("score_breakdown"), "incident drilldown should include a score breakdown");
     expect(response.summary.contains("why_it_matters"), "incident drilldown should include a why-it-matters summary");
     expect(response.summary.contains("protected_window"), "incident drilldown should include the incident protected window");
+    expect(response.summary.contains("timeline"), "incident drilldown should now include a merged investigation timeline");
+    expect(response.summary.contains("timeline_summary"), "incident drilldown should summarize the merged investigation timeline");
+    expect(response.summary.value("timeline_summary", json::object()).value("incident_count", 0ULL) >= 1ULL,
+           "incident drilldown timeline summary should include at least the incident entry");
+    expect(response.summary.value("report_summary", json::object()).contains("timeline_highlights"),
+           "incident drilldown report summary should include timeline highlights");
     expect(response.events.is_array() && response.events.size() == 2, "incident drilldown should return the related findings as evidence");
     expect(response.events.at(0).value("logical_incident_id", 0ULL) == logicalIncidentId, "incident drilldown findings should be linked to the logical incident");
 
@@ -1685,7 +1691,15 @@ void testTapeEnginePhase3BuildsTradePressureOrderCase() {
     expect(response.summary.value("related_incident_count", 0ULL) >= 1ULL,
            "order-case summary should include at least one related incident");
     expect(response.summary.contains("protected_window"), "order-case summary should surface the selected protected window");
+    expect(response.summary.value("protected_window_event_count", 0ULL) >= 4ULL,
+           "order-case summary should include protected-window evidence beyond the anchor-matched lifecycle events");
+    expect(response.summary.contains("timeline"), "order-case summary should include a merged case timeline");
+    expect(response.summary.contains("timeline_summary"), "order-case summary should summarize the merged case timeline");
+    expect(response.summary.value("timeline_summary", json::object()).value("market_event_count", 0ULL) >= 2ULL,
+           "order-case timeline summary should count surrounding market evidence");
     expect(response.summary.contains("case_report"), "order-case summary should include a report-style case summary");
+    expect(response.summary.value("case_report", json::object()).contains("timeline_highlights"),
+           "order-case case report should include timeline highlights");
 
     bool sawTradePressureRelatedFinding = false;
     for (const auto& item : response.summary.value("related_findings", json::array())) {
@@ -1708,6 +1722,17 @@ void testTapeEnginePhase3BuildsTradePressureOrderCase() {
     }
     expect(sawOrderIntent, "order-case evidence should include the order intent");
     expect(sawFill, "order-case evidence should include the fill execution");
+
+    bool sawTimelineMarketTick = false;
+    bool sawTimelineIncident = false;
+    for (const auto& item : response.summary.value("timeline", json::array())) {
+        const std::string entryType = item.value("entry_type", std::string());
+        const std::string kind = item.value("kind", std::string());
+        sawTimelineMarketTick = sawTimelineMarketTick || (entryType == "event" && kind == "market_tick");
+        sawTimelineIncident = sawTimelineIncident || (entryType == "incident" && kind == "buy_trade_pressure");
+    }
+    expect(sawTimelineMarketTick, "order-case timeline should include protected-window market evidence");
+    expect(sawTimelineIncident, "order-case timeline should include incident entries");
 
     server.stop();
 }

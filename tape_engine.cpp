@@ -222,6 +222,218 @@ json incidentScoreBreakdown(const IncidentRecord& incident) {
     };
 }
 
+std::string eventTimelineStage(const std::string& kind) {
+    if (kind == "order_intent") {
+        return "intent";
+    }
+    if (kind == "open_order") {
+        return "open";
+    }
+    if (kind == "order_status") {
+        return "status";
+    }
+    if (kind == "fill_execution") {
+        return "fill";
+    }
+    if (kind == "cancel_request") {
+        return "cancel";
+    }
+    if (kind == "order_reject" || kind == "broker_error") {
+        return "error";
+    }
+    if (kind == "market_tick") {
+        return "market_tick";
+    }
+    if (kind == "market_depth") {
+        return "market_depth";
+    }
+    if (kind == "gap_marker" || kind == "reset_marker") {
+        return "data_quality";
+    }
+    return "event";
+}
+
+std::string eventTimelineHeadline(const json& event) {
+    const std::string kind = event.value("event_kind", std::string());
+    if (kind == "order_intent") {
+        return "Order intent submitted";
+    }
+    if (kind == "open_order") {
+        return "Broker open-order update";
+    }
+    if (kind == "order_status") {
+        return "Order status update";
+    }
+    if (kind == "fill_execution") {
+        return "Fill execution";
+    }
+    if (kind == "cancel_request") {
+        return "Cancel requested";
+    }
+    if (kind == "order_reject") {
+        return "Order rejected";
+    }
+    if (kind == "broker_error") {
+        return "Broker error";
+    }
+    if (kind == "market_tick") {
+        return "Market tick";
+    }
+    if (kind == "market_depth") {
+        return "Market depth update";
+    }
+    if (kind == "gap_marker") {
+        return "Feed gap marker";
+    }
+    if (kind == "reset_marker") {
+        return "Feed reset marker";
+    }
+    return kind.empty() ? "Event" : kind;
+}
+
+json timelineEntryFromEvent(const json& event) {
+    json entry{
+        {"entry_type", "event"},
+        {"stage", eventTimelineStage(event.value("event_kind", std::string()))},
+        {"headline", eventTimelineHeadline(event)},
+        {"kind", event.value("event_kind", std::string())},
+        {"session_seq", event.value("session_seq", 0ULL)},
+        {"ts_engine_ns", event.value("ts_engine_ns", 0ULL)}
+    };
+    const std::string note = event.value("note", std::string());
+    if (!note.empty()) {
+        entry["summary"] = note;
+    }
+    if (event.contains("anchor")) {
+        entry["anchor"] = event["anchor"];
+    }
+    if (event.contains("price")) {
+        entry["price"] = event["price"];
+    }
+    if (event.contains("size")) {
+        entry["size"] = event["size"];
+    }
+    return entry;
+}
+
+json timelineEntryFromFinding(const FindingRecord& finding) {
+    return {
+        {"entry_type", "finding"},
+        {"stage", "finding"},
+        {"headline", finding.title},
+        {"summary", finding.summary},
+        {"kind", finding.kind},
+        {"severity", finding.severity},
+        {"confidence", finding.confidence},
+        {"session_seq", finding.lastSessionSeq},
+        {"session_seq_from", finding.firstSessionSeq},
+        {"ts_engine_ns", finding.tsEngineNs},
+        {"finding_id", finding.findingId},
+        {"logical_incident_id", finding.logicalIncidentId}
+    };
+}
+
+json timelineEntryFromIncident(const IncidentRecord& incident) {
+    return {
+        {"entry_type", "incident"},
+        {"stage", "incident"},
+        {"headline", incident.title},
+        {"summary", incident.summary},
+        {"kind", incident.kind},
+        {"severity", incident.severity},
+        {"confidence", incident.confidence},
+        {"score", incident.score},
+        {"session_seq", incident.lastSessionSeq},
+        {"session_seq_from", incident.firstSessionSeq},
+        {"ts_engine_ns", incident.tsEngineNs},
+        {"logical_incident_id", incident.logicalIncidentId},
+        {"incident_revision_id", incident.incidentRevisionId}
+    };
+}
+
+json buildTimelineSummary(const json& timeline) {
+    std::size_t eventCount = 0;
+    std::size_t findingCount = 0;
+    std::size_t incidentCount = 0;
+    std::size_t fillCount = 0;
+    std::size_t errorCount = 0;
+    std::size_t marketCount = 0;
+    std::size_t dataQualityCount = 0;
+    for (const auto& entry : timeline) {
+        const std::string entryType = entry.value("entry_type", std::string());
+        const std::string kind = entry.value("kind", std::string());
+        if (entryType == "event") {
+            ++eventCount;
+            if (kind == "fill_execution") {
+                ++fillCount;
+            } else if (kind == "order_reject" || kind == "broker_error") {
+                ++errorCount;
+            } else if (kind == "market_tick" || kind == "market_depth") {
+                ++marketCount;
+            } else if (kind == "gap_marker" || kind == "reset_marker") {
+                ++dataQualityCount;
+            }
+        } else if (entryType == "finding") {
+            ++findingCount;
+        } else if (entryType == "incident") {
+            ++incidentCount;
+        }
+    }
+    return {
+        {"timeline_entry_count", timeline.size()},
+        {"event_count", eventCount},
+        {"finding_count", findingCount},
+        {"incident_count", incidentCount},
+        {"fill_count", fillCount},
+        {"error_count", errorCount},
+        {"market_event_count", marketCount},
+        {"data_quality_event_count", dataQualityCount}
+    };
+}
+
+json sortAndTrimTimeline(json timeline, std::size_t limit) {
+    std::vector<json> entries = timeline.get<std::vector<json>>();
+    std::sort(entries.begin(), entries.end(), [](const json& left, const json& right) {
+        const std::uint64_t leftSeq = left.value("session_seq", 0ULL);
+        const std::uint64_t rightSeq = right.value("session_seq", 0ULL);
+        if (leftSeq != rightSeq) {
+            return leftSeq < rightSeq;
+        }
+        const std::uint64_t leftTs = left.value("ts_engine_ns", 0ULL);
+        const std::uint64_t rightTs = right.value("ts_engine_ns", 0ULL);
+        if (leftTs != rightTs) {
+            return leftTs < rightTs;
+        }
+        return left.value("entry_type", std::string()) < right.value("entry_type", std::string());
+    });
+    if (limit > 0 && entries.size() > limit) {
+        entries.erase(entries.begin(), entries.end() - static_cast<std::ptrdiff_t>(limit));
+    }
+    json result = json::array();
+    for (const auto& entry : entries) {
+        result.push_back(entry);
+    }
+    return result;
+}
+
+json buildTimelineHighlights(const json& timeline, std::size_t limit) {
+    json highlights = json::array();
+    if (!timeline.is_array() || limit == 0) {
+        return highlights;
+    }
+    const std::size_t start = timeline.size() > limit ? timeline.size() - limit : 0;
+    for (std::size_t i = start; i < timeline.size(); ++i) {
+        const auto& entry = timeline.at(i);
+        highlights.push_back({
+            {"entry_type", entry.value("entry_type", std::string())},
+            {"headline", entry.value("headline", std::string())},
+            {"kind", entry.value("kind", std::string())},
+            {"session_seq", entry.value("session_seq", 0ULL)}
+        });
+    }
+    return highlights;
+}
+
 std::vector<IncidentRecord> collapseLatestIncidentRevisions(const std::vector<IncidentRecord>& records) {
     std::map<std::uint64_t, IncidentRecord> latestByLogicalIncident;
     for (const auto& record : records) {
@@ -2728,9 +2940,26 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"evidence_from_session_seq", latestIncident.firstSessionSeq},
             {"evidence_to_session_seq", latestIncident.lastSessionSeq}
         };
+        json timeline = json::array();
         if (incidentWindow.has_value()) {
+            std::vector<json> windowEvents = filterEventsByProtectedWindow(snapshot,
+                                                                          incidentWindow->windowId,
+                                                                          32,
+                                                                          frozenRevisionId,
+                                                                          request.includeLiveTail,
+                                                                          nullptr);
+            for (const auto& event : windowEvents) {
+                timeline.push_back(timelineEntryFromEvent(event));
+            }
             reportSummary["protected_window_id"] = incidentWindow->windowId;
         }
+        for (const auto& finding : relatedFindings) {
+            timeline.push_back(timelineEntryFromFinding(finding));
+        }
+        timeline.push_back(timelineEntryFromIncident(latestIncident));
+        timeline = sortAndTrimTimeline(std::move(timeline), 24);
+        const json timelineSummary = buildTimelineSummary(timeline);
+        reportSummary["timeline_highlights"] = buildTimelineHighlights(timeline, 3);
 
         response.summary = {
             {"includes_mutable_tail", request.includeLiveTail},
@@ -2741,6 +2970,8 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"score_breakdown", incidentScoreBreakdown(latestIncident)},
             {"why_it_matters", incidentWhyItMatters(latestIncident)},
             {"report_summary", reportSummary},
+            {"timeline", timeline},
+            {"timeline_summary", timelineSummary},
             {"returned_events", response.events.size()},
             {"related_finding_count", relatedFindings.size()},
             {"incident_revisions", revisionsJson}
@@ -2955,6 +3186,36 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                       << orderCaseSummary.value("last_fill_session_seq", 0ULL) << ".";
         }
 
+        json timeline = json::array();
+        if (orderCaseSummary.contains("protected_window")) {
+            const std::uint64_t protectedWindowId = orderCaseSummary["protected_window"].value("window_id", 0ULL);
+            if (protectedWindowId > 0) {
+                std::vector<json> windowEvents = filterEventsByProtectedWindow(snapshot,
+                                                                              protectedWindowId,
+                                                                              48,
+                                                                              frozenRevisionId,
+                                                                              request.includeLiveTail,
+                                                                              nullptr);
+                for (const auto& event : windowEvents) {
+                    timeline.push_back(timelineEntryFromEvent(event));
+                }
+                orderCaseSummary["protected_window_event_count"] = windowEvents.size();
+            }
+        }
+        if (timeline.empty()) {
+            for (const auto& event : events) {
+                timeline.push_back(timelineEntryFromEvent(event));
+            }
+        }
+        for (const auto& record : relatedFindings) {
+            timeline.push_back(timelineEntryFromFinding(record));
+        }
+        for (const auto& record : collapsedIncidents) {
+            timeline.push_back(timelineEntryFromIncident(record));
+        }
+        timeline = sortAndTrimTimeline(std::move(timeline), 32);
+        const json timelineSummary = buildTimelineSummary(timeline);
+
         response.events = json::array();
         for (const auto& event : events) {
             response.events.push_back(event);
@@ -2963,9 +3224,12 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         orderCaseSummary["related_incident_count"] = collapsedIncidents.size();
         orderCaseSummary["related_findings"] = findingsJson;
         orderCaseSummary["related_incidents"] = incidentsJson;
+        orderCaseSummary["timeline"] = timeline;
+        orderCaseSummary["timeline_summary"] = timelineSummary;
         orderCaseSummary["case_report"] = {
             {"headline", headline},
             {"summary", narrative.str()},
+            {"timeline_highlights", buildTimelineHighlights(timeline, 4)},
             {"replay_target_session_seq", orderCaseSummary.value("replay_target_session_seq", 0ULL)},
             {"replay_from_session_seq", orderCaseSummary.value("replay_from_session_seq", 0ULL)},
             {"replay_to_session_seq", orderCaseSummary.value("replay_to_session_seq", 0ULL)}
