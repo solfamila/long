@@ -161,6 +161,17 @@ QueryResult<std::vector<json>> QueryClient::readRange(const RangeQuery& query) c
     return makeSuccess(std::move(events));
 }
 
+QueryResult<json> QueryClient::readSessionQuality(const RangeQuery& query, bool includeLiveTail) const {
+    tape_engine::QueryRequest request;
+    request.requestId = "tapescope-read-session-quality";
+    request.operation = "read_session_quality";
+    request.fromSessionSeq = query.firstSessionSeq;
+    request.toSessionSeq = query.lastSessionSeq;
+    request.includeLiveTail = includeLiveTail;
+
+    return packSummaryAndEvents(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readSessionOverview(const RangeQuery& query) const {
     tape_engine::QueryRequest request;
     request.requestId = "tapescope-read-session-overview";
@@ -230,6 +241,15 @@ QueryResult<json> QueryClient::seekOrderAnchor(const OrderAnchorQuery& anchorQue
     return packSummaryAndEvents(performQuery(request));
 }
 
+QueryResult<json> QueryClient::readFinding(std::uint64_t findingId) const {
+    tape_engine::QueryRequest request;
+    request.requestId = "tapescope-read-finding";
+    request.operation = "read_finding";
+    request.findingId = findingId;
+
+    return packSummaryAndEvents(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readOrderCase(const OrderAnchorQuery& anchorQuery) const {
     tape_engine::QueryRequest request;
     request.requestId = "tapescope-read-order-case";
@@ -293,6 +313,15 @@ QueryResult<json> QueryClient::readIncident(std::uint64_t logicalIncidentId) con
     request.requestId = "tapescope-read-incident";
     request.operation = "read_incident";
     request.logicalIncidentId = logicalIncidentId;
+
+    return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<json> QueryClient::readOrderAnchor(std::uint64_t anchorId) const {
+    tape_engine::QueryRequest request;
+    request.requestId = "tapescope-read-order-anchor";
+    request.operation = "read_order_anchor";
+    request.anchorId = anchorId;
 
     return packSummaryAndEvents(performQuery(request));
 }

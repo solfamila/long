@@ -75,16 +75,19 @@ public:
     [[nodiscard]] QueryResult<StatusSnapshot> status() const;
     [[nodiscard]] QueryResult<std::vector<json>> readLiveTail(std::size_t limit = 64) const;
     [[nodiscard]] QueryResult<std::vector<json>> readRange(const RangeQuery& query) const;
+    [[nodiscard]] QueryResult<json> readSessionQuality(const RangeQuery& query, bool includeLiveTail = false) const;
     [[nodiscard]] QueryResult<json> readSessionOverview(const RangeQuery& query) const;
     [[nodiscard]] QueryResult<json> scanSessionReport(const RangeQuery& query) const;
     [[nodiscard]] QueryResult<json> listSessionReports(std::size_t limit = 20) const;
     [[nodiscard]] QueryResult<json> findOrderAnchor(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<json> seekOrderAnchor(const OrderAnchorQuery& query) const;
+    [[nodiscard]] QueryResult<json> readFinding(std::uint64_t findingId) const;
     [[nodiscard]] QueryResult<json> readOrderCase(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<json> scanOrderCaseReport(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<json> listCaseReports(std::size_t limit = 20) const;
     [[nodiscard]] QueryResult<json> listIncidents(std::size_t limit = 20) const;
     [[nodiscard]] QueryResult<json> readIncident(std::uint64_t logicalIncidentId) const;
+    [[nodiscard]] QueryResult<json> readOrderAnchor(std::uint64_t anchorId) const;
     [[nodiscard]] QueryResult<json> readArtifact(const std::string& artifactId) const;
     [[nodiscard]] QueryResult<json> exportArtifact(const std::string& artifactId, const std::string& exportFormat) const;
 

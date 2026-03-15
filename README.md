@@ -105,7 +105,14 @@ TapeScope Phase-4 shell notes:
 - `ReportInventoryPane` now uses structured session/case report tables with selectable rows and direct open-to-artifact actions.
 - `RangePane` and `OrderLookupPane` now use structured event tables with selectable rows and decoded-payload detail views, so replay and anchored lifecycle inspection follow the same browsing model as incidents/reports.
 - `OrderCasePane` and `ArtifactPane` now expose selectable evidence-citation tables, can jump directly into cited artifacts, and let order-case reads push their replay window straight into `RangePane`.
-- The app talks directly to the current query seam (`status`, `read_live_tail`, `read_session_overview`, `scan_session_report`, `list_session_reports`, `read_range`, `find_order_anchor`, `seek_order_anchor`, `read_order_case`, `scan_order_case_report`, `list_case_reports`, `list_incidents`, `read_incident`, `read_artifact`, `export_artifact`) instead of wrapping the older generic command client from earlier prototype branches.
+- `SessionOverviewPane` and `IncidentPane` now follow the same investigation flow: selectable evidence citations, direct jump-to-artifact actions, and replay/range handoff from the loaded summary.
+- Actionable TapeScope tables now support double-click plus `Return` / `Space` keyboard activation for the common drilldown actions (`open selected incident`, `open selected evidence`, `open selected report`), which makes the shell usable with much less pointer travel.
+- Loading, empty, and error states are now calmer and more explicit across the shell: investigation panes show loading placeholders while requests are in flight, empty result sets explain what to try next, and report/incident inventory panes distinguish between “loaded but empty” and actual query failures.
+- TapeScope now also drops keyboard focus into the overview range field on launch, so a fresh session can be driven immediately from the keyboard without clicking into the first pane.
+- The header now includes `Refresh Now`, polling pause/resume, and a `Last updated` timestamp so live investigation can be paused deliberately, refreshed on demand, and checked for staleness at a glance.
+- `QualityPane` now exposes `read_session_quality`, and `RangePane` can hand its current replay window straight into that data-quality view.
+- `FindingPane` and `AnchorPane` now expose the engine’s direct `read_finding` and `read_order_anchor` investigation reads, including replay-window handoff and evidence-citation browsing.
+- The app talks directly to the current query seam (`status`, `read_live_tail`, `read_session_quality`, `read_session_overview`, `scan_session_report`, `list_session_reports`, `read_range`, `find_order_anchor`, `seek_order_anchor`, `read_finding`, `read_order_anchor`, `read_order_case`, `scan_order_case_report`, `list_case_reports`, `list_incidents`, `read_incident`, `read_artifact`, `export_artifact`) instead of wrapping the older generic command client from earlier prototype branches.
 
 Package a distributable zip:
 

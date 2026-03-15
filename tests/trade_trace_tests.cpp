@@ -1299,6 +1299,11 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(overviewResult.value.value("summary", json::object()).contains("report"),
            "TapeScope session-overview read should expose the overview report envelope");
 
+    const auto qualityResult = client.readSessionQuality(range);
+    expect(qualityResult.ok(), "TapeScope session-quality read should succeed: " + tapescope::QueryClient::describeError(qualityResult.error));
+    expect(qualityResult.value.value("summary", json::object()).contains("data_quality"),
+           "TapeScope session-quality read should expose the data-quality summary");
+
     const auto sessionReportResult = client.scanSessionReport(range);
     expect(sessionReportResult.ok(), "TapeScope session-report scan should succeed: " + tapescope::QueryClient::describeError(sessionReportResult.error));
     const std::string sessionReportArtifactId =
@@ -1344,6 +1349,28 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(incidentResult.ok(), "TapeScope incident read should succeed: " + tapescope::QueryClient::describeError(incidentResult.error));
     expect(incidentResult.value.value("summary", json::object()).value("logical_incident_id", 0ULL) == logicalIncidentId,
            "TapeScope incident read should preserve the requested logical incident id");
+
+    std::uint64_t findingId = 0;
+    for (const auto& citation : incidentResult.value.value("summary", json::object())
+                                   .value("evidence", json::object())
+                                   .value("citations", json::array())) {
+        const std::string artifactId = citation.value("artifact_id", std::string());
+        if (artifactId.rfind("finding:", 0) == 0) {
+            findingId = std::stoull(artifactId.substr(std::string("finding:").size()));
+            break;
+        }
+    }
+    expect(findingId > 0, "TapeScope incident read should expose at least one linked finding artifact id");
+
+    const auto findingResult = client.readFinding(findingId);
+    expect(findingResult.ok(), "TapeScope finding read should succeed: " + tapescope::QueryClient::describeError(findingResult.error));
+    expect(findingResult.value.value("summary", json::object()).value("finding", json::object()).value("finding_id", 0ULL) == findingId,
+           "TapeScope finding read should preserve the requested finding id");
+
+    const auto orderAnchorResult = client.readOrderAnchor(1);
+    expect(orderAnchorResult.ok(), "TapeScope order-anchor read should succeed: " + tapescope::QueryClient::describeError(orderAnchorResult.error));
+    expect(orderAnchorResult.value.value("summary", json::object()).value("order_anchor", json::object()).value("anchor_id", 0ULL) == 1,
+           "TapeScope order-anchor read should preserve the requested anchor id");
 
     server.stop();
 }

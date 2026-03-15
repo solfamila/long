@@ -16,12 +16,62 @@
 #include <string>
 #include <vector>
 
+@interface ActionTableView : NSTableView
+@property(nonatomic, weak) id primaryActionTarget;
+@property(nonatomic) SEL primaryAction;
+@end
+
+@implementation ActionTableView
+
+- (void)performPrimaryActionFrom:(id)sender {
+    if (self.primaryActionTarget == nil || self.primaryAction == nullptr || self.selectedRow < 0) {
+        return;
+    }
+    [NSApp sendAction:self.primaryAction to:self.primaryActionTarget from:sender];
+}
+
+- (void)keyDown:(NSEvent*)event {
+    NSString* chars = event.charactersIgnoringModifiers ?: @"";
+    if (([chars isEqualToString:@"\r"] || [chars isEqualToString:@" "] || [chars isEqualToString:@"\n"]) &&
+        self.selectedRow >= 0 && self.primaryAction != nullptr) {
+        [self performPrimaryActionFrom:self];
+        return;
+    }
+    [super keyDown:event];
+}
+
+@end
+
 namespace {
 
 using tapescope::json;
 
 constexpr NSTimeInterval kPollIntervalSeconds = 2.0;
 constexpr std::size_t kLiveTailLimit = 32;
+
+NSColor* TapeBackgroundColor() {
+    return [NSColor colorWithCalibratedRed:0.953 green:0.941 blue:0.914 alpha:1.0];
+}
+
+NSColor* TapeCardColor() {
+    return [NSColor colorWithCalibratedRed:0.986 green:0.979 blue:0.965 alpha:0.96];
+}
+
+NSColor* TapeCardBorderColor() {
+    return [NSColor colorWithCalibratedRed:0.835 green:0.792 blue:0.706 alpha:0.9];
+}
+
+NSColor* TapePanelFillColor() {
+    return [NSColor colorWithCalibratedRed:0.994 green:0.991 blue:0.982 alpha:1.0];
+}
+
+NSColor* TapePanelBorderColor() {
+    return [NSColor colorWithCalibratedRed:0.869 green:0.833 blue:0.761 alpha:0.95];
+}
+
+NSColor* TapeInkMutedColor() {
+    return [NSColor colorWithCalibratedRed:0.345 green:0.333 blue:0.302 alpha:1.0];
+}
 
 NSString* ToNSString(const std::string& value) {
     if (value.empty()) {
@@ -97,7 +147,7 @@ NSTextField* MakeLabel(NSString* text, NSFont* font, NSColor* color) {
 NSTextField* MakeValueLabel() {
     return MakeLabel(@"--",
                      [NSFont monospacedSystemFontOfSize:12.5 weight:NSFontWeightMedium],
-                     [NSColor labelColor]);
+                     TapeInkMutedColor());
 }
 
 NSTextView* MakeReadOnlyTextView() {
@@ -110,7 +160,8 @@ NSTextView* MakeReadOnlyTextView() {
     textView.automaticTextReplacementEnabled = NO;
     textView.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightRegular];
     textView.textColor = [NSColor labelColor];
-    textView.backgroundColor = [NSColor colorWithCalibratedWhite:0.995 alpha:1.0];
+    textView.backgroundColor = TapePanelFillColor();
+    textView.textContainerInset = NSMakeSize(12.0, 12.0);
     return textView;
 }
 
@@ -118,7 +169,8 @@ NSScrollView* MakeScrollView(NSTextView* textView, CGFloat minHeight) {
     NSScrollView* scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 800, minHeight)];
     scrollView.hasVerticalScroller = YES;
     scrollView.hasHorizontalScroller = YES;
-    scrollView.borderType = NSBezelBorder;
+    scrollView.borderType = NSLineBorder;
+    scrollView.backgroundColor = TapePanelFillColor();
     scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     scrollView.documentView = textView;
     [scrollView.heightAnchor constraintGreaterThanOrEqualToConstant:minHeight].active = YES;
@@ -132,6 +184,150 @@ NSStackView* MakeColumnStack(CGFloat spacing) {
     stack.spacing = spacing;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     return stack;
+}
+
+NSBox* MakeCardBox(CGFloat cornerRadius = 18.0) {
+    NSBox* box = [[NSBox alloc] initWithFrame:NSZeroRect];
+    box.boxType = NSBoxCustom;
+    box.cornerRadius = cornerRadius;
+    box.borderWidth = 1.0;
+    box.fillColor = TapeCardColor();
+    box.borderColor = TapeCardBorderColor();
+    box.translatesAutoresizingMaskIntoConstraints = NO;
+    return box;
+}
+
+NSView* MakePaneWithStack(NSStackView* __strong* outStack) {
+    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
+    NSStackView* stack = MakeColumnStack(10.0);
+    [pane addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
+        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
+        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
+        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
+    ]];
+    if (outStack != nullptr) {
+        *outStack = stack;
+    }
+    return pane;
+}
+
+NSBox* MakeCardWithStack(NSStackView* __strong* outStack, CGFloat spacing = 10.0) {
+    NSBox* card = MakeCardBox();
+    NSStackView* stack = MakeColumnStack(spacing);
+    [card addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:16.0],
+        [stack.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16.0],
+        [stack.topAnchor constraintEqualToAnchor:card.topAnchor constant:16.0],
+        [stack.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-16.0]
+    ]];
+    if (outStack != nullptr) {
+        *outStack = stack;
+    }
+    return card;
+}
+
+NSTextField* MakeIntroLabel(NSString* text, NSInteger lines = 1) {
+    NSTextField* label = MakeLabel(text,
+                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
+                                   TapeInkMutedColor());
+    label.lineBreakMode = NSLineBreakByWordWrapping;
+    label.maximumNumberOfLines = lines;
+    return label;
+}
+
+NSTextField* MakeSectionLabel(NSString* text) {
+    return MakeLabel(text,
+                     [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                     TapeInkMutedColor());
+}
+
+NSStackView* MakeControlRow() {
+    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    controls.alignment = NSLayoutAttributeCenterY;
+    controls.spacing = 8.0;
+    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    return controls;
+}
+
+NSTextField* MakeMonospacedField(CGFloat width,
+                                 NSString* initialValue = nil,
+                                 NSString* placeholder = nil) {
+    NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, width, 24)];
+    field.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
+    if (initialValue != nil) {
+        field.stringValue = initialValue;
+    }
+    if (placeholder != nil) {
+        field.placeholderString = placeholder;
+    }
+    return field;
+}
+
+NSTableView* MakeStandardTableView(id delegate, id dataSource) {
+    NSTableView* tableView = [[ActionTableView alloc] initWithFrame:NSZeroRect];
+    tableView.usesAlternatingRowBackgroundColors = NO;
+    tableView.allowsEmptySelection = YES;
+    tableView.allowsMultipleSelection = NO;
+    tableView.rowHeight = 28.0;
+    tableView.intercellSpacing = NSMakeSize(6.0, 4.0);
+    tableView.selectionHighlightStyle = NSTableViewSelectionHighlightStyleRegular;
+    tableView.gridStyleMask = NSTableViewSolidHorizontalGridLineMask;
+    tableView.gridColor = [TapePanelBorderColor() colorWithAlphaComponent:0.45];
+    tableView.backgroundColor = TapePanelFillColor();
+    tableView.delegate = delegate;
+    tableView.dataSource = dataSource;
+    if (@available(macOS 11.0, *)) {
+        tableView.style = NSTableViewStyleInset;
+    }
+    return tableView;
+}
+
+void ConfigureTablePrimaryAction(NSTableView* tableView, id target, SEL action) {
+    if (tableView == nil || action == nullptr) {
+        return;
+    }
+    tableView.target = target;
+    tableView.doubleAction = action;
+    if ([tableView isKindOfClass:[ActionTableView class]]) {
+        ActionTableView* actionTableView = (ActionTableView*)tableView;
+        actionTableView.primaryActionTarget = target;
+        actionTableView.primaryAction = action;
+    }
+}
+
+void AddTableColumn(NSTableView* tableView,
+                    NSString* identifier,
+                    NSString* title,
+                    CGFloat width) {
+    NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
+    column.title = title;
+    column.width = width;
+    column.minWidth = 90.0;
+    [tableView addTableColumn:column];
+}
+
+NSScrollView* MakeTableScrollView(NSTableView* tableView, CGFloat minHeight) {
+    NSScrollView* scrollView = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, minHeight)];
+    scrollView.hasVerticalScroller = YES;
+    scrollView.hasHorizontalScroller = YES;
+    scrollView.borderType = NSLineBorder;
+    scrollView.backgroundColor = TapePanelFillColor();
+    scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    scrollView.documentView = tableView;
+    [scrollView.heightAnchor constraintGreaterThanOrEqualToConstant:minHeight].active = YES;
+    return scrollView;
+}
+
+NSTableView* MakeEvidenceTableView(id delegate, id dataSource) {
+    NSTableView* tableView = MakeStandardTableView(delegate, dataSource);
+    AddTableColumn(tableView, @"kind", @"kind", 130.0);
+    AddTableColumn(tableView, @"artifact_id", @"artifact_id", 260.0);
+    AddTableColumn(tableView, @"label", @"label", 360.0);
+    return tableView;
 }
 
 NSTableCellView* MakeOrReuseTableCell(NSTableView* tableView,
@@ -547,6 +743,23 @@ std::string DescribeArtifactExportResult(const std::string& artifactId,
     return out.str();
 }
 
+std::string DescribeSessionQualityResult(const tapescope::RangeQuery& query,
+                                         bool includeLiveTail,
+                                         const tapescope::QueryResult<json>& result) {
+    std::ostringstream out;
+    out << "session_quality\n";
+    out << "session_seq=[" << query.firstSessionSeq << ", " << query.lastSessionSeq << "]\n";
+    out << "include_live_tail: " << (includeLiveTail ? "true" : "false") << "\n\n";
+    if (!result.ok()) {
+        out << tapescope::QueryClient::describeError(result.error) << '\n';
+        return out.str();
+    }
+
+    const json summary = result.value.value("summary", json::object());
+    out << "summary:\n" << summary.dump(2) << '\n';
+    return out.str();
+}
+
 bool ReplayRangeFromSeekSummary(const json& summary, tapescope::RangeQuery* query) {
     if (query == nullptr || !summary.is_object()) {
         return false;
@@ -577,6 +790,22 @@ bool ReplayRangeFromSeekSummary(const json& summary, tapescope::RangeQuery* quer
     query->firstSessionSeq = target > 16 ? target - 16 : 1;
     query->lastSessionSeq = target + 16;
     return true;
+}
+
+bool ReplayRangeFromInvestigationSummary(const json& summary, tapescope::RangeQuery* query) {
+    if (query == nullptr || !summary.is_object()) {
+        return false;
+    }
+    const std::uint64_t from = summary.value("from_session_seq",
+                                             summary.value("first_session_seq", 0ULL));
+    const std::uint64_t to = summary.value("to_session_seq",
+                                           summary.value("last_session_seq", 0ULL));
+    if (from > 0 && to >= from) {
+        query->firstSessionSeq = from;
+        query->lastSessionSeq = to;
+        return true;
+    }
+    return ReplayRangeFromSeekSummary(summary, query);
 }
 
 enum class OrderAnchorType {
@@ -619,6 +848,21 @@ struct ProbeSnapshot {
     tapescope::QueryResult<std::vector<json>> liveTail;
 };
 
+struct InvestigationPaneModel {
+    NSTextField* stateLabel = nil;
+    NSTextView* detailView = nil;
+    NSTableView* evidenceTableView = nil;
+    NSButton* openEvidenceButton = nil;
+    NSButton* loadReplayButton = nil;
+    std::vector<json>* evidenceItems = nullptr;
+    BOOL* hasReplayRange = nullptr;
+    tapescope::RangeQuery* replayRange = nullptr;
+    NSString* emptyEvidenceMessage = nil;
+    NSString* missingSelectionMessage = nil;
+    NSString* missingArtifactMessage = nil;
+    NSString* missingReplayMessage = nil;
+};
+
 } // namespace
 
 @interface TapeScopeWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate> {
@@ -627,9 +871,15 @@ struct ProbeSnapshot {
     dispatch_queue_t _pollQueue;
     NSTimer* _pollTimer;
     BOOL _pollInFlight;
+    BOOL _pollingPaused;
+    NSDate* _lastProbeAt;
 
+    NSBox* _bannerBox;
     NSTextField* _bannerLabel;
     NSTextField* _pollMetaLabel;
+    NSTextField* _lastProbeLabel;
+    NSButton* _refreshNowButton;
+    NSButton* _pollingToggleButton;
     NSTextField* _socketValue;
     NSTextField* _dataDirValue;
     NSTextField* _instrumentValue;
@@ -648,13 +898,19 @@ struct ProbeSnapshot {
     NSTextField* _overviewLastField;
     NSButton* _overviewFetchButton;
     NSButton* _overviewScanButton;
+    NSButton* _overviewLoadReplayButton;
     NSButton* _overviewOpenSelectedIncidentButton;
+    NSButton* _overviewOpenSelectedEvidenceButton;
     NSTextField* _overviewStateLabel;
     NSTableView* _overviewIncidentTableView;
+    NSTableView* _overviewEvidenceTableView;
     NSTextView* _overviewTextView;
     BOOL _overviewInFlight;
+    BOOL _hasOverviewReplayRange;
     tapescope::RangeQuery _lastOverviewQuery;
+    tapescope::RangeQuery _overviewReplayRange;
     std::vector<json> _overviewIncidents;
+    std::vector<json> _overviewEvidenceItems;
 
     NSTextField* _rangeFirstField;
     NSTextField* _rangeLastField;
@@ -665,6 +921,39 @@ struct ProbeSnapshot {
     BOOL _rangeInFlight;
     tapescope::RangeQuery _lastRangeQuery;
     std::vector<json> _rangeEvents;
+
+    NSTextField* _qualityFirstField;
+    NSTextField* _qualityLastField;
+    NSButton* _qualityFetchButton;
+    NSButton* _qualityIncludeLiveTailButton;
+    NSTextField* _qualityStateLabel;
+    NSTextView* _qualityTextView;
+    BOOL _qualityInFlight;
+    tapescope::RangeQuery _lastQualityQuery;
+
+    NSTextField* _findingIdField;
+    NSButton* _findingFetchButton;
+    NSButton* _findingLoadReplayButton;
+    NSButton* _findingOpenSelectedEvidenceButton;
+    NSTextField* _findingStateLabel;
+    NSTableView* _findingEvidenceTableView;
+    NSTextView* _findingTextView;
+    BOOL _findingInFlight;
+    BOOL _hasFindingReplayRange;
+    tapescope::RangeQuery _findingReplayRange;
+    std::vector<json> _findingEvidenceItems;
+
+    NSTextField* _anchorIdField;
+    NSButton* _anchorFetchButton;
+    NSButton* _anchorLoadReplayButton;
+    NSButton* _anchorOpenSelectedEvidenceButton;
+    NSTextField* _anchorStateLabel;
+    NSTableView* _anchorEvidenceTableView;
+    NSTextView* _anchorTextView;
+    BOOL _anchorInFlight;
+    BOOL _hasAnchorReplayRange;
+    tapescope::RangeQuery _anchorReplayRange;
+    std::vector<json> _anchorEvidenceItems;
 
     NSPopUpButton* _orderAnchorTypePopup;
     NSTextField* _orderAnchorInputField;
@@ -702,12 +991,18 @@ struct ProbeSnapshot {
     NSTextField* _incidentIdField;
     NSButton* _incidentFetchButton;
     NSButton* _incidentRefreshButton;
+    NSButton* _incidentLoadReplayButton;
     NSButton* _incidentOpenSelectedButton;
+    NSButton* _incidentOpenSelectedEvidenceButton;
     NSTextField* _incidentStateLabel;
     NSTableView* _incidentTableView;
+    NSTableView* _incidentEvidenceTableView;
     NSTextView* _incidentTextView;
     BOOL _incidentInFlight;
+    BOOL _hasIncidentReplayRange;
+    tapescope::RangeQuery _incidentReplayRange;
     std::vector<json> _latestIncidents;
+    std::vector<json> _incidentEvidenceItems;
 
     NSTextField* _artifactIdField;
     NSButton* _artifactFetchButton;
@@ -751,8 +1046,13 @@ struct ProbeSnapshot {
 
     window.title = @"TapeScope";
     window.minSize = NSMakeSize(900, 620);
+    if (@available(macOS 11.0, *)) {
+        window.toolbarStyle = NSWindowToolbarStyleUnified;
+    }
+    window.titleVisibility = NSWindowTitleHidden;
+    window.titlebarAppearsTransparent = YES;
     window.contentView.wantsLayer = YES;
-    window.contentView.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.96 green:0.95 blue:0.92 alpha:1.0].CGColor;
+    window.contentView.layer.backgroundColor = TapeBackgroundColor().CGColor;
 
     tapescope::ClientConfig config;
     config.socketPath = tapescope::defaultSocketPath();
@@ -762,6 +1062,8 @@ struct ProbeSnapshot {
     _lastOverviewQuery.lastSessionSeq = 128;
     _lastRangeQuery.firstSessionSeq = 1;
     _lastRangeQuery.lastSessionSeq = 128;
+    _lastQualityQuery.firstSessionSeq = 1;
+    _lastQualityQuery.lastSessionSeq = 128;
 
     [self buildInterface];
     return self;
@@ -781,51 +1083,19 @@ struct ProbeSnapshot {
 }
 
 - (NSTabViewItem*)liveEventsTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
 
-    NSTextField* intro = MakeLabel(@"Live tape: recent mutable-tail events from tape_engine with row-level drilldown.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
-                                   [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:intro];
+    [stack addArrangedSubview:MakeIntroLabel(@"Live tape: recent mutable-tail events from tape_engine with row-level drilldown.")];
 
-    _liveTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _liveTableView.usesAlternatingRowBackgroundColors = YES;
-    _liveTableView.allowsEmptySelection = YES;
-    _liveTableView.allowsMultipleSelection = NO;
-    _liveTableView.delegate = self;
-    _liveTableView.dataSource = self;
-    auto addLiveColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_liveTableView addTableColumn:column];
-    };
-    addLiveColumn(@"session_seq", @"session_seq", 120.0);
-    addLiveColumn(@"source_seq", @"source_seq", 120.0);
-    addLiveColumn(@"event_kind", @"event_kind", 180.0);
-    addLiveColumn(@"summary", @"summary", 460.0);
-    NSScrollView* liveTableScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 180)];
-    liveTableScroll.hasVerticalScroller = YES;
-    liveTableScroll.hasHorizontalScroller = YES;
-    liveTableScroll.borderType = NSBezelBorder;
-    liveTableScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    liveTableScroll.documentView = _liveTableView;
-    [liveTableScroll.heightAnchor constraintGreaterThanOrEqualToConstant:170.0].active = YES;
-    [stack addArrangedSubview:liveTableScroll];
+    _liveTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_liveTableView, @"session_seq", @"session_seq", 120.0);
+    AddTableColumn(_liveTableView, @"source_seq", @"source_seq", 120.0);
+    AddTableColumn(_liveTableView, @"event_kind", @"event_kind", 180.0);
+    AddTableColumn(_liveTableView, @"summary", @"summary", 460.0);
+    [stack addArrangedSubview:MakeTableScrollView(_liveTableView, 170.0)];
 
-    NSTextField* detailLabel = MakeLabel(@"Selected Live Event",
-                                         [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                         [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:detailLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Selected Live Event")];
 
     _liveTextView = MakeReadOnlyTextView();
     _liveTextView.string = @"Waiting for the first live-tail response…";
@@ -838,42 +1108,22 @@ struct ProbeSnapshot {
 }
 
 - (NSTabViewItem*)overviewTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Session overview: summarize the major incidents and evidence for a frozen session_seq window.",
+                                             2)];
 
-    NSTextField* intro = MakeLabel(@"Session overview: summarize the major incidents and evidence for a frozen session_seq window.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
-                                   [NSColor secondaryLabelColor]);
-    intro.lineBreakMode = NSLineBreakByWordWrapping;
-    intro.maximumNumberOfLines = 2;
-    [stack addArrangedSubview:intro];
-
-    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controls.alignment = NSLayoutAttributeCenterY;
-    controls.spacing = 8.0;
-    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* controls = MakeControlRow();
     [controls addArrangedSubview:MakeLabel(@"first_session_seq",
                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
                                            [NSColor secondaryLabelColor])];
-    _overviewFirstField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 130, 24)];
-    _overviewFirstField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _overviewFirstField.stringValue = UInt64String(_lastOverviewQuery.firstSessionSeq);
+    _overviewFirstField = MakeMonospacedField(130.0, UInt64String(_lastOverviewQuery.firstSessionSeq));
     [controls addArrangedSubview:_overviewFirstField];
 
     [controls addArrangedSubview:MakeLabel(@"last_session_seq",
                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
                                            [NSColor secondaryLabelColor])];
-    _overviewLastField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 130, 24)];
-    _overviewLastField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _overviewLastField.stringValue = UInt64String(_lastOverviewQuery.lastSessionSeq);
+    _overviewLastField = MakeMonospacedField(130.0, UInt64String(_lastOverviewQuery.lastSessionSeq));
     [controls addArrangedSubview:_overviewLastField];
 
     _overviewFetchButton = [NSButton buttonWithTitle:@"Read Overview"
@@ -884,11 +1134,21 @@ struct ProbeSnapshot {
                                              target:self
                                              action:@selector(scanOverviewReport:)];
     [controls addArrangedSubview:_overviewScanButton];
+    _overviewLoadReplayButton = [NSButton buttonWithTitle:@"Load Range"
+                                                   target:self
+                                                   action:@selector(loadReplayWindowFromOverview:)];
+    _overviewLoadReplayButton.enabled = NO;
+    [controls addArrangedSubview:_overviewLoadReplayButton];
     _overviewOpenSelectedIncidentButton = [NSButton buttonWithTitle:@"Open Selected Incident"
                                                              target:self
                                                              action:@selector(openSelectedOverviewIncident:)];
     _overviewOpenSelectedIncidentButton.enabled = NO;
     [controls addArrangedSubview:_overviewOpenSelectedIncidentButton];
+    _overviewOpenSelectedEvidenceButton = [NSButton buttonWithTitle:@"Open Selected Evidence"
+                                                             target:self
+                                                             action:@selector(openSelectedOverviewEvidence:)];
+    _overviewOpenSelectedEvidenceButton.enabled = NO;
+    [controls addArrangedSubview:_overviewOpenSelectedEvidenceButton];
     [stack addArrangedSubview:controls];
 
     _overviewStateLabel = MakeLabel(@"No session overview loaded yet.",
@@ -896,45 +1156,27 @@ struct ProbeSnapshot {
                                     [NSColor secondaryLabelColor]);
     [stack addArrangedSubview:_overviewStateLabel];
 
-    NSTextField* overviewSummaryLabel = MakeLabel(@"Overview Summary",
-                                                  [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                                  [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:overviewSummaryLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Overview Summary")];
 
     _overviewTextView = MakeReadOnlyTextView();
     _overviewTextView.string = @"Read a session overview to inspect ranked incidents and evidence.";
     [stack addArrangedSubview:MakeScrollView(_overviewTextView, 170.0)];
 
-    NSTextField* incidentListLabel = MakeLabel(@"Top Incidents",
-                                               [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                               [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:incidentListLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Top Incidents")];
 
-    _overviewIncidentTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _overviewIncidentTableView.usesAlternatingRowBackgroundColors = YES;
-    _overviewIncidentTableView.allowsEmptySelection = YES;
-    _overviewIncidentTableView.allowsMultipleSelection = NO;
-    _overviewIncidentTableView.delegate = self;
-    _overviewIncidentTableView.dataSource = self;
-    auto addOverviewIncidentColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_overviewIncidentTableView addTableColumn:column];
-    };
-    addOverviewIncidentColumn(@"logical_incident_id", @"logical_incident_id", 150.0);
-    addOverviewIncidentColumn(@"kind", @"kind", 180.0);
-    addOverviewIncidentColumn(@"score", @"score", 100.0);
-    addOverviewIncidentColumn(@"summary", @"summary", 430.0);
-    NSScrollView* incidentTableScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 170)];
-    incidentTableScroll.hasVerticalScroller = YES;
-    incidentTableScroll.hasHorizontalScroller = YES;
-    incidentTableScroll.borderType = NSBezelBorder;
-    incidentTableScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    incidentTableScroll.documentView = _overviewIncidentTableView;
-    [incidentTableScroll.heightAnchor constraintGreaterThanOrEqualToConstant:160.0].active = YES;
-    [stack addArrangedSubview:incidentTableScroll];
+    _overviewIncidentTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_overviewIncidentTableView, @"logical_incident_id", @"logical_incident_id", 150.0);
+    AddTableColumn(_overviewIncidentTableView, @"kind", @"kind", 180.0);
+    AddTableColumn(_overviewIncidentTableView, @"score", @"score", 100.0);
+    AddTableColumn(_overviewIncidentTableView, @"summary", @"summary", 430.0);
+    ConfigureTablePrimaryAction(_overviewIncidentTableView, self, @selector(openSelectedOverviewIncident:));
+    [stack addArrangedSubview:MakeTableScrollView(_overviewIncidentTableView, 160.0)];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Evidence Citations")];
+
+    _overviewEvidenceTableView = MakeEvidenceTableView(self, self);
+    ConfigureTablePrimaryAction(_overviewEvidenceTableView, self, @selector(openSelectedOverviewEvidence:));
+    [stack addArrangedSubview:MakeTableScrollView(_overviewEvidenceTableView, 140.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"SessionOverviewPane"];
     item.label = @"SessionOverviewPane";
@@ -943,44 +1185,29 @@ struct ProbeSnapshot {
 }
 
 - (NSTabViewItem*)rangeTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Replay window: fetch a frozen session_seq range from tape_engine.")];
 
-    NSTextField* intro = MakeLabel(@"Replay window: fetch a frozen session_seq range from tape_engine.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
-                                   [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:intro];
-
-    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controls.alignment = NSLayoutAttributeCenterY;
-    controls.spacing = 8.0;
-    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* controls = MakeControlRow();
     [controls addArrangedSubview:MakeLabel(@"first_session_seq",
                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
                                            [NSColor secondaryLabelColor])];
-    _rangeFirstField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 130, 24)];
-    _rangeFirstField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _rangeFirstField.stringValue = UInt64String(_lastRangeQuery.firstSessionSeq);
+    _rangeFirstField = MakeMonospacedField(130.0, UInt64String(_lastRangeQuery.firstSessionSeq));
     [controls addArrangedSubview:_rangeFirstField];
 
     [controls addArrangedSubview:MakeLabel(@"last_session_seq",
                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
                                            [NSColor secondaryLabelColor])];
-    _rangeLastField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 130, 24)];
-    _rangeLastField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _rangeLastField.stringValue = UInt64String(_lastRangeQuery.lastSessionSeq);
+    _rangeLastField = MakeMonospacedField(130.0, UInt64String(_lastRangeQuery.lastSessionSeq));
     [controls addArrangedSubview:_rangeLastField];
 
     _rangeFetchButton = [NSButton buttonWithTitle:@"Fetch Range" target:self action:@selector(fetchRange:)];
     [controls addArrangedSubview:_rangeFetchButton];
+    NSButton* rangeQualityButton = [NSButton buttonWithTitle:@"Read Quality"
+                                                      target:self
+                                                      action:@selector(loadQualityFromRange:)];
+    [controls addArrangedSubview:rangeQualityButton];
     [stack addArrangedSubview:controls];
 
     _rangeStateLabel = MakeLabel(@"No replay window loaded yet.",
@@ -988,36 +1215,14 @@ struct ProbeSnapshot {
                                  [NSColor secondaryLabelColor]);
     [stack addArrangedSubview:_rangeStateLabel];
 
-    _rangeTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _rangeTableView.usesAlternatingRowBackgroundColors = YES;
-    _rangeTableView.allowsEmptySelection = YES;
-    _rangeTableView.allowsMultipleSelection = NO;
-    _rangeTableView.delegate = self;
-    _rangeTableView.dataSource = self;
-    auto addRangeColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_rangeTableView addTableColumn:column];
-    };
-    addRangeColumn(@"session_seq", @"session_seq", 120.0);
-    addRangeColumn(@"source_seq", @"source_seq", 120.0);
-    addRangeColumn(@"event_kind", @"event_kind", 180.0);
-    addRangeColumn(@"summary", @"summary", 460.0);
-    NSScrollView* rangeTableScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 180)];
-    rangeTableScroll.hasVerticalScroller = YES;
-    rangeTableScroll.hasHorizontalScroller = YES;
-    rangeTableScroll.borderType = NSBezelBorder;
-    rangeTableScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    rangeTableScroll.documentView = _rangeTableView;
-    [rangeTableScroll.heightAnchor constraintGreaterThanOrEqualToConstant:170.0].active = YES;
-    [stack addArrangedSubview:rangeTableScroll];
+    _rangeTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_rangeTableView, @"session_seq", @"session_seq", 120.0);
+    AddTableColumn(_rangeTableView, @"source_seq", @"source_seq", 120.0);
+    AddTableColumn(_rangeTableView, @"event_kind", @"event_kind", 180.0);
+    AddTableColumn(_rangeTableView, @"summary", @"summary", 460.0);
+    [stack addArrangedSubview:MakeTableScrollView(_rangeTableView, 170.0)];
 
-    NSTextField* rangeDetailLabel = MakeLabel(@"Decoded Event",
-                                              [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                              [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:rangeDetailLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Decoded Event")];
 
     _rangeTextView = MakeReadOnlyTextView();
     _rangeTextView.string = @"Fetch a replay window, then select a row to inspect the decoded event payload.";
@@ -1029,27 +1234,158 @@ struct ProbeSnapshot {
     return item;
 }
 
-- (NSTabViewItem*)orderTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+- (NSTabViewItem*)qualityTabItem {
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Session quality: inspect evidence trust, identity quality, and feed caveats for a session_seq window.",
+                                             2)];
 
-    NSTextField* intro = MakeLabel(@"Order anchor lookup: query anchored lifecycle context by trace/order/perm/exec id.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
+    NSStackView* controls = MakeControlRow();
+    [controls addArrangedSubview:MakeLabel(@"first_session_seq",
+                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                           [NSColor secondaryLabelColor])];
+    _qualityFirstField = MakeMonospacedField(130.0, UInt64String(_lastQualityQuery.firstSessionSeq));
+    [controls addArrangedSubview:_qualityFirstField];
+
+    [controls addArrangedSubview:MakeLabel(@"last_session_seq",
+                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                           [NSColor secondaryLabelColor])];
+    _qualityLastField = MakeMonospacedField(130.0, UInt64String(_lastQualityQuery.lastSessionSeq));
+    [controls addArrangedSubview:_qualityLastField];
+
+    _qualityIncludeLiveTailButton = [NSButton checkboxWithTitle:@"Include Live Tail"
+                                                         target:nil
+                                                         action:nil];
+    _qualityIncludeLiveTailButton.state = NSControlStateValueOff;
+    [controls addArrangedSubview:_qualityIncludeLiveTailButton];
+
+    _qualityFetchButton = [NSButton buttonWithTitle:@"Read Quality"
+                                             target:self
+                                             action:@selector(fetchSessionQuality:)];
+    [controls addArrangedSubview:_qualityFetchButton];
+    [stack addArrangedSubview:controls];
+
+    _qualityStateLabel = MakeLabel(@"No session quality loaded yet.",
+                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
                                    [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:intro];
+    [stack addArrangedSubview:_qualityStateLabel];
 
-    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controls.alignment = NSLayoutAttributeCenterY;
-    controls.spacing = 8.0;
-    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    _qualityTextView = MakeReadOnlyTextView();
+    _qualityTextView.string = @"Read a session-quality window to inspect evidence trust and provenance caveats.";
+    [stack addArrangedSubview:MakeScrollView(_qualityTextView, 420.0)];
+
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"QualityPane"];
+    item.label = @"QualityPane";
+    item.view = pane;
+    return item;
+}
+
+- (NSTabViewItem*)findingTabItem {
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Finding drilldown: reopen one finding directly by stable finding_id.",
+                                             2)];
+
+    NSStackView* controls = MakeControlRow();
+    [controls addArrangedSubview:MakeLabel(@"finding_id",
+                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                           [NSColor secondaryLabelColor])];
+    _findingIdField = MakeMonospacedField(180.0, nil, @"e.g. 1");
+    [controls addArrangedSubview:_findingIdField];
+
+    _findingFetchButton = [NSButton buttonWithTitle:@"Read Finding"
+                                             target:self
+                                             action:@selector(fetchFinding:)];
+    [controls addArrangedSubview:_findingFetchButton];
+    _findingLoadReplayButton = [NSButton buttonWithTitle:@"Load Replay Window"
+                                                  target:self
+                                                  action:@selector(loadReplayWindowFromFinding:)];
+    _findingLoadReplayButton.enabled = NO;
+    [controls addArrangedSubview:_findingLoadReplayButton];
+    _findingOpenSelectedEvidenceButton = [NSButton buttonWithTitle:@"Open Selected Evidence"
+                                                            target:self
+                                                            action:@selector(openSelectedFindingEvidence:)];
+    _findingOpenSelectedEvidenceButton.enabled = NO;
+    [controls addArrangedSubview:_findingOpenSelectedEvidenceButton];
+    [stack addArrangedSubview:controls];
+
+    _findingStateLabel = MakeLabel(@"No finding loaded yet.",
+                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                   [NSColor secondaryLabelColor]);
+    [stack addArrangedSubview:_findingStateLabel];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Evidence Citations")];
+
+    _findingEvidenceTableView = MakeEvidenceTableView(self, self);
+    ConfigureTablePrimaryAction(_findingEvidenceTableView, self, @selector(openSelectedFindingEvidence:));
+    [stack addArrangedSubview:MakeTableScrollView(_findingEvidenceTableView, 150.0)];
+
+    _findingTextView = MakeReadOnlyTextView();
+    _findingTextView.string = @"Read a finding to inspect its report, timeline, and linked evidence.";
+    [stack addArrangedSubview:MakeScrollView(_findingTextView, 220.0)];
+
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"FindingPane"];
+    item.label = @"FindingPane";
+    item.view = pane;
+    return item;
+}
+
+- (NSTabViewItem*)anchorTabItem {
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Order anchor drilldown: reopen one persisted order anchor by stable anchor_id.",
+                                             2)];
+
+    NSStackView* controls = MakeControlRow();
+    [controls addArrangedSubview:MakeLabel(@"anchor_id",
+                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                           [NSColor secondaryLabelColor])];
+    _anchorIdField = MakeMonospacedField(180.0, nil, @"e.g. 1");
+    [controls addArrangedSubview:_anchorIdField];
+
+    _anchorFetchButton = [NSButton buttonWithTitle:@"Read Anchor"
+                                            target:self
+                                            action:@selector(fetchOrderAnchorById:)];
+    [controls addArrangedSubview:_anchorFetchButton];
+    _anchorLoadReplayButton = [NSButton buttonWithTitle:@"Load Replay Window"
+                                                 target:self
+                                                 action:@selector(loadReplayWindowFromAnchor:)];
+    _anchorLoadReplayButton.enabled = NO;
+    [controls addArrangedSubview:_anchorLoadReplayButton];
+    _anchorOpenSelectedEvidenceButton = [NSButton buttonWithTitle:@"Open Selected Evidence"
+                                                           target:self
+                                                           action:@selector(openSelectedAnchorEvidence:)];
+    _anchorOpenSelectedEvidenceButton.enabled = NO;
+    [controls addArrangedSubview:_anchorOpenSelectedEvidenceButton];
+    [stack addArrangedSubview:controls];
+
+    _anchorStateLabel = MakeLabel(@"No order anchor loaded yet.",
+                                  [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                  [NSColor secondaryLabelColor]);
+    [stack addArrangedSubview:_anchorStateLabel];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Evidence Citations")];
+
+    _anchorEvidenceTableView = MakeEvidenceTableView(self, self);
+    ConfigureTablePrimaryAction(_anchorEvidenceTableView, self, @selector(openSelectedAnchorEvidence:));
+    [stack addArrangedSubview:MakeTableScrollView(_anchorEvidenceTableView, 150.0)];
+
+    _anchorTextView = MakeReadOnlyTextView();
+    _anchorTextView.string = @"Read an order anchor to inspect the anchor event and linked order-case evidence.";
+    [stack addArrangedSubview:MakeScrollView(_anchorTextView, 220.0)];
+
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"AnchorPane"];
+    item.label = @"AnchorPane";
+    item.view = pane;
+    return item;
+}
+
+- (NSTabViewItem*)orderTabItem {
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Order anchor lookup: query anchored lifecycle context by trace/order/perm/exec id.")];
+
+    NSStackView* controls = MakeControlRow();
 
     _orderAnchorTypePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 120, 24) pullsDown:NO];
     [_orderAnchorTypePopup addItemsWithTitles:@[@"traceId", @"orderId", @"permId", @"execId"]];
@@ -1057,9 +1393,7 @@ struct ProbeSnapshot {
     _orderAnchorTypePopup.action = @selector(orderAnchorTypeChanged:);
     [controls addArrangedSubview:_orderAnchorTypePopup];
 
-    _orderAnchorInputField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 220, 24)];
-    _orderAnchorInputField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _orderAnchorInputField.placeholderString = PlaceholderForOrderAnchorType(OrderAnchorType::TraceId);
+    _orderAnchorInputField = MakeMonospacedField(220.0, nil, PlaceholderForOrderAnchorType(OrderAnchorType::TraceId));
     [controls addArrangedSubview:_orderAnchorInputField];
 
     _orderLookupButton = [NSButton buttonWithTitle:@"Find Order Anchor"
@@ -1073,36 +1407,14 @@ struct ProbeSnapshot {
                                  [NSColor secondaryLabelColor]);
     [stack addArrangedSubview:_orderStateLabel];
 
-    _orderTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _orderTableView.usesAlternatingRowBackgroundColors = YES;
-    _orderTableView.allowsEmptySelection = YES;
-    _orderTableView.allowsMultipleSelection = NO;
-    _orderTableView.delegate = self;
-    _orderTableView.dataSource = self;
-    auto addOrderColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_orderTableView addTableColumn:column];
-    };
-    addOrderColumn(@"session_seq", @"session_seq", 120.0);
-    addOrderColumn(@"event_kind", @"event_kind", 180.0);
-    addOrderColumn(@"side", @"side", 100.0);
-    addOrderColumn(@"summary", @"summary", 460.0);
-    NSScrollView* orderTableScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 180)];
-    orderTableScroll.hasVerticalScroller = YES;
-    orderTableScroll.hasHorizontalScroller = YES;
-    orderTableScroll.borderType = NSBezelBorder;
-    orderTableScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    orderTableScroll.documentView = _orderTableView;
-    [orderTableScroll.heightAnchor constraintGreaterThanOrEqualToConstant:170.0].active = YES;
-    [stack addArrangedSubview:orderTableScroll];
+    _orderTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_orderTableView, @"session_seq", @"session_seq", 120.0);
+    AddTableColumn(_orderTableView, @"event_kind", @"event_kind", 180.0);
+    AddTableColumn(_orderTableView, @"side", @"side", 100.0);
+    AddTableColumn(_orderTableView, @"summary", @"summary", 460.0);
+    [stack addArrangedSubview:MakeTableScrollView(_orderTableView, 170.0)];
 
-    NSTextField* orderDetailLabel = MakeLabel(@"Anchored Event",
-                                              [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                              [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:orderDetailLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Anchored Event")];
 
     _orderTextView = MakeReadOnlyTextView();
     _orderTextView.string = @"Lookup an anchor, then select a row to inspect the decoded event payload.";
@@ -1115,28 +1427,12 @@ struct ProbeSnapshot {
 }
 
 - (NSTabViewItem*)orderCaseTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Order case: load the report-style investigation summary for one trace/order/perm/exec anchor.",
+                                             2)];
 
-    NSTextField* intro = MakeLabel(@"Order case: load the report-style investigation summary for one trace/order/perm/exec anchor.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
-                                   [NSColor secondaryLabelColor]);
-    intro.lineBreakMode = NSLineBreakByWordWrapping;
-    intro.maximumNumberOfLines = 2;
-    [stack addArrangedSubview:intro];
-
-    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controls.alignment = NSLayoutAttributeCenterY;
-    controls.spacing = 8.0;
-    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* controls = MakeControlRow();
 
     _orderCaseAnchorTypePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 120, 24) pullsDown:NO];
     [_orderCaseAnchorTypePopup addItemsWithTitles:@[@"traceId", @"orderId", @"permId", @"execId"]];
@@ -1144,9 +1440,7 @@ struct ProbeSnapshot {
     _orderCaseAnchorTypePopup.action = @selector(orderCaseAnchorTypeChanged:);
     [controls addArrangedSubview:_orderCaseAnchorTypePopup];
 
-    _orderCaseAnchorInputField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 220, 24)];
-    _orderCaseAnchorInputField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _orderCaseAnchorInputField.placeholderString = PlaceholderForOrderAnchorType(OrderAnchorType::TraceId);
+    _orderCaseAnchorInputField = MakeMonospacedField(220.0, nil, PlaceholderForOrderAnchorType(OrderAnchorType::TraceId));
     [controls addArrangedSubview:_orderCaseAnchorInputField];
 
     _orderCaseFetchButton = [NSButton buttonWithTitle:@"Read Order Case"
@@ -1164,11 +1458,7 @@ struct ProbeSnapshot {
                                      [NSColor secondaryLabelColor]);
     [stack addArrangedSubview:_orderCaseStateLabel];
 
-    NSStackView* actions = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    actions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    actions.alignment = NSLayoutAttributeCenterY;
-    actions.spacing = 8.0;
-    actions.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* actions = MakeControlRow();
     _orderCaseLoadReplayButton = [NSButton buttonWithTitle:@"Load Replay Window"
                                                     target:self
                                                     action:@selector(loadReplayWindowFromOrderCase:)];
@@ -1181,44 +1471,17 @@ struct ProbeSnapshot {
     [actions addArrangedSubview:_orderCaseOpenSelectedEvidenceButton];
     [stack addArrangedSubview:actions];
 
-    NSTextField* orderCaseDetailLabel = MakeLabel(@"Order Case Summary",
-                                                  [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                                  [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:orderCaseDetailLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Order Case Summary")];
 
     _orderCaseTextView = MakeReadOnlyTextView();
     _orderCaseTextView.string = @"Read an order case to inspect replay targets, findings, incidents, and evidence.";
     [stack addArrangedSubview:MakeScrollView(_orderCaseTextView, 170.0)];
 
-    NSTextField* orderCaseEvidenceLabel = MakeLabel(@"Evidence Citations",
-                                                    [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                                    [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:orderCaseEvidenceLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Evidence Citations")];
 
-    _orderCaseEvidenceTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _orderCaseEvidenceTableView.usesAlternatingRowBackgroundColors = YES;
-    _orderCaseEvidenceTableView.allowsEmptySelection = YES;
-    _orderCaseEvidenceTableView.allowsMultipleSelection = NO;
-    _orderCaseEvidenceTableView.delegate = self;
-    _orderCaseEvidenceTableView.dataSource = self;
-    auto addOrderCaseEvidenceColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_orderCaseEvidenceTableView addTableColumn:column];
-    };
-    addOrderCaseEvidenceColumn(@"kind", @"kind", 130.0);
-    addOrderCaseEvidenceColumn(@"artifact_id", @"artifact_id", 260.0);
-    addOrderCaseEvidenceColumn(@"label", @"label", 360.0);
-    NSScrollView* orderCaseEvidenceScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 170)];
-    orderCaseEvidenceScroll.hasVerticalScroller = YES;
-    orderCaseEvidenceScroll.hasHorizontalScroller = YES;
-    orderCaseEvidenceScroll.borderType = NSBezelBorder;
-    orderCaseEvidenceScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    orderCaseEvidenceScroll.documentView = _orderCaseEvidenceTableView;
-    [orderCaseEvidenceScroll.heightAnchor constraintGreaterThanOrEqualToConstant:160.0].active = YES;
-    [stack addArrangedSubview:orderCaseEvidenceScroll];
+    _orderCaseEvidenceTableView = MakeEvidenceTableView(self, self);
+    ConfigureTablePrimaryAction(_orderCaseEvidenceTableView, self, @selector(openSelectedOrderCaseEvidence:));
+    [stack addArrangedSubview:MakeTableScrollView(_orderCaseEvidenceTableView, 160.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"OrderCasePane"];
     item.label = @"OrderCasePane";
@@ -1227,28 +1490,12 @@ struct ProbeSnapshot {
 }
 
 - (NSTabViewItem*)seekTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Replay target: compute the best replay jump around an order/fill anchor.",
+                                             2)];
 
-    NSTextField* intro = MakeLabel(@"Replay target: compute the best replay jump around an order/fill anchor.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
-                                   [NSColor secondaryLabelColor]);
-    intro.lineBreakMode = NSLineBreakByWordWrapping;
-    intro.maximumNumberOfLines = 2;
-    [stack addArrangedSubview:intro];
-
-    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controls.alignment = NSLayoutAttributeCenterY;
-    controls.spacing = 8.0;
-    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* controls = MakeControlRow();
 
     _seekAnchorTypePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 120, 24) pullsDown:NO];
     [_seekAnchorTypePopup addItemsWithTitles:@[@"traceId", @"orderId", @"permId", @"execId"]];
@@ -1256,9 +1503,7 @@ struct ProbeSnapshot {
     _seekAnchorTypePopup.action = @selector(seekAnchorTypeChanged:);
     [controls addArrangedSubview:_seekAnchorTypePopup];
 
-    _seekAnchorInputField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 220, 24)];
-    _seekAnchorInputField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _seekAnchorInputField.placeholderString = PlaceholderForOrderAnchorType(OrderAnchorType::TraceId);
+    _seekAnchorInputField = MakeMonospacedField(220.0, nil, PlaceholderForOrderAnchorType(OrderAnchorType::TraceId));
     [controls addArrangedSubview:_seekAnchorInputField];
 
     _seekFetchButton = [NSButton buttonWithTitle:@"Seek Replay Target"
@@ -1288,34 +1533,16 @@ struct ProbeSnapshot {
 }
 
 - (NSTabViewItem*)incidentTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Incident drilldown: reopen a ranked logical incident by stable logical_incident_id.",
+                                             2)];
 
-    NSTextField* intro = MakeLabel(@"Incident drilldown: reopen a ranked logical incident by stable logical_incident_id.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
-                                   [NSColor secondaryLabelColor]);
-    intro.lineBreakMode = NSLineBreakByWordWrapping;
-    intro.maximumNumberOfLines = 2;
-    [stack addArrangedSubview:intro];
-
-    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controls.alignment = NSLayoutAttributeCenterY;
-    controls.spacing = 8.0;
-    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* controls = MakeControlRow();
     [controls addArrangedSubview:MakeLabel(@"logical_incident_id",
                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
                                            [NSColor secondaryLabelColor])];
-    _incidentIdField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 180, 24)];
-    _incidentIdField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _incidentIdField.placeholderString = @"e.g. 1";
+    _incidentIdField = MakeMonospacedField(180.0, nil, @"e.g. 1");
     [controls addArrangedSubview:_incidentIdField];
 
     _incidentRefreshButton = [NSButton buttonWithTitle:@"Refresh List"
@@ -1327,12 +1554,22 @@ struct ProbeSnapshot {
                                               target:self
                                               action:@selector(fetchIncident:)];
     [controls addArrangedSubview:_incidentFetchButton];
+    _incidentLoadReplayButton = [NSButton buttonWithTitle:@"Load Replay Window"
+                                                   target:self
+                                                   action:@selector(loadReplayWindowFromIncident:)];
+    _incidentLoadReplayButton.enabled = NO;
+    [controls addArrangedSubview:_incidentLoadReplayButton];
 
     _incidentOpenSelectedButton = [NSButton buttonWithTitle:@"Open Selected"
                                                      target:self
                                                      action:@selector(openSelectedIncident:)];
     _incidentOpenSelectedButton.enabled = NO;
     [controls addArrangedSubview:_incidentOpenSelectedButton];
+    _incidentOpenSelectedEvidenceButton = [NSButton buttonWithTitle:@"Open Selected Evidence"
+                                                             target:self
+                                                             action:@selector(openSelectedIncidentEvidence:)];
+    _incidentOpenSelectedEvidenceButton.enabled = NO;
+    [controls addArrangedSubview:_incidentOpenSelectedEvidenceButton];
     [stack addArrangedSubview:controls];
 
     _incidentStateLabel = MakeLabel(@"No incident loaded yet.",
@@ -1340,35 +1577,23 @@ struct ProbeSnapshot {
                                     [NSColor secondaryLabelColor]);
     [stack addArrangedSubview:_incidentStateLabel];
 
-    _incidentTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _incidentTableView.usesAlternatingRowBackgroundColors = YES;
-    _incidentTableView.allowsEmptySelection = YES;
-    _incidentTableView.allowsMultipleSelection = NO;
-    _incidentTableView.delegate = self;
-    _incidentTableView.dataSource = self;
-    auto addIncidentColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_incidentTableView addTableColumn:column];
-    };
-    addIncidentColumn(@"logical_incident_id", @"logical_incident_id", 150.0);
-    addIncidentColumn(@"kind", @"kind", 180.0);
-    addIncidentColumn(@"score", @"score", 90.0);
-    addIncidentColumn(@"headline", @"headline", 420.0);
-    NSScrollView* incidentScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 180)];
-    incidentScroll.hasVerticalScroller = YES;
-    incidentScroll.hasHorizontalScroller = YES;
-    incidentScroll.borderType = NSBezelBorder;
-    incidentScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    incidentScroll.documentView = _incidentTableView;
-    [incidentScroll.heightAnchor constraintGreaterThanOrEqualToConstant:170.0].active = YES;
-    [stack addArrangedSubview:incidentScroll];
+    _incidentTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_incidentTableView, @"logical_incident_id", @"logical_incident_id", 150.0);
+    AddTableColumn(_incidentTableView, @"kind", @"kind", 180.0);
+    AddTableColumn(_incidentTableView, @"score", @"score", 90.0);
+    AddTableColumn(_incidentTableView, @"headline", @"headline", 420.0);
+    ConfigureTablePrimaryAction(_incidentTableView, self, @selector(openSelectedIncident:));
+    [stack addArrangedSubview:MakeTableScrollView(_incidentTableView, 170.0)];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Evidence Citations")];
+
+    _incidentEvidenceTableView = MakeEvidenceTableView(self, self);
+    ConfigureTablePrimaryAction(_incidentEvidenceTableView, self, @selector(openSelectedIncidentEvidence:));
+    [stack addArrangedSubview:MakeTableScrollView(_incidentEvidenceTableView, 140.0)];
 
     _incidentTextView = MakeReadOnlyTextView();
     _incidentTextView.string = @"Incident drilldown will show score breakdown, findings, protected windows, and narrative summary.";
-    [stack addArrangedSubview:MakeScrollView(_incidentTextView, 320.0)];
+    [stack addArrangedSubview:MakeScrollView(_incidentTextView, 180.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"IncidentPane"];
     item.label = @"IncidentPane";
@@ -1377,34 +1602,16 @@ struct ProbeSnapshot {
 }
 
 - (NSTabViewItem*)artifactTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Artifact read: reopen durable reports or selector artifacts by stable artifact id.",
+                                             2)];
 
-    NSTextField* intro = MakeLabel(@"Artifact read: reopen durable reports or selector artifacts by stable artifact id.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
-                                   [NSColor secondaryLabelColor]);
-    intro.lineBreakMode = NSLineBreakByWordWrapping;
-    intro.maximumNumberOfLines = 2;
-    [stack addArrangedSubview:intro];
-
-    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controls.alignment = NSLayoutAttributeCenterY;
-    controls.spacing = 8.0;
-    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* controls = MakeControlRow();
     [controls addArrangedSubview:MakeLabel(@"artifact_id",
                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
                                            [NSColor secondaryLabelColor])];
-    _artifactIdField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 340, 24)];
-    _artifactIdField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
-    _artifactIdField.placeholderString = @"e.g. session-report:1 or order-case:order:7401";
+    _artifactIdField = MakeMonospacedField(340.0, nil, @"e.g. session-report:1 or order-case:order:7401");
     [controls addArrangedSubview:_artifactIdField];
 
     _artifactFetchButton = [NSButton buttonWithTitle:@"Read Artifact"
@@ -1432,40 +1639,13 @@ struct ProbeSnapshot {
                                     [NSColor secondaryLabelColor]);
     [stack addArrangedSubview:_artifactStateLabel];
 
-    NSTextField* artifactEvidenceLabel = MakeLabel(@"Evidence Citations",
-                                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                                   [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:artifactEvidenceLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Evidence Citations")];
 
-    _artifactEvidenceTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _artifactEvidenceTableView.usesAlternatingRowBackgroundColors = YES;
-    _artifactEvidenceTableView.allowsEmptySelection = YES;
-    _artifactEvidenceTableView.allowsMultipleSelection = NO;
-    _artifactEvidenceTableView.delegate = self;
-    _artifactEvidenceTableView.dataSource = self;
-    auto addArtifactEvidenceColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_artifactEvidenceTableView addTableColumn:column];
-    };
-    addArtifactEvidenceColumn(@"kind", @"kind", 130.0);
-    addArtifactEvidenceColumn(@"artifact_id", @"artifact_id", 260.0);
-    addArtifactEvidenceColumn(@"label", @"label", 360.0);
-    NSScrollView* artifactEvidenceScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 170)];
-    artifactEvidenceScroll.hasVerticalScroller = YES;
-    artifactEvidenceScroll.hasHorizontalScroller = YES;
-    artifactEvidenceScroll.borderType = NSBezelBorder;
-    artifactEvidenceScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    artifactEvidenceScroll.documentView = _artifactEvidenceTableView;
-    [artifactEvidenceScroll.heightAnchor constraintGreaterThanOrEqualToConstant:160.0].active = YES;
-    [stack addArrangedSubview:artifactEvidenceScroll];
+    _artifactEvidenceTableView = MakeEvidenceTableView(self, self);
+    ConfigureTablePrimaryAction(_artifactEvidenceTableView, self, @selector(openSelectedArtifactEvidence:));
+    [stack addArrangedSubview:MakeTableScrollView(_artifactEvidenceTableView, 160.0)];
 
-    NSTextField* artifactDetailLabel = MakeLabel(@"Artifact Detail",
-                                                 [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                                 [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:artifactDetailLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Artifact Detail")];
 
     _artifactTextView = MakeReadOnlyTextView();
     _artifactTextView.string = @"Artifact reads will show the normalized investigation envelope for durable reports and selector artifacts.";
@@ -1478,28 +1658,12 @@ struct ProbeSnapshot {
 }
 
 - (NSTabViewItem*)reportInventoryTabItem {
-    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
-    NSStackView* stack = MakeColumnStack(10.0);
-    [pane addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
-        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
-        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
-        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
-    ]];
+    NSStackView* stack = nil;
+    NSView* pane = MakePaneWithStack(&stack);
+    [stack addArrangedSubview:MakeIntroLabel(@"Durable reports: browse session and case report artifacts already persisted by tape_engine.",
+                                             2)];
 
-    NSTextField* intro = MakeLabel(@"Durable reports: browse session and case report artifacts already persisted by tape_engine.",
-                                   [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
-                                   [NSColor secondaryLabelColor]);
-    intro.lineBreakMode = NSLineBreakByWordWrapping;
-    intro.maximumNumberOfLines = 2;
-    [stack addArrangedSubview:intro];
-
-    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controls.alignment = NSLayoutAttributeCenterY;
-    controls.spacing = 8.0;
-    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView* controls = MakeControlRow();
 
     _reportInventoryRefreshButton = [NSButton buttonWithTitle:@"Refresh Reports"
                                                        target:self
@@ -1525,67 +1689,25 @@ struct ProbeSnapshot {
                                            [NSColor secondaryLabelColor]);
     [stack addArrangedSubview:_reportInventoryStateLabel];
 
-    NSTextField* sessionLabel = MakeLabel(@"Session Reports",
-                                          [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                          [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:sessionLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Session Reports")];
 
-    _sessionReportTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _sessionReportTableView.usesAlternatingRowBackgroundColors = YES;
-    _sessionReportTableView.allowsEmptySelection = YES;
-    _sessionReportTableView.allowsMultipleSelection = NO;
-    _sessionReportTableView.delegate = self;
-    _sessionReportTableView.dataSource = self;
-    auto addSessionColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_sessionReportTableView addTableColumn:column];
-    };
-    addSessionColumn(@"report_id", @"report_id", 110.0);
-    addSessionColumn(@"revision_id", @"revision_id", 110.0);
-    addSessionColumn(@"artifact_id", @"artifact_id", 220.0);
-    addSessionColumn(@"headline", @"headline", 360.0);
-    NSScrollView* sessionScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 150)];
-    sessionScroll.hasVerticalScroller = YES;
-    sessionScroll.hasHorizontalScroller = YES;
-    sessionScroll.borderType = NSBezelBorder;
-    sessionScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    sessionScroll.documentView = _sessionReportTableView;
-    [sessionScroll.heightAnchor constraintGreaterThanOrEqualToConstant:140.0].active = YES;
-    [stack addArrangedSubview:sessionScroll];
+    _sessionReportTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_sessionReportTableView, @"report_id", @"report_id", 110.0);
+    AddTableColumn(_sessionReportTableView, @"revision_id", @"revision_id", 110.0);
+    AddTableColumn(_sessionReportTableView, @"artifact_id", @"artifact_id", 220.0);
+    AddTableColumn(_sessionReportTableView, @"headline", @"headline", 360.0);
+    ConfigureTablePrimaryAction(_sessionReportTableView, self, @selector(openSelectedSessionReport:));
+    [stack addArrangedSubview:MakeTableScrollView(_sessionReportTableView, 140.0)];
 
-    NSTextField* caseLabel = MakeLabel(@"Case Reports",
-                                       [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                       [NSColor secondaryLabelColor]);
-    [stack addArrangedSubview:caseLabel];
+    [stack addArrangedSubview:MakeSectionLabel(@"Case Reports")];
 
-    _caseReportTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
-    _caseReportTableView.usesAlternatingRowBackgroundColors = YES;
-    _caseReportTableView.allowsEmptySelection = YES;
-    _caseReportTableView.allowsMultipleSelection = NO;
-    _caseReportTableView.delegate = self;
-    _caseReportTableView.dataSource = self;
-    auto addCaseColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
-        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
-        column.title = title;
-        column.width = width;
-        column.minWidth = 90.0;
-        [_caseReportTableView addTableColumn:column];
-    };
-    addCaseColumn(@"report_id", @"report_id", 110.0);
-    addCaseColumn(@"report_type", @"report_type", 150.0);
-    addCaseColumn(@"artifact_id", @"artifact_id", 220.0);
-    addCaseColumn(@"headline", @"headline", 320.0);
-    NSScrollView* caseScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 150)];
-    caseScroll.hasVerticalScroller = YES;
-    caseScroll.hasHorizontalScroller = YES;
-    caseScroll.borderType = NSBezelBorder;
-    caseScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    caseScroll.documentView = _caseReportTableView;
-    [caseScroll.heightAnchor constraintGreaterThanOrEqualToConstant:140.0].active = YES;
-    [stack addArrangedSubview:caseScroll];
+    _caseReportTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_caseReportTableView, @"report_id", @"report_id", 110.0);
+    AddTableColumn(_caseReportTableView, @"report_type", @"report_type", 150.0);
+    AddTableColumn(_caseReportTableView, @"artifact_id", @"artifact_id", 220.0);
+    AddTableColumn(_caseReportTableView, @"headline", @"headline", 320.0);
+    ConfigureTablePrimaryAction(_caseReportTableView, self, @selector(openSelectedCaseReport:));
+    [stack addArrangedSubview:MakeTableScrollView(_caseReportTableView, 140.0)];
 
     _reportInventoryTextView = MakeReadOnlyTextView();
     _reportInventoryTextView.string = @"Refresh report inventory, then select a row to inspect its metadata or open it in ArtifactPane.";
@@ -1599,7 +1721,7 @@ struct ProbeSnapshot {
 
 - (void)buildInterface {
     NSView* contentView = self.window.contentView;
-    NSStackView* root = MakeColumnStack(16.0);
+    NSStackView* root = MakeColumnStack(18.0);
     [contentView addSubview:root];
     [NSLayoutConstraint activateConstraints:@[
         [root.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor constant:22.0],
@@ -1608,42 +1730,74 @@ struct ProbeSnapshot {
         [root.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor constant:-20.0]
     ]];
 
-    NSTextField* title = MakeLabel(@"TapeScope",
-                                   [NSFont systemFontOfSize:28.0 weight:NSFontWeightBold],
-                                   [NSColor labelColor]);
-    [root addArrangedSubview:title];
+    NSStackView* headerStack = nil;
+    NSBox* headerCard = MakeCardWithStack(&headerStack, 10.0);
 
-    NSTextField* subtitle = MakeLabel(@"Phase 4: native status, live-tail, overview, incident, replay-target, range, order case, report inventory, and artifact/export panes backed by the engine query seam.",
+    NSTextField* title = MakeLabel(@"TapeScope",
+                                   [NSFont systemFontOfSize:30.0 weight:NSFontWeightBlack],
+                                   [NSColor labelColor]);
+    [headerStack addArrangedSubview:title];
+
+    NSTextField* subtitle = MakeLabel(@"Phase 4: native status, live-tail, overview, incident, replay-target, range, quality, finding, anchor, order case, report inventory, and artifact/export panes backed by the engine query seam.",
                                       [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium],
-                                      [NSColor secondaryLabelColor]);
+                                      TapeInkMutedColor());
     subtitle.lineBreakMode = NSLineBreakByWordWrapping;
     subtitle.maximumNumberOfLines = 2;
-    [root addArrangedSubview:subtitle];
+    [headerStack addArrangedSubview:subtitle];
+
+    NSStackView* bannerStack = nil;
+    _bannerBox = MakeCardWithStack(&bannerStack, 4.0);
+    _bannerBox.fillColor = [[NSColor secondaryLabelColor] colorWithAlphaComponent:0.10];
+    _bannerBox.borderColor = [[NSColor secondaryLabelColor] colorWithAlphaComponent:0.18];
 
     _bannerLabel = MakeLabel(@"Waiting for tape_engine",
                              [NSFont systemFontOfSize:14.0 weight:NSFontWeightSemibold],
                              [NSColor secondaryLabelColor]);
-    [root addArrangedSubview:_bannerLabel];
+    [bannerStack addArrangedSubview:_bannerLabel];
 
+    NSStackView* bannerControls = MakeControlRow();
     _pollMetaLabel = MakeLabel(@"Polling engine every 2s",
                                [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
-                               [NSColor tertiaryLabelColor]);
-    [root addArrangedSubview:_pollMetaLabel];
+                               TapeInkMutedColor());
+    [bannerControls addArrangedSubview:_pollMetaLabel];
+
+    _lastProbeLabel = MakeLabel(@"No probe yet",
+                                [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightMedium],
+                                TapeInkMutedColor());
+    [bannerControls addArrangedSubview:_lastProbeLabel];
+
+    _refreshNowButton = [NSButton buttonWithTitle:@"Refresh Now"
+                                           target:self
+                                           action:@selector(refreshNow:)];
+    [bannerControls addArrangedSubview:_refreshNowButton];
+
+    _pollingToggleButton = [NSButton buttonWithTitle:@"Pause Polling"
+                                              target:self
+                                              action:@selector(togglePolling:)];
+    [bannerControls addArrangedSubview:_pollingToggleButton];
+    [bannerStack addArrangedSubview:bannerControls];
+    [headerStack addArrangedSubview:_bannerBox];
+    [root addArrangedSubview:headerCard];
 
     NSGridView* summaryGrid = [NSGridView gridViewWithViews:@[
-        @[MakeLabel(@"Socket", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]), (_socketValue = MakeValueLabel())],
-        @[MakeLabel(@"Data Dir", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]), (_dataDirValue = MakeValueLabel())],
-        @[MakeLabel(@"Instrument", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]), (_instrumentValue = MakeValueLabel())],
-        @[MakeLabel(@"Latest Session Seq", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]), (_latestSeqValue = MakeValueLabel())],
-        @[MakeLabel(@"Live Event Count", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]), (_liveCountValue = MakeValueLabel())],
-        @[MakeLabel(@"Segment Count", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]), (_segmentCountValue = MakeValueLabel())],
-        @[MakeLabel(@"Manifest Hash", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]), (_manifestHashValue = MakeValueLabel())]
+        @[MakeSectionLabel(@"Socket"), (_socketValue = MakeValueLabel())],
+        @[MakeSectionLabel(@"Data Dir"), (_dataDirValue = MakeValueLabel())],
+        @[MakeSectionLabel(@"Instrument"), (_instrumentValue = MakeValueLabel())],
+        @[MakeSectionLabel(@"Latest Session Seq"), (_latestSeqValue = MakeValueLabel())],
+        @[MakeSectionLabel(@"Live Event Count"), (_liveCountValue = MakeValueLabel())],
+        @[MakeSectionLabel(@"Segment Count"), (_segmentCountValue = MakeValueLabel())],
+        @[MakeSectionLabel(@"Manifest Hash"), (_manifestHashValue = MakeValueLabel())]
     ]];
     summaryGrid.translatesAutoresizingMaskIntoConstraints = NO;
     summaryGrid.rowSpacing = 8.0;
     summaryGrid.columnSpacing = 18.0;
-    [summaryGrid.widthAnchor constraintEqualToAnchor:root.widthAnchor].active = YES;
-    [root addArrangedSubview:summaryGrid];
+
+    NSStackView* summaryStack = nil;
+    NSBox* summaryCard = MakeCardWithStack(&summaryStack, 12.0);
+    [summaryStack addArrangedSubview:MakeSectionLabel(@"Engine Snapshot")];
+    [summaryStack addArrangedSubview:summaryGrid];
+    [summaryGrid.widthAnchor constraintEqualToAnchor:summaryStack.widthAnchor].active = YES;
+    [root addArrangedSubview:summaryCard];
 
     _tabView = [[NSTabView alloc] initWithFrame:NSZeroRect];
     _tabView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1653,24 +1807,425 @@ struct ProbeSnapshot {
     [_tabView addTabViewItem:[self incidentTabItem]];
     [_tabView addTabViewItem:[self seekTabItem]];
     [_tabView addTabViewItem:[self rangeTabItem]];
+    [_tabView addTabViewItem:[self qualityTabItem]];
+    [_tabView addTabViewItem:[self findingTabItem]];
+    [_tabView addTabViewItem:[self anchorTabItem]];
     [_tabView addTabViewItem:[self orderTabItem]];
     [_tabView addTabViewItem:[self orderCaseTabItem]];
     [_tabView addTabViewItem:[self reportInventoryTabItem]];
     [_tabView addTabViewItem:[self artifactTabItem]];
     [_tabView.heightAnchor constraintGreaterThanOrEqualToConstant:520.0].active = YES;
-    [root addArrangedSubview:_tabView];
+
+    NSStackView* tabStack = nil;
+    NSBox* tabCard = MakeCardWithStack(&tabStack, 12.0);
+    [tabStack addArrangedSubview:MakeSectionLabel(@"Investigation Surface")];
+    [tabStack addArrangedSubview:_tabView];
+    [root addArrangedSubview:tabCard];
 
     _statusTextView.string = @"Waiting for the first status response…";
     _liveTextView.string = @"Waiting for the first live-tail response…";
+    [self updateBannerAppearanceWithColor:[NSColor secondaryLabelColor]];
 }
 
 - (void)showWindowAndStart {
     [self showWindow:nil];
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+    [self.window makeFirstResponder:_overviewFirstField];
     [self startPolling];
     [self refreshIncidentList:nil];
     [self refreshReportInventory:nil];
+}
+
+- (void)updateBannerAppearanceWithColor:(NSColor*)color {
+    NSColor* tone = color ?: [NSColor secondaryLabelColor];
+    _bannerLabel.textColor = tone;
+    if (_bannerBox != nil) {
+        _bannerBox.fillColor = [tone colorWithAlphaComponent:0.12];
+        _bannerBox.borderColor = [tone colorWithAlphaComponent:0.24];
+    }
+}
+
+- (void)updatePollingStatusText {
+    NSString* pollingState =
+        _pollingPaused ? [NSString stringWithFormat:@"Polling paused (manual refresh only, %.1fs baseline)", kPollIntervalSeconds]
+                       : [NSString stringWithFormat:@"Polling engine every %.1fs", kPollIntervalSeconds];
+    _pollMetaLabel.stringValue = pollingState;
+    if (_lastProbeAt != nil) {
+        NSDateFormatter* formatter = [[NSDateFormatter alloc] init];
+        formatter.timeStyle = NSDateFormatterMediumStyle;
+        formatter.dateStyle = NSDateFormatterNoStyle;
+        _lastProbeLabel.stringValue =
+            [NSString stringWithFormat:@"Last updated %@", [formatter stringFromDate:_lastProbeAt]];
+    } else {
+        _lastProbeLabel.stringValue = @"No probe yet";
+    }
+    _pollingToggleButton.title = _pollingPaused ? @"Resume Polling" : @"Pause Polling";
+}
+
+- (void)refreshNow:(id)sender {
+    (void)sender;
+    [self refresh:nil];
+}
+
+- (void)togglePolling:(id)sender {
+    (void)sender;
+    _pollingPaused = !_pollingPaused;
+    if (_pollingPaused) {
+        [_pollTimer invalidate];
+        _pollTimer = nil;
+    } else if (_pollTimer == nil) {
+        _pollTimer = [NSTimer scheduledTimerWithTimeInterval:kPollIntervalSeconds
+                                                      target:self
+                                                    selector:@selector(refresh:)
+                                                    userInfo:nil
+                                                     repeats:YES];
+    }
+    [self updatePollingStatusText];
+}
+
+- (InvestigationPaneModel)overviewPaneModel {
+    InvestigationPaneModel pane;
+    pane.stateLabel = _overviewStateLabel;
+    pane.detailView = _overviewTextView;
+    pane.evidenceTableView = _overviewEvidenceTableView;
+    pane.openEvidenceButton = _overviewOpenSelectedEvidenceButton;
+    pane.loadReplayButton = _overviewLoadReplayButton;
+    pane.evidenceItems = &_overviewEvidenceItems;
+    pane.hasReplayRange = &_hasOverviewReplayRange;
+    pane.replayRange = &_overviewReplayRange;
+    pane.emptyEvidenceMessage = @"Read or scan a session overview, then select a citation row to inspect or reopen evidence.";
+    pane.missingSelectionMessage = @"Select an overview evidence row first.";
+    pane.missingArtifactMessage = @"Selected overview evidence is missing artifact_id.";
+    pane.missingReplayMessage = @"No overview replay range is ready yet.";
+    return pane;
+}
+
+- (InvestigationPaneModel)incidentPaneModel {
+    InvestigationPaneModel pane;
+    pane.stateLabel = _incidentStateLabel;
+    pane.detailView = _incidentTextView;
+    pane.evidenceTableView = _incidentEvidenceTableView;
+    pane.openEvidenceButton = _incidentOpenSelectedEvidenceButton;
+    pane.loadReplayButton = _incidentLoadReplayButton;
+    pane.evidenceItems = &_incidentEvidenceItems;
+    pane.hasReplayRange = &_hasIncidentReplayRange;
+    pane.replayRange = &_incidentReplayRange;
+    pane.emptyEvidenceMessage = @"Read an incident, then select a citation row to inspect or reopen evidence.";
+    pane.missingSelectionMessage = @"Select an incident evidence row first.";
+    pane.missingArtifactMessage = @"Selected incident evidence is missing artifact_id.";
+    pane.missingReplayMessage = @"No incident replay window is ready yet.";
+    return pane;
+}
+
+- (InvestigationPaneModel)findingPaneModel {
+    InvestigationPaneModel pane;
+    pane.stateLabel = _findingStateLabel;
+    pane.detailView = _findingTextView;
+    pane.evidenceTableView = _findingEvidenceTableView;
+    pane.openEvidenceButton = _findingOpenSelectedEvidenceButton;
+    pane.loadReplayButton = _findingLoadReplayButton;
+    pane.evidenceItems = &_findingEvidenceItems;
+    pane.hasReplayRange = &_hasFindingReplayRange;
+    pane.replayRange = &_findingReplayRange;
+    pane.emptyEvidenceMessage = @"Read a finding, then select a citation row to inspect or reopen evidence.";
+    pane.missingSelectionMessage = @"Select a finding evidence row first.";
+    pane.missingArtifactMessage = @"Selected finding evidence is missing artifact_id.";
+    pane.missingReplayMessage = @"No finding replay window is ready yet.";
+    return pane;
+}
+
+- (InvestigationPaneModel)anchorPaneModel {
+    InvestigationPaneModel pane;
+    pane.stateLabel = _anchorStateLabel;
+    pane.detailView = _anchorTextView;
+    pane.evidenceTableView = _anchorEvidenceTableView;
+    pane.openEvidenceButton = _anchorOpenSelectedEvidenceButton;
+    pane.loadReplayButton = _anchorLoadReplayButton;
+    pane.evidenceItems = &_anchorEvidenceItems;
+    pane.hasReplayRange = &_hasAnchorReplayRange;
+    pane.replayRange = &_anchorReplayRange;
+    pane.emptyEvidenceMessage = @"Read an order anchor, then select a citation row to inspect or reopen evidence.";
+    pane.missingSelectionMessage = @"Select an order-anchor evidence row first.";
+    pane.missingArtifactMessage = @"Selected order-anchor evidence is missing artifact_id.";
+    pane.missingReplayMessage = @"No order-anchor replay window is ready yet.";
+    return pane;
+}
+
+- (InvestigationPaneModel)orderCasePaneModel {
+    InvestigationPaneModel pane;
+    pane.stateLabel = _orderCaseStateLabel;
+    pane.detailView = _orderCaseTextView;
+    pane.evidenceTableView = _orderCaseEvidenceTableView;
+    pane.openEvidenceButton = _orderCaseOpenSelectedEvidenceButton;
+    pane.loadReplayButton = _orderCaseLoadReplayButton;
+    pane.evidenceItems = &_orderCaseEvidenceItems;
+    pane.hasReplayRange = &_hasOrderCaseReplayRange;
+    pane.replayRange = &_orderCaseReplayRange;
+    pane.emptyEvidenceMessage = @"Read an order case, then select a citation row to inspect or reopen evidence.";
+    pane.missingSelectionMessage = @"Select an order-case evidence row first.";
+    pane.missingArtifactMessage = @"Selected order-case evidence is missing artifact_id.";
+    pane.missingReplayMessage = @"No order-case replay window is ready yet.";
+    return pane;
+}
+
+- (InvestigationPaneModel)artifactPaneModel {
+    InvestigationPaneModel pane;
+    pane.stateLabel = _artifactStateLabel;
+    pane.detailView = _artifactTextView;
+    pane.evidenceTableView = _artifactEvidenceTableView;
+    pane.openEvidenceButton = _artifactOpenSelectedEvidenceButton;
+    pane.evidenceItems = &_artifactEvidenceItems;
+    pane.emptyEvidenceMessage = @"Read an artifact, then select a citation row to inspect or reopen evidence.";
+    pane.missingSelectionMessage = @"Select an artifact evidence row first.";
+    pane.missingArtifactMessage = @"Selected artifact evidence is missing artifact_id.";
+    return pane;
+}
+
+- (BOOL)getInvestigationPaneModelForEvidenceTable:(NSTableView*)tableView
+                                         outModel:(InvestigationPaneModel*)outModel {
+    if (outModel == nullptr || tableView == nil) {
+        return NO;
+    }
+    if (tableView == _overviewEvidenceTableView) {
+        *outModel = [self overviewPaneModel];
+        return YES;
+    }
+    if (tableView == _incidentEvidenceTableView) {
+        *outModel = [self incidentPaneModel];
+        return YES;
+    }
+    if (tableView == _findingEvidenceTableView) {
+        *outModel = [self findingPaneModel];
+        return YES;
+    }
+    if (tableView == _anchorEvidenceTableView) {
+        *outModel = [self anchorPaneModel];
+        return YES;
+    }
+    if (tableView == _orderCaseEvidenceTableView) {
+        *outModel = [self orderCasePaneModel];
+        return YES;
+    }
+    if (tableView == _artifactEvidenceTableView) {
+        *outModel = [self artifactPaneModel];
+        return YES;
+    }
+    return NO;
+}
+
+- (void)beginInvestigationRequestForPane:(const InvestigationPaneModel&)pane
+                                 message:(NSString*)message {
+    if (pane.stateLabel != nil) {
+        pane.stateLabel.stringValue = message ?: @"Loading…";
+        pane.stateLabel.textColor = [NSColor systemOrangeColor];
+    }
+    if (pane.detailView != nil) {
+        pane.detailView.string = @"Loading investigation details…";
+    }
+    if (pane.hasReplayRange != nullptr) {
+        *pane.hasReplayRange = NO;
+    }
+    if (pane.loadReplayButton != nil) {
+        pane.loadReplayButton.enabled = NO;
+    }
+    [self resetEvidenceItems:pane.evidenceItems
+                   tableView:pane.evidenceTableView
+                  openButton:pane.openEvidenceButton];
+}
+
+- (void)applyInvestigationResult:(const tapescope::QueryResult<json>&)result
+                          toPane:(const InvestigationPaneModel&)pane
+                     successText:(NSString*)successText
+                syncArtifactField:(BOOL)syncArtifactField {
+    if (result.ok()) {
+        if (pane.stateLabel != nil) {
+            pane.stateLabel.stringValue = successText ?: @"Loaded.";
+            pane.stateLabel.textColor = [NSColor systemGreenColor];
+        }
+        [self applyEvidenceItemsFromResult:result
+                                     items:pane.evidenceItems
+                                 tableView:pane.evidenceTableView
+                                openButton:pane.openEvidenceButton];
+        [self applyInvestigationReplayRangeFromResult:result
+                                                range:pane.replayRange
+                                             hasRange:pane.hasReplayRange
+                                         actionButton:pane.loadReplayButton];
+        if (syncArtifactField) {
+            [self applyArtifactFieldFromResult:result];
+        }
+        return;
+    }
+
+    if (pane.stateLabel != nil) {
+        pane.stateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+        pane.stateLabel.textColor = ErrorColorForKind(result.error.kind);
+    }
+    [self applyInvestigationReplayRangeFromResult:result
+                                            range:pane.replayRange
+                                         hasRange:pane.hasReplayRange
+                                     actionButton:pane.loadReplayButton];
+    [self resetEvidenceItems:pane.evidenceItems
+                   tableView:pane.evidenceTableView
+                  openButton:pane.openEvidenceButton];
+}
+
+- (void)loadReplayWindowForPane:(const InvestigationPaneModel&)pane {
+    const BOOL available = (pane.hasReplayRange != nullptr) ? *pane.hasReplayRange : NO;
+    const tapescope::RangeQuery replayRange =
+        (pane.replayRange != nullptr) ? *pane.replayRange : tapescope::RangeQuery{};
+    [self loadReplayRange:replayRange
+                available:available
+               stateLabel:pane.stateLabel
+           missingMessage:pane.missingReplayMessage ?: @"No replay window is ready yet."];
+}
+
+- (void)openSelectedEvidenceForPane:(const InvestigationPaneModel&)pane {
+    [self openSelectedEvidenceFromTable:pane.evidenceTableView
+                                  items:(pane.evidenceItems != nullptr ? *pane.evidenceItems : std::vector<json>{})
+                             stateLabel:pane.stateLabel
+                       missingSelection:pane.missingSelectionMessage ?: @"Select an evidence row first."
+                        missingArtifact:pane.missingArtifactMessage ?: @"Selected evidence is missing artifact_id."];
+}
+
+- (BOOL)renderSelectionForPane:(const InvestigationPaneModel&)pane {
+    return [self renderSelectedEvidenceFromTable:pane.evidenceTableView
+                                           items:(pane.evidenceItems != nullptr ? *pane.evidenceItems : std::vector<json>{})
+                                      detailView:pane.detailView
+                                      openButton:pane.openEvidenceButton
+                                    emptyMessage:pane.emptyEvidenceMessage ?: @"Select an evidence row to inspect it."];
+}
+
+- (void)resetEvidenceItems:(std::vector<json>*)items
+                 tableView:(NSTableView*)tableView
+                openButton:(NSButton*)openButton {
+    if (items != nullptr) {
+        items->clear();
+    }
+    if (tableView != nil) {
+        [tableView reloadData];
+    }
+    if (openButton != nil) {
+        openButton.enabled = NO;
+    }
+}
+
+- (void)applyEvidenceItemsFromResult:(const tapescope::QueryResult<json>&)result
+                               items:(std::vector<json>*)items
+                           tableView:(NSTableView*)tableView
+                          openButton:(NSButton*)openButton {
+    [self resetEvidenceItems:items tableView:tableView openButton:openButton];
+    if (!result.ok() || items == nullptr || tableView == nil) {
+        return;
+    }
+    const json citations = ExtractEvidenceCitations(result.value);
+    if (!citations.is_array()) {
+        return;
+    }
+    items->assign(citations.begin(), citations.end());
+    [tableView reloadData];
+    const bool hasRows = !items->empty();
+    if (openButton != nil) {
+        openButton.enabled = hasRows;
+    }
+    if (hasRows) {
+        [tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    }
+}
+
+- (void)applyArtifactFieldFromResult:(const tapescope::QueryResult<json>&)result {
+    if (!result.ok() || _artifactIdField == nil) {
+        return;
+    }
+    const std::string artifactId = ExtractArtifactId(result.value);
+    if (!artifactId.empty()) {
+        _artifactIdField.stringValue = ToNSString(artifactId);
+    }
+}
+
+- (void)applyInvestigationReplayRangeFromResult:(const tapescope::QueryResult<json>&)result
+                                          range:(tapescope::RangeQuery*)range
+                                       hasRange:(BOOL*)hasRange
+                                   actionButton:(NSButton*)actionButton {
+    BOOL available = NO;
+    if (result.ok() && range != nullptr) {
+        available = ReplayRangeFromInvestigationSummary(result.value.value("summary", json::object()), range);
+    }
+    if (hasRange != nullptr) {
+        *hasRange = available;
+    }
+    if (actionButton != nil) {
+        actionButton.enabled = available;
+    }
+}
+
+- (void)loadReplayRange:(const tapescope::RangeQuery&)range
+              available:(BOOL)available
+             stateLabel:(NSTextField*)stateLabel
+         missingMessage:(NSString*)missingMessage {
+    if (!available) {
+        if (stateLabel != nil) {
+            stateLabel.stringValue = missingMessage;
+            stateLabel.textColor = [NSColor systemRedColor];
+        }
+        return;
+    }
+    _rangeFirstField.stringValue = UInt64String(range.firstSessionSeq);
+    _rangeLastField.stringValue = UInt64String(range.lastSessionSeq);
+    if (_tabView != nil) {
+        [_tabView selectTabViewItemWithIdentifier:@"RangePane"];
+    }
+    [self fetchRange:nil];
+}
+
+- (void)openSelectedEvidenceFromTable:(NSTableView*)tableView
+                                items:(const std::vector<json>&)items
+                           stateLabel:(NSTextField*)stateLabel
+                     missingSelection:(NSString*)missingSelection
+                      missingArtifact:(NSString*)missingArtifact {
+    const NSInteger selected = tableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= items.size()) {
+        if (stateLabel != nil) {
+            stateLabel.stringValue = missingSelection;
+            stateLabel.textColor = [NSColor systemRedColor];
+        }
+        return;
+    }
+    const json& citation = items.at(static_cast<std::size_t>(selected));
+    const std::string artifactId = citation.value("artifact_id", std::string());
+    if (artifactId.empty()) {
+        if (stateLabel != nil) {
+            stateLabel.stringValue = missingArtifact;
+            stateLabel.textColor = [NSColor systemRedColor];
+        }
+        return;
+    }
+    _artifactIdField.stringValue = ToNSString(artifactId);
+    if (_tabView != nil) {
+        [_tabView selectTabViewItemWithIdentifier:@"ArtifactPane"];
+    }
+    [self fetchArtifact:nil];
+}
+
+- (BOOL)renderSelectedEvidenceFromTable:(NSTableView*)tableView
+                                  items:(const std::vector<json>&)items
+                             detailView:(NSTextView*)detailView
+                             openButton:(NSButton*)openButton
+                           emptyMessage:(NSString*)emptyMessage {
+    const NSInteger selected = tableView.selectedRow;
+    if (openButton != nil) {
+        openButton.enabled = (selected >= 0);
+    }
+    if (selected < 0 || static_cast<std::size_t>(selected) >= items.size()) {
+        if (detailView != nil) {
+            detailView.string = emptyMessage;
+        }
+        return NO;
+    }
+    if (detailView != nil) {
+        detailView.string = ToNSString(items.at(static_cast<std::size_t>(selected)).dump(2));
+    }
+    return YES;
 }
 
 - (void)startPolling {
@@ -1680,6 +2235,7 @@ struct ProbeSnapshot {
                                                 selector:@selector(refresh:)
                                                 userInfo:nil
                                                  repeats:YES];
+    [self updatePollingStatusText];
 }
 
 - (void)shutdown {
@@ -1689,13 +2245,16 @@ struct ProbeSnapshot {
 
 - (void)refresh:(id)sender {
     (void)sender;
+    if (_pollingPaused && sender != _refreshNowButton) {
+        return;
+    }
     if (_pollInFlight || !_client) {
         return;
     }
 
     _pollInFlight = YES;
     _bannerLabel.stringValue = @"Probing tape_engine…";
-    _bannerLabel.textColor = [NSColor systemOrangeColor];
+    [self updateBannerAppearanceWithColor:[NSColor systemOrangeColor]];
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -1720,9 +2279,10 @@ struct ProbeSnapshot {
 }
 
 - (void)applyProbe:(const ProbeSnapshot&)probe {
+    _lastProbeAt = [NSDate date];
     if (probe.status.ok()) {
         _bannerLabel.stringValue = @"Connected to tape_engine";
-        _bannerLabel.textColor = [NSColor systemGreenColor];
+        [self updateBannerAppearanceWithColor:[NSColor systemGreenColor]];
         _socketValue.stringValue = ToNSString(probe.status.value.socketPath);
         _dataDirValue.stringValue = ToNSString(probe.status.value.dataDir);
         _instrumentValue.stringValue = ToNSString(probe.status.value.instrumentId);
@@ -1732,7 +2292,7 @@ struct ProbeSnapshot {
         _manifestHashValue.stringValue = ToNSString(probe.status.value.manifestHash);
     } else {
         _bannerLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(probe.status.error));
-        _bannerLabel.textColor = ErrorColorForKind(probe.status.error.kind);
+        [self updateBannerAppearanceWithColor:ErrorColorForKind(probe.status.error.kind)];
         _socketValue.stringValue = ToNSString(_client ? _client->config().socketPath : tapescope::defaultSocketPath());
         _dataDirValue.stringValue = @"--";
         _instrumentValue.stringValue = @"--";
@@ -1742,7 +2302,7 @@ struct ProbeSnapshot {
         _manifestHashValue.stringValue = @"--";
     }
 
-    _pollMetaLabel.stringValue = [NSString stringWithFormat:@"Mutable/live refresh every %.1fs", kPollIntervalSeconds];
+    [self updatePollingStatusText];
     _statusTextView.string = ToNSString(DescribeStatusPane(probe.status,
                                                            _client ? _client->config().socketPath : tapescope::defaultSocketPath()));
     if (probe.liveTail.ok()) {
@@ -1780,6 +2340,7 @@ struct ProbeSnapshot {
     _rangeFetchButton.enabled = NO;
     _rangeStateLabel.stringValue = @"Fetching replay window…";
     _rangeStateLabel.textColor = [NSColor systemOrangeColor];
+    _rangeTextView.string = @"Loading replay window and decoded events…";
     _lastRangeQuery.firstSessionSeq = firstSessionSeq;
     _lastRangeQuery.lastSessionSeq = lastSessionSeq;
 
@@ -1799,14 +2360,16 @@ struct ProbeSnapshot {
             innerSelf->_rangeInFlight = NO;
             innerSelf->_rangeFetchButton.enabled = YES;
             if (result.ok()) {
-                innerSelf->_rangeStateLabel.stringValue = @"Replay window loaded.";
-                innerSelf->_rangeStateLabel.textColor = [NSColor systemGreenColor];
                 innerSelf->_rangeEvents = result.value;
                 [innerSelf->_rangeTableView reloadData];
                 if (!innerSelf->_rangeEvents.empty()) {
+                    innerSelf->_rangeStateLabel.stringValue = @"Replay window loaded.";
+                    innerSelf->_rangeStateLabel.textColor = [NSColor systemGreenColor];
                     [innerSelf->_rangeTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
                 } else {
-                    innerSelf->_rangeTextView.string = @"No decoded events are available for the requested replay window.";
+                    innerSelf->_rangeStateLabel.stringValue = @"Replay window is empty for that range.";
+                    innerSelf->_rangeStateLabel.textColor = TapeInkMutedColor();
+                    innerSelf->_rangeTextView.string = @"No decoded events are available for the requested replay window. Try widening the session_seq range or loading a replay target from an order, finding, or incident.";
                 }
             } else {
                 innerSelf->_rangeStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
@@ -1817,6 +2380,176 @@ struct ProbeSnapshot {
             }
         });
     });
+}
+
+- (void)loadQualityFromRange:(id)sender {
+    (void)sender;
+    _qualityFirstField.stringValue = _rangeFirstField.stringValue;
+    _qualityLastField.stringValue = _rangeLastField.stringValue;
+    if (_tabView != nil) {
+        [_tabView selectTabViewItemWithIdentifier:@"QualityPane"];
+    }
+    [self fetchSessionQuality:nil];
+}
+
+- (void)fetchSessionQuality:(id)sender {
+    (void)sender;
+    if (_qualityInFlight || !_client) {
+        return;
+    }
+
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    if (!ParsePositiveUInt64(ToStdString(_qualityFirstField.stringValue), &firstSessionSeq) ||
+        !ParsePositiveUInt64(ToStdString(_qualityLastField.stringValue), &lastSessionSeq) ||
+        firstSessionSeq > lastSessionSeq) {
+        _qualityStateLabel.stringValue = @"Quality inputs must be positive integers with first <= last.";
+        _qualityStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _qualityInFlight = YES;
+    _qualityFetchButton.enabled = NO;
+    _qualityStateLabel.stringValue = @"Reading session quality…";
+    _qualityStateLabel.textColor = [NSColor systemOrangeColor];
+    _qualityTextView.string = @"Loading data-quality summary and provenance coverage…";
+    _lastQualityQuery.firstSessionSeq = firstSessionSeq;
+    _lastQualityQuery.lastSessionSeq = lastSessionSeq;
+    const bool includeLiveTail = (_qualityIncludeLiveTailButton.state == NSControlStateValueOn);
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    const tapescope::RangeQuery query = _lastQualityQuery;
+    dispatch_async(_pollQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->readSessionQuality(query, includeLiveTail);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil) {
+                return;
+            }
+            innerSelf->_qualityInFlight = NO;
+            innerSelf->_qualityFetchButton.enabled = YES;
+            if (result.ok()) {
+                innerSelf->_qualityStateLabel.stringValue = @"Session quality loaded.";
+                innerSelf->_qualityStateLabel.textColor = [NSColor systemGreenColor];
+            } else {
+                innerSelf->_qualityStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_qualityStateLabel.textColor = ErrorColorForKind(result.error.kind);
+            }
+            innerSelf->_qualityTextView.string = ToNSString(DescribeSessionQualityResult(query, includeLiveTail, result));
+        });
+    });
+}
+
+- (void)fetchFinding:(id)sender {
+    (void)sender;
+    if (_findingInFlight || !_client) {
+        return;
+    }
+
+    std::uint64_t findingId = 0;
+    if (!ParsePositiveUInt64(ToStdString(_findingIdField.stringValue), &findingId)) {
+        _findingStateLabel.stringValue = @"finding_id must be a positive integer.";
+        _findingStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    const InvestigationPaneModel pane = [self findingPaneModel];
+    _findingInFlight = YES;
+    _findingFetchButton.enabled = NO;
+    [self beginInvestigationRequestForPane:pane message:@"Reading finding…"];
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_pollQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->readFinding(findingId);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil) {
+                return;
+            }
+            innerSelf->_findingInFlight = NO;
+            innerSelf->_findingFetchButton.enabled = YES;
+            [innerSelf applyInvestigationResult:result
+                                         toPane:[innerSelf findingPaneModel]
+                                    successText:@"Finding loaded."
+                               syncArtifactField:YES];
+            innerSelf->_findingTextView.string =
+                ToNSString(DescribeInvestigationPayload("finding",
+                                                       "finding_id=" + std::to_string(findingId),
+                                                       result));
+        });
+    });
+}
+
+- (void)loadReplayWindowFromFinding:(id)sender {
+    (void)sender;
+    [self loadReplayWindowForPane:[self findingPaneModel]];
+}
+
+- (void)openSelectedFindingEvidence:(id)sender {
+    (void)sender;
+    [self openSelectedEvidenceForPane:[self findingPaneModel]];
+}
+
+- (void)fetchOrderAnchorById:(id)sender {
+    (void)sender;
+    if (_anchorInFlight || !_client) {
+        return;
+    }
+
+    std::uint64_t anchorId = 0;
+    if (!ParsePositiveUInt64(ToStdString(_anchorIdField.stringValue), &anchorId)) {
+        _anchorStateLabel.stringValue = @"anchor_id must be a positive integer.";
+        _anchorStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    const InvestigationPaneModel pane = [self anchorPaneModel];
+    _anchorInFlight = YES;
+    _anchorFetchButton.enabled = NO;
+    [self beginInvestigationRequestForPane:pane message:@"Reading order anchor…"];
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_pollQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->readOrderAnchor(anchorId);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil) {
+                return;
+            }
+            innerSelf->_anchorInFlight = NO;
+            innerSelf->_anchorFetchButton.enabled = YES;
+            [innerSelf applyInvestigationResult:result
+                                         toPane:[innerSelf anchorPaneModel]
+                                    successText:@"Order anchor loaded."
+                               syncArtifactField:YES];
+            innerSelf->_anchorTextView.string =
+                ToNSString(DescribeInvestigationPayload("order_anchor",
+                                                       "anchor_id=" + std::to_string(anchorId),
+                                                       result));
+        });
+    });
+}
+
+- (void)loadReplayWindowFromAnchor:(id)sender {
+    (void)sender;
+    [self loadReplayWindowForPane:[self anchorPaneModel]];
+}
+
+- (void)openSelectedAnchorEvidence:(id)sender {
+    (void)sender;
+    [self openSelectedEvidenceForPane:[self anchorPaneModel]];
 }
 
 - (void)fetchOverview:(id)sender {
@@ -1835,11 +2568,12 @@ struct ProbeSnapshot {
         return;
     }
 
+    const InvestigationPaneModel pane = [self overviewPaneModel];
     _overviewInFlight = YES;
     _overviewFetchButton.enabled = NO;
     _overviewScanButton.enabled = NO;
-    _overviewStateLabel.stringValue = @"Reading session overview…";
-    _overviewStateLabel.textColor = [NSColor systemOrangeColor];
+    _overviewOpenSelectedIncidentButton.enabled = NO;
+    [self beginInvestigationRequestForPane:pane message:@"Reading session overview…"];
     _lastOverviewQuery.firstSessionSeq = firstSessionSeq;
     _lastOverviewQuery.lastSessionSeq = lastSessionSeq;
 
@@ -1860,24 +2594,28 @@ struct ProbeSnapshot {
             innerSelf->_overviewFetchButton.enabled = YES;
             innerSelf->_overviewScanButton.enabled = YES;
             if (result.ok()) {
-                innerSelf->_overviewStateLabel.stringValue = @"Session overview loaded.";
-                innerSelf->_overviewStateLabel.textColor = [NSColor systemGreenColor];
                 const json incidents = result.value.value("events", json::array());
                 innerSelf->_overviewIncidents.clear();
                 if (incidents.is_array()) {
                     innerSelf->_overviewIncidents.assign(incidents.begin(), incidents.end());
                 }
                 [innerSelf->_overviewIncidentTableView reloadData];
+                [innerSelf applyInvestigationResult:result
+                                             toPane:[innerSelf overviewPaneModel]
+                                        successText:@"Session overview loaded."
+                                   syncArtifactField:NO];
                 innerSelf->_overviewOpenSelectedIncidentButton.enabled = !innerSelf->_overviewIncidents.empty();
                 if (!innerSelf->_overviewIncidents.empty()) {
                     [innerSelf->_overviewIncidentTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                          byExtendingSelection:NO];
                 }
             } else {
-                innerSelf->_overviewStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
-                innerSelf->_overviewStateLabel.textColor = ErrorColorForKind(result.error.kind);
                 innerSelf->_overviewIncidents.clear();
                 [innerSelf->_overviewIncidentTableView reloadData];
+                [innerSelf applyInvestigationResult:result
+                                             toPane:[innerSelf overviewPaneModel]
+                                        successText:nil
+                                   syncArtifactField:NO];
                 innerSelf->_overviewOpenSelectedIncidentButton.enabled = NO;
             }
             innerSelf->_overviewTextView.string =
@@ -1905,11 +2643,12 @@ struct ProbeSnapshot {
         return;
     }
 
+    const InvestigationPaneModel pane = [self overviewPaneModel];
     _overviewInFlight = YES;
     _overviewFetchButton.enabled = NO;
     _overviewScanButton.enabled = NO;
-    _overviewStateLabel.stringValue = @"Scanning durable session report…";
-    _overviewStateLabel.textColor = [NSColor systemOrangeColor];
+    _overviewOpenSelectedIncidentButton.enabled = NO;
+    [self beginInvestigationRequestForPane:pane message:@"Scanning durable session report…"];
     _lastOverviewQuery.firstSessionSeq = firstSessionSeq;
     _lastOverviewQuery.lastSessionSeq = lastSessionSeq;
 
@@ -1930,29 +2669,29 @@ struct ProbeSnapshot {
             innerSelf->_overviewFetchButton.enabled = YES;
             innerSelf->_overviewScanButton.enabled = YES;
             if (result.ok()) {
-                innerSelf->_overviewStateLabel.stringValue = @"Durable session report scanned.";
-                innerSelf->_overviewStateLabel.textColor = [NSColor systemGreenColor];
                 const json incidents = result.value.value("events", json::array());
                 innerSelf->_overviewIncidents.clear();
                 if (incidents.is_array()) {
                     innerSelf->_overviewIncidents.assign(incidents.begin(), incidents.end());
                 }
                 [innerSelf->_overviewIncidentTableView reloadData];
+                [innerSelf applyInvestigationResult:result
+                                             toPane:[innerSelf overviewPaneModel]
+                                        successText:@"Durable session report scanned."
+                                   syncArtifactField:YES];
                 innerSelf->_overviewOpenSelectedIncidentButton.enabled = !innerSelf->_overviewIncidents.empty();
                 if (!innerSelf->_overviewIncidents.empty()) {
                     [innerSelf->_overviewIncidentTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                          byExtendingSelection:NO];
                 }
-                const std::string artifactId = ExtractArtifactId(result.value);
-                if (!artifactId.empty() && innerSelf->_artifactIdField != nil) {
-                    innerSelf->_artifactIdField.stringValue = ToNSString(artifactId);
-                }
                 [innerSelf refreshReportInventory:nil];
             } else {
-                innerSelf->_overviewStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
-                innerSelf->_overviewStateLabel.textColor = ErrorColorForKind(result.error.kind);
                 innerSelf->_overviewIncidents.clear();
                 [innerSelf->_overviewIncidentTableView reloadData];
+                [innerSelf applyInvestigationResult:result
+                                             toPane:[innerSelf overviewPaneModel]
+                                        successText:nil
+                                   syncArtifactField:NO];
                 innerSelf->_overviewOpenSelectedIncidentButton.enabled = NO;
             }
             innerSelf->_overviewTextView.string =
@@ -1962,6 +2701,16 @@ struct ProbeSnapshot {
                                                        result));
         });
     });
+}
+
+- (void)loadReplayWindowFromOverview:(id)sender {
+    (void)sender;
+    [self loadReplayWindowForPane:[self overviewPaneModel]];
+}
+
+- (void)openSelectedOverviewEvidence:(id)sender {
+    (void)sender;
+    [self openSelectedEvidenceForPane:[self overviewPaneModel]];
 }
 
 - (BOOL)buildOrderAnchorQueryFromPopup:(NSPopUpButton*)popup
@@ -2051,6 +2800,7 @@ struct ProbeSnapshot {
     _orderLookupButton.enabled = NO;
     _orderStateLabel.stringValue = @"Looking up order anchor…";
     _orderStateLabel.textColor = [NSColor systemOrangeColor];
+    _orderTextView.string = @"Looking up anchor-linked events and replay context…";
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2067,8 +2817,6 @@ struct ProbeSnapshot {
             innerSelf->_orderLookupInFlight = NO;
             innerSelf->_orderLookupButton.enabled = YES;
             if (result.ok()) {
-                innerSelf->_orderStateLabel.stringValue = @"Order lookup complete.";
-                innerSelf->_orderStateLabel.textColor = [NSColor systemGreenColor];
                 const json events = result.value.value("events", json::array());
                 innerSelf->_orderEvents.clear();
                 if (events.is_array()) {
@@ -2076,8 +2824,12 @@ struct ProbeSnapshot {
                 }
                 [innerSelf->_orderTableView reloadData];
                 if (!innerSelf->_orderEvents.empty()) {
+                    innerSelf->_orderStateLabel.stringValue = @"Order lookup complete.";
+                    innerSelf->_orderStateLabel.textColor = [NSColor systemGreenColor];
                     [innerSelf->_orderTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
                 } else {
+                    innerSelf->_orderStateLabel.stringValue = @"No anchor-linked events matched that selector.";
+                    innerSelf->_orderStateLabel.textColor = TapeInkMutedColor();
                     innerSelf->_orderTextView.string = ToNSString(DescribeOrderLookupResult(descriptor, result));
                 }
             } else {
@@ -2122,14 +2874,11 @@ struct ProbeSnapshot {
         return;
     }
 
+    const InvestigationPaneModel pane = [self orderCasePaneModel];
     _orderCaseInFlight = YES;
     _orderCaseFetchButton.enabled = NO;
     _orderCaseScanButton.enabled = NO;
-    _orderCaseLoadReplayButton.enabled = NO;
-    _orderCaseOpenSelectedEvidenceButton.enabled = NO;
-    _hasOrderCaseReplayRange = NO;
-    _orderCaseStateLabel.stringValue = @"Reading order case…";
-    _orderCaseStateLabel.textColor = [NSColor systemOrangeColor];
+    [self beginInvestigationRequestForPane:pane message:@"Reading order case…"];
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2146,38 +2895,10 @@ struct ProbeSnapshot {
             innerSelf->_orderCaseInFlight = NO;
             innerSelf->_orderCaseFetchButton.enabled = YES;
             innerSelf->_orderCaseScanButton.enabled = YES;
-            if (result.ok()) {
-                innerSelf->_orderCaseStateLabel.stringValue = @"Order case loaded.";
-                innerSelf->_orderCaseStateLabel.textColor = [NSColor systemGreenColor];
-                const json citations = ExtractEvidenceCitations(result.value);
-                innerSelf->_orderCaseEvidenceItems.clear();
-                if (citations.is_array()) {
-                    innerSelf->_orderCaseEvidenceItems.assign(citations.begin(), citations.end());
-                }
-                [innerSelf->_orderCaseEvidenceTableView reloadData];
-                innerSelf->_hasOrderCaseReplayRange =
-                    ReplayRangeFromSeekSummary(result.value.value("summary", json::object()),
-                                              &innerSelf->_orderCaseReplayRange);
-                innerSelf->_orderCaseLoadReplayButton.enabled = innerSelf->_hasOrderCaseReplayRange;
-                innerSelf->_orderCaseOpenSelectedEvidenceButton.enabled = !innerSelf->_orderCaseEvidenceItems.empty();
-                const std::string artifactId = ExtractArtifactId(result.value);
-                if (!artifactId.empty() && innerSelf->_artifactIdField != nil) {
-                    innerSelf->_artifactIdField.stringValue = ToNSString(artifactId);
-                }
-                if (!innerSelf->_orderCaseEvidenceItems.empty()) {
-                    [innerSelf->_orderCaseEvidenceTableView
-                        selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
-                  byExtendingSelection:NO];
-                }
-            } else {
-                innerSelf->_orderCaseStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
-                innerSelf->_orderCaseStateLabel.textColor = ErrorColorForKind(result.error.kind);
-                innerSelf->_hasOrderCaseReplayRange = NO;
-                innerSelf->_orderCaseLoadReplayButton.enabled = NO;
-                innerSelf->_orderCaseEvidenceItems.clear();
-                [innerSelf->_orderCaseEvidenceTableView reloadData];
-                innerSelf->_orderCaseOpenSelectedEvidenceButton.enabled = NO;
-            }
+            [innerSelf applyInvestigationResult:result
+                                         toPane:[innerSelf orderCasePaneModel]
+                                    successText:@"Order case loaded."
+                               syncArtifactField:YES];
             innerSelf->_orderCaseTextView.string =
                 ToNSString(DescribeInvestigationPayload("order_case", descriptor, result));
         });
@@ -2203,14 +2924,11 @@ struct ProbeSnapshot {
         return;
     }
 
+    const InvestigationPaneModel pane = [self orderCasePaneModel];
     _orderCaseInFlight = YES;
     _orderCaseFetchButton.enabled = NO;
     _orderCaseScanButton.enabled = NO;
-    _orderCaseLoadReplayButton.enabled = NO;
-    _orderCaseOpenSelectedEvidenceButton.enabled = NO;
-    _hasOrderCaseReplayRange = NO;
-    _orderCaseStateLabel.stringValue = @"Scanning durable order-case report…";
-    _orderCaseStateLabel.textColor = [NSColor systemOrangeColor];
+    [self beginInvestigationRequestForPane:pane message:@"Scanning durable order-case report…"];
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2227,38 +2945,12 @@ struct ProbeSnapshot {
             innerSelf->_orderCaseInFlight = NO;
             innerSelf->_orderCaseFetchButton.enabled = YES;
             innerSelf->_orderCaseScanButton.enabled = YES;
+            [innerSelf applyInvestigationResult:result
+                                         toPane:[innerSelf orderCasePaneModel]
+                                    successText:@"Durable order-case report scanned."
+                               syncArtifactField:YES];
             if (result.ok()) {
-                innerSelf->_orderCaseStateLabel.stringValue = @"Durable order-case report scanned.";
-                innerSelf->_orderCaseStateLabel.textColor = [NSColor systemGreenColor];
-                const json citations = ExtractEvidenceCitations(result.value);
-                innerSelf->_orderCaseEvidenceItems.clear();
-                if (citations.is_array()) {
-                    innerSelf->_orderCaseEvidenceItems.assign(citations.begin(), citations.end());
-                }
-                [innerSelf->_orderCaseEvidenceTableView reloadData];
-                innerSelf->_hasOrderCaseReplayRange =
-                    ReplayRangeFromSeekSummary(result.value.value("summary", json::object()),
-                                              &innerSelf->_orderCaseReplayRange);
-                innerSelf->_orderCaseLoadReplayButton.enabled = innerSelf->_hasOrderCaseReplayRange;
-                innerSelf->_orderCaseOpenSelectedEvidenceButton.enabled = !innerSelf->_orderCaseEvidenceItems.empty();
-                const std::string artifactId = ExtractArtifactId(result.value);
-                if (!artifactId.empty() && innerSelf->_artifactIdField != nil) {
-                    innerSelf->_artifactIdField.stringValue = ToNSString(artifactId);
-                }
                 [innerSelf refreshReportInventory:nil];
-                if (!innerSelf->_orderCaseEvidenceItems.empty()) {
-                    [innerSelf->_orderCaseEvidenceTableView
-                        selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
-                  byExtendingSelection:NO];
-                }
-            } else {
-                innerSelf->_orderCaseStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
-                innerSelf->_orderCaseStateLabel.textColor = ErrorColorForKind(result.error.kind);
-                innerSelf->_hasOrderCaseReplayRange = NO;
-                innerSelf->_orderCaseLoadReplayButton.enabled = NO;
-                innerSelf->_orderCaseEvidenceItems.clear();
-                [innerSelf->_orderCaseEvidenceTableView reloadData];
-                innerSelf->_orderCaseOpenSelectedEvidenceButton.enabled = NO;
             }
             innerSelf->_orderCaseTextView.string =
                 ToNSString(DescribeInvestigationPayload("order_case_report_scan", descriptor, result));
@@ -2291,6 +2983,7 @@ struct ProbeSnapshot {
     _hasSeekReplayRange = NO;
     _seekStateLabel.stringValue = @"Computing replay target…";
     _seekStateLabel.textColor = [NSColor systemOrangeColor];
+    _seekTextView.string = @"Computing replay target and protected-window context…";
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2339,39 +3032,12 @@ struct ProbeSnapshot {
 
 - (void)loadReplayWindowFromOrderCase:(id)sender {
     (void)sender;
-    if (!_hasOrderCaseReplayRange) {
-        _orderCaseStateLabel.stringValue = @"No order-case replay window is ready yet.";
-        _orderCaseStateLabel.textColor = [NSColor systemRedColor];
-        return;
-    }
-    _rangeFirstField.stringValue = UInt64String(_orderCaseReplayRange.firstSessionSeq);
-    _rangeLastField.stringValue = UInt64String(_orderCaseReplayRange.lastSessionSeq);
-    if (_tabView != nil) {
-        [_tabView selectTabViewItemWithIdentifier:@"RangePane"];
-    }
-    [self fetchRange:nil];
+    [self loadReplayWindowForPane:[self orderCasePaneModel]];
 }
 
 - (void)openSelectedOrderCaseEvidence:(id)sender {
     (void)sender;
-    const NSInteger selected = _orderCaseEvidenceTableView.selectedRow;
-    if (selected < 0 || static_cast<std::size_t>(selected) >= _orderCaseEvidenceItems.size()) {
-        _orderCaseStateLabel.stringValue = @"Select an order-case evidence row first.";
-        _orderCaseStateLabel.textColor = [NSColor systemRedColor];
-        return;
-    }
-    const json& citation = _orderCaseEvidenceItems.at(static_cast<std::size_t>(selected));
-    const std::string artifactId = citation.value("artifact_id", std::string());
-    if (artifactId.empty()) {
-        _orderCaseStateLabel.stringValue = @"Selected order-case evidence is missing artifact_id.";
-        _orderCaseStateLabel.textColor = [NSColor systemRedColor];
-        return;
-    }
-    _artifactIdField.stringValue = ToNSString(artifactId);
-    if (_tabView != nil) {
-        [_tabView selectTabViewItemWithIdentifier:@"ArtifactPane"];
-    }
-    [self fetchArtifact:nil];
+    [self openSelectedEvidenceForPane:[self orderCasePaneModel]];
 }
 
 - (void)fetchIncident:(id)sender {
@@ -2387,12 +3053,12 @@ struct ProbeSnapshot {
         return;
     }
 
+    const InvestigationPaneModel pane = [self incidentPaneModel];
     _incidentInFlight = YES;
     _incidentFetchButton.enabled = NO;
     _incidentRefreshButton.enabled = NO;
     _incidentOpenSelectedButton.enabled = NO;
-    _incidentStateLabel.stringValue = @"Reading incident drilldown…";
-    _incidentStateLabel.textColor = [NSColor systemOrangeColor];
+    [self beginInvestigationRequestForPane:pane message:@"Reading incident drilldown…"];
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2410,21 +3076,24 @@ struct ProbeSnapshot {
             innerSelf->_incidentFetchButton.enabled = YES;
             innerSelf->_incidentRefreshButton.enabled = YES;
             innerSelf->_incidentOpenSelectedButton.enabled = (innerSelf->_incidentTableView.selectedRow >= 0);
-            if (result.ok()) {
-                innerSelf->_incidentStateLabel.stringValue = @"Incident loaded.";
-                innerSelf->_incidentStateLabel.textColor = [NSColor systemGreenColor];
-                const std::string artifactId = ExtractArtifactId(result.value);
-                if (!artifactId.empty() && innerSelf->_artifactIdField != nil) {
-                    innerSelf->_artifactIdField.stringValue = ToNSString(artifactId);
-                }
-            } else {
-                innerSelf->_incidentStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
-                innerSelf->_incidentStateLabel.textColor = ErrorColorForKind(result.error.kind);
-            }
+            [innerSelf applyInvestigationResult:result
+                                         toPane:[innerSelf incidentPaneModel]
+                                    successText:@"Incident loaded."
+                               syncArtifactField:YES];
             innerSelf->_incidentTextView.string =
                 ToNSString(DescribeInvestigationPayload("incident", "logical_incident_id=" + std::to_string(logicalIncidentId), result));
         });
     });
+}
+
+- (void)loadReplayWindowFromIncident:(id)sender {
+    (void)sender;
+    [self loadReplayWindowForPane:[self incidentPaneModel]];
+}
+
+- (void)openSelectedIncidentEvidence:(id)sender {
+    (void)sender;
+    [self openSelectedEvidenceForPane:[self incidentPaneModel]];
 }
 
 - (void)openSelectedOverviewIncident:(id)sender {
@@ -2461,6 +3130,7 @@ struct ProbeSnapshot {
     _incidentOpenSelectedButton.enabled = NO;
     _incidentStateLabel.stringValue = @"Refreshing incident list…";
     _incidentStateLabel.textColor = [NSColor systemOrangeColor];
+    _incidentTextView.string = @"Refreshing ranked incidents…";
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2483,8 +3153,13 @@ struct ProbeSnapshot {
                 if (rows.is_array()) {
                     innerSelf->_latestIncidents.assign(rows.begin(), rows.end());
                 }
-                innerSelf->_incidentStateLabel.stringValue = @"Incident list loaded.";
-                innerSelf->_incidentStateLabel.textColor = [NSColor systemGreenColor];
+                if (!innerSelf->_latestIncidents.empty()) {
+                    innerSelf->_incidentStateLabel.stringValue = @"Incident list loaded.";
+                    innerSelf->_incidentStateLabel.textColor = [NSColor systemGreenColor];
+                } else {
+                    innerSelf->_incidentStateLabel.stringValue = @"No ranked incidents are available yet.";
+                    innerSelf->_incidentStateLabel.textColor = TapeInkMutedColor();
+                }
             } else {
                 innerSelf->_incidentStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
                 innerSelf->_incidentStateLabel.textColor = ErrorColorForKind(result.error.kind);
@@ -2532,12 +3207,11 @@ struct ProbeSnapshot {
         return;
     }
 
+    const InvestigationPaneModel pane = [self artifactPaneModel];
     _artifactInFlight = YES;
     _artifactFetchButton.enabled = NO;
     _artifactExportButton.enabled = NO;
-    _artifactOpenSelectedEvidenceButton.enabled = NO;
-    _artifactStateLabel.stringValue = @"Reading artifact…";
-    _artifactStateLabel.textColor = [NSColor systemOrangeColor];
+    [self beginInvestigationRequestForPane:pane message:@"Reading artifact…"];
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2554,28 +3228,10 @@ struct ProbeSnapshot {
             innerSelf->_artifactInFlight = NO;
             innerSelf->_artifactFetchButton.enabled = YES;
             innerSelf->_artifactExportButton.enabled = YES;
-            if (result.ok()) {
-                innerSelf->_artifactStateLabel.stringValue = @"Artifact loaded.";
-                innerSelf->_artifactStateLabel.textColor = [NSColor systemGreenColor];
-                const json citations = ExtractEvidenceCitations(result.value);
-                innerSelf->_artifactEvidenceItems.clear();
-                if (citations.is_array()) {
-                    innerSelf->_artifactEvidenceItems.assign(citations.begin(), citations.end());
-                }
-                [innerSelf->_artifactEvidenceTableView reloadData];
-                innerSelf->_artifactOpenSelectedEvidenceButton.enabled = !innerSelf->_artifactEvidenceItems.empty();
-                if (!innerSelf->_artifactEvidenceItems.empty()) {
-                    [innerSelf->_artifactEvidenceTableView
-                        selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
-                  byExtendingSelection:NO];
-                }
-            } else {
-                innerSelf->_artifactStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
-                innerSelf->_artifactStateLabel.textColor = ErrorColorForKind(result.error.kind);
-                innerSelf->_artifactEvidenceItems.clear();
-                [innerSelf->_artifactEvidenceTableView reloadData];
-                innerSelf->_artifactOpenSelectedEvidenceButton.enabled = NO;
-            }
+            [innerSelf applyInvestigationResult:result
+                                         toPane:[innerSelf artifactPaneModel]
+                                    successText:@"Artifact loaded."
+                               syncArtifactField:NO];
             innerSelf->_artifactTextView.string =
                 ToNSString(DescribeInvestigationPayload("artifact_read", artifactId, result));
         });
@@ -2602,6 +3258,7 @@ struct ProbeSnapshot {
     _artifactOpenSelectedEvidenceButton.enabled = NO;
     _artifactStateLabel.stringValue = @"Exporting artifact preview…";
     _artifactStateLabel.textColor = [NSColor systemOrangeColor];
+    _artifactTextView.string = @"Generating export preview…";
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2618,9 +3275,9 @@ struct ProbeSnapshot {
             innerSelf->_artifactInFlight = NO;
             innerSelf->_artifactFetchButton.enabled = YES;
             innerSelf->_artifactExportButton.enabled = YES;
-            innerSelf->_artifactEvidenceItems.clear();
-            [innerSelf->_artifactEvidenceTableView reloadData];
-            innerSelf->_artifactOpenSelectedEvidenceButton.enabled = NO;
+            [innerSelf resetEvidenceItems:&innerSelf->_artifactEvidenceItems
+                                 tableView:innerSelf->_artifactEvidenceTableView
+                                openButton:innerSelf->_artifactOpenSelectedEvidenceButton];
             if (result.ok()) {
                 innerSelf->_artifactStateLabel.stringValue = @"Artifact export preview ready.";
                 innerSelf->_artifactStateLabel.textColor = [NSColor systemGreenColor];
@@ -2636,21 +3293,7 @@ struct ProbeSnapshot {
 
 - (void)openSelectedArtifactEvidence:(id)sender {
     (void)sender;
-    const NSInteger selected = _artifactEvidenceTableView.selectedRow;
-    if (selected < 0 || static_cast<std::size_t>(selected) >= _artifactEvidenceItems.size()) {
-        _artifactStateLabel.stringValue = @"Select an artifact evidence row first.";
-        _artifactStateLabel.textColor = [NSColor systemRedColor];
-        return;
-    }
-    const json& citation = _artifactEvidenceItems.at(static_cast<std::size_t>(selected));
-    const std::string artifactId = citation.value("artifact_id", std::string());
-    if (artifactId.empty()) {
-        _artifactStateLabel.stringValue = @"Selected artifact evidence is missing artifact_id.";
-        _artifactStateLabel.textColor = [NSColor systemRedColor];
-        return;
-    }
-    _artifactIdField.stringValue = ToNSString(artifactId);
-    [self fetchArtifact:nil];
+    [self openSelectedEvidenceForPane:[self artifactPaneModel]];
 }
 
 - (void)refreshReportInventory:(id)sender {
@@ -2665,6 +3308,7 @@ struct ProbeSnapshot {
     _reportInventoryOpenCaseButton.enabled = NO;
     _reportInventoryStateLabel.stringValue = @"Refreshing report inventory…";
     _reportInventoryStateLabel.textColor = [NSColor systemOrangeColor];
+    _reportInventoryTextView.string = @"Refreshing session and case report inventory…";
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -2710,8 +3354,13 @@ struct ProbeSnapshot {
                 (innerSelf->_caseReportTableView.selectedRow >= 0);
 
             if (sessionReports.ok() || caseReports.ok()) {
-                innerSelf->_reportInventoryStateLabel.stringValue = @"Report inventory loaded.";
-                innerSelf->_reportInventoryStateLabel.textColor = [NSColor systemGreenColor];
+                if (!innerSelf->_latestSessionReports.empty() || !innerSelf->_latestCaseReports.empty()) {
+                    innerSelf->_reportInventoryStateLabel.stringValue = @"Report inventory loaded.";
+                    innerSelf->_reportInventoryStateLabel.textColor = [NSColor systemGreenColor];
+                } else {
+                    innerSelf->_reportInventoryStateLabel.stringValue = @"No durable reports are available yet.";
+                    innerSelf->_reportInventoryStateLabel.textColor = TapeInkMutedColor();
+                }
             } else {
                 innerSelf->_reportInventoryStateLabel.stringValue = @"Report inventory queries failed.";
                 innerSelf->_reportInventoryStateLabel.textColor = [NSColor systemRedColor];
@@ -2773,6 +3422,9 @@ struct ProbeSnapshot {
     if (tableView == _overviewIncidentTableView) {
         return static_cast<NSInteger>(_overviewIncidents.size());
     }
+    if (tableView == _overviewEvidenceTableView) {
+        return static_cast<NSInteger>(_overviewEvidenceItems.size());
+    }
     if (tableView == _rangeTableView) {
         return static_cast<NSInteger>(_rangeEvents.size());
     }
@@ -2784,6 +3436,15 @@ struct ProbeSnapshot {
     }
     if (tableView == _incidentTableView) {
         return static_cast<NSInteger>(_latestIncidents.size());
+    }
+    if (tableView == _incidentEvidenceTableView) {
+        return static_cast<NSInteger>(_incidentEvidenceItems.size());
+    }
+    if (tableView == _findingEvidenceTableView) {
+        return static_cast<NSInteger>(_findingEvidenceItems.size());
+    }
+    if (tableView == _anchorEvidenceTableView) {
+        return static_cast<NSInteger>(_anchorEvidenceItems.size());
     }
     if (tableView == _artifactEvidenceTableView) {
         return static_cast<NSInteger>(_artifactEvidenceItems.size());
@@ -2815,6 +3476,11 @@ struct ProbeSnapshot {
             return nil;
         }
         item = &_overviewIncidents.at(static_cast<std::size_t>(row));
+    } else if (tableView == _overviewEvidenceTableView) {
+        if (static_cast<std::size_t>(row) >= _overviewEvidenceItems.size()) {
+            return nil;
+        }
+        item = &_overviewEvidenceItems.at(static_cast<std::size_t>(row));
     } else if (tableView == _rangeTableView) {
         if (static_cast<std::size_t>(row) >= _rangeEvents.size()) {
             return nil;
@@ -2835,6 +3501,21 @@ struct ProbeSnapshot {
             return nil;
         }
         item = &_latestIncidents.at(static_cast<std::size_t>(row));
+    } else if (tableView == _incidentEvidenceTableView) {
+        if (static_cast<std::size_t>(row) >= _incidentEvidenceItems.size()) {
+            return nil;
+        }
+        item = &_incidentEvidenceItems.at(static_cast<std::size_t>(row));
+    } else if (tableView == _findingEvidenceTableView) {
+        if (static_cast<std::size_t>(row) >= _findingEvidenceItems.size()) {
+            return nil;
+        }
+        item = &_findingEvidenceItems.at(static_cast<std::size_t>(row));
+    } else if (tableView == _anchorEvidenceTableView) {
+        if (static_cast<std::size_t>(row) >= _anchorEvidenceItems.size()) {
+            return nil;
+        }
+        item = &_anchorEvidenceItems.at(static_cast<std::size_t>(row));
     } else if (tableView == _artifactEvidenceTableView) {
         if (static_cast<std::size_t>(row) >= _artifactEvidenceItems.size()) {
             return nil;
@@ -2907,6 +3588,15 @@ struct ProbeSnapshot {
             value = EventSummaryText(*item);
         }
     } else if (tableView == _orderCaseEvidenceTableView || tableView == _artifactEvidenceTableView) {
+        if ([columnId isEqualToString:@"kind"]) {
+            value = item->value("kind", item->value("type", std::string()));
+        } else if ([columnId isEqualToString:@"artifact_id"]) {
+            value = item->value("artifact_id", std::string());
+        } else {
+            value = item->value("label", item->value("headline", item->value("artifact_id", std::string())));
+        }
+    } else if (tableView == _overviewEvidenceTableView || tableView == _incidentEvidenceTableView ||
+               tableView == _findingEvidenceTableView || tableView == _anchorEvidenceTableView) {
         if ([columnId isEqualToString:@"kind"]) {
             value = item->value("kind", item->value("type", std::string()));
         } else if ([columnId isEqualToString:@"artifact_id"]) {
@@ -3000,18 +3690,6 @@ struct ProbeSnapshot {
         return;
     }
 
-    if (tableView == _orderCaseEvidenceTableView) {
-        const NSInteger selected = _orderCaseEvidenceTableView.selectedRow;
-        _orderCaseOpenSelectedEvidenceButton.enabled = (selected >= 0);
-        if (selected < 0 || static_cast<std::size_t>(selected) >= _orderCaseEvidenceItems.size()) {
-            _orderCaseTextView.string = @"Read an order case, then select a citation row to inspect or reopen evidence.";
-            return;
-        }
-        const json& item = _orderCaseEvidenceItems.at(static_cast<std::size_t>(selected));
-        _orderCaseTextView.string = ToNSString(item.dump(2));
-        return;
-    }
-
     if (tableView == _incidentTableView) {
         const NSInteger selected = _incidentTableView.selectedRow;
         _incidentOpenSelectedButton.enabled = (selected >= 0);
@@ -3025,15 +3703,9 @@ struct ProbeSnapshot {
         return;
     }
 
-    if (tableView == _artifactEvidenceTableView) {
-        const NSInteger selected = _artifactEvidenceTableView.selectedRow;
-        _artifactOpenSelectedEvidenceButton.enabled = (selected >= 0);
-        if (selected < 0 || static_cast<std::size_t>(selected) >= _artifactEvidenceItems.size()) {
-            _artifactTextView.string = @"Read an artifact, then select a citation row to inspect or reopen evidence.";
-            return;
-        }
-        const json& item = _artifactEvidenceItems.at(static_cast<std::size_t>(selected));
-        _artifactTextView.string = ToNSString(item.dump(2));
+    InvestigationPaneModel pane;
+    if ([self getInvestigationPaneModelForEvidenceTable:tableView outModel:&pane]) {
+        [self renderSelectionForPane:pane];
         return;
     }
 
