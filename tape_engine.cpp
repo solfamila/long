@@ -123,6 +123,7 @@ constexpr std::size_t kTradePressureMinStreak = 3;
 constexpr double kTouchTradeTolerance = 1e-6;
 constexpr std::size_t kDisplayInstabilityMinCycles = 2;
 constexpr std::uint64_t kDisplayInstabilitySeqWindow = 8;
+constexpr double kFillInvalidationMinMove = 0.02;
 
 bool hasAnchorIdentity(const BridgeAnchorIdentity& anchor) {
     return anchor.traceId > 0 || anchor.orderId > 0 || anchor.permId > 0 || !anchor.execId.empty();
@@ -133,6 +134,13 @@ bool sameAnchorIdentity(const BridgeAnchorIdentity& left, const BridgeAnchorIden
            left.orderId == right.orderId &&
            left.permId == right.permId &&
            left.execId == right.execId;
+}
+
+bool anchorsShareIdentity(const BridgeAnchorIdentity& left, const BridgeAnchorIdentity& right) {
+    return (left.traceId > 0 && right.traceId > 0 && left.traceId == right.traceId) ||
+           (left.orderId > 0 && right.orderId > 0 && left.orderId == right.orderId) ||
+           (left.permId > 0 && right.permId > 0 && left.permId == right.permId) ||
+           (!left.execId.empty() && !right.execId.empty() && left.execId == right.execId);
 }
 
 bool matchesAnchorSelector(const BridgeAnchorIdentity& anchor,
@@ -164,6 +172,16 @@ int classifyTradePressureSide(const EngineEvent& event,
         return -1;
     }
     return 0;
+}
+
+std::optional<bool> classifyFillSide(const std::string& side) {
+    if (side == "BOT" || side == "BUY") {
+        return true;
+    }
+    if (side == "SLD" || side == "SELL") {
+        return false;
+    }
+    return std::nullopt;
 }
 
 struct DisplayInstabilityResult {
@@ -214,6 +232,11 @@ std::string incidentWhyItMatters(const IncidentRecord& incident) {
     }
     if (incident.kind == "ask_display_instability" || incident.kind == "bid_display_instability") {
         return "Displayed touch liquidity repeatedly disappeared and reappeared at the same price, which can make the visible book less trustworthy for queue and fill decisions.";
+    }
+    if (incident.kind == "buy_fill_invalidation" || incident.kind == "sell_fill_invalidation") {
+        return incident.kind == "buy_fill_invalidation"
+            ? "After the buy fill, the best bid moved materially lower, which is a strong sign that the immediate execution thesis failed."
+            : "After the sell fill, the best ask moved materially higher, which is a strong sign that the immediate execution thesis failed.";
     }
     if (incident.kind == "source_gap" || incident.kind == "source_reset") {
         return "Source continuity changed, so any interpretation around this window needs to account for data-quality risk.";
@@ -516,6 +539,11 @@ struct HotAnalyzerInput {
     std::size_t displayInstabilityCycles = 0;
     std::uint64_t displayInstabilityFirstSessionSeq = 0;
     double displayInstabilityPrice = 0.0;
+    bool fillInvalidationTriggered = false;
+    std::string fillInvalidationKind;
+    std::uint64_t fillInvalidationFirstSessionSeq = 0;
+    double fillInvalidationFillPrice = 0.0;
+    double fillInvalidationObservedPrice = 0.0;
 };
 
 struct DeferredAnalyzerInput {
@@ -772,6 +800,47 @@ public:
     }
 };
 
+class FillInvalidationAnalyzer final : public Phase3Analyzer {
+public:
+    const char* name() const override { return "fill_invalidation"; }
+    AnalyzerLane lane() const override { return AnalyzerLane::Hot; }
+
+    void analyzeHot(const HotAnalyzerInput& input,
+                    std::vector<AnalyzerFindingSpec>* findings) const override {
+        if (!input.fillInvalidationTriggered || input.fillInvalidationKind.empty()) {
+            return;
+        }
+
+        const bool buySide = input.fillInvalidationKind == "buy_fill_invalidation";
+        std::ostringstream title;
+        title << (buySide ? "Buy fill invalidated below " : "Sell fill invalidated above ")
+              << std::fixed << std::setprecision(2) << input.fillInvalidationObservedPrice;
+
+        std::ostringstream summary;
+        summary << "After the "
+                << (buySide ? "buy" : "sell")
+                << " fill at " << std::fixed << std::setprecision(2) << input.fillInvalidationFillPrice
+                << ", the inside "
+                << (buySide ? "bid" : "ask")
+                << " moved to " << input.fillInvalidationObservedPrice
+                << " by session_seq " << input.event.sessionSeq << ".";
+
+        AnalyzerFindingSpec finding;
+        finding.kind = input.fillInvalidationKind;
+        finding.severity = "warning";
+        finding.confidence = 0.86;
+        finding.firstSessionSeq = input.fillInvalidationFirstSessionSeq;
+        finding.lastSessionSeq = input.event.sessionSeq;
+        finding.tsEngineNs = input.event.tsEngineNs;
+        finding.instrumentId = input.event.instrumentId;
+        finding.title = title.str();
+        finding.summary = summary.str();
+        finding.overlapsOrder = true;
+        finding.overlappingAnchor = input.overlappingAnchor;
+        findings->push_back(std::move(finding));
+    }
+};
+
 class OrderFlowTimelineAnalyzer final : public Phase3Analyzer {
 public:
     const char* name() const override { return "order_flow_timeline"; }
@@ -856,6 +925,7 @@ const std::vector<std::unique_ptr<Phase3Analyzer>>& allPhase3Analyzers() {
         built.push_back(std::make_unique<InsideLiquidityAnalyzer>());
         built.push_back(std::make_unique<TradePressureAnalyzer>());
         built.push_back(std::make_unique<DisplayInstabilityAnalyzer>());
+        built.push_back(std::make_unique<FillInvalidationAnalyzer>());
         built.push_back(std::make_unique<OrderFlowTimelineAnalyzer>());
         return built;
     }();
@@ -1902,6 +1972,40 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         : 0.0;
     const bool hasInside = effectiveBid > 0.0 && effectiveAsk > 0.0 && effectiveAsk >= effectiveBid;
 
+    bool fillInvalidationTriggered = false;
+    std::string fillInvalidationKind;
+    std::uint64_t fillInvalidationFirstSessionSeq = 0;
+    double fillInvalidationFillPrice = 0.0;
+    double fillInvalidationObservedPrice = 0.0;
+    if (analyzerBookState_.activeFillWatch.has_value()) {
+        const auto& watch = *analyzerBookState_.activeFillWatch;
+        if (event.tsEngineNs > watch.expiryTsEngineNs) {
+            analyzerBookState_.activeFillWatch.reset();
+        } else if (event.sessionSeq > watch.fillSessionSeq &&
+                   hasInside &&
+                   (event.eventKind == "market_tick" || event.eventKind == "market_depth")) {
+            if (watch.isBuy &&
+                effectiveBid > 0.0 &&
+                effectiveBid <= watch.fillPrice - kFillInvalidationMinMove) {
+                fillInvalidationTriggered = true;
+                fillInvalidationKind = "buy_fill_invalidation";
+                fillInvalidationFirstSessionSeq = watch.fillSessionSeq;
+                fillInvalidationFillPrice = watch.fillPrice;
+                fillInvalidationObservedPrice = effectiveBid;
+                analyzerBookState_.activeFillWatch.reset();
+            } else if (!watch.isBuy &&
+                       effectiveAsk > 0.0 &&
+                       effectiveAsk >= watch.fillPrice + kFillInvalidationMinMove) {
+                fillInvalidationTriggered = true;
+                fillInvalidationKind = "sell_fill_invalidation";
+                fillInvalidationFirstSessionSeq = watch.fillSessionSeq;
+                fillInvalidationFillPrice = watch.fillPrice;
+                fillInvalidationObservedPrice = effectiveAsk;
+                analyzerBookState_.activeFillWatch.reset();
+            }
+        }
+    }
+
     bool tradePressureTriggered = false;
     std::string tradePressureKind;
     const int tradePressureSide = classifyTradePressureSide(event, effectiveBid, effectiveAsk, hasInside);
@@ -2050,7 +2154,28 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
     analyzerBookState_.hasInside = hasInside;
 
     const BridgeAnchorIdentity overlap = findOverlappingOrderAnchorUnlocked(event.tsEngineNs);
-    const bool overlapsOrder = hasAnchorIdentity(overlap);
+    BridgeAnchorIdentity effectiveOverlap = overlap;
+    if (fillInvalidationTriggered && !hasAnchorIdentity(effectiveOverlap) && hasAnchorIdentity(event.bridgeRecord.anchor)) {
+        effectiveOverlap = event.bridgeRecord.anchor;
+    }
+    const bool overlapsOrder = hasAnchorIdentity(effectiveOverlap);
+
+    if (event.eventKind == "fill_execution" &&
+        hasAnchorIdentity(event.bridgeRecord.anchor) &&
+        std::isfinite(event.bridgeRecord.price)) {
+        const std::optional<bool> fillSide = classifyFillSide(event.bridgeRecord.side);
+        if (fillSide.has_value()) {
+            AnalyzerBookState::ActiveFillWatch watch;
+            watch.anchor = event.bridgeRecord.anchor;
+            watch.instrumentId = event.instrumentId;
+            watch.isBuy = *fillSide;
+            watch.fillPrice = event.bridgeRecord.price;
+            watch.fillSessionSeq = event.sessionSeq;
+            watch.fillTsEngineNs = event.tsEngineNs;
+            watch.expiryTsEngineNs = event.tsEngineNs + kProtectedWindowPostNs;
+            analyzerBookState_.activeFillWatch = std::move(watch);
+        }
+    }
 
     HotAnalyzerInput input{
         .event = event,
@@ -2065,7 +2190,7 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         .effectiveAskSize = effectiveAskSize,
         .hasInside = hasInside,
         .overlapsOrder = overlapsOrder,
-        .overlappingAnchor = overlap,
+        .overlappingAnchor = effectiveOverlap,
         .tradePressureTriggered = tradePressureTriggered,
         .tradePressureKind = tradePressureKind,
         .tradePressureStreakCount = analyzerBookState_.tradePressureStreakCount,
@@ -2075,7 +2200,12 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         .displayInstabilityKind = displayInstabilityKind,
         .displayInstabilityCycles = displayInstabilityCycles,
         .displayInstabilityFirstSessionSeq = displayInstabilityFirstSessionSeq,
-        .displayInstabilityPrice = displayInstabilityPrice
+        .displayInstabilityPrice = displayInstabilityPrice,
+        .fillInvalidationTriggered = fillInvalidationTriggered,
+        .fillInvalidationKind = fillInvalidationKind,
+        .fillInvalidationFirstSessionSeq = fillInvalidationFirstSessionSeq,
+        .fillInvalidationFillPrice = fillInvalidationFillPrice,
+        .fillInvalidationObservedPrice = fillInvalidationObservedPrice
     };
 
     std::vector<AnalyzerFindingSpec> analyzerFindings;
@@ -3316,7 +3446,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         relatedFindings.erase(std::remove_if(relatedFindings.begin(),
                                              relatedFindings.end(),
                                              [&](const FindingRecord& record) {
-                                                 return !sameAnchorIdentity(record.overlappingAnchor, anchor);
+                                                 return !anchorsShareIdentity(record.overlappingAnchor, anchor);
                                              }),
                               relatedFindings.end());
         std::sort(relatedFindings.begin(), relatedFindings.end(), [](const FindingRecord& left,
@@ -3330,7 +3460,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         relatedIncidents.erase(std::remove_if(relatedIncidents.begin(),
                                               relatedIncidents.end(),
                                               [&](const IncidentRecord& record) {
-                                                  return !sameAnchorIdentity(record.overlappingAnchor, anchor);
+                                                  return !anchorsShareIdentity(record.overlappingAnchor, anchor);
                                               }),
                                relatedIncidents.end());
         const std::vector<IncidentRecord> collapsedIncidents = collapseLatestIncidentRevisions(relatedIncidents);

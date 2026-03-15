@@ -208,6 +208,16 @@ private:
             std::size_t completedCycles = 0;
         };
 
+        struct ActiveFillWatch {
+            BridgeAnchorIdentity anchor;
+            std::string instrumentId;
+            bool isBuy = true;
+            double fillPrice = 0.0;
+            std::uint64_t fillSessionSeq = 0;
+            std::uint64_t fillTsEngineNs = 0;
+            std::uint64_t expiryTsEngineNs = 0;
+        };
+
         double bidTickPrice = 0.0;
         double askTickPrice = 0.0;
         double lastTradePrice = 0.0;
@@ -224,6 +234,7 @@ private:
         double tradePressureReferencePrice = 0.0;
         DisplayInstabilitySideState askDisplayInstability;
         DisplayInstabilitySideState bidDisplayInstability;
+        std::optional<ActiveFillWatch> activeFillWatch;
         bool hasInside = false;
     };
 

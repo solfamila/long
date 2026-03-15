@@ -1697,6 +1697,117 @@ void testTapeEnginePhase3DetectsDisplayInstabilitySignals() {
     server.stop();
 }
 
+void testTapeEnginePhase3DetectsFillInvalidationSignals() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-fill-invalidation";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-fill-invalidation.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9381:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for fill-invalidation signal test: " + startError);
+
+    auto marketTick = [](std::uint64_t sourceSeq,
+                         int field,
+                         double price,
+                         const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, "market_tick", "BrokerMarketData", "INTC",
+                                                     field == 1 ? "BID" : (field == 2 ? "ASK" : "LAST"),
+                                                     0, 0, 0, "", note, "2026-03-14T09:43:45.000");
+        record.instrumentId = "ib:conid:9381:STK:SMART:USD:INTC";
+        record.marketField = field;
+        record.price = price;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-fill-invalid";
+    options.runtimeSessionId = "runtime-engine-phase3-fill-invalid";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8381, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      541, 4401, 0, "", "fill invalidation anchor", "2026-03-14T09:43:45.050");
+    orderIntent.instrumentId = "ib:conid:9381:STK:SMART:USD:INTC";
+    options.batchSeq = 127;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the fill-invalidation anchor batch: " + error);
+
+    options.batchSeq = 128;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8382, 1, 45.50, "fill invalidation bid"),
+        marketTick(8383, 2, 45.51, "fill invalidation ask")
+    }, options)), &error), "tape-engine should accept the fill-invalidation seed batch: " + error);
+
+    BridgeOutboxRecord fill = makeBridgeRecord(8384, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                                               541, 4401, 0, "exec-4401-a", "fill invalidation fill", "2026-03-14T09:43:45.070");
+    fill.instrumentId = "ib:conid:9381:STK:SMART:USD:INTC";
+    fill.price = 45.51;
+    fill.size = 100.0;
+    options.batchSeq = 129;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({fill}, options)), &error),
+           "tape-engine should accept the fill-invalidation fill batch: " + error);
+
+    options.batchSeq = 130;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8385, 1, 45.48, "fill invalidation bid down"),
+        marketTick(8386, 2, 45.49, "fill invalidation ask down")
+    }, options)), &error), "tape-engine should accept the post-fill invalidation batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+    }, "tape-engine should freeze fill-invalidation signal batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3-fill-invalid";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 fill-invalidation findings query should succeed: " + error);
+    bool sawFillInvalidationFinding = false;
+    for (const auto& item : response.events) {
+        sawFillInvalidationFinding = sawFillInvalidationFinding || item.value("kind", std::string()) == "buy_fill_invalidation";
+    }
+    expect(sawFillInvalidationFinding, "phase 3 should detect a buy fill invalidation after adverse post-fill movement");
+
+    tape_engine::QueryRequest incidentsRequest;
+    incidentsRequest.requestId = "incidents-phase3-fill-invalid";
+    incidentsRequest.operation = "list_incidents";
+    expect(client.query(incidentsRequest, &response, &error), "phase 3 fill-invalidation incidents query should succeed: " + error);
+    bool sawFillInvalidationIncident = false;
+    for (const auto& item : response.events) {
+        if (item.value("kind", std::string()) == "buy_fill_invalidation" &&
+            item.value("score", 0.0) > 0.5) {
+            sawFillInvalidationIncident = true;
+        }
+    }
+    expect(sawFillInvalidationIncident, "phase 3 fill-invalidation incidents should surface a ranked invalidation incident");
+
+    tape_engine::QueryRequest caseRequest;
+    caseRequest.requestId = "order-case-phase3-fill-invalid";
+    caseRequest.operation = "read_order_case";
+    caseRequest.orderId = 4401;
+    expect(client.query(caseRequest, &response, &error), "phase 3 fill-invalidation order-case query should succeed: " + error);
+    bool sawInvalidationRelatedFinding = false;
+    for (const auto& item : response.summary.value("related_findings", json::array())) {
+        sawInvalidationRelatedFinding = sawInvalidationRelatedFinding || item.value("kind", std::string()) == "buy_fill_invalidation";
+    }
+    expect(sawInvalidationRelatedFinding, "order-case related findings should include the fill invalidation signal");
+
+    server.stop();
+}
+
 void testTapeEnginePhase3BuildsTradePressureOrderCase() {
     const fs::path rootDir = testDataDir() / "tape-engine-phase3-trade-pressure";
     const fs::path socketPath = testDataDir() / "tape-engine-phase3-trade-pressure.sock";
@@ -2853,6 +2964,7 @@ int main() {
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
         testTapeEnginePhase3DetectsInsideLiquiditySignals();
         testTapeEnginePhase3DetectsDisplayInstabilitySignals();
+        testTapeEnginePhase3DetectsFillInvalidationSignals();
         testTapeEnginePhase3BuildsTradePressureOrderCase();
         testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity();
         testTapeEngineReplaySnapshotRebuildsFrozenMarketState();
