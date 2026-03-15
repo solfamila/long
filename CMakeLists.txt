@@ -65,12 +65,34 @@ set(IXWEBSOCKET_DIR "${CMAKE_SOURCE_DIR}/ixwebsocket" CACHE PATH "Path to ixWebS
 set(NLOHMANN_JSON_DIR "${CMAKE_SOURCE_DIR}/nlohmann_json" CACHE PATH "Path to nlohmann/json")
 set(LOCAL_IBAPI_STUB_DIR "${CMAKE_SOURCE_DIR}/stubs/ibapi")
 
-if(NOT EXISTS "${IXWEBSOCKET_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR "IXWebSocket sources not found at ${IXWEBSOCKET_DIR}")
+set(HAVE_IXWEBSOCKET OFF)
+if(EXISTS "${IXWEBSOCKET_DIR}/CMakeLists.txt")
+    set(HAVE_IXWEBSOCKET ON)
+else()
+    add_library(ixwebsocket::ixwebsocket INTERFACE IMPORTED GLOBAL)
+    message(WARNING
+        "IXWebSocket sources not found at ${IXWEBSOCKET_DIR}. "
+        "The TapeScope target can still build in isolation, but tws_gui/tws_gui_tests "
+        "will remain blocked until the dependency is restored.")
 endif()
 
-if(NOT EXISTS "${NLOHMANN_JSON_DIR}/single_include/nlohmann/json.hpp")
-    message(FATAL_ERROR "nlohmann/json headers not found at ${NLOHMANN_JSON_DIR}")
+set(NLOHMANN_JSON_INCLUDE_DIR "${NLOHMANN_JSON_DIR}/single_include")
+if(NOT EXISTS "${NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp")
+    unset(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR CACHE)
+    find_path(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR
+        NAMES nlohmann/json.hpp
+        PATHS
+            "/opt/homebrew/include"
+            "/usr/local/include"
+    )
+    if(NLOHMANN_JSON_SYSTEM_INCLUDE_DIR)
+        set(NLOHMANN_JSON_INCLUDE_DIR "${NLOHMANN_JSON_SYSTEM_INCLUDE_DIR}")
+    endif()
+endif()
+
+if(NOT NLOHMANN_JSON_INCLUDE_DIR OR NOT EXISTS "${NLOHMANN_JSON_INCLUDE_DIR}/nlohmann/json.hpp")
+    message(FATAL_ERROR
+        "nlohmann/json headers not found at ${NLOHMANN_JSON_DIR} and no system install was discovered")
 endif()
 
 set(APP_SOURCES
@@ -93,6 +115,11 @@ set(APP_SOURCES
     controller_mac.mm
 )
 
+set(TAPESCOPE_SOURCES
+    tapescope_app.mm
+    tapescope_client.cpp
+)
+
 set(TAPE_ENGINE_SOURCES
     tape_engine_main.cpp
     tape_engine.cpp
@@ -103,26 +130,38 @@ set(TAPE_ENGINE_SOURCES
 set(BUILD_DEMO OFF CACHE BOOL "" FORCE)
 set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
 set(USE_TLS OFF CACHE BOOL "" FORCE)
-add_subdirectory("${IXWEBSOCKET_DIR}" "${CMAKE_BINARY_DIR}/third_party/ixwebsocket" EXCLUDE_FROM_ALL)
+if(HAVE_IXWEBSOCKET)
+    add_subdirectory("${IXWEBSOCKET_DIR}" "${CMAKE_BINARY_DIR}/third_party/ixwebsocket" EXCLUDE_FROM_ALL)
+endif()
 
 add_executable(tws_gui MACOSX_BUNDLE ${APP_SOURCES})
+add_executable(TapeScope MACOSX_BUNDLE ${TAPESCOPE_SOURCES})
 add_executable(tape_engine ${TAPE_ENGINE_SOURCES})
 
 target_include_directories(tws_gui PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${IXWEBSOCKET_DIR}"
-    "${NLOHMANN_JSON_DIR}/single_include"
+    "${NLOHMANN_JSON_INCLUDE_DIR}"
+)
+
+target_include_directories(TapeScope PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_INCLUDE_DIR}"
 )
 
 target_include_directories(tape_engine PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${IXWEBSOCKET_DIR}"
-    "${NLOHMANN_JSON_DIR}/single_include"
+    "${NLOHMANN_JSON_INCLUDE_DIR}"
 )
 
 target_link_libraries(tws_gui PRIVATE
     Threads::Threads
     ixwebsocket::ixwebsocket
+)
+
+target_link_libraries(TapeScope PRIVATE
+    Threads::Threads
 )
 
 target_link_libraries(tape_engine PRIVATE
@@ -292,6 +331,10 @@ target_link_libraries(tws_gui PRIVATE
     ${GAME_CONTROLLER_LIBRARY}
 )
 
+target_link_libraries(TapeScope PRIVATE
+    ${APP_KIT_LIBRARY}
+)
+
 set_target_properties(tws_gui PROPERTIES
     OUTPUT_NAME "tws_gui"
     MACOSX_BUNDLE_BUNDLE_NAME "${APP_BUNDLE_NAME}"
@@ -301,6 +344,15 @@ set_target_properties(tws_gui PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/Info.plist.in"
     BUILD_RPATH "@executable_path/../Frameworks"
     INSTALL_RPATH "@executable_path/../Frameworks"
+)
+
+set_target_properties(TapeScope PROPERTIES
+    OUTPUT_NAME "TapeScope"
+    MACOSX_BUNDLE_BUNDLE_NAME "TapeScope"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.foxy.tapescope"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${APP_BUNDLE_VERSION}"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${APP_BUNDLE_VERSION}"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/Info.plist.in"
 )
 
 find_program(CODESIGN_EXECUTABLE codesign)
@@ -363,6 +415,7 @@ if(BUILD_TESTING)
         bridge_batch_transport.cpp
         tape_engine.cpp
         tape_engine_protocol.cpp
+        tapescope_client.cpp
         trace_exporter.cpp
         trading_ui_format.cpp
         mac_observability.mm
@@ -371,7 +424,7 @@ if(BUILD_TESTING)
     target_include_directories(tws_gui_tests PRIVATE
         "${CMAKE_SOURCE_DIR}"
         "${IXWEBSOCKET_DIR}"
-        "${NLOHMANN_JSON_DIR}/single_include"
+        "${NLOHMANN_JSON_INCLUDE_DIR}"
     )
     target_compile_definitions(tws_gui_tests PRIVATE
         TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
@@ -406,6 +459,7 @@ endif()
 set_source_files_properties(
     main.mm
     mac_observability.mm
+    tapescope_app.mm
     trading_export_panels.mm
     trading_refresh_scheduler.mm
     trading_settings_sheet.mm
