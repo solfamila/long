@@ -128,6 +128,13 @@ set(TAPESCOPE_SOURCES
     tapescope_client.cpp
 )
 
+set(TAPE_MCP_SOURCES
+    tape_mcp_main.cpp
+    tape_mcp_adapter.cpp
+    tape_mcp_engine_rpc.cpp
+    tapescope_client.cpp
+)
+
 set(TAPE_ENGINE_SOURCES
     tape_engine_main.cpp
     tape_engine.cpp
@@ -147,13 +154,23 @@ if(NOT TAPESCOPE_ISOLATED_BUILD)
     add_executable(tape_engine ${TAPE_ENGINE_SOURCES})
 endif()
 add_executable(TapeScope MACOSX_BUNDLE ${TAPESCOPE_SOURCES})
+add_executable(tape_mcp ${TAPE_MCP_SOURCES})
 
 target_include_directories(TapeScope PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${NLOHMANN_JSON_INCLUDE_DIR}"
 )
 
+target_include_directories(tape_mcp PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_INCLUDE_DIR}"
+)
+
 target_link_libraries(TapeScope PRIVATE
+    Threads::Threads
+)
+
+target_link_libraries(tape_mcp PRIVATE
     Threads::Threads
 )
 

@@ -37,3 +37,20 @@ processes:
         qos: work
         concurrency: 1
         category: bridge
+
+  tape_mcp:
+    subsystem: com.foxy.long.tape-mcp
+    units:
+      mcp_stdio:
+        label: com.foxy.long.tape-mcp.stdio
+        primitive: dedicated_thread
+        qos: inherited
+        concurrency: 1
+        category: adapter
+
+      engine_rpc:
+        label: com.foxy.long.tape-mcp.engine-rpc
+        primitive: dedicated_thread
+        qos: work
+        concurrency: 1
+        category: adapter
