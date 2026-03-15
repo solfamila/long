@@ -111,6 +111,7 @@ Phase-1 bridge sender notes:
 - `seek_order_anchor` now returns replay targets and protected-window context for order/fill investigations, so a client can jump straight to the right `session_seq` and replay window around a fill or order-state transition.
 - `read_order_case` now returns a report-style order/fill investigation summary with replay targets, protected-window context, related findings, and ranked incidents for the selected anchor.
 - `read_order_case` and `read_incident` now include merged investigation timelines and timeline highlights, so clients can render case/incident narratives instead of stitching raw events together themselves.
+- `read_session_quality` now summarizes evidence trust for the whole frozen session or any requested `session_seq` range, and case/incident/protected-window reads now surface a `data_quality` block alongside their narrative output.
 - Frozen range/replay reads now snapshot engine state up front and use segment `session_seq` bounds to avoid holding the main engine lock across disk I/O and broad rescans.
 - Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.
 - `long` now emits normalized public market records (`market_tick`, `market_depth`) alongside widened private lifecycle records including `open_order`, `order_status`, `commission_report`, `cancel_request`, `broker_error`, and `order_reject`.
@@ -121,6 +122,7 @@ Phase-1 bridge sender notes:
 - Protected windows now materialize `first_session_seq` / `last_session_seq` bounds in addition to timestamp bounds, so replay, export, and protected-window evidence reads can stay deterministic and segment-bounded.
 - Analyzer execution is now split into hot-path analyzers and an explicit deferred analyzer lane owned by the engine runtime. The deferred lane emits both order-flow timeline and order/fill-context findings from protected order/fill windows on its own background queue instead of keeping all analysis inline on the sequencer path.
 - Query and deferred-analysis artifact reads now build indexed views from the captured engine snapshot instead of reloading frozen artifact sidecars from disk on every request.
+- Data-quality scoring is now a first-class Phase 3 output. Query surfaces report gaps, resets, weak instrument identity, timestamp coverage, vendor-sequence coverage, and mutable-tail caveats so investigations can say how strong the evidence is, not just what happened.
 
 Runtime registry and QoS:
 

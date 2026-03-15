@@ -19,6 +19,7 @@ void printUsage() {
               << "  tape_engine_ctl status\n"
               << "  tape_engine_ctl read-live-tail [limit]\n"
               << "  tape_engine_ctl read-range <from_session_seq> <to_session_seq> [--revision N] [--include-live-tail] [--limit N]\n"
+              << "  tape_engine_ctl read-session-quality [--from N] [--to N] [--revision N] [--include-live-tail]\n"
               << "  tape_engine_ctl replay-snapshot <session_seq> [--revision N] [--include-live-tail] [--depth N]\n"
               << "  tape_engine_ctl find-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
               << "  tape_engine_ctl seek-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--include-live-tail] [--limit N]\n"
@@ -47,6 +48,20 @@ int main(int argc, char** argv) {
         request.operation = "read_live_tail";
         if (argc >= 3) {
             request.limit = static_cast<std::size_t>(std::stoull(argv[2]));
+        }
+    } else if (request.operation == "read-session-quality") {
+        request.operation = "read_session_quality";
+        for (int i = 2; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--from" && i + 1 < argc) {
+                request.fromSessionSeq = std::stoull(argv[++i]);
+            } else if (arg == "--to" && i + 1 < argc) {
+                request.toSessionSeq = std::stoull(argv[++i]);
+            } else if (arg == "--include-live-tail") {
+                request.includeLiveTail = true;
+            } else if (arg == "--revision" && i + 1 < argc) {
+                request.revisionId = std::stoull(argv[++i]);
+            }
         }
     } else if (request.operation == "read-range") {
         request.operation = "read_range";

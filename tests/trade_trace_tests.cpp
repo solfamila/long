@@ -994,6 +994,18 @@ void testTapeEngineQueryStatusAndReads() {
     expect(response.summary.value("replay_target_session_seq", 0ULL) == 4, "seek-order should point replay at the fill when one exists");
     expect(response.summary.contains("protected_window"), "seek-order should include protected-window context");
 
+    tape_engine::QueryRequest qualityRequest;
+    qualityRequest.requestId = "quality-1";
+    qualityRequest.operation = "read_session_quality";
+    qualityRequest.fromSessionSeq = 1;
+    qualityRequest.toSessionSeq = 4;
+    expect(client.query(qualityRequest, &response, &error), "tape-engine session-quality query should succeed: " + error);
+    expect(response.summary.contains("data_quality"), "session-quality query should return a data-quality block");
+    expect(response.summary.value("data_quality", json::object()).value("gap_marker_count", 0ULL) == 1ULL,
+           "session-quality query should count explicit gap markers");
+    expect(response.summary.value("data_quality", json::object()).value("weak_instrument_identity_count", 0ULL) >= 1ULL,
+           "session-quality query should flag weak identity fallback when only symbol-style identity is available");
+
     server.stop();
 }
 
@@ -1481,6 +1493,7 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
     expect(response.summary.contains("score_breakdown"), "incident drilldown should include a score breakdown");
     expect(response.summary.contains("why_it_matters"), "incident drilldown should include a why-it-matters summary");
     expect(response.summary.contains("protected_window"), "incident drilldown should include the incident protected window");
+    expect(response.summary.contains("data_quality"), "incident drilldown should include data-quality scoring");
     expect(response.summary.contains("timeline"), "incident drilldown should now include a merged investigation timeline");
     expect(response.summary.contains("timeline_summary"), "incident drilldown should summarize the merged investigation timeline");
     expect(response.summary.value("timeline_summary", json::object()).value("incident_count", 0ULL) >= 1ULL,
@@ -1915,6 +1928,7 @@ void testTapeEnginePhase3BuildsTradePressureOrderCase() {
     expect(response.summary.contains("protected_window"), "order-case summary should surface the selected protected window");
     expect(response.summary.value("protected_window_event_count", 0ULL) >= 4ULL,
            "order-case summary should include protected-window evidence beyond the anchor-matched lifecycle events");
+    expect(response.summary.contains("data_quality"), "order-case summary should include data-quality scoring");
     expect(response.summary.contains("timeline"), "order-case summary should include a merged case timeline");
     expect(response.summary.contains("timeline_summary"), "order-case summary should summarize the merged case timeline");
     expect(response.summary.value("timeline_summary", json::object()).value("market_event_count", 0ULL) >= 2ULL,

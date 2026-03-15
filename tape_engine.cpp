@@ -502,6 +502,135 @@ json buildTimelineHighlights(const json& timeline, std::size_t limit) {
     return highlights;
 }
 
+json buildDataQualitySummary(const std::vector<json>& events,
+                             bool includesMutableTail,
+                             const std::string& expectedInstrumentId = {}) {
+    std::size_t totalEvents = 0;
+    std::size_t marketEventCount = 0;
+    std::size_t lifecycleEventCount = 0;
+    std::size_t gapMarkerCount = 0;
+    std::size_t resetMarkerCount = 0;
+    std::size_t weakInstrumentIdentityCount = 0;
+    std::size_t missingReceiveTimestampCount = 0;
+    std::size_t missingExchangeTimestampCount = 0;
+    std::size_t missingVendorSequenceCount = 0;
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+
+    for (const auto& event : events) {
+        const std::string kind = event.value("event_kind", std::string());
+        if (kind.empty()) {
+            continue;
+        }
+
+        ++totalEvents;
+        const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+        if (firstSessionSeq == 0 || (sessionSeq > 0 && sessionSeq < firstSessionSeq)) {
+            firstSessionSeq = sessionSeq;
+        }
+        lastSessionSeq = std::max(lastSessionSeq, sessionSeq);
+
+        if (kind == "gap_marker") {
+            ++gapMarkerCount;
+            continue;
+        }
+        if (kind == "reset_marker") {
+            ++resetMarkerCount;
+            continue;
+        }
+
+        const bool marketEvent = kind == "market_tick" || kind == "market_depth";
+        if (marketEvent) {
+            ++marketEventCount;
+        } else {
+            ++lifecycleEventCount;
+        }
+
+        const std::string instrumentId = event.value("instrument_id", std::string());
+        if (instrumentId.empty() ||
+            (!expectedInstrumentId.empty() && instrumentId != expectedInstrumentId) ||
+            !isStrongInstrumentId(instrumentId)) {
+            ++weakInstrumentIdentityCount;
+        }
+        if (event.value("ts_receive_ns", 0ULL) == 0ULL) {
+            ++missingReceiveTimestampCount;
+        }
+        if (marketEvent && event.value("ts_exchange_ns", 0ULL) == 0ULL) {
+            ++missingExchangeTimestampCount;
+        }
+        if (marketEvent && event.value("vendor_seq", 0ULL) == 0ULL) {
+            ++missingVendorSequenceCount;
+        }
+    }
+
+    const double marketDenominator = marketEventCount == 0 ? 1.0 : static_cast<double>(marketEventCount);
+    double score = 100.0;
+    score -= std::min<std::size_t>(2, gapMarkerCount) * 18.0;
+    score -= std::min<std::size_t>(2, resetMarkerCount) * 22.0;
+    if (weakInstrumentIdentityCount > 0) {
+        score -= 14.0;
+    }
+    score -= 12.0 * (static_cast<double>(missingReceiveTimestampCount) / std::max<double>(1.0, static_cast<double>(totalEvents)));
+    score -= 18.0 * (static_cast<double>(missingExchangeTimestampCount) / marketDenominator);
+    score -= 10.0 * (static_cast<double>(missingVendorSequenceCount) / marketDenominator);
+    if (includesMutableTail) {
+        score -= 3.0;
+    }
+    score = std::clamp(score, 0.0, 100.0);
+
+    std::string grade = "excellent";
+    if (score < 90.0) {
+        grade = "good";
+    }
+    if (score < 75.0) {
+        grade = "degraded";
+    }
+    if (score < 55.0) {
+        grade = "poor";
+    }
+
+    json issues = json::array();
+    if (gapMarkerCount > 0) {
+        issues.push_back("Feed gaps were recorded in this evidence window.");
+    }
+    if (resetMarkerCount > 0) {
+        issues.push_back("Source resets were recorded in this evidence window.");
+    }
+    if (weakInstrumentIdentityCount > 0) {
+        issues.push_back("At least one event relied on a weak or mismatched instrument identity.");
+    }
+    if (missingReceiveTimestampCount > 0) {
+        issues.push_back("Some events are missing receive timestamps.");
+    }
+    if (missingExchangeTimestampCount > 0) {
+        issues.push_back("Some market events are missing exchange timestamps.");
+    }
+    if (missingVendorSequenceCount > 0) {
+        issues.push_back("Some market events are missing vendor sequence numbers.");
+    }
+    if (includesMutableTail) {
+        issues.push_back("This read includes mutable live-tail evidence in addition to frozen revisions.");
+    }
+
+    return {
+        {"score", score},
+        {"grade", grade},
+        {"total_event_count", totalEvents},
+        {"market_event_count", marketEventCount},
+        {"lifecycle_event_count", lifecycleEventCount},
+        {"first_session_seq", firstSessionSeq},
+        {"last_session_seq", lastSessionSeq},
+        {"gap_marker_count", gapMarkerCount},
+        {"reset_marker_count", resetMarkerCount},
+        {"weak_instrument_identity_count", weakInstrumentIdentityCount},
+        {"missing_receive_timestamp_count", missingReceiveTimestampCount},
+        {"missing_exchange_timestamp_count", missingExchangeTimestampCount},
+        {"missing_vendor_sequence_count", missingVendorSequenceCount},
+        {"includes_mutable_tail", includesMutableTail},
+        {"issues", issues}
+    };
+}
+
 std::vector<IncidentRecord> collapseLatestIncidentRevisions(const std::vector<IncidentRecord>& records) {
     std::map<std::uint64_t, IncidentRecord> latestByLogicalIncident;
     for (const auto& record : records) {
@@ -3222,6 +3351,7 @@ json Server::buildReplaySnapshot(const QuerySnapshot& snapshot,
         {"ask_book", bookToJson(replay.askBook, depthLimit)},
         {"ask_price", effectiveAsk},
         {"bid_book", bookToJson(replay.bidBook, depthLimit)},
+        {"data_quality", buildDataQualitySummary(allEvents, includeLiveTail, snapshot.instrumentId)},
         {"bid_price", effectiveBid},
         {"gap_markers_encountered", replay.gapMarkers},
         {"includes_mutable_tail", includeLiveTail},
@@ -3442,6 +3572,29 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
+    if (request.operation == "read_session_quality") {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+        const std::uint64_t from = request.fromSessionSeq;
+        const std::uint64_t to = request.toSessionSeq;
+        const std::vector<json> events = mergedEvents(snapshot,
+                                                      frozenRevisionId,
+                                                      request.includeLiveTail,
+                                                      from,
+                                                      to);
+        response.summary = {
+            {"from_session_seq", from},
+            {"to_session_seq", to},
+            {"served_revision_id", frozenRevisionId},
+            {"data_quality", buildDataQualitySummary(events, request.includeLiveTail, snapshot.instrumentId)}
+        };
+        return response;
+    }
+
     if (request.operation == "list_order_anchors" ||
         request.operation == "list_protected_windows" ||
         request.operation == "list_findings" ||
@@ -3574,6 +3727,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"evidence_to_session_seq", latestIncident.lastSessionSeq}
         };
         json timeline = json::array();
+        std::vector<json> dataQualityEvents;
         if (incidentWindow.has_value()) {
             std::vector<json> windowEvents = filterEventsByProtectedWindow(snapshot,
                                                                           artifacts,
@@ -3582,10 +3736,18 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                                           frozenRevisionId,
                                                                           request.includeLiveTail,
                                                                           nullptr);
+            dataQualityEvents = windowEvents;
             for (const auto& event : windowEvents) {
                 timeline.push_back(timelineEntryFromEvent(event));
             }
             reportSummary["protected_window_id"] = incidentWindow->windowId;
+        }
+        if (dataQualityEvents.empty()) {
+            dataQualityEvents = mergedEvents(snapshot,
+                                             frozenRevisionId,
+                                             request.includeLiveTail,
+                                             latestIncident.firstSessionSeq,
+                                             latestIncident.lastSessionSeq);
         }
         for (const auto& finding : relatedFindings) {
             timeline.push_back(timelineEntryFromFinding(finding));
@@ -3606,6 +3768,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"report_summary", reportSummary},
             {"timeline", timeline},
             {"timeline_summary", timelineSummary},
+            {"data_quality", buildDataQualitySummary(dataQualityEvents, request.includeLiveTail, latestIncident.instrumentId)},
             {"returned_events", response.events.size()},
             {"related_finding_count", relatedFindings.size()},
             {"incident_revisions", revisionsJson}
@@ -3645,6 +3808,9 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             response.events.push_back(event);
         }
         response.summary = {
+            {"data_quality", buildDataQualitySummary(events,
+                                                    request.includeLiveTail,
+                                                    selectedWindowSummary.value("instrument_id", std::string()))},
             {"includes_mutable_tail", request.includeLiveTail},
             {"protected_window", selectedWindowSummary},
             {"returned_events", response.events.size()},
@@ -3815,6 +3981,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         json timeline = json::array();
+        std::vector<json> evidenceEvents = events;
         if (orderCaseSummary.contains("protected_window")) {
             const std::uint64_t protectedWindowId = orderCaseSummary["protected_window"].value("window_id", 0ULL);
             if (protectedWindowId > 0) {
@@ -3825,6 +3992,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                                               frozenRevisionId,
                                                                               request.includeLiveTail,
                                                                               nullptr);
+                evidenceEvents = windowEvents;
                 for (const auto& event : windowEvents) {
                     timeline.push_back(timelineEntryFromEvent(event));
                 }
@@ -3855,6 +4023,9 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         orderCaseSummary["related_incidents"] = incidentsJson;
         orderCaseSummary["timeline"] = timeline;
         orderCaseSummary["timeline_summary"] = timelineSummary;
+        orderCaseSummary["data_quality"] = buildDataQualitySummary(evidenceEvents,
+                                                                   request.includeLiveTail,
+                                                                   events.front().value("instrument_id", std::string()));
         orderCaseSummary["case_report"] = {
             {"headline", headline},
             {"summary", narrative.str()},
