@@ -1,4 +1,6 @@
 #include "app_shared.h"
+#include "bridge_batch_codec.h"
+#include "bridge_batch_transport.h"
 #include "trace_exporter.h"
 #include "trading_ui_format.h"
 #include "trading_wrapper.h"
@@ -8,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -118,6 +121,53 @@ std::vector<json> readJsonLines(const std::string& path) {
     return lines;
 }
 
+fs::path fixturePath(const std::string& relativePath) {
+    return fs::path(TWS_GUI_SOURCE_DIR) / "tests" / "fixtures" / relativePath;
+}
+
+std::string readTextFile(const fs::path& path) {
+    std::ifstream in(path);
+    expect(in.is_open(), "failed to open fixture file at " + path.string());
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+std::string trimWhitespace(std::string text) {
+    text.erase(std::remove_if(text.begin(), text.end(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    }), text.end());
+    return text;
+}
+
+BridgeOutboxRecord makeBridgeRecord(std::uint64_t sourceSeq,
+                                    const std::string& recordType,
+                                    const std::string& source,
+                                    const std::string& symbol,
+                                    const std::string& side,
+                                    std::uint64_t traceId,
+                                    OrderId orderId,
+                                    long long permId,
+                                    const std::string& execId,
+                                    const std::string& note,
+                                    const std::string& wallTime,
+                                    const std::string& fallbackState = "queued_for_recovery",
+                                    const std::string& fallbackReason = "engine_unavailable") {
+    BridgeOutboxRecord record;
+    record.sourceSeq = sourceSeq;
+    record.recordType = recordType;
+    record.source = source;
+    record.symbol = symbol;
+    record.side = side;
+    record.anchor.traceId = traceId;
+    record.anchor.orderId = orderId;
+    record.anchor.permId = permId;
+    record.anchor.execId = execId;
+    record.fallbackState = fallbackState;
+    record.fallbackReason = fallbackReason;
+    record.note = note;
+    record.wallTime = wallTime;
+    return record;
+}
+
 void testReplayPrefersRichLiveTrace() {
     clearTestFiles();
 
@@ -185,6 +235,43 @@ void testReplayPrefersRichLiveTrace() {
     expectContains(bundle.summaryCsv, "GUI Button", "summary should be enriched from live trace");
     expectContains(bundle.summaryCsv, "2936", "summary should contain full fill latency");
     expectContains(bundle.timelineCsv, "ValidationStart", "timeline should include live validation stages");
+}
+
+void testBridgeBatchCodecRoundTripPreservesOrderAndMetadata() {
+    const std::vector<BridgeOutboxRecord> records{
+        makeBridgeRecord(101, "order_intent", "WebSocket", "INTC", "BUY",
+                         71, 501, 0, "", "accepted order intent", "2026-03-14T09:30:00.100"),
+        makeBridgeRecord(102, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                         71, 501, 9501, "EXEC-71", "execution details observed", "2026-03-14T09:30:00.250")
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-phase1-order-fill";
+    options.runtimeSessionId = "runtime-phase1-order-fill";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+    options.batchSeq = 7;
+
+    const bridge_batch::Batch batch = bridge_batch::buildBatch(records, options);
+    const std::vector<std::uint8_t> frame = bridge_batch::encodeFrame(batch);
+    const bridge_batch::Batch decoded = bridge_batch::decodeFrame(frame);
+
+    expect(decoded.header.version == bridge_batch::kWireVersion, "wire version should survive codec round trip");
+    expect(decoded.header.schema == bridge_batch::kSchemaName, "schema name should survive codec round trip");
+    expect(decoded.header.transport == bridge_batch::kTransportName, "transport name should survive codec round trip");
+    expect(decoded.header.appSessionId == options.appSessionId, "app session id should survive codec round trip");
+    expect(decoded.header.runtimeSessionId == options.runtimeSessionId, "runtime session id should survive codec round trip");
+    expect(decoded.header.flushReason == bridge_batch::flushReasonName(options.flushReason), "flush reason should survive codec round trip");
+    expect(decoded.header.batchSeq == options.batchSeq, "batch sequence should survive codec round trip");
+    expect(decoded.header.firstSourceSeq == 101, "first source sequence should reflect the first accepted record");
+    expect(decoded.header.lastSourceSeq == 102, "last source sequence should reflect the last accepted record");
+    expect(decoded.header.recordCount == records.size(), "record count should reflect the number of encoded records");
+    expect(decoded.records.size() == records.size(), "codec round trip should preserve record count");
+    expect(decoded.records.front().sourceSeq == 101, "codec round trip should preserve accepted ordering");
+    expect(decoded.records.back().sourceSeq == 102, "codec round trip should preserve tail ordering");
+    expect(decoded.records.front().anchor.traceId == 71, "codec round trip should preserve first trace anchor");
+    expect(decoded.records.back().anchor.permId == 9501, "codec round trip should preserve fill permId");
+    expect(decoded.records.back().anchor.execId == "EXEC-71", "codec round trip should preserve fill execId");
+    expect(decoded.records.back().fallbackState == "queued_for_recovery", "codec round trip should preserve fallback state");
 }
 
 void testTraceIdFloorRecoversFromLog() {
@@ -359,6 +446,86 @@ void testBridgeOutboxSourceSeqPreservesAcceptanceOrderingAndAnchors() {
 
     unbindSharedDataOwner(&owner);
     resetSharedDataForTesting();
+}
+
+void testBridgeBatchFixtureMatchesGoldenFrame() {
+    const json fixtureJson = json::parse(readTextFile(fixturePath("bridge_batch_v1_order_fill.json")));
+    const bridge_batch::Batch fixtureBatch = bridge_batch::batchFromJson(fixtureJson);
+    const std::string expectedHex = trimWhitespace(readTextFile(fixturePath("bridge_batch_v1_order_fill.msgpack.hex")));
+    const std::string actualHex = bridge_batch::encodeFrameHex(fixtureBatch);
+
+    expect(actualHex == expectedHex, "golden frame should match the fixture-backed bridge batch contract");
+
+    const bridge_batch::Batch decoded = bridge_batch::decodeFrame(bridge_batch::decodeHex(expectedHex));
+    expect(decoded.header.batchSeq == 7, "golden frame should decode the expected batch sequence");
+    expect(decoded.header.firstSourceSeq == 101, "golden frame should decode the expected first source sequence");
+    expect(decoded.header.lastSourceSeq == 102, "golden frame should decode the expected last source sequence");
+    expect(decoded.records.size() == 2, "golden frame should decode both bridge records");
+    expect(decoded.records.front().recordType == "order_intent", "golden frame should keep the first record type");
+    expect(decoded.records.back().recordType == "fill_execution", "golden frame should keep the second record type");
+    expect(decoded.records.back().anchor.execId == "EXEC-71", "golden frame should keep the fill execution anchor");
+}
+
+void testBridgeBatchSenderPreservesOrderingAcrossRetries() {
+    bridge_batch::FakeTransport transport;
+    bridge_batch::Sender sender(transport);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-phase1-order-fill";
+    options.runtimeSessionId = "runtime-phase1-order-fill";
+    options.flushReason = bridge_batch::FlushReason::RecoveryDrain;
+
+    options.batchSeq = 1;
+    const bridge_batch::Batch first = bridge_batch::buildBatch({
+        makeBridgeRecord(201, "order_intent", "WebSocket", "INTC", "BUY",
+                         88, 601, 0, "", "first batch", "2026-03-14T09:31:00.000")
+    }, options);
+
+    options.batchSeq = 2;
+    const bridge_batch::Batch second = bridge_batch::buildBatch({
+        makeBridgeRecord(202, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                         88, 601, 9601, "EXEC-88-A", "second batch", "2026-03-14T09:31:00.150")
+    }, options);
+
+    options.batchSeq = 3;
+    const bridge_batch::Batch third = bridge_batch::buildBatch({
+        makeBridgeRecord(203, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                         88, 601, 9601, "EXEC-88-B", "third batch", "2026-03-14T09:31:00.300")
+    }, options);
+
+    transport.failNext("engine offline");
+    const bridge_batch::PublishResult firstResult = sender.publish(first);
+    expect(!firstResult.delivered, "first publish should fail while transport is unavailable");
+    expect(firstResult.queuedForRetry, "failed first publish should remain queued for retry");
+    expect(firstResult.pendingBatchCount == 1, "first failed publish should leave one pending batch");
+
+    const bridge_batch::PublishResult secondResult = sender.publish(second);
+    expect(!secondResult.delivered, "second publish should not bypass an earlier failed batch");
+    expect(secondResult.queuedForRetry, "second publish should queue behind pending retry work");
+    expect(secondResult.pendingBatchCount == 2, "second publish should extend the pending retry queue");
+
+    const bridge_batch::PublishResult thirdResult = sender.publish(third);
+    expect(!thirdResult.delivered, "third publish should wait behind earlier pending batches");
+    expect(thirdResult.queuedForRetry, "third publish should queue behind earlier pending batches");
+    expect(thirdResult.pendingBatchCount == 3, "third publish should leave all queued batches pending");
+
+    const bridge_batch::DrainResult drain = sender.drainPending();
+    expect(!drain.blocked, "draining pending batches should succeed once transport recovers");
+    expect(drain.deliveredCount == 3, "drain should deliver every queued batch");
+    expect(drain.pendingBatchCount == 0, "drain should empty the pending queue");
+    expect(sender.pendingBatchCount() == 0, "sender should report no pending batches after drain");
+    expect(transport.attemptedSendCount() == 4, "transport should see one failed attempt plus three successful retries");
+    expect(transport.deliveredFrames().size() == 3, "transport should receive all three batches in delivery order");
+
+    const bridge_batch::Batch deliveredFirst = bridge_batch::decodeFrame(transport.deliveredFrames().at(0));
+    const bridge_batch::Batch deliveredSecond = bridge_batch::decodeFrame(transport.deliveredFrames().at(1));
+    const bridge_batch::Batch deliveredThird = bridge_batch::decodeFrame(transport.deliveredFrames().at(2));
+    expect(deliveredFirst.header.batchSeq == 1, "drain should preserve the first queued batch");
+    expect(deliveredSecond.header.batchSeq == 2, "drain should preserve the second queued batch");
+    expect(deliveredThird.header.batchSeq == 3, "drain should preserve the third queued batch");
+    expect(deliveredFirst.records.front().sourceSeq == 201, "drain should preserve source ordering in the first batch");
+    expect(deliveredSecond.records.front().sourceSeq == 202, "drain should preserve source ordering in the second batch");
+    expect(deliveredThird.records.front().sourceSeq == 203, "drain should preserve source ordering in the third batch");
 }
 
 void testBridgeOutboxOverflowWritesExplicitLossMarker() {
@@ -1053,12 +1220,15 @@ void testManualReconcileAndAcknowledgeFlow() {
 int main() {
     try {
         testDataDir();
+        testBridgeBatchCodecRoundTripPreservesOrderAndMetadata();
         testReplayPrefersRichLiveTrace();
         testTraceIdFloorRecoversFromLog();
         testReplayHandlesPartialFillsAndCommission();
         testWebSocketRuntimeGuards();
         testRecoverySnapshotReportsAbnormalShutdown();
         testBridgeOutboxSourceSeqPreservesAcceptanceOrderingAndAnchors();
+        testBridgeBatchFixtureMatchesGoldenFrame();
+        testBridgeBatchSenderPreservesOrderingAcrossRetries();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();

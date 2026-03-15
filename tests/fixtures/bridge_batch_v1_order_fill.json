@@ -1,0 +1,53 @@
+{
+  "app_session_id": "app-phase1-order-fill",
+  "batch_seq": 7,
+  "category": "bridge",
+  "first_source_seq": 101,
+  "flush_reason": "immediate_lifecycle",
+  "last_source_seq": 102,
+  "producer": "long",
+  "queue_label": "com.foxy.long.bridge.sender",
+  "queue_qos": "user_initiated",
+  "record_count": 2,
+  "records": [
+    {
+      "anchor": {
+        "exec_id": "",
+        "order_id": 501,
+        "perm_id": 0,
+        "trace_id": 71
+      },
+      "fallback_reason": "engine_unavailable",
+      "fallback_state": "queued_for_recovery",
+      "note": "accepted order intent",
+      "record_type": "order_intent",
+      "side": "BUY",
+      "source": "WebSocket",
+      "source_seq": 101,
+      "symbol": "INTC",
+      "wall_time": "2026-03-14T09:30:00.100"
+    },
+    {
+      "anchor": {
+        "exec_id": "EXEC-71",
+        "order_id": 501,
+        "perm_id": 9501,
+        "trace_id": 71
+      },
+      "fallback_reason": "engine_unavailable",
+      "fallback_state": "queued_for_recovery",
+      "note": "execution details observed",
+      "record_type": "fill_execution",
+      "side": "BOT",
+      "source": "BrokerExecution",
+      "source_seq": 102,
+      "symbol": "INTC",
+      "wall_time": "2026-03-14T09:30:00.250"
+    }
+  ],
+  "runtime_session_id": "runtime-phase1-order-fill",
+  "schema": "com.foxy.long.bridge.batch",
+  "subsystem": "com.foxy.long.bridge",
+  "transport": "framed_msgpack_v1",
+  "version": 1
+}

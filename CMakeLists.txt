@@ -76,6 +76,8 @@ endif()
 set(APP_SOURCES
     main.mm
     app_shared.cpp
+    bridge_batch_codec.cpp
+    bridge_batch_transport.cpp
     mac_observability.mm
     trading_export_panels.mm
     trading_refresh_scheduler.mm
@@ -326,6 +328,8 @@ if(BUILD_TESTING)
     add_executable(tws_gui_tests
         tests/trade_trace_tests.cpp
         app_shared.cpp
+        bridge_batch_codec.cpp
+        bridge_batch_transport.cpp
         trace_exporter.cpp
         trading_ui_format.cpp
         mac_observability.mm
@@ -335,6 +339,9 @@ if(BUILD_TESTING)
         "${CMAKE_SOURCE_DIR}"
         "${IXWEBSOCKET_DIR}"
         "${NLOHMANN_JSON_DIR}/single_include"
+    )
+    target_compile_definitions(tws_gui_tests PRIVATE
+        TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )
 
     target_link_libraries(tws_gui_tests PRIVATE
