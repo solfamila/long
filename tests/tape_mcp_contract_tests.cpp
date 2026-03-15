@@ -676,6 +676,60 @@ void testPhase7AnalyzerAndFindingsFailureMapping() {
         .clientName = "tape-mcp-contract-tests"
     });
 
+    const json analyzerNeitherEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json::object()));
+    expect(!analyzerNeitherEnvelope.value("ok", true),
+           "analyzer_run with neither source manifest should return ok=false");
+    expect(analyzerNeitherEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "analyzer_run with neither source manifest should map to invalid_arguments");
+
+    const json analyzerBothEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"case_manifest_path", "/tmp/case-manifest.json"},
+            {"report_manifest_path", "/tmp/report-manifest.json"}
+        }));
+    expect(!analyzerBothEnvelope.value("ok", true),
+           "analyzer_run with both source manifests should return ok=false");
+    expect(analyzerBothEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "analyzer_run with both source manifests should map to invalid_arguments");
+
+    const json analyzerNonStringEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{{"case_manifest_path", 31}}));
+    expect(!analyzerNonStringEnvelope.value("ok", true),
+           "analyzer_run with non-string manifest path should return ok=false");
+    expect(analyzerNonStringEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "analyzer_run with non-string manifest path should map to invalid_arguments");
+
+    const json findingsNeitherEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_findings_list", json::object()));
+    expect(!findingsNeitherEnvelope.value("ok", true),
+           "findings_list with neither analysis reference should return ok=false");
+    expect(findingsNeitherEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "findings_list with neither analysis reference should map to invalid_arguments");
+
+    const json findingsBothEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_findings_list", json{
+            {"analysis_manifest_path", "/tmp/analysis-manifest.json"},
+            {"analysis_artifact_id", "analysis-123"}
+        }));
+    expect(!findingsBothEnvelope.value("ok", true),
+           "findings_list with both analysis references should return ok=false");
+    expect(findingsBothEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "findings_list with both analysis references should map to invalid_arguments");
+
+    const json findingsNonStringEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_findings_list", json{{"analysis_manifest_path", 31}}));
+    expect(!findingsNonStringEnvelope.value("ok", true),
+           "findings_list with non-string manifest path should return ok=false");
+    expect(findingsNonStringEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "findings_list with non-string manifest path should map to invalid_arguments");
+
     const json missingSourceEnvelope = envelopeFromToolResult(
         adapter.callTool("tapescript_analyzer_run", json{
             {"report_manifest_path", (testDataDir() / "missing-phase6-manifest.json").string()}
