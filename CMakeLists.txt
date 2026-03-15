@@ -122,6 +122,13 @@ set(TAPE_ENGINE_SOURCES
     runtime_qos.cpp
 )
 
+set(TAPESCOPE_SOURCES
+    tapescope_app.mm
+    tapescope_client.cpp
+    tape_engine_client.cpp
+    tape_engine_protocol.cpp
+)
+
 set(BUILD_DEMO OFF CACHE BOOL "" FORCE)
 set(IXWEBSOCKET_INSTALL OFF CACHE BOOL "" FORCE)
 set(USE_TLS OFF CACHE BOOL "" FORCE)
@@ -134,6 +141,7 @@ add_executable(tape_engine_ctl
     tape_engine_client.cpp
     tape_engine_protocol.cpp
 )
+add_executable(TapeScope MACOSX_BUNDLE ${TAPESCOPE_SOURCES})
 
 target_include_directories(tws_gui PRIVATE
     "${CMAKE_SOURCE_DIR}"
@@ -156,9 +164,17 @@ target_include_directories(tape_engine_ctl PRIVATE
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
+target_include_directories(TapeScope PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${RUNTIME_REGISTRY_GENERATED_DIR}"
+    "${IXWEBSOCKET_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
 add_dependencies(tws_gui generate_runtime_registry)
 add_dependencies(tape_engine generate_runtime_registry)
 add_dependencies(tape_engine_ctl generate_runtime_registry)
+add_dependencies(TapeScope generate_runtime_registry)
 
 target_link_libraries(tws_gui PRIVATE
     Threads::Threads
@@ -170,6 +186,10 @@ target_link_libraries(tape_engine PRIVATE
 )
 
 target_link_libraries(tape_engine_ctl PRIVATE
+    Threads::Threads
+)
+
+target_link_libraries(TapeScope PRIVATE
     Threads::Threads
 )
 
@@ -322,6 +342,7 @@ else()
     target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine_ctl PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+    target_include_directories(TapeScope PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_compile_definitions(tws_gui PRIVATE
         TWS_GUI_MOCK_IBAPI=1
         TWS_HAS_PROTOBUF_API=1
@@ -337,6 +358,11 @@ else()
         TWS_HAS_PROTOBUF_API=1
         TWS_HAS_ORDER_CANCEL_OBJECT=1
     )
+    target_compile_definitions(TapeScope PRIVATE
+        TWS_GUI_MOCK_IBAPI=1
+        TWS_HAS_PROTOBUF_API=1
+        TWS_HAS_ORDER_CANCEL_OBJECT=1
+    )
     message(STATUS "Interactive Brokers API not found; building with local mock API shims")
 endif()
 
@@ -348,6 +374,10 @@ target_link_libraries(tws_gui PRIVATE
     ${GAME_CONTROLLER_LIBRARY}
 )
 
+target_link_libraries(TapeScope PRIVATE
+    ${APP_KIT_LIBRARY}
+)
+
 set_target_properties(tws_gui PROPERTIES
     OUTPUT_NAME "tws_gui"
     MACOSX_BUNDLE_BUNDLE_NAME "${APP_BUNDLE_NAME}"
@@ -357,6 +387,15 @@ set_target_properties(tws_gui PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/Info.plist.in"
     BUILD_RPATH "@executable_path/../Frameworks"
     INSTALL_RPATH "@executable_path/../Frameworks"
+)
+
+set_target_properties(TapeScope PROPERTIES
+    OUTPUT_NAME "TapeScope"
+    MACOSX_BUNDLE_BUNDLE_NAME "TapeScope"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.foxy.tapescope"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${APP_BUNDLE_VERSION}"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${APP_BUNDLE_VERSION}"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/Info.plist.in"
 )
 
 find_program(CODESIGN_EXECUTABLE codesign)
@@ -422,6 +461,7 @@ if(BUILD_TESTING)
         tape_engine.cpp
         tape_engine_client.cpp
         tape_engine_protocol.cpp
+        tapescope_client.cpp
         trace_exporter.cpp
         trading_ui_format.cpp
         mac_observability.mm
@@ -467,6 +507,7 @@ endif()
 set_source_files_properties(
     main.mm
     mac_observability.mm
+    tapescope_app.mm
     trading_export_panels.mm
     trading_refresh_scheduler.mm
     trading_settings_sheet.mm

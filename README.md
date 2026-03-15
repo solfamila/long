@@ -37,6 +37,18 @@ Direct executable inside the bundle:
 ./build/tws_gui.app/Contents/MacOS/tws_gui
 ```
 
+Run the native TapeScope app bundle:
+
+```bash
+open build/TapeScope.app
+```
+
+Direct executable inside the TapeScope bundle:
+
+```bash
+./build/TapeScope.app/Contents/MacOS/TapeScope
+```
+
 Run the Phase-1 engine daemon:
 
 ```bash
@@ -71,6 +83,29 @@ Query the engine daemon:
 ./build/tape_engine_ctl list-incidents --limit 20
 ./build/tape_engine_ctl read-incident 1 --revision 4
 ```
+
+TapeScope Phase-4 shell notes:
+
+- `TapeScope` is the native AppKit investigation shell for `tape_engine`.
+- It uses the same `LONG_TAPE_ENGINE_SOCKET` env var as the bridge sender and defaults to `/tmp/tape-engine.sock`.
+- The current Phase-4 slice includes:
+  - `StatusPane`
+  - `LiveEventsPane`
+  - `SessionOverviewPane`
+  - `IncidentPane`
+  - `ReplayTargetPane`
+  - `RangePane`
+  - `OrderLookupPane`
+  - `OrderCasePane`
+  - `ReportInventoryPane`
+  - `ArtifactPane`
+- `ReplayTargetPane` can now push the computed replay target window directly into `RangePane`.
+- `ArtifactPane` now previews `export_artifact` outputs for both Markdown and JSON-bundle formats.
+- `IncidentPane` now supports both manual incident-id drilldown and a structured incident table with selectable rows.
+- `ReportInventoryPane` now uses structured session/case report tables with selectable rows and direct open-to-artifact actions.
+- `RangePane` and `OrderLookupPane` now use structured event tables with selectable rows and decoded-payload detail views, so replay and anchored lifecycle inspection follow the same browsing model as incidents/reports.
+- `OrderCasePane` and `ArtifactPane` now expose selectable evidence-citation tables, can jump directly into cited artifacts, and let order-case reads push their replay window straight into `RangePane`.
+- The app talks directly to the current query seam (`status`, `read_live_tail`, `read_session_overview`, `scan_session_report`, `list_session_reports`, `read_range`, `find_order_anchor`, `seek_order_anchor`, `read_order_case`, `scan_order_case_report`, `list_case_reports`, `list_incidents`, `read_incident`, `read_artifact`, `export_artifact`) instead of wrapping the older generic command client from earlier prototype branches.
 
 Package a distributable zip:
 
@@ -126,6 +161,7 @@ Phase-1 bridge sender notes:
 - `read_artifact` and `export_artifact` now give the engine a stable artifact-facing surface for future MCP/tool clients. The resolver now supports durable report IDs plus selector-style artifacts like `session-overview:<revision>:<from>:<to>`, `order-case:order:<id>`, `finding:<id>`, and `anchor:<id>`.
 - Investigation/report responses now share a versioned envelope with `api`, `artifact`, `entity`, `report`, and `evidence` sections, so session, incident, protected-window, finding, and order-case outputs line up structurally instead of only sharing ad hoc summary fields.
 - `export_artifact` supports Markdown summaries and JSON bundles, which makes durable report artifacts easier to hand to future native UI and MCP clients without rebuilding them from live query code.
+- `TapeScope` Phase 4 work is now more navigable: `LiveEventsPane`, `RangePane`, `OrderLookupPane`, `IncidentPane`, and `ReportInventoryPane` all use structured row selection instead of only text dumps, and `SessionOverviewPane` now exposes top incidents in a table that can jump directly into incident drilldown.
 - Scan operations now promote the persisted durable report artifact to the primary `artifact` envelope and preserve the live source object under `source_artifact`, which keeps later `read_*_report` and `read_artifact` semantics aligned.
 - `read_finding` and `read_order_anchor` now provide direct investigation reads for those artifact IDs instead of forcing clients to back into them through list endpoints or order-case drilldowns.
 - `read_session_quality` now summarizes evidence trust for the whole frozen session or any requested `session_seq` range, and case/incident/protected-window reads now surface a `data_quality` block alongside their narrative output.

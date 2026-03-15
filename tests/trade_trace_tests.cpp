@@ -2,6 +2,7 @@
 #include "bridge_batch_codec.h"
 #include "bridge_batch_transport.h"
 #include "runtime_registry.h"
+#include "tapescope_client.h"
 #include "tape_engine_client.h"
 #include "tape_engine.h"
 #include "tape_engine_protocol.h"
@@ -1202,6 +1203,147 @@ void testTapeEngineQueryStatusAndReads() {
            "session-quality query should count explicit gap markers");
     expect(response.summary.value("data_quality", json::object()).value("weak_instrument_identity_count", 0ULL) >= 1ULL,
            "session-quality query should flag weak identity fallback when only symbol-style identity is available");
+
+    server.stop();
+}
+
+void testTapeScopeClientReadsPhase4EngineSeam() {
+    const fs::path rootDir = testDataDir() / "tapescope-phase4-client";
+    const fs::path socketPath = testDataDir() / "tapescope-phase4-client.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9301:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for TapeScope phase4 seam test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-tapescope-phase4";
+    options.runtimeSessionId = "runtime-tapescope-phase4";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    options.batchSeq = 201;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        makeBridgeRecord(9101, "order_intent", "WebSocket", "INTC", "BUY",
+                         401, 7401, 0, "", "tapescope order intent", "2026-03-15T09:41:00.100"),
+        makeBridgeRecord(9102, "order_status", "BrokerOrderStatus", "INTC", "BUY",
+                         401, 7401, 8801, "", "Submitted: filled=0 remaining=1", "2026-03-15T09:41:00.120")
+    }, options)), &error), "tape-engine should accept the TapeScope seam first batch: " + error);
+
+    options.batchSeq = 202;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        makeBridgeRecord(9104, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                         401, 7401, 8801, "EXEC-401", "phase4 fill", "2026-03-15T09:41:00.250")
+    }, options)), &error), "tape-engine should accept the TapeScope seam second batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.segments.size() >= 2 && snapshot.latestFrozenRevisionId >= 2;
+    }, "tape-engine should freeze TapeScope seam batches");
+
+    tapescope::ClientConfig clientConfig;
+    clientConfig.socketPath = socketPath.string();
+    tapescope::QueryClient client(clientConfig);
+
+    const auto status = client.status();
+    expect(status.ok(), "TapeScope status should succeed: " + tapescope::QueryClient::describeError(status.error));
+    expect(status.value.instrumentId == "ib:conid:9301:STK:SMART:USD:INTC",
+           "TapeScope status should expose the engine instrument id");
+    expect(status.value.latestSessionSeq == 4,
+           "TapeScope status should expose the latest session seq");
+
+    const auto liveTail = client.readLiveTail(2);
+    expect(liveTail.ok(), "TapeScope live tail should succeed: " + tapescope::QueryClient::describeError(liveTail.error));
+    expect(liveTail.value.size() == 2, "TapeScope live tail should honor the requested limit");
+    expect(liveTail.value.back().value("event_kind", std::string()) == "fill_execution",
+           "TapeScope live tail should expose the latest fill");
+
+    tapescope::RangeQuery range;
+    range.firstSessionSeq = 2;
+    range.lastSessionSeq = 4;
+    const auto rangeResult = client.readRange(range);
+    expect(rangeResult.ok(), "TapeScope range read should succeed: " + tapescope::QueryClient::describeError(rangeResult.error));
+    expect(rangeResult.value.size() == 3, "TapeScope range read should return the requested seq window");
+    expect(rangeResult.value.front().value("event_kind", std::string()) == "order_status",
+           "TapeScope range read should include the order status event");
+
+    tapescope::OrderAnchorQuery anchor;
+    anchor.orderId = 7401;
+    const auto anchorResult = client.findOrderAnchor(anchor);
+    expect(anchorResult.ok(), "TapeScope order-anchor lookup should succeed: " + tapescope::QueryClient::describeError(anchorResult.error));
+    expect(anchorResult.value.value("events", json::array()).size() == 3,
+           "TapeScope order-anchor lookup should return the anchored lifecycle events");
+
+    const auto orderCaseResult = client.readOrderCase(anchor);
+    expect(orderCaseResult.ok(), "TapeScope order-case read should succeed: " + tapescope::QueryClient::describeError(orderCaseResult.error));
+    expect(orderCaseResult.value.value("summary", json::object()).contains("report"),
+           "TapeScope order-case read should expose the investigation report envelope");
+
+    const auto seekResult = client.seekOrderAnchor(anchor);
+    expect(seekResult.ok(), "TapeScope seek-order read should succeed: " + tapescope::QueryClient::describeError(seekResult.error));
+    expect(seekResult.value.value("summary", json::object()).value("replay_target_session_seq", 0ULL) == 4,
+           "TapeScope seek-order read should expose the replay target session seq");
+
+    const auto overviewResult = client.readSessionOverview(range);
+    expect(overviewResult.ok(), "TapeScope session-overview read should succeed: " + tapescope::QueryClient::describeError(overviewResult.error));
+    expect(overviewResult.value.value("summary", json::object()).contains("report"),
+           "TapeScope session-overview read should expose the overview report envelope");
+
+    const auto sessionReportResult = client.scanSessionReport(range);
+    expect(sessionReportResult.ok(), "TapeScope session-report scan should succeed: " + tapescope::QueryClient::describeError(sessionReportResult.error));
+    const std::string sessionReportArtifactId =
+        sessionReportResult.value.value("summary", json::object()).value("artifact", json::object()).value("artifact_id", std::string());
+    expect(!sessionReportArtifactId.empty(), "TapeScope session-report scan should expose a durable artifact id");
+
+    const auto sessionReportListResult = client.listSessionReports(10);
+    expect(sessionReportListResult.ok(), "TapeScope session-report list should succeed: " + tapescope::QueryClient::describeError(sessionReportListResult.error));
+    expect(!sessionReportListResult.value.value("events", json::array()).empty(),
+           "TapeScope session-report list should include the newly scanned durable report");
+
+    const auto artifactResult = client.readArtifact(sessionReportArtifactId);
+    expect(artifactResult.ok(), "TapeScope artifact read should succeed: " + tapescope::QueryClient::describeError(artifactResult.error));
+    expect(artifactResult.value.value("summary", json::object()).value("resolved_artifact_id", std::string()) == sessionReportArtifactId,
+           "TapeScope artifact read should reopen the durable session report artifact");
+
+    const auto exportResult = client.exportArtifact(sessionReportArtifactId, "markdown");
+    expect(exportResult.ok(), "TapeScope artifact export should succeed: " + tapescope::QueryClient::describeError(exportResult.error));
+    expect(exportResult.value.value("summary", json::object()).value("artifact_export", json::object()).value("format", std::string()) == "markdown",
+           "TapeScope artifact export should preserve the requested export format");
+
+    const auto orderCaseReportResult = client.scanOrderCaseReport(anchor);
+    expect(orderCaseReportResult.ok(), "TapeScope order-case report scan should succeed: " + tapescope::QueryClient::describeError(orderCaseReportResult.error));
+    const std::string orderCaseReportArtifactId =
+        orderCaseReportResult.value.value("summary", json::object()).value("artifact", json::object()).value("artifact_id", std::string());
+    expect(!orderCaseReportArtifactId.empty(), "TapeScope order-case report scan should expose a durable case-report artifact id");
+
+    const auto caseReportListResult = client.listCaseReports(10);
+    expect(caseReportListResult.ok(), "TapeScope case-report list should succeed: " + tapescope::QueryClient::describeError(caseReportListResult.error));
+    expect(!caseReportListResult.value.value("events", json::array()).empty(),
+           "TapeScope case-report list should include the newly scanned durable case report");
+
+    const auto incidentsResult = client.listIncidents(10);
+    expect(incidentsResult.ok(), "TapeScope incident list should succeed: " + tapescope::QueryClient::describeError(incidentsResult.error));
+    expect(incidentsResult.value.value("events", json::array()).is_array() &&
+               !incidentsResult.value.value("events", json::array()).empty(),
+           "TapeScope seam test should surface at least one logical incident");
+    const std::uint64_t logicalIncidentId =
+        incidentsResult.value.value("events", json::array()).at(0).value("logical_incident_id", 0ULL);
+    expect(logicalIncidentId > 0, "TapeScope seam test should expose a drilldown-capable logical incident id");
+
+    const auto incidentResult = client.readIncident(logicalIncidentId);
+    expect(incidentResult.ok(), "TapeScope incident read should succeed: " + tapescope::QueryClient::describeError(incidentResult.error));
+    expect(incidentResult.value.value("summary", json::object()).value("logical_incident_id", 0ULL) == logicalIncidentId,
+           "TapeScope incident read should preserve the requested logical incident id");
 
     server.stop();
 }
@@ -4773,6 +4915,7 @@ int main() {
         testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments();
         testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq();
         testTapeEngineQueryStatusAndReads();
+        testTapeScopeClientReadsPhase4EngineSeam();
         testTapeEngineRevisionPinnedReadsCanOverlayMutableTail();
         testTapeEnginePhase3FindingsIncidentsAndProtectedWindows();
         testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();
