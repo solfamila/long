@@ -1125,6 +1125,81 @@ void testTapeScopeClientParsesLiveTailObjectPayload() {
            "tapescope live-tail should preserve event order from nested payload");
 }
 
+void testTapeScopeClientParsesRangeRecordsPayload() {
+    tapescope::QueryResult<std::vector<tapescope::json>> range;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-range-records"),
+        json{
+            {"ok", true},
+            {"result", {
+                {"records", json::array({
+                    json{{"session_seq", 51}, {"event_kind", "order_intent"}},
+                    json{{"session_seq", 52}, {"event_kind", "fill_execution"}}
+                })}
+            }}
+        },
+        [&](const tapescope::QueryClient& client) {
+            tapescope::RangeQuery query;
+            query.firstSessionSeq = 51;
+            query.lastSessionSeq = 52;
+            range = client.readRange(query);
+        });
+
+    expect(request.value("command", std::string()) == "read_range",
+           "tapescope range records test should issue read_range");
+    expect(range.ok(), "tapescope range should parse nested records arrays");
+    expect(range.value.size() == 2, "tapescope range records should preserve count");
+    expect(range.value.front().value("session_seq", 0ULL) == 51ULL,
+           "tapescope range records should preserve ordering");
+}
+
+void testTapeScopeClientRejectsMalformedRangePayload() {
+    tapescope::QueryResult<std::vector<tapescope::json>> range;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-range-malformed"),
+        json{
+            {"ok", true},
+            {"result", {
+                {"latest_session_seq", 77}
+            }}
+        },
+        [&](const tapescope::QueryClient& client) {
+            tapescope::RangeQuery query;
+            query.firstSessionSeq = 70;
+            query.lastSessionSeq = 77;
+            range = client.readRange(query);
+        });
+
+    expect(request.value("command", std::string()) == "read_range",
+           "tapescope malformed range test should issue read_range");
+    expect(!range.ok(), "tapescope range should fail when no event array is present");
+    expect(range.error.kind == tapescope::QueryErrorKind::MalformedResponse,
+           "tapescope malformed range payloads should surface malformed-response errors");
+}
+
+void testTapeScopeClientMarksReadRangeAckResponsesAsSeamUnavailable() {
+    tape_engine::IngestAck ack;
+    ack.status = "accepted";
+    ack.acceptedRecords = 1;
+
+    tapescope::QueryResult<std::vector<tapescope::json>> range;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-range-seam"),
+        tape_engine::ackToJson(ack),
+        [&](const tapescope::QueryClient& client) {
+            tapescope::RangeQuery query;
+            query.firstSessionSeq = 5;
+            query.lastSessionSeq = 8;
+            range = client.readRange(query);
+        });
+
+    expect(request.value("command", std::string()) == "read_range",
+           "tapescope seam range test should issue read_range");
+    expect(!range.ok(), "tapescope range should reject ingest-ack payloads");
+    expect(range.error.kind == tapescope::QueryErrorKind::SeamUnavailable,
+           "tapescope range should classify ingest-ack payloads as seam unavailable");
+}
+
 void testBridgeOutboxOverflowWritesExplicitLossMarker() {
     clearTestFiles();
 
@@ -1836,6 +1911,9 @@ int main() {
         testTapeScopeClientMarksAckResponsesAsSeamUnavailable();
         testTapeScopeClientBuildsCommandRequestsForLiveRangeAndLookup();
         testTapeScopeClientParsesLiveTailObjectPayload();
+        testTapeScopeClientParsesRangeRecordsPayload();
+        testTapeScopeClientRejectsMalformedRangePayload();
+        testTapeScopeClientMarksReadRangeAckResponsesAsSeamUnavailable();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();

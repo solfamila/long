@@ -4,9 +4,14 @@
 
 #include <dispatch/dispatch.h>
 
+#include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -18,10 +23,21 @@ using tapescope::json;
 
 constexpr NSTimeInterval kPollIntervalSeconds = 2.0;
 constexpr std::size_t kLiveTailLimit = 32;
+constexpr std::uint64_t kDefaultRangeFirstSessionSeq = 1;
+constexpr std::uint64_t kDefaultRangeLastSessionSeq = 128;
+constexpr std::size_t kRangeSummaryMaxChars = 140;
 
 struct ProbeSnapshot {
     tapescope::QueryResult<tapescope::StatusSnapshot> status;
     tapescope::QueryResult<std::vector<json>> liveTail;
+};
+
+struct RangeRow {
+    std::string sessionSeq;
+    std::string sourceSeq;
+    std::string eventKind;
+    std::string wallTime;
+    std::string summary;
 };
 
 NSString* ToNSString(const std::string& value) {
@@ -29,6 +45,14 @@ NSString* ToNSString(const std::string& value) {
         return @"";
     }
     return [NSString stringWithUTF8String:value.c_str()];
+}
+
+std::string ToStdString(NSString* value) {
+    if (value == nil) {
+        return {};
+    }
+    const char* utf8 = [value UTF8String];
+    return utf8 == nullptr ? std::string() : std::string(utf8);
 }
 
 NSTextField* MakeLabel(NSString* text, NSFont* font, NSColor* color) {
@@ -133,6 +157,155 @@ std::uint64_t FirstPresentUInt64(const json& payload,
     return 0;
 }
 
+std::string TrimAscii(std::string text) {
+    const auto begin = std::find_if_not(text.begin(), text.end(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    });
+    const auto end = std::find_if_not(text.rbegin(), text.rend(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    }).base();
+
+    if (begin >= end) {
+        return {};
+    }
+    return std::string(begin, end);
+}
+
+bool ParsePositiveUInt64(const std::string& raw, std::uint64_t* parsed) {
+    if (parsed == nullptr) {
+        return false;
+    }
+
+    std::string text = TrimAscii(raw);
+    if (text.empty()) {
+        return false;
+    }
+
+    if (text.front() == '+') {
+        text.erase(text.begin());
+    }
+    if (text.empty()) {
+        return false;
+    }
+
+    const bool allDigits = std::all_of(text.begin(), text.end(), [](unsigned char ch) {
+        return std::isdigit(ch) != 0;
+    });
+    if (!allDigits) {
+        return false;
+    }
+
+    errno = 0;
+    char* consumed = nullptr;
+    const unsigned long long value = std::strtoull(text.c_str(), &consumed, 10);
+    if (errno == ERANGE || consumed == nullptr || *consumed != '\0') {
+        return false;
+    }
+
+    if (value == 0 || value > std::numeric_limits<std::uint64_t>::max()) {
+        return false;
+    }
+
+    *parsed = static_cast<std::uint64_t>(value);
+    return true;
+}
+
+std::string TruncateString(const std::string& value, std::size_t maxChars) {
+    if (value.size() <= maxChars) {
+        return value;
+    }
+    if (maxChars <= 3) {
+        return value.substr(0, maxChars);
+    }
+    return value.substr(0, maxChars - 3) + "...";
+}
+
+std::string UInt64OrDash(std::uint64_t value) {
+    return value == 0 ? std::string("--") : std::to_string(value);
+}
+
+std::string DescribeRangeSummary(const json& event) {
+    if (!event.is_object()) {
+        return TruncateString(event.dump(), kRangeSummaryMaxChars);
+    }
+
+    const std::string detail = FirstPresentString(event, {"details", "note", "message", "reason"});
+    if (!detail.empty()) {
+        return TruncateString(detail, kRangeSummaryMaxChars);
+    }
+
+    std::ostringstream out;
+
+    const std::uint64_t traceId = FirstPresentUInt64(event, {"trace_id", "traceId"});
+    if (traceId > 0) {
+        out << "trace_id=" << traceId << ' ';
+    }
+
+    const std::uint64_t orderId = FirstPresentUInt64(event, {"order_id", "orderId"});
+    if (orderId > 0) {
+        out << "order_id=" << orderId << ' ';
+    }
+
+    const std::uint64_t permId = FirstPresentUInt64(event, {"perm_id", "permId"});
+    if (permId > 0) {
+        out << "perm_id=" << permId << ' ';
+    }
+
+    const std::string execId = FirstPresentString(event, {"exec_id", "execId"});
+    if (!execId.empty()) {
+        out << "exec_id=" << execId << ' ';
+    }
+
+    const std::string symbol = FirstPresentString(event, {"symbol", "instrument", "instrument_id"});
+    if (!symbol.empty()) {
+        out << "symbol=" << symbol << ' ';
+    }
+
+    const std::string side = FirstPresentString(event, {"side"});
+    if (!side.empty()) {
+        out << "side=" << side << ' ';
+    }
+
+    const std::string summary = TrimAscii(out.str());
+    if (!summary.empty()) {
+        return TruncateString(summary, kRangeSummaryMaxChars);
+    }
+
+    return TruncateString(event.dump(), kRangeSummaryMaxChars);
+}
+
+RangeRow BuildRangeRow(const json& event) {
+    RangeRow row;
+    row.sessionSeq = UInt64OrDash(FirstPresentUInt64(event, {"session_seq", "sessionSeq"}));
+    row.sourceSeq = UInt64OrDash(FirstPresentUInt64(event, {"source_seq", "sourceSeq"}));
+    row.eventKind = FirstPresentString(event, {"event_kind", "eventType", "kind", "type"});
+    row.wallTime = FirstPresentString(event, {"wall_time", "wallTime", "timestamp"});
+    row.summary = DescribeRangeSummary(event);
+
+    if (row.eventKind.empty()) {
+        row.eventKind = event.is_object() ? "--" : "raw";
+    }
+    if (row.wallTime.empty()) {
+        row.wallTime = "--";
+    }
+    return row;
+}
+
+NSColor* RangeErrorColor(tapescope::QueryErrorKind kind) {
+    switch (kind) {
+        case tapescope::QueryErrorKind::None:
+            return [NSColor secondaryLabelColor];
+        case tapescope::QueryErrorKind::Transport:
+            return [NSColor systemRedColor];
+        case tapescope::QueryErrorKind::SeamUnavailable:
+            return [NSColor systemOrangeColor];
+        case tapescope::QueryErrorKind::MalformedResponse:
+        case tapescope::QueryErrorKind::Remote:
+            return [NSColor systemYellowColor];
+    }
+    return [NSColor secondaryLabelColor];
+}
+
 std::string DescribeStatusPane(const ProbeSnapshot& probe, const std::string& configuredSocketPath) {
     std::ostringstream out;
     out << "StatusPane (mutable/live)\n";
@@ -217,13 +390,6 @@ std::string DescribeLiveEventsPane(const tapescope::QueryResult<std::vector<json
     return out.str();
 }
 
-std::string RangePlaceholderText() {
-    return
-        "RangePane is reserved for Wave 3.\n\n"
-        "This pane is intentionally left as a placeholder in Wave 2 while "
-        "StatusPane and LiveEventsPane are being implemented.";
-}
-
 std::string OrderPlaceholderText() {
     return
         "OrderLookupPane is reserved for Wave 4.\n\n"
@@ -296,7 +462,7 @@ NSString* UInt64String(std::uint64_t value) {
 
 } // namespace
 
-@interface TapeScopeWindowController : NSWindowController <NSWindowDelegate> {
+@interface TapeScopeWindowController : NSWindowController <NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate> {
 @private
     std::unique_ptr<tapescope::QueryClient> _client;
     dispatch_queue_t _pollQueue;
@@ -315,8 +481,23 @@ NSString* UInt64String(std::uint64_t value) {
 
     NSTextView* _statusTextView;
     NSTextView* _liveTextView;
-    NSTextView* _rangeTextView;
     NSTextView* _orderTextView;
+
+    NSTextField* _rangeFirstField;
+    NSTextField* _rangeLastField;
+    NSButton* _rangeFetchButton;
+    NSButton* _rangePrevButton;
+    NSButton* _rangeNextButton;
+    NSTextField* _rangeStateLabel;
+    NSTextField* _rangeSummaryLabel;
+    NSTableView* _rangeTableView;
+    NSTextView* _rangeDetailTextView;
+
+    std::vector<json> _rangeEvents;
+    std::vector<RangeRow> _rangeRows;
+    tapescope::RangeQuery _activeRangeQuery;
+    BOOL _hasActiveRangeQuery;
+    BOOL _rangeRequestInFlight;
 }
 @end
 
@@ -365,6 +546,329 @@ NSString* UInt64String(std::uint64_t value) {
     return item;
 }
 
+- (NSTextField*)rangeInputFieldWithDefaultValue:(std::uint64_t)value {
+    NSTextField* field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 130, 24)];
+    field.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
+    field.stringValue = UInt64String(value);
+    field.alignment = NSTextAlignmentRight;
+    field.target = self;
+    field.action = @selector(fetchRange:);
+    return field;
+}
+
+- (NSTabViewItem*)rangeTabItem {
+    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
+
+    NSStackView* stack = MakeColumnStack(10.0);
+    [pane addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
+        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
+        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
+        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
+    ]];
+
+    NSTextField* intro = MakeLabel(
+        @"Replay window (frozen snapshot): choose first/last session_seq and fetch read_range results.",
+        [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
+        [NSColor secondaryLabelColor]);
+    intro.lineBreakMode = NSLineBreakByWordWrapping;
+    intro.maximumNumberOfLines = 2;
+    [stack addArrangedSubview:intro];
+
+    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    controls.alignment = NSLayoutAttributeCenterY;
+    controls.spacing = 8.0;
+    controls.translatesAutoresizingMaskIntoConstraints = NO;
+
+    [controls addArrangedSubview:MakeLabel(@"first_session_seq",
+                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                           [NSColor secondaryLabelColor])];
+    _rangeFirstField = [self rangeInputFieldWithDefaultValue:kDefaultRangeFirstSessionSeq];
+    [controls addArrangedSubview:_rangeFirstField];
+
+    [controls addArrangedSubview:MakeLabel(@"last_session_seq",
+                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                           [NSColor secondaryLabelColor])];
+    _rangeLastField = [self rangeInputFieldWithDefaultValue:kDefaultRangeLastSessionSeq];
+    [controls addArrangedSubview:_rangeLastField];
+
+    _rangeFetchButton = [NSButton buttonWithTitle:@"Fetch Range" target:self action:@selector(fetchRange:)];
+    _rangePrevButton = [NSButton buttonWithTitle:@"Prev Window" target:self action:@selector(fetchPreviousRange:)];
+    _rangeNextButton = [NSButton buttonWithTitle:@"Next Window" target:self action:@selector(fetchNextRange:)];
+    [controls addArrangedSubview:_rangeFetchButton];
+    [controls addArrangedSubview:_rangePrevButton];
+    [controls addArrangedSubview:_rangeNextButton];
+    [stack addArrangedSubview:controls];
+
+    _rangeStateLabel = MakeLabel(@"Enter a replay window and click Fetch Range.",
+                                 [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                 [NSColor secondaryLabelColor]);
+    _rangeStateLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    _rangeStateLabel.maximumNumberOfLines = 2;
+    [stack addArrangedSubview:_rangeStateLabel];
+
+    _rangeSummaryLabel = MakeLabel(@"No replay window loaded yet.",
+                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightRegular],
+                                   [NSColor tertiaryLabelColor]);
+    [stack addArrangedSubview:_rangeSummaryLabel];
+
+    _rangeTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
+    _rangeTableView.usesAlternatingRowBackgroundColors = YES;
+    _rangeTableView.allowsMultipleSelection = NO;
+    _rangeTableView.allowsEmptySelection = YES;
+    _rangeTableView.delegate = self;
+    _rangeTableView.dataSource = self;
+
+    auto addColumn = ^(NSString* identifier, NSString* title, CGFloat width) {
+        NSTableColumn* column = [[NSTableColumn alloc] initWithIdentifier:identifier];
+        column.title = title;
+        column.width = width;
+        column.minWidth = 90.0;
+        [_rangeTableView addTableColumn:column];
+    };
+    addColumn(@"session_seq", @"session_seq", 120.0);
+    addColumn(@"source_seq", @"source_seq", 120.0);
+    addColumn(@"event_kind", @"event_kind", 190.0);
+    addColumn(@"wall_time", @"wall_time", 210.0);
+    addColumn(@"summary", @"summary", 520.0);
+
+    NSScrollView* tableScroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 900, 280)];
+    tableScroll.hasVerticalScroller = YES;
+    tableScroll.hasHorizontalScroller = YES;
+    tableScroll.borderType = NSBezelBorder;
+    tableScroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    tableScroll.documentView = _rangeTableView;
+    [tableScroll.heightAnchor constraintGreaterThanOrEqualToConstant:250.0].active = YES;
+    [stack addArrangedSubview:tableScroll];
+
+    NSTextField* detailLabel = MakeLabel(@"Decoded Event",
+                                         [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                         [NSColor secondaryLabelColor]);
+    [stack addArrangedSubview:detailLabel];
+
+    _rangeDetailTextView = MakeReadOnlyTextView();
+    _rangeDetailTextView.string = @"Select a row to inspect the decoded event payload.";
+    NSScrollView* detailScroll = MakeScrollView(_rangeDetailTextView);
+    detailScroll.hasHorizontalScroller = YES;
+    [detailScroll.heightAnchor constraintGreaterThanOrEqualToConstant:150.0].active = YES;
+    [stack addArrangedSubview:detailScroll];
+
+    _activeRangeQuery.firstSessionSeq = kDefaultRangeFirstSessionSeq;
+    _activeRangeQuery.lastSessionSeq = kDefaultRangeLastSessionSeq;
+    _hasActiveRangeQuery = NO;
+    _rangeRequestInFlight = NO;
+    [self updateRangeControls];
+
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"RangePane"];
+    item.label = @"RangePane";
+    item.view = pane;
+    return item;
+}
+
+- (void)updateRangeControls {
+    const BOOL controlsEnabled = !_rangeRequestInFlight;
+    _rangeFirstField.enabled = controlsEnabled;
+    _rangeLastField.enabled = controlsEnabled;
+    _rangeFetchButton.enabled = controlsEnabled;
+    _rangePrevButton.enabled = controlsEnabled && _hasActiveRangeQuery && _activeRangeQuery.firstSessionSeq > 1;
+    _rangeNextButton.enabled = controlsEnabled && _hasActiveRangeQuery;
+}
+
+- (BOOL)parseRangeInputs:(tapescope::RangeQuery*)outQuery error:(std::string*)outError {
+    if (outQuery == nullptr || outError == nullptr) {
+        return NO;
+    }
+
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    if (!ParsePositiveUInt64(ToStdString(_rangeFirstField.stringValue), &firstSessionSeq)) {
+        *outError = "first_session_seq must be a positive integer.";
+        return NO;
+    }
+
+    if (!ParsePositiveUInt64(ToStdString(_rangeLastField.stringValue), &lastSessionSeq)) {
+        *outError = "last_session_seq must be a positive integer.";
+        return NO;
+    }
+
+    if (firstSessionSeq > lastSessionSeq) {
+        *outError = "first_session_seq must be less than or equal to last_session_seq.";
+        return NO;
+    }
+
+    outQuery->firstSessionSeq = firstSessionSeq;
+    outQuery->lastSessionSeq = lastSessionSeq;
+    return YES;
+}
+
+- (void)updateRangeDetailForSelection {
+    const NSInteger selected = _rangeTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _rangeEvents.size()) {
+        if (_rangeEvents.empty()) {
+            _rangeDetailTextView.string = @"No decoded events to inspect for the current window.";
+        } else {
+            _rangeDetailTextView.string = @"Select a row to inspect the decoded event payload.";
+        }
+        return;
+    }
+
+    const json& event = _rangeEvents.at(static_cast<std::size_t>(selected));
+    std::ostringstream out;
+    out << "event_index: " << (selected + 1) << '\n';
+    out << "event_count: " << _rangeEvents.size() << "\n\n";
+    out << event.dump(2);
+    _rangeDetailTextView.string = ToNSString(out.str());
+}
+
+- (void)queueRangeRequest:(const tapescope::RangeQuery&)query {
+    if (_rangeRequestInFlight || !_client) {
+        return;
+    }
+
+    _rangeRequestInFlight = YES;
+    _activeRangeQuery = query;
+    _hasActiveRangeQuery = YES;
+    _rangeFirstField.stringValue = UInt64String(query.firstSessionSeq);
+    _rangeLastField.stringValue = UInt64String(query.lastSessionSeq);
+    _rangeStateLabel.stringValue = @"Requesting replay window…";
+    _rangeStateLabel.textColor = [NSColor systemOrangeColor];
+    _rangeSummaryLabel.stringValue = [NSString stringWithFormat:@"Fetching read_range [%llu, %llu]…",
+                                                                static_cast<unsigned long long>(query.firstSessionSeq),
+                                                                static_cast<unsigned long long>(query.lastSessionSeq)];
+    [self updateRangeControls];
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_pollQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+
+        const tapescope::QueryResult<std::vector<json>> rangeResult = strongSelf->_client->readRange(query);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil) {
+                return;
+            }
+            [innerSelf applyRangeResult:rangeResult forQuery:query];
+        });
+    });
+}
+
+- (void)applyRangeResult:(const tapescope::QueryResult<std::vector<json>>&)result
+                forQuery:(const tapescope::RangeQuery&)query {
+    _rangeRequestInFlight = NO;
+    _activeRangeQuery = query;
+    _hasActiveRangeQuery = YES;
+
+    _rangeEvents.clear();
+    _rangeRows.clear();
+
+    if (!result.ok()) {
+        _rangeStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+        _rangeStateLabel.textColor = RangeErrorColor(result.error.kind);
+        _rangeSummaryLabel.stringValue = [NSString stringWithFormat:@"read_range [%llu, %llu] failed.",
+                                                                    static_cast<unsigned long long>(query.firstSessionSeq),
+                                                                    static_cast<unsigned long long>(query.lastSessionSeq)];
+        _rangeDetailTextView.string = @"Range window unavailable. Fix input or engine state, then retry.";
+        [_rangeTableView reloadData];
+        [self updateRangeControls];
+        return;
+    }
+
+    _rangeEvents = result.value;
+    _rangeRows.reserve(_rangeEvents.size());
+    for (const json& event : _rangeEvents) {
+        _rangeRows.push_back(BuildRangeRow(event));
+    }
+    [_rangeTableView reloadData];
+
+    if (_rangeRows.empty()) {
+        _rangeStateLabel.stringValue = @"read_range returned no events for this window.";
+        _rangeStateLabel.textColor = [NSColor secondaryLabelColor];
+        _rangeSummaryLabel.stringValue = [NSString stringWithFormat:@"Window [%llu, %llu] is empty.",
+                                                                    static_cast<unsigned long long>(query.firstSessionSeq),
+                                                                    static_cast<unsigned long long>(query.lastSessionSeq)];
+        _rangeDetailTextView.string = @"No decoded events were returned for the requested window.";
+        [self updateRangeControls];
+        return;
+    }
+
+    _rangeStateLabel.stringValue = @"Replay window loaded.";
+    _rangeStateLabel.textColor = [NSColor systemGreenColor];
+    _rangeSummaryLabel.stringValue = [NSString stringWithFormat:@"Window [%llu, %llu] returned %llu events.",
+                                                                static_cast<unsigned long long>(query.firstSessionSeq),
+                                                                static_cast<unsigned long long>(query.lastSessionSeq),
+                                                                static_cast<unsigned long long>(_rangeRows.size())];
+    [_rangeTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    [_rangeTableView scrollRowToVisible:0];
+    [self updateRangeDetailForSelection];
+    [self updateRangeControls];
+}
+
+- (void)showRangeValidationError:(const std::string&)errorMessage {
+    _rangeStateLabel.stringValue = ToNSString(errorMessage);
+    _rangeStateLabel.textColor = [NSColor systemRedColor];
+    _rangeSummaryLabel.stringValue = @"Fix range inputs, then request again.";
+}
+
+- (void)fetchRange:(id)sender {
+    (void)sender;
+    tapescope::RangeQuery query;
+    std::string validationError;
+    if (![self parseRangeInputs:&query error:&validationError]) {
+        [self showRangeValidationError:validationError];
+        return;
+    }
+    [self queueRangeRequest:query];
+}
+
+- (void)fetchPreviousRange:(id)sender {
+    (void)sender;
+    tapescope::RangeQuery query;
+    std::string validationError;
+    if (![self parseRangeInputs:&query error:&validationError]) {
+        [self showRangeValidationError:validationError];
+        return;
+    }
+
+    if (query.firstSessionSeq == 1) {
+        [self showRangeValidationError:"Already at the earliest replay window."];
+        return;
+    }
+
+    const std::uint64_t span = query.lastSessionSeq - query.firstSessionSeq + 1;
+    if (query.firstSessionSeq <= span) {
+        query.firstSessionSeq = 1;
+        query.lastSessionSeq = span;
+    } else {
+        query.firstSessionSeq -= span;
+        query.lastSessionSeq -= span;
+    }
+    [self queueRangeRequest:query];
+}
+
+- (void)fetchNextRange:(id)sender {
+    (void)sender;
+    tapescope::RangeQuery query;
+    std::string validationError;
+    if (![self parseRangeInputs:&query error:&validationError]) {
+        [self showRangeValidationError:validationError];
+        return;
+    }
+
+    const std::uint64_t span = query.lastSessionSeq - query.firstSessionSeq + 1;
+    if (query.lastSessionSeq > std::numeric_limits<std::uint64_t>::max() - span) {
+        [self showRangeValidationError:"Cannot advance window past uint64 session_seq bounds."];
+        return;
+    }
+    query.firstSessionSeq += span;
+    query.lastSessionSeq += span;
+    [self queueRangeRequest:query];
+}
+
 - (void)buildInterface {
     NSView* contentView = self.window.contentView;
     NSStackView* root = MakeColumnStack(16.0);
@@ -383,7 +887,7 @@ NSString* UInt64String(std::uint64_t value) {
     [root addArrangedSubview:title];
 
     NSTextField* subtitle = MakeLabel(
-        @"Wave 2: status and mutable live-tail panes backed only by QueryClient status/read_live_tail.",
+        @"Wave 3: status, mutable live-tail, and replay range panes backed only by QueryClient seam commands.",
         [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium],
         [NSColor secondaryLabelColor]);
     subtitle.lineBreakMode = NSLineBreakByWordWrapping;
@@ -419,14 +923,13 @@ NSString* UInt64String(std::uint64_t value) {
     tabView.translatesAutoresizingMaskIntoConstraints = NO;
     [tabView addTabViewItem:[self tabItemWithLabel:@"StatusPane" textView:&_statusTextView]];
     [tabView addTabViewItem:[self tabItemWithLabel:@"LiveEventsPane" textView:&_liveTextView]];
-    [tabView addTabViewItem:[self tabItemWithLabel:@"RangePane" textView:&_rangeTextView]];
+    [tabView addTabViewItem:[self rangeTabItem]];
     [tabView addTabViewItem:[self tabItemWithLabel:@"OrderLookupPane" textView:&_orderTextView]];
     [tabView.heightAnchor constraintGreaterThanOrEqualToConstant:430.0].active = YES;
     [root addArrangedSubview:tabView];
 
     _statusTextView.string = @"Waiting for first status response…";
     _liveTextView.string = @"Waiting for first live-tail response…";
-    _rangeTextView.string = ToNSString(RangePlaceholderText());
     _orderTextView.string = ToNSString(OrderPlaceholderText());
 }
 
@@ -510,6 +1013,68 @@ NSString* UInt64String(std::uint64_t value) {
 
     _liveTextView.string = ToNSString(DescribeLiveEventsPane(probe.liveTail));
     _pollMetaLabel.stringValue = PollMetaTextForProbe(probe);
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView*)tableView {
+    if (tableView == _rangeTableView) {
+        return static_cast<NSInteger>(_rangeRows.size());
+    }
+    return 0;
+}
+
+- (NSView*)tableView:(NSTableView*)tableView
+   viewForTableColumn:(NSTableColumn*)tableColumn
+                  row:(NSInteger)row {
+    if (tableView != _rangeTableView || tableColumn == nil) {
+        return nil;
+    }
+    if (row < 0 || static_cast<std::size_t>(row) >= _rangeRows.size()) {
+        return nil;
+    }
+
+    NSString* columnId = tableColumn.identifier ?: @"";
+    NSTableCellView* cell = [tableView makeViewWithIdentifier:columnId owner:self];
+    if (cell == nil) {
+        cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+        cell.identifier = columnId;
+
+        NSTextField* label = [NSTextField labelWithString:@""];
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        label.lineBreakMode = NSLineBreakByTruncatingTail;
+        [cell addSubview:label];
+        [NSLayoutConstraint activateConstraints:@[
+            [label.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:4.0],
+            [label.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-4.0],
+            [label.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor]
+        ]];
+        cell.textField = label;
+    }
+
+    const RangeRow& rangeRow = _rangeRows.at(static_cast<std::size_t>(row));
+    std::string value;
+    if ([columnId isEqualToString:@"session_seq"]) {
+        value = rangeRow.sessionSeq;
+    } else if ([columnId isEqualToString:@"source_seq"]) {
+        value = rangeRow.sourceSeq;
+    } else if ([columnId isEqualToString:@"event_kind"]) {
+        value = rangeRow.eventKind;
+    } else if ([columnId isEqualToString:@"wall_time"]) {
+        value = rangeRow.wallTime;
+    } else {
+        value = rangeRow.summary;
+    }
+
+    cell.textField.font = [columnId isEqualToString:@"summary"]
+                              ? [NSFont systemFontOfSize:12.0 weight:NSFontWeightRegular]
+                              : [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular];
+    cell.textField.stringValue = ToNSString(value);
+    return cell;
+}
+
+- (void)tableViewSelectionDidChange:(NSNotification*)notification {
+    if (notification.object == _rangeTableView) {
+        [self updateRangeDetailForSelection];
+    }
 }
 
 - (void)windowWillClose:(NSNotification*)notification {
