@@ -4,7 +4,10 @@
 
 #include <dispatch/dispatch.h>
 
+#include <cstdint>
+#include <initializer_list>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,11 +16,12 @@ namespace {
 
 using tapescope::json;
 
+constexpr NSTimeInterval kPollIntervalSeconds = 2.0;
+constexpr std::size_t kLiveTailLimit = 32;
+
 struct ProbeSnapshot {
     tapescope::QueryResult<tapescope::StatusSnapshot> status;
     tapescope::QueryResult<std::vector<json>> liveTail;
-    tapescope::QueryResult<std::vector<json>> range;
-    std::string orderPlaceholder;
 };
 
 NSString* ToNSString(const std::string& value) {
@@ -92,54 +96,166 @@ NSColor* BannerColorForProbe(const ProbeSnapshot& probe) {
     return [NSColor secondaryLabelColor];
 }
 
-std::string PrettyPrintJson(const json& payload) {
-    return payload.dump(2);
-}
-
-json StatusToJson(const tapescope::StatusSnapshot& status) {
-    return json{
-        {"socket_path", status.socketPath},
-        {"data_dir", status.dataDir},
-        {"instrument", status.instrumentId},
-        {"latest_session_seq", status.latestSessionSeq},
-        {"live_event_count", status.liveEventCount},
-        {"segment_count", status.segmentCount},
-        {"manifest_hash", status.manifestHash}
-    };
-}
-
-json EventsToJson(const std::vector<json>& events) {
-    json payload = json::array();
-    for (const auto& event : events) {
-        payload.push_back(event);
+std::string FirstPresentString(const json& payload,
+                               std::initializer_list<const char*> keys) {
+    if (!payload.is_object()) {
+        return {};
     }
-    return payload;
+    for (const char* key : keys) {
+        const auto it = payload.find(key);
+        if (it != payload.end() && it->is_string()) {
+            return it->get<std::string>();
+        }
+    }
+    return {};
 }
 
-std::string DescribeResult(const tapescope::QueryResult<std::vector<json>>& result,
-                           const std::string& emptyMessage) {
-    if (!result.ok()) {
-        return tapescope::QueryClient::describeError(result.error);
+std::uint64_t FirstPresentUInt64(const json& payload,
+                                 std::initializer_list<const char*> keys) {
+    if (!payload.is_object()) {
+        return 0;
     }
-    if (result.value.empty()) {
-        return emptyMessage;
+    for (const char* key : keys) {
+        const auto it = payload.find(key);
+        if (it == payload.end()) {
+            continue;
+        }
+        if (it->is_number_unsigned()) {
+            return it->get<std::uint64_t>();
+        }
+        if (it->is_number_integer()) {
+            const long long value = it->get<long long>();
+            if (value >= 0) {
+                return static_cast<std::uint64_t>(value);
+            }
+        }
     }
-    return PrettyPrintJson(EventsToJson(result.value));
+    return 0;
 }
 
-std::string OrderPlaceholderText(const ProbeSnapshot& probe) {
-    std::string text =
-        "Wave 1 scaffold only.\n\n"
-        "The app-side client already exposes the `find_order_anchor` command, "
-        "but this build intentionally stops short of the lookup form and result rendering. "
-        "That keeps the first wave limited to the bundle scaffold, query transport boundary, "
-        "polling health, and safe placeholder states.\n";
+std::string DescribeStatusPane(const ProbeSnapshot& probe, const std::string& configuredSocketPath) {
+    std::ostringstream out;
+    out << "StatusPane (mutable/live)\n";
+    out << "Source command: status\n\n";
 
     if (!probe.status.ok()) {
-        text += "\nCurrent engine state: ";
-        text += tapescope::QueryClient::describeError(probe.status.error);
+        out << tapescope::QueryClient::describeError(probe.status.error) << '\n';
+        out << "\nThis pane remains readable while the engine is unavailable or "
+               "the query seam has not landed yet.";
+        return out.str();
     }
-    return text;
+
+    const tapescope::StatusSnapshot& status = probe.status.value;
+    out << "socket_path: "
+        << (status.socketPath.empty() ? configuredSocketPath : status.socketPath) << '\n';
+    out << "data_dir: " << (status.dataDir.empty() ? "--" : status.dataDir) << '\n';
+    out << "instrument: " << (status.instrumentId.empty() ? "--" : status.instrumentId) << '\n';
+    out << "latest_session_seq: " << status.latestSessionSeq << '\n';
+    out << "live_event_count: " << status.liveEventCount << '\n';
+    out << "segment_count: " << status.segmentCount << '\n';
+    out << "manifest_hash: " << (status.manifestHash.empty() ? "--" : status.manifestHash) << '\n';
+    return out.str();
+}
+
+std::string DescribeLiveEvent(const json& event, std::size_t index) {
+    std::ostringstream out;
+    out << '[' << (index + 1) << "] ";
+    if (!event.is_object()) {
+        out << event.dump();
+        return out.str();
+    }
+
+    const std::uint64_t sessionSeq = FirstPresentUInt64(event, {"session_seq", "sessionSeq"});
+    if (sessionSeq > 0) {
+        out << "session_seq=" << sessionSeq << ' ';
+    }
+
+    const std::uint64_t sourceSeq = FirstPresentUInt64(event, {"source_seq", "sourceSeq"});
+    if (sourceSeq > 0) {
+        out << "source_seq=" << sourceSeq << ' ';
+    }
+
+    const std::string eventKind = FirstPresentString(event, {"event_kind", "eventType", "kind", "type"});
+    if (!eventKind.empty()) {
+        out << "kind=" << eventKind << ' ';
+    }
+
+    const std::string wallTime = FirstPresentString(event, {"wall_time", "wallTime", "timestamp"});
+    if (!wallTime.empty()) {
+        out << "time=" << wallTime << ' ';
+    }
+
+    out << '\n' << event.dump(2);
+    return out.str();
+}
+
+std::string DescribeLiveEventsPane(const tapescope::QueryResult<std::vector<json>>& liveTail) {
+    std::ostringstream out;
+    out << "LiveEventsPane (mutable/live)\n";
+    out << "Source command: read_live_tail\n";
+    out << "Requested limit: " << kLiveTailLimit << " events\n\n";
+
+    if (!liveTail.ok()) {
+        out << tapescope::QueryClient::describeError(liveTail.error) << '\n';
+        out << "\nThis list updates automatically when the seam becomes available.";
+        return out.str();
+    }
+
+    if (liveTail.value.empty()) {
+        out << "No live events returned yet.\n";
+        out << "This can happen at startup before the first accepted bridge batch.";
+        return out.str();
+    }
+
+    out << "Most recent events from the mutable tail:\n\n";
+    for (std::size_t i = 0; i < liveTail.value.size(); ++i) {
+        out << DescribeLiveEvent(liveTail.value[i], i);
+        if (i + 1 != liveTail.value.size()) {
+            out << "\n\n";
+        }
+    }
+    return out.str();
+}
+
+std::string RangePlaceholderText() {
+    return
+        "RangePane is reserved for Wave 3.\n\n"
+        "This pane is intentionally left as a placeholder in Wave 2 while "
+        "StatusPane and LiveEventsPane are being implemented.";
+}
+
+std::string OrderPlaceholderText() {
+    return
+        "OrderLookupPane is reserved for Wave 4.\n\n"
+        "This pane is intentionally left as a placeholder in Wave 2.";
+}
+
+NSString* PollMetaTextForProbe(const ProbeSnapshot& probe) {
+    NSString* tailState = @"live tail unavailable";
+    if (probe.liveTail.ok()) {
+        tailState = [NSString stringWithFormat:@"live tail: %llu events",
+                                               static_cast<unsigned long long>(probe.liveTail.value.size())];
+    } else {
+        switch (probe.liveTail.error.kind) {
+            case tapescope::QueryErrorKind::SeamUnavailable:
+                tailState = @"live tail: seam unavailable";
+                break;
+            case tapescope::QueryErrorKind::Transport:
+                tailState = @"live tail: socket unavailable";
+                break;
+            case tapescope::QueryErrorKind::MalformedResponse:
+                tailState = @"live tail: malformed response";
+                break;
+            case tapescope::QueryErrorKind::Remote:
+                tailState = @"live tail: remote error";
+                break;
+            case tapescope::QueryErrorKind::None:
+                break;
+        }
+    }
+    return [NSString stringWithFormat:@"Mutable/live refresh every %.1fs (%@)",
+                                      kPollIntervalSeconds,
+                                      tailState];
 }
 
 ProbeSnapshot CaptureProbe(const tapescope::QueryClient& client) {
@@ -148,18 +264,10 @@ ProbeSnapshot CaptureProbe(const tapescope::QueryClient& client) {
 
     if (!probe.status.ok()) {
         probe.liveTail.error = probe.status.error;
-        probe.range.error = probe.status.error;
-        probe.orderPlaceholder = OrderPlaceholderText(probe);
         return probe;
     }
 
-    probe.liveTail = client.readLiveTail(32);
-
-    tapescope::RangeQuery rangeQuery;
-    rangeQuery.firstSessionSeq = 1;
-    rangeQuery.lastSessionSeq = 64;
-    probe.range = client.readRange(rangeQuery);
-    probe.orderPlaceholder = OrderPlaceholderText(probe);
+    probe.liveTail = client.readLiveTail(kLiveTailLimit);
     return probe;
 }
 
@@ -196,6 +304,7 @@ NSString* UInt64String(std::uint64_t value) {
     BOOL _pollInFlight;
 
     NSTextField* _bannerLabel;
+    NSTextField* _pollMetaLabel;
     NSTextField* _socketValue;
     NSTextField* _dataDirValue;
     NSTextField* _instrumentValue;
@@ -274,7 +383,7 @@ NSString* UInt64String(std::uint64_t value) {
     [root addArrangedSubview:title];
 
     NSTextField* subtitle = MakeLabel(
-        @"Wave 1 scaffold: one app-side query client, health polling, and safe placeholders while the engine query seam lands.",
+        @"Wave 2: status and mutable live-tail panes backed only by QueryClient status/read_live_tail.",
         [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium],
         [NSColor secondaryLabelColor]);
     subtitle.lineBreakMode = NSLineBreakByWordWrapping;
@@ -285,6 +394,11 @@ NSString* UInt64String(std::uint64_t value) {
                              [NSFont systemFontOfSize:14.0 weight:NSFontWeightSemibold],
                              [NSColor secondaryLabelColor]);
     [root addArrangedSubview:_bannerLabel];
+
+    _pollMetaLabel = MakeLabel(@"Mutable/live refresh every 2.0s",
+                               [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                               [NSColor tertiaryLabelColor]);
+    [root addArrangedSubview:_pollMetaLabel];
 
     NSGridView* summaryGrid = [NSGridView gridViewWithViews:@[
         @[MakeLabel(@"Socket", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor secondaryLabelColor]), (_socketValue = MakeValueLabel())],
@@ -309,6 +423,11 @@ NSString* UInt64String(std::uint64_t value) {
     [tabView addTabViewItem:[self tabItemWithLabel:@"OrderLookupPane" textView:&_orderTextView]];
     [tabView.heightAnchor constraintGreaterThanOrEqualToConstant:430.0].active = YES;
     [root addArrangedSubview:tabView];
+
+    _statusTextView.string = @"Waiting for first status response…";
+    _liveTextView.string = @"Waiting for first live-tail response…";
+    _rangeTextView.string = ToNSString(RangePlaceholderText());
+    _orderTextView.string = ToNSString(OrderPlaceholderText());
 }
 
 - (void)showWindowAndStart {
@@ -320,7 +439,7 @@ NSString* UInt64String(std::uint64_t value) {
 
 - (void)startPolling {
     [self refresh:nil];
-    _pollTimer = [NSTimer scheduledTimerWithTimeInterval:2.0
+    _pollTimer = [NSTimer scheduledTimerWithTimeInterval:kPollIntervalSeconds
                                                   target:self
                                                 selector:@selector(refresh:)
                                                 userInfo:nil
@@ -341,6 +460,7 @@ NSString* UInt64String(std::uint64_t value) {
     _pollInFlight = YES;
     _bannerLabel.stringValue = @"Probing tape_engine…";
     _bannerLabel.textColor = [NSColor systemOrangeColor];
+    _pollMetaLabel.stringValue = @"Refreshing mutable/live panes…";
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_pollQueue, ^{
@@ -377,7 +497,7 @@ NSString* UInt64String(std::uint64_t value) {
         _liveCountValue.stringValue = UInt64String(probe.status.value.liveEventCount);
         _segmentCountValue.stringValue = UInt64String(probe.status.value.segmentCount);
         _manifestHashValue.stringValue = probe.status.value.manifestHash.empty() ? @"--" : ToNSString(probe.status.value.manifestHash);
-        _statusTextView.string = ToNSString(PrettyPrintJson(StatusToJson(probe.status.value)));
+        _statusTextView.string = ToNSString(DescribeStatusPane(probe, configuredSocket));
     } else {
         _dataDirValue.stringValue = @"--";
         _instrumentValue.stringValue = @"--";
@@ -385,12 +505,11 @@ NSString* UInt64String(std::uint64_t value) {
         _liveCountValue.stringValue = @"--";
         _segmentCountValue.stringValue = @"--";
         _manifestHashValue.stringValue = @"--";
-        _statusTextView.string = ToNSString(tapescope::QueryClient::describeError(probe.status.error));
+        _statusTextView.string = ToNSString(DescribeStatusPane(probe, configuredSocket));
     }
 
-    _liveTextView.string = ToNSString(DescribeResult(probe.liveTail, "No live events returned"));
-    _rangeTextView.string = ToNSString(DescribeResult(probe.range, "No range events returned"));
-    _orderTextView.string = ToNSString(probe.orderPlaceholder);
+    _liveTextView.string = ToNSString(DescribeLiveEventsPane(probe.liveTail));
+    _pollMetaLabel.stringValue = PollMetaTextForProbe(probe);
 }
 
 - (void)windowWillClose:(NSNotification*)notification {

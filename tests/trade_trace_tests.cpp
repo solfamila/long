@@ -972,6 +972,45 @@ void testTapeScopeClientParsesStatusPayload() {
     expect(result.value.manifestHash == "manifest-42", "tapescope status should preserve the manifest hash");
 }
 
+void testTapeScopeClientParsesStatusFallbackFields() {
+    tapescope::QueryResult<tapescope::StatusSnapshot> result;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-status-fallback"),
+        json{
+            {"status", "ok"},
+            {"result", {
+                {"socket", "/tmp/tape-engine-alt.sock"},
+                {"dataDir", "/tmp/tape-engine-alt"},
+                {"instrument_id", "AAPL"},
+                {"next_session_seq", 101},
+                {"live_events", json::array({json{{"session_seq", 100}}, json{{"session_seq", 99}}})},
+                {"segments", json::array({json{{"id", 1}}, json{{"id", 2}}, json{{"id", 3}}})},
+                {"manifest_sha256", "manifest-alt"}
+            }}
+        },
+        [&](const tapescope::QueryClient& client) {
+            result = client.status();
+        });
+
+    expect(request.value("command", std::string()) == "status",
+           "tapescope fallback status should still issue the status command");
+    expect(result.ok(), "tapescope status should parse fallback field names");
+    expect(result.value.socketPath == "/tmp/tape-engine-alt.sock",
+           "tapescope status should parse fallback socket key");
+    expect(result.value.dataDir == "/tmp/tape-engine-alt",
+           "tapescope status should parse fallback data dir key");
+    expect(result.value.instrumentId == "AAPL",
+           "tapescope status should parse fallback instrument key");
+    expect(result.value.latestSessionSeq == 100,
+           "tapescope status should derive latest sequence from next_session_seq");
+    expect(result.value.liveEventCount == 2,
+           "tapescope status should derive live count from live_events arrays");
+    expect(result.value.segmentCount == 3,
+           "tapescope status should derive segment count from segments arrays");
+    expect(result.value.manifestHash == "manifest-alt",
+           "tapescope status should parse fallback manifest hash key");
+}
+
 void testTapeScopeClientMarksAckResponsesAsSeamUnavailable() {
     tape_engine::IngestAck ack;
     ack.status = "rejected";
@@ -1059,6 +1098,31 @@ void testTapeScopeClientBuildsCommandRequestsForLiveRangeAndLookup() {
            "tapescope lookup should preserve the requested anchor selector");
     expect(lookup.ok(), "tapescope lookup should preserve a successful lookup payload");
     expect(lookup.value.value("trace_id", 0ULL) == 71ULL, "tapescope lookup should preserve the raw lookup payload");
+}
+
+void testTapeScopeClientParsesLiveTailObjectPayload() {
+    tapescope::QueryResult<std::vector<tapescope::json>> liveTail;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-live-object"),
+        json{
+            {"ok", true},
+            {"result", {
+                {"events", json::array({
+                    json{{"session_seq", 9}, {"event_kind", "fill_execution"}},
+                    json{{"session_seq", 8}, {"event_kind", "order_intent"}}
+                })}
+            }}
+        },
+        [&](const tapescope::QueryClient& client) {
+            liveTail = client.readLiveTail(8);
+        });
+
+    expect(request.value("command", std::string()) == "read_live_tail",
+           "tapescope live-tail object test should issue read_live_tail");
+    expect(liveTail.ok(), "tapescope live-tail should parse nested events arrays");
+    expect(liveTail.value.size() == 2, "tapescope live-tail should preserve event count from nested payload");
+    expect(liveTail.value.front().value("session_seq", 0ULL) == 9ULL,
+           "tapescope live-tail should preserve event order from nested payload");
 }
 
 void testBridgeOutboxOverflowWritesExplicitLossMarker() {
@@ -1768,8 +1832,10 @@ int main() {
         testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments();
         testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq();
         testTapeScopeClientParsesStatusPayload();
+        testTapeScopeClientParsesStatusFallbackFields();
         testTapeScopeClientMarksAckResponsesAsSeamUnavailable();
         testTapeScopeClientBuildsCommandRequestsForLiveRangeAndLookup();
+        testTapeScopeClientParsesLiveTailObjectPayload();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
