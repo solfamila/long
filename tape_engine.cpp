@@ -6,12 +6,15 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <unordered_set>
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -44,6 +47,62 @@ std::string sha256Hex(const std::string& input) {
     return output;
 }
 
+bool hasFiniteNumber(const json& payload, const char* key) {
+    return payload.contains(key) && payload[key].is_number() && std::isfinite(payload[key].get<double>());
+}
+
+double numberOrDefault(const json& payload, const char* key, double fallback) {
+    return hasFiniteNumber(payload, key) ? payload[key].get<double>() : fallback;
+}
+
+void applyDepthDelta(std::vector<BookLevel>& book, int position, int operation, double price, double size) {
+    if (position < 0) {
+        return;
+    }
+
+    if (operation == 0) {
+        BookLevel level{price, size};
+        if (position >= static_cast<int>(book.size())) {
+            book.push_back(level);
+        } else {
+            book.insert(book.begin() + position, level);
+        }
+    } else if (operation == 1) {
+        if (position < static_cast<int>(book.size())) {
+            book[position].price = price;
+            book[position].size = size;
+        }
+    } else if (operation == 2) {
+        if (position < static_cast<int>(book.size())) {
+            book.erase(book.begin() + position);
+        }
+    }
+}
+
+json bookToJson(const std::vector<BookLevel>& book, std::size_t depthLimit) {
+    json levels = json::array();
+    const std::size_t limit = depthLimit == 0 ? book.size() : std::min(depthLimit, book.size());
+    for (std::size_t i = 0; i < limit; ++i) {
+        levels.push_back({
+            {"position", i},
+            {"price", book[i].price},
+            {"size", book[i].size}
+        });
+    }
+    return levels;
+}
+
+struct ReplayBookState {
+    double bidPrice = 0.0;
+    double askPrice = 0.0;
+    double lastPrice = 0.0;
+    std::vector<BookLevel> bidBook;
+    std::vector<BookLevel> askBook;
+    std::uint64_t replayedThroughSessionSeq = 0;
+    std::size_t appliedEvents = 0;
+    std::size_t gapMarkers = 0;
+};
+
 json eventToJson(const EngineEvent& event) {
     json payload{
         {"adapter_id", event.adapterId},
@@ -61,20 +120,10 @@ json eventToJson(const EngineEvent& event) {
         return payload;
     }
 
-    payload["record_type"] = event.bridgeRecord.recordType;
-    payload["source"] = event.bridgeRecord.source;
-    payload["symbol"] = event.bridgeRecord.symbol;
-    payload["side"] = event.bridgeRecord.side;
-    payload["note"] = event.bridgeRecord.note;
-    payload["wall_time"] = event.bridgeRecord.wallTime;
-    payload["fallback_state"] = event.bridgeRecord.fallbackState;
-    payload["fallback_reason"] = event.bridgeRecord.fallbackReason;
-    payload["anchor"] = {
-        {"trace_id", event.bridgeRecord.anchor.traceId},
-        {"order_id", static_cast<long long>(event.bridgeRecord.anchor.orderId)},
-        {"perm_id", event.bridgeRecord.anchor.permId},
-        {"exec_id", event.bridgeRecord.anchor.execId}
-    };
+    const json recordPayload = bridge_batch::recordToJson(event.bridgeRecord);
+    for (auto it = recordPayload.begin(); it != recordPayload.end(); ++it) {
+        payload[it.key()] = it.value();
+    }
     return payload;
 }
 
@@ -392,12 +441,35 @@ std::vector<json> Server::loadAllEventsUnlocked() const {
     return events;
 }
 
+std::vector<json> Server::mergedEventsUnlocked(bool includeLiveTail) const {
+    std::vector<json> events = loadAllEventsUnlocked();
+    if (!includeLiveTail) {
+        return events;
+    }
+
+    std::unordered_set<std::uint64_t> seenSessionSeq;
+    seenSessionSeq.reserve(events.size() + liveRing_.size());
+    for (const auto& event : events) {
+        seenSessionSeq.insert(event.value("session_seq", 0ULL));
+    }
+    for (const auto& event : liveRing_) {
+        if (seenSessionSeq.insert(event.sessionSeq).second) {
+            events.push_back(eventToJson(event));
+        }
+    }
+
+    std::sort(events.begin(), events.end(), [](const json& left, const json& right) {
+        return left.value("session_seq", 0ULL) < right.value("session_seq", 0ULL);
+    });
+    return events;
+}
+
 std::vector<json> Server::filterEventsByRangeUnlocked(std::uint64_t fromSessionSeq,
                                                       std::uint64_t toSessionSeq,
                                                       std::size_t limit,
                                                       bool includeLiveTail) const {
     std::vector<json> results;
-    const auto allEvents = loadAllEventsUnlocked();
+    const auto allEvents = mergedEventsUnlocked(includeLiveTail);
     for (const auto& event : allEvents) {
         const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
         if (sessionSeq < fromSessionSeq) {
@@ -409,26 +481,6 @@ std::vector<json> Server::filterEventsByRangeUnlocked(std::uint64_t fromSessionS
         results.push_back(event);
         if (limit > 0 && results.size() >= limit) {
             return results;
-        }
-    }
-
-    if (includeLiveTail) {
-        for (const auto& event : liveRing_) {
-            if (event.sessionSeq < fromSessionSeq) {
-                continue;
-            }
-            if (toSessionSeq > 0 && event.sessionSeq > toSessionSeq) {
-                continue;
-            }
-            const bool alreadyPresent = std::any_of(results.begin(), results.end(), [&](const json& existing) {
-                return existing.value("session_seq", 0ULL) == event.sessionSeq;
-            });
-            if (!alreadyPresent) {
-                results.push_back(eventToJson(event));
-                if (limit > 0 && results.size() >= limit) {
-                    return results;
-                }
-            }
         }
     }
 
@@ -457,6 +509,83 @@ std::vector<json> Server::filterEventsByAnchorUnlocked(std::uint64_t traceId,
         }
     }
     return results;
+}
+
+json Server::buildReplaySnapshotUnlocked(std::uint64_t targetSessionSeq,
+                                         std::size_t depthLimit,
+                                         bool includeLiveTail) const {
+    const std::vector<json> allEvents = mergedEventsUnlocked(includeLiveTail);
+    if (targetSessionSeq == 0 && !allEvents.empty()) {
+        targetSessionSeq = allEvents.back().value("session_seq", 0ULL);
+    }
+
+    ReplayBookState replay;
+    for (const auto& event : allEvents) {
+        const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+        if (sessionSeq == 0) {
+            continue;
+        }
+        if (targetSessionSeq > 0 && sessionSeq > targetSessionSeq) {
+            break;
+        }
+
+        replay.replayedThroughSessionSeq = sessionSeq;
+        const std::string eventKind = event.value("event_kind", std::string());
+        if (eventKind == "gap_marker") {
+            ++replay.gapMarkers;
+            continue;
+        }
+
+        if (eventKind == "market_tick") {
+            const int marketField = event.value("market_field", -1);
+            const double price = numberOrDefault(event, "price", std::numeric_limits<double>::quiet_NaN());
+            if (std::isfinite(price)) {
+                if (marketField == 1) {
+                    replay.bidPrice = price;
+                } else if (marketField == 2) {
+                    replay.askPrice = price;
+                } else if (marketField == 4) {
+                    replay.lastPrice = price;
+                }
+            }
+            ++replay.appliedEvents;
+            continue;
+        }
+
+        if (eventKind == "market_depth") {
+            const int bookSide = event.value("book_side", -1);
+            const int position = event.value("book_position", -1);
+            const int operation = event.value("book_operation", -1);
+            const double price = numberOrDefault(event, "price", std::numeric_limits<double>::quiet_NaN());
+            const double size = numberOrDefault(event, "size", std::numeric_limits<double>::quiet_NaN());
+            if (bookSide == 0) {
+                applyDepthDelta(replay.askBook, position, operation, price, size);
+            } else if (bookSide == 1) {
+                applyDepthDelta(replay.bidBook, position, operation, price, size);
+            }
+            ++replay.appliedEvents;
+        }
+    }
+
+    const double effectiveBid = !replay.bidBook.empty()
+        ? replay.bidBook.front().price
+        : replay.bidPrice;
+    const double effectiveAsk = !replay.askBook.empty()
+        ? replay.askBook.front().price
+        : replay.askPrice;
+
+    return json{
+        {"applied_event_count", replay.appliedEvents},
+        {"ask_book", bookToJson(replay.askBook, depthLimit)},
+        {"ask_price", effectiveAsk},
+        {"bid_book", bookToJson(replay.bidBook, depthLimit)},
+        {"bid_price", effectiveBid},
+        {"gap_markers_encountered", replay.gapMarkers},
+        {"includes_mutable_tail", includeLiveTail},
+        {"last_price", replay.lastPrice},
+        {"replayed_through_session_seq", replay.replayedThroughSessionSeq},
+        {"target_session_seq", targetSessionSeq}
+    };
 }
 
 std::vector<std::uint8_t> Server::processRequest(const std::vector<std::uint8_t>& frame) {
@@ -650,6 +779,13 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"returned_events", response.events.size()},
             {"trace_id", request.traceId}
         };
+        return response;
+    }
+
+    if (request.operation == "replay_snapshot") {
+        const std::size_t depthLimit = request.limit == 0 ? 5 : request.limit;
+        response.summary = buildReplaySnapshotUnlocked(request.targetSessionSeq, depthLimit, request.includeLiveTail);
+        response.events = json::array();
         return response;
     }
 

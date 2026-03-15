@@ -63,6 +63,7 @@ inline double commissionValue(const CommissionReport& report) {
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <limits>
 
 // WebSocket server
 #include <ixwebsocket/IXWebSocketServer.h>
@@ -328,6 +329,12 @@ struct BridgeOutboxRecord {
     std::string source;
     std::string symbol;
     std::string side;
+    int marketField = -1;
+    int bookPosition = -1;
+    int bookOperation = -1;
+    int bookSide = -1;
+    double price = std::numeric_limits<double>::quiet_NaN();
+    double size = std::numeric_limits<double>::quiet_NaN();
     BridgeAnchorIdentity anchor;
     std::string fallbackState;
     std::string fallbackReason;
@@ -340,6 +347,12 @@ struct BridgeOutboxRecordInput {
     std::string source;
     std::string symbol;
     std::string side;
+    int marketField = -1;
+    int bookPosition = -1;
+    int bookOperation = -1;
+    int bookSide = -1;
+    double price = std::numeric_limits<double>::quiet_NaN();
+    double size = std::numeric_limits<double>::quiet_NaN();
     std::uint64_t traceId = 0;
     OrderId orderId = 0;
     long long permId = 0;

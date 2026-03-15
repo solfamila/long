@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -93,7 +94,7 @@ FlushReason parseFlushReason(std::string_view reason) {
 }
 
 json recordToJson(const BridgeOutboxRecord& record) {
-    return json{
+    json payload{
         {"anchor", anchorToJson(record.anchor)},
         {"fallback_reason", record.fallbackReason},
         {"fallback_state", record.fallbackState},
@@ -105,6 +106,25 @@ json recordToJson(const BridgeOutboxRecord& record) {
         {"symbol", record.symbol},
         {"wall_time", record.wallTime}
     };
+    if (record.marketField >= 0) {
+        payload["market_field"] = record.marketField;
+    }
+    if (record.bookPosition >= 0) {
+        payload["book_position"] = record.bookPosition;
+    }
+    if (record.bookOperation >= 0) {
+        payload["book_operation"] = record.bookOperation;
+    }
+    if (record.bookSide >= 0) {
+        payload["book_side"] = record.bookSide;
+    }
+    if (std::isfinite(record.price)) {
+        payload["price"] = record.price;
+    }
+    if (std::isfinite(record.size)) {
+        payload["size"] = record.size;
+    }
+    return payload;
 }
 
 BridgeOutboxRecord recordFromJson(const json& payload) {
@@ -114,6 +134,16 @@ BridgeOutboxRecord recordFromJson(const json& payload) {
     record.source = payload.value("source", std::string());
     record.symbol = payload.value("symbol", std::string());
     record.side = payload.value("side", std::string());
+    record.marketField = payload.value("market_field", -1);
+    record.bookPosition = payload.value("book_position", -1);
+    record.bookOperation = payload.value("book_operation", -1);
+    record.bookSide = payload.value("book_side", -1);
+    record.price = payload.contains("price") && payload["price"].is_number()
+        ? payload["price"].get<double>()
+        : std::numeric_limits<double>::quiet_NaN();
+    record.size = payload.contains("size") && payload["size"].is_number()
+        ? payload["size"].get<double>()
+        : std::numeric_limits<double>::quiet_NaN();
     record.anchor = anchorFromJson(payload.value("anchor", json::object()));
     record.fallbackState = payload.value("fallback_state", std::string());
     record.fallbackReason = payload.value("fallback_reason", std::string());

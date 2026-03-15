@@ -947,6 +947,133 @@ void testTapeEngineQueryStatusAndReads() {
     server.stop();
 }
 
+void testTapeEngineReplaySnapshotRebuildsFrozenMarketState() {
+    const fs::path rootDir = testDataDir() / "tape-engine-replay";
+    const fs::path socketPath = testDataDir() / "tape-engine-replay.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for replay snapshot test: " + startError);
+
+    auto marketRecord = [](std::uint64_t sourceSeq,
+                           const std::string& recordType,
+                           const std::string& side,
+                           int marketField,
+                           int bookPosition,
+                           int bookOperation,
+                           int bookSide,
+                           double price,
+                           double size,
+                           const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, recordType, "BrokerMarketData", "INTC", side,
+                                                     0, 0, 0, "", note, "2026-03-14T09:39:00.000");
+        record.marketField = marketField;
+        record.bookPosition = bookPosition;
+        record.bookOperation = bookOperation;
+        record.bookSide = bookSide;
+        record.price = price;
+        record.size = size;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-replay";
+    options.runtimeSessionId = "runtime-engine-replay";
+    options.flushReason = bridge_batch::FlushReason::ThresholdRecords;
+    options.batchSeq = 61;
+
+    const bridge_batch::Batch batch = bridge_batch::buildBatch({
+        marketRecord(4001, "market_tick", "BID", 1, -1, -1, -1, 45.10, std::numeric_limits<double>::quiet_NaN(), "BID tick 45.10"),
+        marketRecord(4002, "market_tick", "ASK", 2, -1, -1, -1, 45.12, std::numeric_limits<double>::quiet_NaN(), "ASK tick 45.12"),
+        marketRecord(4003, "market_depth", "ASK", -1, 0, 0, 0, 45.12, 200.0, "ASK depth insert"),
+        marketRecord(4004, "market_depth", "BID", -1, 0, 0, 1, 45.10, 300.0, "BID depth insert"),
+        marketRecord(4005, "market_tick", "LAST", 4, -1, -1, -1, 45.11, std::numeric_limits<double>::quiet_NaN(), "LAST tick 45.11"),
+        marketRecord(4006, "market_depth", "ASK", -1, 0, 1, 0, 45.13, 150.0, "ASK depth update"),
+        marketRecord(4007, "market_depth", "BID", -1, 1, 0, 1, 45.09, 500.0, "BID depth insert level 1")
+    }, options);
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(batch), &error),
+           "tape-engine should accept replay market data batch: " + error);
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest replayRequest;
+    replayRequest.requestId = "replay-1";
+    replayRequest.operation = "replay_snapshot";
+    replayRequest.targetSessionSeq = 7;
+    replayRequest.limit = 2;
+    expect(client.query(replayRequest, &response, &error), "tape-engine replay snapshot query should succeed: " + error);
+
+    expect(response.summary.value("target_session_seq", 0ULL) == 7, "replay snapshot should preserve the requested session_seq");
+    expect(response.summary.value("replayed_through_session_seq", 0ULL) == 7, "replay snapshot should rebuild through the target session_seq");
+    expect(response.summary.value("applied_event_count", 0ULL) == 7, "replay snapshot should count the applied market events");
+    expect(std::fabs(response.summary.value("bid_price", 0.0) - 45.10) < 0.0001, "replay snapshot should rebuild the inside bid");
+    expect(std::fabs(response.summary.value("ask_price", 0.0) - 45.13) < 0.0001, "replay snapshot should rebuild the inside ask from depth updates");
+    expect(std::fabs(response.summary.value("last_price", 0.0) - 45.11) < 0.0001, "replay snapshot should rebuild the last trade price");
+    expect(response.summary.contains("bid_book") && response.summary["bid_book"].is_array() &&
+           response.summary["bid_book"].size() == 2, "replay snapshot should return the requested bid book depth");
+    expect(response.summary.contains("ask_book") && response.summary["ask_book"].is_array() &&
+           response.summary["ask_book"].size() == 1, "replay snapshot should return the rebuilt ask book");
+    expect(std::fabs(response.summary["bid_book"].at(1).value("price", 0.0) - 45.09) < 0.0001,
+           "replay snapshot should preserve deeper bid levels");
+    expect(std::fabs(response.summary["ask_book"].at(0).value("size", 0.0) - 150.0) < 0.0001,
+           "replay snapshot should preserve updated ask size");
+
+    server.stop();
+}
+
+void testBridgeMarketDataEmissionExpandsPublicEvents() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    trading_engine::reduce(appState(), trading_engine::MarketSubscriptionStartedEvent{
+        "INTC",
+        9101,
+        9201,
+        false
+    });
+    trading_engine::reduce(appState(), trading_engine::BrokerTickPriceEvent{9101, static_cast<TickType>(1), 45.10});
+    trading_engine::reduce(appState(), trading_engine::BrokerTickPriceEvent{9101, static_cast<TickType>(2), 45.12});
+    trading_engine::reduce(appState(), trading_engine::BrokerTickPriceEvent{9101, static_cast<TickType>(4), 45.11});
+    trading_engine::reduce(appState(), trading_engine::BrokerMarketDepthEvent{9201, 0, 0, 0, 45.12, 200.0});
+    trading_engine::reduce(appState(), trading_engine::BrokerMarketDepthEvent{9201, 0, 0, 1, 45.10, 300.0});
+    publishSharedDataSnapshot();
+
+    const BridgeDispatchSnapshot dispatch = captureBridgeDispatchSnapshot(10);
+    expect(dispatch.records.size() >= 5, "public market capture should enqueue quote and depth bridge records");
+
+    const auto bidTick = std::find_if(dispatch.records.begin(), dispatch.records.end(), [](const BridgeOutboxRecord& record) {
+        return record.recordType == "market_tick" && record.marketField == 1;
+    });
+    expect(bidTick != dispatch.records.end(), "bridge outbox should include a bid market_tick record");
+    expect(bidTick->side == "BID", "market tick record should preserve the bid side label");
+    expect(std::fabs(bidTick->price - 45.10) < 0.0001, "market tick record should preserve the quote price");
+
+    const auto askDepth = std::find_if(dispatch.records.begin(), dispatch.records.end(), [](const BridgeOutboxRecord& record) {
+        return record.recordType == "market_depth" && record.bookSide == 0;
+    });
+    expect(askDepth != dispatch.records.end(), "bridge outbox should include ask-side market_depth records");
+    expect(askDepth->bookOperation == 0 && askDepth->bookPosition == 0, "market depth record should preserve position and operation");
+    expect(std::fabs(askDepth->size - 200.0) < 0.0001, "market depth record should preserve size");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 void testBridgeLifecycleEmissionExpandsPrivateOrderEvents() {
     clearTestFiles();
 
@@ -1739,6 +1866,8 @@ int main() {
         testTapeEngineAcceptsBatchAssignsSessionSeqAndWritesSegments();
         testTapeEngineEmitsGapMarkersAndDeduplicatesSourceSeq();
         testTapeEngineQueryStatusAndReads();
+        testTapeEngineReplaySnapshotRebuildsFrozenMarketState();
+        testBridgeMarketDataEmissionExpandsPublicEvents();
         testBridgeLifecycleEmissionExpandsPrivateOrderEvents();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();

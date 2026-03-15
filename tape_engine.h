@@ -97,6 +97,7 @@ private:
     void appendLiveEvent(const EngineEvent& event);
     void writeSegment(const std::vector<EngineEvent>& events);
     std::vector<json> loadAllEventsUnlocked() const;
+    std::vector<json> mergedEventsUnlocked(bool includeLiveTail) const;
     std::vector<json> filterEventsByRangeUnlocked(std::uint64_t fromSessionSeq,
                                                   std::uint64_t toSessionSeq,
                                                   std::size_t limit,
@@ -106,6 +107,9 @@ private:
                                                    long long permId,
                                                    const std::string& execId,
                                                    std::size_t limit) const;
+    json buildReplaySnapshotUnlocked(std::uint64_t targetSessionSeq,
+                                     std::size_t depthLimit,
+                                     bool includeLiveTail) const;
 
     EngineConfig config_;
     mutable std::mutex stateMutex_;

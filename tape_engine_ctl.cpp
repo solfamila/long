@@ -19,6 +19,7 @@ void printUsage() {
               << "  tape_engine_ctl status\n"
               << "  tape_engine_ctl read-live-tail [limit]\n"
               << "  tape_engine_ctl read-range <from_session_seq> <to_session_seq> [--include-live-tail] [--limit N]\n"
+              << "  tape_engine_ctl replay-snapshot <session_seq> [--include-live-tail] [--depth N]\n"
               << "  tape_engine_ctl find-order [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--limit N]\n";
 }
 
@@ -52,6 +53,21 @@ int main(int argc, char** argv) {
             if (arg == "--include-live-tail") {
                 request.includeLiveTail = true;
             } else if (arg == "--limit" && i + 1 < argc) {
+                request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
+            }
+        }
+    } else if (request.operation == "replay-snapshot") {
+        request.operation = "replay_snapshot";
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.targetSessionSeq = std::stoull(argv[2]);
+        for (int i = 3; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--include-live-tail") {
+                request.includeLiveTail = true;
+            } else if (arg == "--depth" && i + 1 < argc) {
                 request.limit = static_cast<std::size_t>(std::stoull(argv[++i]));
             }
         }
