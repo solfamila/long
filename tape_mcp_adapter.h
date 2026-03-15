@@ -55,6 +55,7 @@ private:
     [[nodiscard]] json invokeExportRangeTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeFindingsListTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokePlaybookApplyTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReservedDeferredTool(const ToolSpec& tool) const;
     [[nodiscard]] json makeToolResult(const json& envelope) const;
     [[nodiscard]] json makeSuccessEnvelope(const std::string& contractVersion,

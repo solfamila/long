@@ -2,13 +2,18 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <initializer_list>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <string_view>
 #include <utility>
 
@@ -23,7 +28,11 @@ namespace fs = std::filesystem;
 constexpr const char* kLegacyContractVersion = "phase5-mcp-compat-v1";
 constexpr const char* kPhase7ContractVersion = "phase7-analyzer-playbook-v1";
 constexpr const char* kPhase7AnalysisArtifactType = "phase7.analysis_output.v1";
+constexpr const char* kPhase7PlaybookArtifactType = "phase7.playbook_plan.v1";
 constexpr const char* kPhase7DefaultAnalyzerPassId = "phase7.trace_fill_integrity.v1";
+constexpr const char* kPhase7PlaybookDefaultMode = "dry_run";
+constexpr const char* kPhase7PlaybookApplyMode = "apply";
+constexpr const char* kPhase7PlaybookActionType = "phase7.review_trace_integrity.v1";
 constexpr const char* kServerVersion = "0.1.0";
 constexpr std::uint64_t kDefaultReadLiveTailLimit = 64;
 
@@ -150,6 +159,110 @@ std::string mapAnalyzerFailureCode(const std::string& errorMessage) {
         return "artifact_load_failed";
     }
     return "analysis_failed";
+}
+
+std::string normalizeArtifactToken(const std::string& value) {
+    std::string normalized;
+    normalized.reserve(value.size());
+    bool previousSeparator = false;
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) != 0) {
+            normalized.push_back(static_cast<char>(std::tolower(ch)));
+            previousSeparator = false;
+            continue;
+        }
+        if (!normalized.empty() && !previousSeparator) {
+            normalized.push_back('-');
+            previousSeparator = true;
+        }
+    }
+
+    while (!normalized.empty() && normalized.back() == '-') {
+        normalized.pop_back();
+    }
+    if (normalized.empty()) {
+        return "artifact";
+    }
+    return normalized;
+}
+
+std::string fnv1aHex(std::string_view text) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char ch : text) {
+        hash ^= static_cast<std::uint64_t>(ch);
+        hash *= 1099511628211ULL;
+    }
+
+    std::ostringstream out;
+    out << std::hex << std::nouppercase << std::setw(16) << std::setfill('0') << hash;
+    return out.str();
+}
+
+std::string utcTimestampIso8601Now() {
+    const auto now = std::chrono::system_clock::now();
+    const auto msSinceEpoch = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
+    const auto msPart = static_cast<long long>(msSinceEpoch.count() % 1000);
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+
+    std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &time);
+#else
+    gmtime_r(&time, &utc);
+#endif
+
+    std::ostringstream out;
+    out << std::put_time(&utc, "%Y-%m-%dT%H:%M:%S")
+        << '.'
+        << std::setw(3) << std::setfill('0') << msPart
+        << 'Z';
+    return out.str();
+}
+
+bool ensureDirectoryExists(const fs::path& path, std::string* error) {
+    std::error_code ec;
+    if (fs::exists(path, ec)) {
+        if (ec) {
+            if (error != nullptr) {
+                *error = "Failed to inspect artifact directory " + path.string() + ": " + ec.message();
+            }
+            return false;
+        }
+        if (!fs::is_directory(path, ec) || ec) {
+            if (error != nullptr) {
+                *error = "Artifact directory path is not a directory: " + path.string();
+            }
+            return false;
+        }
+        return true;
+    }
+
+    fs::create_directories(path, ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "Failed to create artifact directory " + path.string() + ": " + ec.message();
+        }
+        return false;
+    }
+    return true;
+}
+
+bool writeJsonTextFile(const fs::path& path, const json& payload, std::string* error) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        if (error != nullptr) {
+            *error = "Failed to open output file: " + path.string();
+        }
+        return false;
+    }
+    out << payload.dump(2) << '\n';
+    if (!out.good()) {
+        if (error != nullptr) {
+            *error = "Failed to write output file: " + path.string();
+        }
+        return false;
+    }
+    return true;
 }
 
 json reportArtifactResult(const Phase6ReportOutputArtifact& artifact) {
@@ -686,12 +799,32 @@ std::vector<ToolSpec> buildToolSpecs() {
     });
     specs.push_back(ToolSpec{
         "tapescript_playbook_apply",
-        "Deferred tool placeholder for guarded playbook behavior.",
-        emptyObjectSchema(),
+        "Generate a guarded local Phase 7 playbook plan from a stored analysis artifact.",
+        json{
+            {"type", "object"},
+            {"properties", json{
+                {"analysis_manifest_path", json{{"type", "string"}, {"minLength", 1}}},
+                {"analysis_artifact_id", json{{"type", "string"}, {"minLength", 1}}},
+                {"finding_ids", json{
+                    {"type", "array"},
+                    {"items", json{{"type", "string"}, {"minLength", 1}}},
+                    {"minItems", 1}
+                }},
+                {"mode", json{
+                    {"type", "string"},
+                    {"enum", json::array({kPhase7PlaybookDefaultMode, kPhase7PlaybookApplyMode})}
+                }}
+            }},
+            {"oneOf", json::array({
+                json{{"required", json::array({"analysis_manifest_path"})}},
+                json{{"required", json::array({"analysis_artifact_id"})}}
+            })},
+            {"additionalProperties", false}
+        },
         "phase7_playbook_apply_guarded_local",
         kPhase7ContractVersion,
-        false,
-        true
+        true,
+        false
     });
 
     return specs;
@@ -853,6 +986,9 @@ json Adapter::invokeSupportedReadTool(const ToolSpec& tool, const json& args) co
     }
     if (tool.name == "tapescript_findings_list") {
         return invokeFindingsListTool(tool, args);
+    }
+    if (tool.name == "tapescript_playbook_apply") {
+        return invokePlaybookApplyTool(tool, args);
     }
 
     return makeToolResult(makeErrorEnvelope(
@@ -1971,6 +2107,488 @@ json Adapter::invokeFindingsListTool(const ToolSpec& tool, const json& args) con
         {"findings", findings},
         {"replay_context", manifest.value("replay_context", json::object())},
         {"findings_summary", manifest.value("findings_summary", json::object())}
+    };
+
+    json revision = makeReadRevision("snapshot");
+    revision["source"] = "artifact_manifest";
+    return makeToolResult(makeSuccessEnvelope(
+        tool.contractVersion,
+        tool.name,
+        tool.engineCommand,
+        std::move(result),
+        std::move(revision)));
+}
+
+json Adapter::invokePlaybookApplyTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_playbook_apply arguments must be an object.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+    if (hasUnexpectedKeys(args, {"analysis_manifest_path", "analysis_artifact_id", "finding_ids", "mode"})) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_playbook_apply accepts only analysis_manifest_path, analysis_artifact_id, finding_ids, and mode.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const bool hasManifestPath = args.contains("analysis_manifest_path");
+    const bool hasArtifactId = args.contains("analysis_artifact_id");
+    if (hasManifestPath == hasArtifactId) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "Exactly one of analysis_manifest_path or analysis_artifact_id is required.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    std::string mode = kPhase7PlaybookDefaultMode;
+    if (args.contains("mode")) {
+        const std::optional<std::string> requestedMode = asNonEmptyString(args.at("mode"));
+        if (!requestedMode.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "mode must be a non-empty string when provided.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        if (*requestedMode != kPhase7PlaybookDefaultMode && *requestedMode != kPhase7PlaybookApplyMode) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "mode must be either dry_run or apply.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        mode = *requestedMode;
+    }
+
+    std::vector<std::string> requestedFindingIds;
+    if (args.contains("finding_ids")) {
+        const json& rawFindingIds = args.at("finding_ids");
+        if (!rawFindingIds.is_array() || rawFindingIds.empty()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "finding_ids must be a non-empty array of finding_id strings when provided.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+
+        requestedFindingIds.reserve(rawFindingIds.size());
+        for (const json& value : rawFindingIds) {
+            const std::optional<std::string> findingId = asNonEmptyString(value);
+            if (!findingId.has_value()) {
+                return makeToolResult(makeErrorEnvelope(
+                    tool.contractVersion,
+                    tool.name,
+                    tool.engineCommand,
+                    true,
+                    false,
+                    "invalid_arguments",
+                    "finding_ids entries must be non-empty strings.",
+                    false,
+                    makeReadRevision("snapshot")));
+            }
+            if (std::find(requestedFindingIds.begin(), requestedFindingIds.end(), *findingId) !=
+                requestedFindingIds.end()) {
+                return makeToolResult(makeErrorEnvelope(
+                    tool.contractVersion,
+                    tool.name,
+                    tool.engineCommand,
+                    true,
+                    false,
+                    "invalid_arguments",
+                    "finding_ids entries must be unique.",
+                    false,
+                    makeReadRevision("snapshot")));
+            }
+            requestedFindingIds.push_back(*findingId);
+        }
+    }
+
+    if (mode == kPhase7PlaybookApplyMode) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            true,
+            "deferred_behavior",
+            "mode=apply is deferred in this guarded Phase 7 playbook slice.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    fs::path analysisManifestPath;
+    if (hasManifestPath) {
+        const std::optional<std::string> providedPath = asNonEmptyString(args.at("analysis_manifest_path"));
+        if (!providedPath.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "analysis_manifest_path must be a non-empty string.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        analysisManifestPath = fs::path(*providedPath);
+    } else {
+        const std::optional<std::string> artifactId = asNonEmptyString(args.at("analysis_artifact_id"));
+        if (!artifactId.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "analysis_artifact_id must be a non-empty string.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        analysisManifestPath = fs::path(appDataDirectory()) /
+            "phase7_artifacts" /
+            "analysis_output.v1" /
+            *artifactId /
+            "manifest.json";
+    }
+
+    std::error_code existsEc;
+    if (!fs::exists(analysisManifestPath, existsEc)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_not_found",
+            "Analysis manifest path does not exist.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    json analysisManifest;
+    std::string analysisManifestError;
+    if (!readJsonFile(analysisManifestPath, &analysisManifest, &analysisManifestError) || !analysisManifest.is_object()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_load_failed",
+            analysisManifestError.empty() ? "Failed to parse analysis manifest json." : analysisManifestError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+    if (analysisManifest.value("artifact_type", std::string()) != kPhase7AnalysisArtifactType ||
+        analysisManifest.value("contract_version", std::string()) != kPhase7ContractVersion) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "unsupported_source_contract",
+            "Analysis manifest artifact type or contract version is unsupported.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const json files = analysisManifest.value("files", json::object());
+    const std::string findingsRelativePath = files.value("findings_json", std::string());
+    if (findingsRelativePath.empty()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_load_failed",
+            "Analysis manifest is missing files.findings_json.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+    const fs::path findingsPath = analysisManifestPath.parent_path() / fs::path(findingsRelativePath);
+    if (!fs::exists(findingsPath, existsEc)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_not_found",
+            "Analysis findings payload path does not exist.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    json findings;
+    std::string findingsError;
+    if (!readJsonFile(findingsPath, &findings, &findingsError) || !findings.is_array()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_load_failed",
+            findingsError.empty() ? "Failed to parse findings payload json." : findingsError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    struct ResolvedFinding {
+        std::string findingId;
+        json payload;
+    };
+    std::vector<ResolvedFinding> resolvedFindings;
+    resolvedFindings.reserve(findings.size());
+    for (const json& finding : findings) {
+        if (!finding.is_object()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "artifact_load_failed",
+                "Analysis findings payload must contain object records.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        const auto idIt = finding.find("finding_id");
+        const std::optional<std::string> findingId =
+            (idIt == finding.end()) ? std::nullopt : asNonEmptyString(*idIt);
+        if (!findingId.has_value()) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "artifact_load_failed",
+                "Analysis findings payload is missing finding_id.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        if (std::any_of(resolvedFindings.begin(),
+                        resolvedFindings.end(),
+                        [&](const ResolvedFinding& existing) { return existing.findingId == *findingId; })) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.contractVersion,
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "artifact_load_failed",
+                "Analysis findings payload contains duplicate finding_id values.",
+                false,
+                makeReadRevision("snapshot")));
+        }
+        resolvedFindings.push_back(ResolvedFinding{*findingId, finding});
+    }
+
+    std::vector<ResolvedFinding> selectedFindings;
+    if (requestedFindingIds.empty()) {
+        selectedFindings = resolvedFindings;
+    } else {
+        selectedFindings.reserve(requestedFindingIds.size());
+        for (const std::string& requestedId : requestedFindingIds) {
+            const auto it = std::find_if(
+                resolvedFindings.begin(),
+                resolvedFindings.end(),
+                [&](const ResolvedFinding& finding) { return finding.findingId == requestedId; });
+            if (it == resolvedFindings.end()) {
+                return makeToolResult(makeErrorEnvelope(
+                    tool.contractVersion,
+                    tool.name,
+                    tool.engineCommand,
+                    true,
+                    false,
+                    "finding_not_found",
+                    "Requested finding_id is not present in the referenced analysis artifact.",
+                    false,
+                    makeReadRevision("snapshot")));
+            }
+            selectedFindings.push_back(*it);
+        }
+    }
+
+    json selectedFindingIds = json::array();
+    json plannedActions = json::array();
+    for (const ResolvedFinding& finding : selectedFindings) {
+        selectedFindingIds.push_back(finding.findingId);
+        json evidenceRefs = finding.payload.value("evidence_refs", json::array());
+        if (!evidenceRefs.is_array()) {
+            evidenceRefs = json::array();
+        }
+        plannedActions.push_back(json{
+            {"action_id", "action-" + normalizeArtifactToken(finding.findingId) + "-review-trace-integrity"},
+            {"action_type", kPhase7PlaybookActionType},
+            {"finding_id", finding.findingId},
+            {"severity", finding.payload.value("severity", std::string())},
+            {"category", finding.payload.value("category", std::string())},
+            {"summary", finding.payload.value("summary", std::string())},
+            {"evidence_refs", std::move(evidenceRefs)},
+            {"guardrails", {
+                {"mode", kPhase7PlaybookDefaultMode},
+                {"side_effects", "none"},
+                {"apply_mode", "deferred"},
+                {"requires_human_review", true}
+            }}
+        });
+    }
+
+    std::string analysisArtifactId = analysisManifest.value("artifact_id", std::string());
+    if (analysisArtifactId.empty()) {
+        analysisArtifactId = analysisManifestPath.parent_path().filename().string();
+    }
+    if (analysisArtifactId.empty()) {
+        analysisArtifactId = "analysis-artifact";
+    }
+    std::string selectionFingerprintInput = analysisArtifactId + "|" + mode;
+    for (const auto& findingIdValue : selectedFindingIds) {
+        if (findingIdValue.is_string()) {
+            selectionFingerprintInput += "|" + findingIdValue.get<std::string>();
+        }
+    }
+    const std::string playbookArtifactId =
+        "playbook-" + normalizeArtifactToken(analysisArtifactId) + "-" + fnv1aHex(selectionFingerprintInput);
+
+    const fs::path playbookArtifactDir =
+        fs::path(appDataDirectory()) /
+        "phase7_artifacts" /
+        "playbook_plan.v1" /
+        playbookArtifactId;
+    std::string artifactWriteError;
+    if (!ensureDirectoryExists(playbookArtifactDir, &artifactWriteError)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_generation_failed",
+            artifactWriteError.empty() ? "Failed to create playbook artifact directory." : artifactWriteError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const fs::path planPath = playbookArtifactDir / "plan.json";
+    const fs::path playbookManifestPath = playbookArtifactDir / "manifest.json";
+    const std::string generatedAtUtc = utcTimestampIso8601Now();
+    const json analysisArtifact = analysisArtifactResult(analysisManifestPath, analysisManifest);
+    const json planPayload{
+        {"contract_version", kPhase7ContractVersion},
+        {"artifact_type", kPhase7PlaybookArtifactType},
+        {"artifact_id", playbookArtifactId},
+        {"generated_at_utc", generatedAtUtc},
+        {"analysis_artifact", analysisArtifact},
+        {"mode", kPhase7PlaybookDefaultMode},
+        {"requested_finding_ids", requestedFindingIds},
+        {"selected_finding_ids", selectedFindingIds},
+        {"planned_actions", plannedActions}
+    };
+    if (!writeJsonTextFile(planPath, planPayload, &artifactWriteError)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_generation_failed",
+            artifactWriteError.empty() ? "Failed to write playbook plan artifact." : artifactWriteError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const json playbookManifest{
+        {"contract_version", kPhase7ContractVersion},
+        {"artifact_type", kPhase7PlaybookArtifactType},
+        {"artifact_id", playbookArtifactId},
+        {"generated_at_utc", generatedAtUtc},
+        {"analysis_artifact", analysisArtifact},
+        {"mode", kPhase7PlaybookDefaultMode},
+        {"guardrails", {
+            {"scope", "local_artifact_plan_only"},
+            {"side_effects", "none"},
+            {"apply_mode", "deferred"}
+        }},
+        {"plan_summary", {
+            {"selected_findings_count", selectedFindings.size()},
+            {"planned_actions_count", plannedActions.size()}
+        }},
+        {"files", {
+            {"plan_json", "plan.json"},
+            {"analysis_manifest_path", analysisManifestPath.string()},
+            {"analysis_findings_path", findingsPath.string()}
+        }}
+    };
+    if (!writeJsonTextFile(playbookManifestPath, playbookManifest, &artifactWriteError)) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.contractVersion,
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "artifact_generation_failed",
+            artifactWriteError.empty() ? "Failed to write playbook manifest artifact." : artifactWriteError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const json playbookArtifact{
+        {"artifact_type", kPhase7PlaybookArtifactType},
+        {"contract_version", kPhase7ContractVersion},
+        {"artifact_id", playbookArtifactId},
+        {"artifact_root_dir", playbookArtifactDir.string()},
+        {"manifest_path", playbookManifestPath.string()},
+        {"plan_path", planPath.string()}
+    };
+    json result{
+        {"mode", kPhase7PlaybookDefaultMode},
+        {"analysis_artifact", analysisArtifact},
+        {"requested_finding_ids", requestedFindingIds},
+        {"selected_finding_ids", selectedFindingIds},
+        {"planned_actions", plannedActions},
+        {"playbook_plan", playbookArtifact},
+        {"artifact", playbookArtifact}
     };
 
     json revision = makeReadRevision("snapshot");

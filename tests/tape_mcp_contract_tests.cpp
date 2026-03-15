@@ -263,16 +263,16 @@ void testDeferredAndUnsupportedEnvelopes() {
         .clientName = "tape-mcp-contract-tests"
     });
 
-    const json deferredEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json::object()));
-    expect(!deferredEnvelope.value("ok", true), "reserved deferred tool should return ok=false");
-    expect(deferredEnvelope.value("result", json(nullptr)).is_null(), "reserved deferred tool should return result=null");
-    expect(deferredEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_tool",
-           "reserved deferred tool should return deferred_tool error code");
-    expect(!deferredEnvelope.value("meta", json::object()).value("supported", true),
-           "reserved deferred tool should set meta.supported=false");
-    expect(deferredEnvelope.value("meta", json::object()).value("deferred", false),
-           "reserved deferred tool should set meta.deferred=true");
-    expectRevisionShape(deferredEnvelope.value("meta", json::object()).value("revision", json::object()));
+    const json playbookInvalidEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json::object()));
+    expect(!playbookInvalidEnvelope.value("ok", true), "playbook_apply without source artifact should return ok=false");
+    expect(playbookInvalidEnvelope.value("result", json(nullptr)).is_null(), "playbook_apply invalid input should return result=null");
+    expect(playbookInvalidEnvelope.value("error", json::object()).value("code", std::string()) == "invalid_arguments",
+           "playbook_apply without source artifact should return invalid_arguments");
+    expect(playbookInvalidEnvelope.value("meta", json::object()).value("supported", false),
+           "playbook_apply invalid input should keep meta.supported=true");
+    expect(!playbookInvalidEnvelope.value("meta", json::object()).value("deferred", true),
+           "playbook_apply invalid input should keep meta.deferred=false");
+    expectRevisionShape(playbookInvalidEnvelope.value("meta", json::object()).value("revision", json::object()));
 
     const json unsupportedEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_unknown", json::object()));
     expect(!unsupportedEnvelope.value("ok", true), "unknown tool should return ok=false");
@@ -654,6 +654,49 @@ void testPhase7AnalyzerAndFindingsToolShaping() {
     expect(findingsFromId == analyzerFindings,
            "findings_list by artifact id should return stored findings payload");
 
+    const json playbookDryRunEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_playbook_apply", json{{"analysis_artifact_id", analysisArtifactId}}));
+    expect(playbookDryRunEnvelope.value("ok", false),
+           "playbook_apply dry_run should return ok=true");
+    expect(playbookDryRunEnvelope.value("meta", json::object()).value("contract_version", std::string()) ==
+               "phase7-analyzer-playbook-v1",
+           "playbook_apply should use phase7 contract version");
+    expect(playbookDryRunEnvelope.value("meta", json::object()).value("engine_command", std::string()) ==
+               "phase7_playbook_apply_guarded_local",
+           "playbook_apply should use local phase7 engine marker");
+    expect(playbookDryRunEnvelope.value("result", json::object()).value("mode", std::string()) == "dry_run",
+           "playbook_apply should default to dry_run mode");
+
+    const json playbookResult = playbookDryRunEnvelope.value("result", json::object());
+    const json plannedActions = playbookResult.value("planned_actions", json::array());
+    expect(plannedActions.is_array() && !plannedActions.empty(),
+           "playbook_apply dry_run should return at least one planned action");
+    const json playbookArtifact = playbookResult.value("playbook_plan", json::object());
+    expect(playbookArtifact.value("artifact_type", std::string()) == "phase7.playbook_plan.v1",
+           "playbook_apply should return phase7 playbook artifact type");
+    expect(playbookArtifact.value("contract_version", std::string()) == "phase7-analyzer-playbook-v1",
+           "playbook_apply artifact should report phase7 contract");
+    const std::string playbookManifestPath = playbookArtifact.value("manifest_path", std::string());
+    expect(fs::exists(playbookManifestPath),
+           "playbook_apply should write a playbook manifest path");
+    const std::string planPath = playbookArtifact.value("plan_path", std::string());
+    expect(fs::exists(planPath),
+           "playbook_apply should write a playbook plan path");
+
+    const json playbookApplyEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_playbook_apply", json{
+            {"analysis_artifact_id", analysisArtifactId},
+            {"mode", "apply"}
+        }));
+    expect(!playbookApplyEnvelope.value("ok", true),
+           "playbook_apply mode=apply should return ok=false");
+    expect(playbookApplyEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_behavior",
+           "playbook_apply mode=apply should return deferred_behavior");
+    expect(playbookApplyEnvelope.value("meta", json::object()).value("supported", false),
+           "playbook_apply mode=apply should keep meta.supported=true");
+    expect(playbookApplyEnvelope.value("meta", json::object()).value("deferred", false),
+           "playbook_apply mode=apply should set meta.deferred=true");
+
     const json deferredProfileEnvelope = envelopeFromToolResult(
         adapter.callTool("tapescript_analyzer_run", json{
             {"case_manifest_path", caseManifestPath},
@@ -729,6 +772,55 @@ void testPhase7AnalyzerAndFindingsFailureMapping() {
     expect(findingsNonStringEnvelope.value("error", json::object()).value("code", std::string()) ==
                "invalid_arguments",
            "findings_list with non-string manifest path should map to invalid_arguments");
+
+    const json playbookNeitherEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_playbook_apply", json::object()));
+    expect(!playbookNeitherEnvelope.value("ok", true),
+           "playbook_apply with neither analysis reference should return ok=false");
+    expect(playbookNeitherEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "playbook_apply with neither analysis reference should map to invalid_arguments");
+
+    const json playbookBothEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_playbook_apply", json{
+            {"analysis_manifest_path", "/tmp/analysis-manifest.json"},
+            {"analysis_artifact_id", "analysis-123"}
+        }));
+    expect(!playbookBothEnvelope.value("ok", true),
+           "playbook_apply with both analysis references should return ok=false");
+    expect(playbookBothEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "playbook_apply with both analysis references should map to invalid_arguments");
+
+    const json playbookNonStringEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_playbook_apply", json{{"analysis_manifest_path", 31}}));
+    expect(!playbookNonStringEnvelope.value("ok", true),
+           "playbook_apply with non-string analysis_manifest_path should return ok=false");
+    expect(playbookNonStringEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "playbook_apply with non-string analysis_manifest_path should map to invalid_arguments");
+
+    const json playbookInvalidFindingIdsEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_playbook_apply", json{
+            {"analysis_artifact_id", "analysis-123"},
+            {"finding_ids", "not-an-array"}
+        }));
+    expect(!playbookInvalidFindingIdsEnvelope.value("ok", true),
+           "playbook_apply with non-array finding_ids should return ok=false");
+    expect(playbookInvalidFindingIdsEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "invalid_arguments",
+           "playbook_apply with non-array finding_ids should map to invalid_arguments");
+
+    const json playbookDeferredApplyEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_playbook_apply", json{
+            {"analysis_artifact_id", "analysis-deferred-check"},
+            {"mode", "apply"}
+        }));
+    expect(!playbookDeferredApplyEnvelope.value("ok", true),
+           "playbook_apply mode=apply should return ok=false");
+    expect(playbookDeferredApplyEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "deferred_behavior",
+           "playbook_apply mode=apply should map to deferred_behavior");
 
     const json missingSourceEnvelope = envelopeFromToolResult(
         adapter.callTool("tapescript_analyzer_run", json{
@@ -832,6 +924,35 @@ void testPhase7AnalyzerAndFindingsFailureMapping() {
     expect(unsupportedAnalysisEnvelope.value("error", json::object()).value("code", std::string()) ==
                "unsupported_source_contract",
            "unsupported analysis manifest should map to unsupported_source_contract");
+
+    const json playbookCaseEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_export_range", json{{"trace_id", 31}}));
+    expect(playbookCaseEnvelope.value("ok", false), "playbook failure-map setup export_range should succeed");
+    const std::string playbookCaseManifestPath =
+        playbookCaseEnvelope.value("result", json::object())
+            .value("artifact", json::object())
+            .value("manifest_path", std::string());
+    expect(!playbookCaseManifestPath.empty(), "playbook failure-map setup should return case manifest path");
+
+    const json playbookAnalyzerEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{{"case_manifest_path", playbookCaseManifestPath}}));
+    expect(playbookAnalyzerEnvelope.value("ok", false), "playbook failure-map setup analyzer_run should succeed");
+    const std::string playbookAnalysisArtifactId =
+        playbookAnalyzerEnvelope.value("result", json::object())
+            .value("analysis_artifact", json::object())
+            .value("artifact_id", std::string());
+    expect(!playbookAnalysisArtifactId.empty(), "playbook failure-map setup should return analysis artifact id");
+
+    const json playbookMissingFindingEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_playbook_apply", json{
+            {"analysis_artifact_id", playbookAnalysisArtifactId},
+            {"finding_ids", json::array({"phase7.missing.finding"})}
+        }));
+    expect(!playbookMissingFindingEnvelope.value("ok", true),
+           "playbook_apply with unknown finding_id should return ok=false");
+    expect(playbookMissingFindingEnvelope.value("error", json::object()).value("code", std::string()) ==
+               "finding_not_found",
+           "playbook_apply with unknown finding_id should map to finding_not_found");
 }
 
 void testErrorAndInvalidArgumentEnvelopes() {
@@ -1151,14 +1272,16 @@ void testMcpStdioHarnessRegression() {
         {"method", "tools/call"},
         {"params", {
             {"name", "tapescript_playbook_apply"},
-            {"arguments", json::object()}
+            {"arguments", json{{"analysis_artifact_id", analysisArtifactId}}}
         }}
     });
     const json playbookResponse = readJsonRpcMessage(child.readFd);
     const json playbookEnvelope = playbookResponse.value("result", json::object())
         .value("structuredContent", json::object());
-    expect(playbookEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_tool",
-           "stdio playbook_apply should remain explicitly deferred");
+    expect(playbookEnvelope.value("ok", false),
+           "stdio playbook_apply should run guarded dry_run planning");
+    expect(playbookEnvelope.value("result", json::object()).value("planned_actions", json::array()).is_array(),
+           "stdio playbook_apply should return planned_actions array");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
