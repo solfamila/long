@@ -1100,6 +1100,135 @@ void testTapeScopeClientBuildsCommandRequestsForLiveRangeAndLookup() {
     expect(lookup.value.value("trace_id", 0ULL) == 71ULL, "tapescope lookup should preserve the raw lookup payload");
 }
 
+void testTapeScopeClientBuildsLookupRequestsForAllAnchorTypes() {
+    {
+        tapescope::OrderAnchorQuery query;
+        query.traceId = 9001;
+        tapescope::QueryResult<tapescope::json> lookup;
+        const json request = exchangeTapeScopeRequest(
+            makeUniqueSocketPath("tapescope-lookup-trace"),
+            json{{"ok", true}, {"result", json{{"trace_id", 9001}}}},
+            [&](const tapescope::QueryClient& client) {
+                lookup = client.findOrderAnchor(query);
+            });
+
+        expect(request.value("command", std::string()) == "find_order_anchor",
+               "trace-id lookup should issue find_order_anchor");
+        expect(request.at("args").size() == 1 && request.at("args").contains("trace_id"),
+               "trace-id lookup should include only trace_id");
+        expect(request.at("args").value("trace_id", 0ULL) == 9001ULL,
+               "trace-id lookup should preserve the requested value");
+        expect(lookup.ok(), "trace-id lookup should preserve success payloads");
+    }
+
+    {
+        tapescope::OrderAnchorQuery query;
+        query.orderId = 501;
+        tapescope::QueryResult<tapescope::json> lookup;
+        const json request = exchangeTapeScopeRequest(
+            makeUniqueSocketPath("tapescope-lookup-order"),
+            json{{"ok", true}, {"result", json{{"order_id", 501}}}},
+            [&](const tapescope::QueryClient& client) {
+                lookup = client.findOrderAnchor(query);
+            });
+
+        expect(request.value("command", std::string()) == "find_order_anchor",
+               "order-id lookup should issue find_order_anchor");
+        expect(request.at("args").size() == 1 && request.at("args").contains("order_id"),
+               "order-id lookup should include only order_id");
+        expect(request.at("args").value("order_id", 0LL) == 501LL,
+               "order-id lookup should preserve the requested value");
+        expect(lookup.ok(), "order-id lookup should preserve success payloads");
+    }
+
+    {
+        tapescope::OrderAnchorQuery query;
+        query.permId = 9901;
+        tapescope::QueryResult<tapescope::json> lookup;
+        const json request = exchangeTapeScopeRequest(
+            makeUniqueSocketPath("tapescope-lookup-perm"),
+            json{{"ok", true}, {"result", json{{"perm_id", 9901}}}},
+            [&](const tapescope::QueryClient& client) {
+                lookup = client.findOrderAnchor(query);
+            });
+
+        expect(request.value("command", std::string()) == "find_order_anchor",
+               "perm-id lookup should issue find_order_anchor");
+        expect(request.at("args").size() == 1 && request.at("args").contains("perm_id"),
+               "perm-id lookup should include only perm_id");
+        expect(request.at("args").value("perm_id", 0LL) == 9901LL,
+               "perm-id lookup should preserve the requested value");
+        expect(lookup.ok(), "perm-id lookup should preserve success payloads");
+    }
+
+    {
+        tapescope::OrderAnchorQuery query;
+        query.execId = std::string("EXEC-9001");
+        tapescope::QueryResult<tapescope::json> lookup;
+        const json request = exchangeTapeScopeRequest(
+            makeUniqueSocketPath("tapescope-lookup-exec"),
+            json{{"ok", true}, {"result", json{{"exec_id", "EXEC-9001"}}}},
+            [&](const tapescope::QueryClient& client) {
+                lookup = client.findOrderAnchor(query);
+            });
+
+        expect(request.value("command", std::string()) == "find_order_anchor",
+               "exec-id lookup should issue find_order_anchor");
+        expect(request.at("args").size() == 1 && request.at("args").contains("exec_id"),
+               "exec-id lookup should include only exec_id");
+        expect(request.at("args").value("exec_id", std::string()) == "EXEC-9001",
+               "exec-id lookup should preserve the requested value");
+        expect(lookup.ok(), "exec-id lookup should preserve success payloads");
+    }
+}
+
+void testTapeScopeClientPreservesLookupNotFoundAsRemoteError() {
+    tapescope::OrderAnchorQuery query;
+    query.orderId = 111;
+
+    tapescope::QueryResult<tapescope::json> lookup;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-lookup-notfound"),
+        json{
+            {"ok", false},
+            {"error", "order anchor not found"}
+        },
+        [&](const tapescope::QueryClient& client) {
+            lookup = client.findOrderAnchor(query);
+        });
+
+    expect(request.value("command", std::string()) == "find_order_anchor",
+           "lookup not-found test should still issue find_order_anchor");
+    expect(!lookup.ok(), "lookup not-found payload should surface as an error");
+    expect(lookup.error.kind == tapescope::QueryErrorKind::Remote,
+           "lookup not-found payload should be classified as a remote error");
+    expectContains(lookup.error.message, "not found",
+                   "lookup not-found payload should preserve the not-found reason");
+}
+
+void testTapeScopeClientMarksLookupAckResponsesAsSeamUnavailable() {
+    tape_engine::IngestAck ack;
+    ack.status = "accepted";
+    ack.acceptedRecords = 1;
+
+    tapescope::OrderAnchorQuery query;
+    query.traceId = 71;
+
+    tapescope::QueryResult<tapescope::json> lookup;
+    const json request = exchangeTapeScopeRequest(
+        makeUniqueSocketPath("tapescope-lookup-seam"),
+        tape_engine::ackToJson(ack),
+        [&](const tapescope::QueryClient& client) {
+            lookup = client.findOrderAnchor(query);
+        });
+
+    expect(request.value("command", std::string()) == "find_order_anchor",
+           "lookup seam test should issue find_order_anchor");
+    expect(!lookup.ok(), "lookup should reject ingest-ack payloads");
+    expect(lookup.error.kind == tapescope::QueryErrorKind::SeamUnavailable,
+           "lookup should classify ingest-ack payloads as seam unavailable");
+}
+
 void testTapeScopeClientParsesLiveTailObjectPayload() {
     tapescope::QueryResult<std::vector<tapescope::json>> liveTail;
     const json request = exchangeTapeScopeRequest(
@@ -1910,6 +2039,9 @@ int main() {
         testTapeScopeClientParsesStatusFallbackFields();
         testTapeScopeClientMarksAckResponsesAsSeamUnavailable();
         testTapeScopeClientBuildsCommandRequestsForLiveRangeAndLookup();
+        testTapeScopeClientBuildsLookupRequestsForAllAnchorTypes();
+        testTapeScopeClientPreservesLookupNotFoundAsRemoteError();
+        testTapeScopeClientMarksLookupAckResponsesAsSeamUnavailable();
         testTapeScopeClientParsesLiveTailObjectPayload();
         testTapeScopeClientParsesRangeRecordsPayload();
         testTapeScopeClientRejectsMalformedRangePayload();

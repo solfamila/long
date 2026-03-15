@@ -40,6 +40,15 @@ struct RangeRow {
     std::string summary;
 };
 
+enum class OrderAnchorType {
+    TraceId = 0,
+    OrderId = 1,
+    PermId = 2,
+    ExecId = 3
+};
+
+std::string DescribeLiveEvent(const json& event, std::size_t index);
+
 NSString* ToNSString(const std::string& value) {
     if (value.empty()) {
         return @"";
@@ -210,6 +219,60 @@ bool ParsePositiveUInt64(const std::string& raw, std::uint64_t* parsed) {
     return true;
 }
 
+bool ParsePositiveInt64(const std::string& raw, long long* parsed) {
+    if (parsed == nullptr) {
+        return false;
+    }
+
+    std::uint64_t unsignedValue = 0;
+    if (!ParsePositiveUInt64(raw, &unsignedValue) ||
+        unsignedValue > static_cast<std::uint64_t>(std::numeric_limits<long long>::max())) {
+        return false;
+    }
+
+    *parsed = static_cast<long long>(unsignedValue);
+    return true;
+}
+
+std::string ToLowerAscii(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return text;
+}
+
+bool ContainsCaseInsensitive(const std::string& haystack, const std::string& needle) {
+    return ToLowerAscii(haystack).find(ToLowerAscii(needle)) != std::string::npos;
+}
+
+OrderAnchorType OrderAnchorTypeFromIndex(NSInteger index) {
+    switch (index) {
+        case 1:
+            return OrderAnchorType::OrderId;
+        case 2:
+            return OrderAnchorType::PermId;
+        case 3:
+            return OrderAnchorType::ExecId;
+        case 0:
+        default:
+            return OrderAnchorType::TraceId;
+    }
+}
+
+NSString* PlaceholderForOrderAnchorType(OrderAnchorType type) {
+    switch (type) {
+        case OrderAnchorType::TraceId:
+            return @"e.g. 71";
+        case OrderAnchorType::OrderId:
+            return @"e.g. 501";
+        case OrderAnchorType::PermId:
+            return @"e.g. 9501";
+        case OrderAnchorType::ExecId:
+            return @"e.g. EXEC-71";
+    }
+    return @"";
+}
+
 std::string TruncateString(const std::string& value, std::size_t maxChars) {
     if (value.size() <= maxChars) {
         return value;
@@ -306,6 +369,150 @@ NSColor* RangeErrorColor(tapescope::QueryErrorKind kind) {
     return [NSColor secondaryLabelColor];
 }
 
+std::vector<json> ExtractOrderContextEvents(const json& payload) {
+    std::vector<json> events;
+    auto fromArray = [](const json& arrayPayload) {
+        std::vector<json> values;
+        values.reserve(arrayPayload.size());
+        for (const auto& item : arrayPayload) {
+            values.push_back(item);
+        }
+        return values;
+    };
+
+    if (payload.is_array()) {
+        return fromArray(payload);
+    }
+    if (!payload.is_object()) {
+        return events;
+    }
+
+    for (const char* key : {"events", "records", "matches", "context"}) {
+        const auto it = payload.find(key);
+        if (it != payload.end() && it->is_array()) {
+            return fromArray(*it);
+        }
+    }
+    for (const char* key : {"event", "record", "match"}) {
+        const auto it = payload.find(key);
+        if (it != payload.end() && it->is_object()) {
+            events.push_back(*it);
+            return events;
+        }
+    }
+    return events;
+}
+
+std::string DescribeOrderAnchor(const json& payload) {
+    if (!payload.is_object()) {
+        return {};
+    }
+
+    const json* anchorObject = &payload;
+    const auto anchorIt = payload.find("anchor");
+    if (anchorIt != payload.end() && anchorIt->is_object()) {
+        anchorObject = &(*anchorIt);
+    }
+
+    std::ostringstream out;
+    const std::uint64_t traceId = FirstPresentUInt64(*anchorObject, {"trace_id", "traceId"});
+    const std::uint64_t orderId = FirstPresentUInt64(*anchorObject, {"order_id", "orderId"});
+    const std::uint64_t permId = FirstPresentUInt64(*anchorObject, {"perm_id", "permId"});
+    const std::string execId = FirstPresentString(*anchorObject, {"exec_id", "execId"});
+
+    if (traceId > 0) {
+        out << "trace_id=" << traceId << ' ';
+    }
+    if (orderId > 0) {
+        out << "order_id=" << orderId << ' ';
+    }
+    if (permId > 0) {
+        out << "perm_id=" << permId << ' ';
+    }
+    if (!execId.empty()) {
+        out << "exec_id=" << execId << ' ';
+    }
+
+    return TrimAscii(out.str());
+}
+
+bool IsOrderLookupNotFoundPayload(const json& payload) {
+    if (payload.is_null()) {
+        return true;
+    }
+    if (payload.is_array()) {
+        return payload.empty();
+    }
+    if (!payload.is_object()) {
+        return false;
+    }
+    if (payload.empty()) {
+        return true;
+    }
+
+    const auto foundIt = payload.find("found");
+    if (foundIt != payload.end() && foundIt->is_boolean() && !foundIt->get<bool>()) {
+        return true;
+    }
+
+    const std::string status = ToLowerAscii(FirstPresentString(payload, {"status", "lookup_status", "result_status"}));
+    if (status == "not_found" || status == "not-found" || status == "not found" || status == "missing") {
+        return true;
+    }
+
+    const std::string message = FirstPresentString(payload, {"error", "message", "reason"});
+    if (ContainsCaseInsensitive(message, "not found")) {
+        return true;
+    }
+
+    const bool hasContextCollection = payload.contains("events") ||
+                                      payload.contains("records") ||
+                                      payload.contains("matches") ||
+                                      payload.contains("context");
+    if (!hasContextCollection) {
+        return false;
+    }
+
+    const std::vector<json> events = ExtractOrderContextEvents(payload);
+    if (!events.empty()) {
+        return false;
+    }
+    return DescribeOrderAnchor(payload).empty();
+}
+
+bool IsOrderLookupNotFoundError(const tapescope::QueryError& error) {
+    return error.kind == tapescope::QueryErrorKind::Remote &&
+           ContainsCaseInsensitive(error.message, "not found");
+}
+
+std::string DescribeOrderLookupResult(const json& payload, const std::string& descriptor) {
+    std::ostringstream out;
+    out << "OrderLookupPane (frozen query)\n";
+    out << "Source command: find_order_anchor\n";
+    out << "Lookup: " << descriptor << "\n\n";
+
+    const std::string resolvedAnchor = DescribeOrderAnchor(payload);
+    if (!resolvedAnchor.empty()) {
+        out << "Resolved anchor: " << resolvedAnchor << "\n\n";
+    }
+
+    const std::vector<json> contextEvents = ExtractOrderContextEvents(payload);
+    if (contextEvents.empty()) {
+        out << "No event context array returned for this lookup.\n";
+    } else {
+        out << "Matching event context (" << contextEvents.size() << " events):\n\n";
+        for (std::size_t i = 0; i < contextEvents.size(); ++i) {
+            out << DescribeLiveEvent(contextEvents[i], i);
+            if (i + 1 != contextEvents.size()) {
+                out << "\n\n";
+            }
+        }
+    }
+
+    out << "\n\nRaw payload:\n" << payload.dump(2);
+    return out.str();
+}
+
 std::string DescribeStatusPane(const ProbeSnapshot& probe, const std::string& configuredSocketPath) {
     std::ostringstream out;
     out << "StatusPane (mutable/live)\n";
@@ -388,12 +595,6 @@ std::string DescribeLiveEventsPane(const tapescope::QueryResult<std::vector<json
         }
     }
     return out.str();
-}
-
-std::string OrderPlaceholderText() {
-    return
-        "OrderLookupPane is reserved for Wave 4.\n\n"
-        "This pane is intentionally left as a placeholder in Wave 2.";
 }
 
 NSString* PollMetaTextForProbe(const ProbeSnapshot& probe) {
@@ -482,6 +683,12 @@ NSString* UInt64String(std::uint64_t value) {
     NSTextView* _statusTextView;
     NSTextView* _liveTextView;
     NSTextView* _orderTextView;
+    NSPopUpButton* _orderAnchorTypePopup;
+    NSTextField* _orderAnchorInputField;
+    NSButton* _orderLookupButton;
+    NSTextField* _orderStateLabel;
+    NSTextField* _orderSummaryLabel;
+    BOOL _orderLookupInFlight;
 
     NSTextField* _rangeFirstField;
     NSTextField* _rangeLastField;
@@ -869,6 +1076,254 @@ NSString* UInt64String(std::uint64_t value) {
     [self queueRangeRequest:query];
 }
 
+- (NSTabViewItem*)orderTabItem {
+    NSView* pane = [[NSView alloc] initWithFrame:NSZeroRect];
+
+    NSStackView* stack = MakeColumnStack(10.0);
+    [pane addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:pane.leadingAnchor constant:10.0],
+        [stack.trailingAnchor constraintEqualToAnchor:pane.trailingAnchor constant:-10.0],
+        [stack.topAnchor constraintEqualToAnchor:pane.topAnchor constant:10.0],
+        [stack.bottomAnchor constraintEqualToAnchor:pane.bottomAnchor constant:-10.0]
+    ]];
+
+    NSTextField* intro = MakeLabel(
+        @"Order anchor lookup: choose one anchor selector and query find_order_anchor for matching context.",
+        [NSFont systemFontOfSize:12.5 weight:NSFontWeightMedium],
+        [NSColor secondaryLabelColor]);
+    intro.lineBreakMode = NSLineBreakByWordWrapping;
+    intro.maximumNumberOfLines = 2;
+    [stack addArrangedSubview:intro];
+
+    NSStackView* controls = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    controls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    controls.alignment = NSLayoutAttributeCenterY;
+    controls.spacing = 8.0;
+    controls.translatesAutoresizingMaskIntoConstraints = NO;
+
+    [controls addArrangedSubview:MakeLabel(@"anchor_type",
+                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                           [NSColor secondaryLabelColor])];
+    _orderAnchorTypePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 120, 24) pullsDown:NO];
+    [_orderAnchorTypePopup addItemsWithTitles:@[@"traceId", @"orderId", @"permId", @"execId"]];
+    _orderAnchorTypePopup.target = self;
+    _orderAnchorTypePopup.action = @selector(orderAnchorTypeChanged:);
+    [controls addArrangedSubview:_orderAnchorTypePopup];
+
+    [controls addArrangedSubview:MakeLabel(@"anchor_value",
+                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                           [NSColor secondaryLabelColor])];
+    _orderAnchorInputField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 200, 24)];
+    _orderAnchorInputField.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightMedium];
+    _orderAnchorInputField.placeholderString = PlaceholderForOrderAnchorType(OrderAnchorType::TraceId);
+    _orderAnchorInputField.target = self;
+    _orderAnchorInputField.action = @selector(performOrderLookup:);
+    [controls addArrangedSubview:_orderAnchorInputField];
+
+    _orderLookupButton = [NSButton buttonWithTitle:@"Find Order Anchor"
+                                            target:self
+                                            action:@selector(performOrderLookup:)];
+    [controls addArrangedSubview:_orderLookupButton];
+    [stack addArrangedSubview:controls];
+
+    _orderStateLabel = MakeLabel(@"Enter one anchor value and click Find Order Anchor.",
+                                 [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                 [NSColor secondaryLabelColor]);
+    _orderStateLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    _orderStateLabel.maximumNumberOfLines = 2;
+    [stack addArrangedSubview:_orderStateLabel];
+
+    _orderSummaryLabel = MakeLabel(@"No lookup issued yet.",
+                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightRegular],
+                                   [NSColor tertiaryLabelColor]);
+    [stack addArrangedSubview:_orderSummaryLabel];
+
+    _orderTextView = MakeReadOnlyTextView();
+    _orderTextView.string = @"Lookup results will appear here.";
+    NSScrollView* resultScroll = MakeScrollView(_orderTextView);
+    resultScroll.hasHorizontalScroller = YES;
+    [resultScroll.heightAnchor constraintGreaterThanOrEqualToConstant:320.0].active = YES;
+    [stack addArrangedSubview:resultScroll];
+
+    _orderLookupInFlight = NO;
+    [self updateOrderLookupControls];
+
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"OrderLookupPane"];
+    item.label = @"OrderLookupPane";
+    item.view = pane;
+    return item;
+}
+
+- (void)updateOrderLookupControls {
+    const BOOL controlsEnabled = !_orderLookupInFlight;
+    _orderAnchorTypePopup.enabled = controlsEnabled;
+    _orderAnchorInputField.enabled = controlsEnabled;
+    _orderLookupButton.enabled = controlsEnabled;
+}
+
+- (void)orderAnchorTypeChanged:(id)sender {
+    (void)sender;
+    const OrderAnchorType type = OrderAnchorTypeFromIndex(_orderAnchorTypePopup.indexOfSelectedItem);
+    _orderAnchorInputField.placeholderString = PlaceholderForOrderAnchorType(type);
+}
+
+- (BOOL)buildOrderLookupQuery:(tapescope::OrderAnchorQuery*)outQuery
+                   descriptor:(std::string*)outDescriptor
+                        error:(std::string*)outError {
+    if (outQuery == nullptr || outDescriptor == nullptr || outError == nullptr) {
+        return NO;
+    }
+
+    *outQuery = tapescope::OrderAnchorQuery{};
+    const OrderAnchorType type = OrderAnchorTypeFromIndex(_orderAnchorTypePopup.indexOfSelectedItem);
+    const std::string rawValue = TrimAscii(ToStdString(_orderAnchorInputField.stringValue));
+    if (rawValue.empty()) {
+        *outError = "anchor_value is required.";
+        return NO;
+    }
+
+    switch (type) {
+        case OrderAnchorType::TraceId: {
+            std::uint64_t traceId = 0;
+            if (!ParsePositiveUInt64(rawValue, &traceId)) {
+                *outError = "traceId must be a positive integer.";
+                return NO;
+            }
+            outQuery->traceId = traceId;
+            *outDescriptor = "traceId=" + std::to_string(traceId);
+            return YES;
+        }
+        case OrderAnchorType::OrderId: {
+            long long orderId = 0;
+            if (!ParsePositiveInt64(rawValue, &orderId)) {
+                *outError = "orderId must be a positive integer.";
+                return NO;
+            }
+            outQuery->orderId = orderId;
+            *outDescriptor = "orderId=" + std::to_string(orderId);
+            return YES;
+        }
+        case OrderAnchorType::PermId: {
+            long long permId = 0;
+            if (!ParsePositiveInt64(rawValue, &permId)) {
+                *outError = "permId must be a positive integer.";
+                return NO;
+            }
+            outQuery->permId = permId;
+            *outDescriptor = "permId=" + std::to_string(permId);
+            return YES;
+        }
+        case OrderAnchorType::ExecId:
+            outQuery->execId = rawValue;
+            *outDescriptor = "execId=" + rawValue;
+            return YES;
+    }
+
+    *outError = "Unsupported anchor selector.";
+    return NO;
+}
+
+- (void)showOrderValidationError:(const std::string&)errorMessage {
+    _orderStateLabel.stringValue = ToNSString(errorMessage);
+    _orderStateLabel.textColor = [NSColor systemRedColor];
+    _orderSummaryLabel.stringValue = @"Fix lookup input, then retry.";
+}
+
+- (void)performOrderLookup:(id)sender {
+    (void)sender;
+    if (_orderLookupInFlight || !_client) {
+        return;
+    }
+
+    tapescope::OrderAnchorQuery query;
+    std::string descriptor;
+    std::string validationError;
+    if (![self buildOrderLookupQuery:&query descriptor:&descriptor error:&validationError]) {
+        [self showOrderValidationError:validationError];
+        return;
+    }
+    [self queueOrderLookup:query descriptor:descriptor];
+}
+
+- (void)queueOrderLookup:(const tapescope::OrderAnchorQuery&)query descriptor:(const std::string&)descriptor {
+    if (_orderLookupInFlight || !_client) {
+        return;
+    }
+
+    _orderLookupInFlight = YES;
+    _orderStateLabel.stringValue = @"Requesting order anchor…";
+    _orderStateLabel.textColor = [NSColor systemOrangeColor];
+    _orderSummaryLabel.stringValue = ToNSString(std::string("Running find_order_anchor for ") + descriptor + "...");
+    [self updateOrderLookupControls];
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_pollQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+
+        const tapescope::QueryResult<json> lookupResult = strongSelf->_client->findOrderAnchor(query);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil) {
+                return;
+            }
+            [innerSelf applyOrderLookupResult:lookupResult descriptor:descriptor];
+        });
+    });
+}
+
+- (void)applyOrderLookupResult:(const tapescope::QueryResult<json>&)result
+                    descriptor:(const std::string&)descriptor {
+    _orderLookupInFlight = NO;
+
+    if (!result.ok()) {
+        if (IsOrderLookupNotFoundError(result.error)) {
+            _orderStateLabel.stringValue = @"No matching order anchor found.";
+            _orderStateLabel.textColor = [NSColor secondaryLabelColor];
+            _orderSummaryLabel.stringValue = ToNSString(std::string("Lookup for ") + descriptor + " returned no match.");
+            _orderTextView.string = ToNSString(std::string("Engine reported no matching order anchor for ") + descriptor + '.');
+            [self updateOrderLookupControls];
+            return;
+        }
+
+        _orderStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+        _orderStateLabel.textColor = RangeErrorColor(result.error.kind);
+        _orderSummaryLabel.stringValue = ToNSString(std::string("Lookup failed for ") + descriptor + '.');
+        _orderTextView.string = ToNSString(std::string("Order lookup failed.\n\n") + tapescope::QueryClient::describeError(result.error));
+        [self updateOrderLookupControls];
+        return;
+    }
+
+    if (IsOrderLookupNotFoundPayload(result.value)) {
+        _orderStateLabel.stringValue = @"No matching order anchor found.";
+        _orderStateLabel.textColor = [NSColor secondaryLabelColor];
+        _orderSummaryLabel.stringValue = ToNSString(std::string("Lookup for ") + descriptor + " returned no match.");
+        std::string details = "No order anchor matched the requested selector.\n";
+        if (!result.value.is_null()) {
+            details += "\nRaw payload:\n";
+            details += result.value.dump(2);
+        }
+        _orderTextView.string = ToNSString(details);
+        [self updateOrderLookupControls];
+        return;
+    }
+
+    const std::vector<json> contextEvents = ExtractOrderContextEvents(result.value);
+    _orderStateLabel.stringValue = @"Order anchor lookup completed.";
+    _orderStateLabel.textColor = [NSColor systemGreenColor];
+    if (contextEvents.empty()) {
+        _orderSummaryLabel.stringValue = ToNSString(std::string("Lookup for ") + descriptor + " returned an anchor payload.");
+    } else {
+        _orderSummaryLabel.stringValue =
+            ToNSString(std::string("Lookup for ") + descriptor + " returned " + std::to_string(contextEvents.size()) + " context events.");
+    }
+    _orderTextView.string = ToNSString(DescribeOrderLookupResult(result.value, descriptor));
+    [self updateOrderLookupControls];
+}
+
 - (void)buildInterface {
     NSView* contentView = self.window.contentView;
     NSStackView* root = MakeColumnStack(16.0);
@@ -887,7 +1342,7 @@ NSString* UInt64String(std::uint64_t value) {
     [root addArrangedSubview:title];
 
     NSTextField* subtitle = MakeLabel(
-        @"Wave 3: status, mutable live-tail, and replay range panes backed only by QueryClient seam commands.",
+        @"Wave 4: status, mutable live-tail, replay range, and order anchor lookup panes backed only by QueryClient seam commands.",
         [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium],
         [NSColor secondaryLabelColor]);
     subtitle.lineBreakMode = NSLineBreakByWordWrapping;
@@ -924,13 +1379,12 @@ NSString* UInt64String(std::uint64_t value) {
     [tabView addTabViewItem:[self tabItemWithLabel:@"StatusPane" textView:&_statusTextView]];
     [tabView addTabViewItem:[self tabItemWithLabel:@"LiveEventsPane" textView:&_liveTextView]];
     [tabView addTabViewItem:[self rangeTabItem]];
-    [tabView addTabViewItem:[self tabItemWithLabel:@"OrderLookupPane" textView:&_orderTextView]];
+    [tabView addTabViewItem:[self orderTabItem]];
     [tabView.heightAnchor constraintGreaterThanOrEqualToConstant:430.0].active = YES;
     [root addArrangedSubview:tabView];
 
     _statusTextView.string = @"Waiting for first status response…";
     _liveTextView.string = @"Waiting for first live-tail response…";
-    _orderTextView.string = ToNSString(OrderPlaceholderText());
 }
 
 - (void)showWindowAndStart {
