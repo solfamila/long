@@ -119,6 +119,8 @@ constexpr std::uint64_t kIncidentMergeWindowNs = 5ULL * 1000ULL * 1000ULL * 1000
 constexpr double kSpreadWideningMinAbsolute = 0.01;
 constexpr double kLiquidityChangeMinShares = 100.0;
 constexpr double kLiquidityChangeMinRatio = 0.50;
+constexpr std::size_t kTradePressureMinStreak = 3;
+constexpr double kTouchTradeTolerance = 1e-6;
 
 bool hasAnchorIdentity(const BridgeAnchorIdentity& anchor) {
     return anchor.traceId > 0 || anchor.orderId > 0 || anchor.permId > 0 || !anchor.execId.empty();
@@ -129,6 +131,37 @@ bool sameAnchorIdentity(const BridgeAnchorIdentity& left, const BridgeAnchorIden
            left.orderId == right.orderId &&
            left.permId == right.permId &&
            left.execId == right.execId;
+}
+
+bool matchesAnchorSelector(const BridgeAnchorIdentity& anchor,
+                           std::uint64_t traceId,
+                           long long orderId,
+                           long long permId,
+                           const std::string& execId) {
+    const bool matchesTrace = traceId > 0 && anchor.traceId == traceId;
+    const bool matchesOrder = orderId > 0 && anchor.orderId == orderId;
+    const bool matchesPerm = permId > 0 && anchor.permId == permId;
+    const bool matchesExec = !execId.empty() && anchor.execId == execId;
+    return matchesTrace || matchesOrder || matchesPerm || matchesExec;
+}
+
+int classifyTradePressureSide(const EngineEvent& event,
+                              double effectiveBid,
+                              double effectiveAsk,
+                              bool hasInside) {
+    if (event.eventKind != "market_tick" ||
+        event.bridgeRecord.marketField != 4 ||
+        !std::isfinite(event.bridgeRecord.price) ||
+        !hasInside) {
+        return 0;
+    }
+    if (event.bridgeRecord.price >= effectiveAsk - kTouchTradeTolerance) {
+        return 1;
+    }
+    if (event.bridgeRecord.price <= effectiveBid + kTouchTradeTolerance) {
+        return -1;
+    }
+    return 0;
 }
 
 int severityRank(const std::string& severity) {
@@ -164,6 +197,11 @@ std::string incidentWhyItMatters(const IncidentRecord& incident) {
     }
     if (incident.kind == "ask_liquidity_refilled" || incident.kind == "bid_liquidity_refilled") {
         return "Displayed inside liquidity refilled at the touch, which can signal absorption or support/resistance rebuilding.";
+    }
+    if (incident.kind == "buy_trade_pressure" || incident.kind == "sell_trade_pressure") {
+        return incident.kind == "buy_trade_pressure"
+            ? "Repeated prints lifted the ask, which can indicate buyers pressing the offer and raising short-term execution risk for passive buys."
+            : "Repeated prints hit the bid, which can indicate sellers pressing the bid and weakening short-term support for passive sells.";
     }
     if (incident.kind == "source_gap" || incident.kind == "source_reset") {
         return "Source continuity changed, so any interpretation around this window needs to account for data-quality risk.";
@@ -244,12 +282,32 @@ struct HotAnalyzerInput {
     bool hasInside = false;
     bool overlapsOrder = false;
     BridgeAnchorIdentity overlappingAnchor;
+    bool tradePressureTriggered = false;
+    std::string tradePressureKind;
+    std::size_t tradePressureStreakCount = 0;
+    std::uint64_t tradePressureFirstSessionSeq = 0;
+    double tradePressureReferencePrice = 0.0;
 };
 
 struct DeferredAnalyzerInput {
     std::uint64_t sourceRevisionId = 0;
     ProtectedWindowRecord protectedWindow;
     std::vector<json> windowEvents;
+};
+
+struct OrderAnchorCase {
+    std::vector<json> events;
+    json anchor = json::object();
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    std::uint64_t firstFillSessionSeq = 0;
+    std::uint64_t lastFillSessionSeq = 0;
+    std::uint64_t latestStatusSessionSeq = 0;
+    std::uint64_t latestOpenOrderSessionSeq = 0;
+    std::uint64_t replayTargetSessionSeq = 0;
+    std::uint64_t replayFromSessionSeq = 0;
+    std::uint64_t replayToSessionSeq = 0;
+    std::optional<ProtectedWindowRecord> protectedWindow;
 };
 
 class Phase3Analyzer {
@@ -406,6 +464,45 @@ public:
     }
 };
 
+class TradePressureAnalyzer final : public Phase3Analyzer {
+public:
+    const char* name() const override { return "trade_pressure"; }
+    AnalyzerLane lane() const override { return AnalyzerLane::Hot; }
+
+    void analyzeHot(const HotAnalyzerInput& input,
+                    std::vector<AnalyzerFindingSpec>* findings) const override {
+        if (!input.tradePressureTriggered || input.tradePressureKind.empty()) {
+            return;
+        }
+
+        const bool buyPressure = input.tradePressureKind == "buy_trade_pressure";
+        std::ostringstream title;
+        title << (buyPressure ? "Buy-side trade pressure at " : "Sell-side trade pressure at ")
+              << std::fixed << std::setprecision(2) << input.tradePressureReferencePrice;
+
+        std::ostringstream summary;
+        summary << input.tradePressureStreakCount
+                << " consecutive last-trade prints matched the "
+                << (buyPressure ? "ask" : "bid")
+                << " from session_seq " << input.tradePressureFirstSessionSeq
+                << " through " << input.event.sessionSeq << ".";
+
+        AnalyzerFindingSpec finding;
+        finding.kind = input.tradePressureKind;
+        finding.severity = input.overlapsOrder ? "warning" : "info";
+        finding.confidence = input.tradePressureStreakCount >= 4 ? 0.82 : 0.76;
+        finding.firstSessionSeq = input.tradePressureFirstSessionSeq;
+        finding.lastSessionSeq = input.event.sessionSeq;
+        finding.tsEngineNs = input.event.tsEngineNs;
+        finding.instrumentId = input.event.instrumentId;
+        finding.title = title.str();
+        finding.summary = summary.str();
+        finding.overlapsOrder = input.overlapsOrder;
+        finding.overlappingAnchor = input.overlappingAnchor;
+        findings->push_back(std::move(finding));
+    }
+};
+
 class OrderFlowTimelineAnalyzer final : public Phase3Analyzer {
 public:
     const char* name() const override { return "order_flow_timeline"; }
@@ -488,6 +585,7 @@ const std::vector<std::unique_ptr<Phase3Analyzer>>& allPhase3Analyzers() {
         built.push_back(std::make_unique<SourceContinuityAnalyzer>());
         built.push_back(std::make_unique<SpreadWideningAnalyzer>());
         built.push_back(std::make_unique<InsideLiquidityAnalyzer>());
+        built.push_back(std::make_unique<TradePressureAnalyzer>());
         built.push_back(std::make_unique<OrderFlowTimelineAnalyzer>());
         return built;
     }();
@@ -1534,6 +1632,31 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         : 0.0;
     const bool hasInside = effectiveBid > 0.0 && effectiveAsk > 0.0 && effectiveAsk >= effectiveBid;
 
+    bool tradePressureTriggered = false;
+    std::string tradePressureKind;
+    const int tradePressureSide = classifyTradePressureSide(event, effectiveBid, effectiveAsk, hasInside);
+    if (tradePressureSide == 0) {
+        analyzerBookState_.tradePressureSide = 0;
+        analyzerBookState_.tradePressureStreakCount = 0;
+        analyzerBookState_.tradePressureFirstSessionSeq = 0;
+        analyzerBookState_.tradePressureLastSessionSeq = 0;
+        analyzerBookState_.tradePressureReferencePrice = 0.0;
+    } else {
+        if (analyzerBookState_.tradePressureSide == tradePressureSide) {
+            ++analyzerBookState_.tradePressureStreakCount;
+        } else {
+            analyzerBookState_.tradePressureSide = tradePressureSide;
+            analyzerBookState_.tradePressureStreakCount = 1;
+            analyzerBookState_.tradePressureFirstSessionSeq = event.sessionSeq;
+        }
+        analyzerBookState_.tradePressureLastSessionSeq = event.sessionSeq;
+        analyzerBookState_.tradePressureReferencePrice = event.bridgeRecord.price;
+        if (analyzerBookState_.tradePressureStreakCount == kTradePressureMinStreak) {
+            tradePressureTriggered = true;
+            tradePressureKind = tradePressureSide > 0 ? "buy_trade_pressure" : "sell_trade_pressure";
+        }
+    }
+
     analyzerBookState_.lastEffectiveBid = effectiveBid;
     analyzerBookState_.lastEffectiveAsk = effectiveAsk;
     analyzerBookState_.lastEffectiveBidSize = effectiveBidSize;
@@ -1556,7 +1679,12 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         .effectiveAskSize = effectiveAskSize,
         .hasInside = hasInside,
         .overlapsOrder = overlapsOrder,
-        .overlappingAnchor = overlap
+        .overlappingAnchor = overlap,
+        .tradePressureTriggered = tradePressureTriggered,
+        .tradePressureKind = tradePressureKind,
+        .tradePressureStreakCount = analyzerBookState_.tradePressureStreakCount,
+        .tradePressureFirstSessionSeq = analyzerBookState_.tradePressureFirstSessionSeq,
+        .tradePressureReferencePrice = analyzerBookState_.tradePressureReferencePrice
     };
 
     std::vector<AnalyzerFindingSpec> analyzerFindings;
@@ -1988,11 +2116,7 @@ std::vector<json> Server::filterEventsByAnchor(const QuerySnapshot& snapshot,
     const auto allEvents = mergedEvents(snapshot, frozenRevisionId, includeLiveTail, 0, 0);
     for (const auto& event : allEvents) {
         const json anchor = event.value("anchor", json::object());
-        const bool matchesTrace = traceId > 0 && anchor.value("trace_id", 0ULL) == traceId;
-        const bool matchesOrder = orderId > 0 && anchor.value("order_id", 0LL) == orderId;
-        const bool matchesPerm = permId > 0 && anchor.value("perm_id", 0LL) == permId;
-        const bool matchesExec = !execId.empty() && anchor.value("exec_id", std::string()) == execId;
-        if (!matchesTrace && !matchesOrder && !matchesPerm && !matchesExec) {
+        if (!matchesAnchorSelector(anchorFromJson(anchor), traceId, orderId, permId, execId)) {
             continue;
         }
         results.push_back(event);
@@ -2001,6 +2125,91 @@ std::vector<json> Server::filterEventsByAnchor(const QuerySnapshot& snapshot,
         }
     }
     return results;
+}
+
+json Server::buildOrderCaseSummary(const QuerySnapshot& snapshot,
+                                   const std::vector<json>& events,
+                                   std::uint64_t traceId,
+                                   long long orderId,
+                                   long long permId,
+                                   const std::string& execId,
+                                   std::uint64_t frozenRevisionId,
+                                   bool includeLiveTail) const {
+    if (events.empty()) {
+        throw std::runtime_error("order/fill anchor not found");
+    }
+
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    std::uint64_t firstFillSessionSeq = 0;
+    std::uint64_t lastFillSessionSeq = 0;
+    std::uint64_t latestStatusSessionSeq = 0;
+    std::uint64_t latestOpenOrderSessionSeq = 0;
+    for (const auto& event : events) {
+        const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+        if (firstSessionSeq == 0 || sessionSeq < firstSessionSeq) {
+            firstSessionSeq = sessionSeq;
+        }
+        lastSessionSeq = std::max(lastSessionSeq, sessionSeq);
+        const std::string kind = event.value("event_kind", std::string());
+        if (kind == "fill_execution") {
+            if (firstFillSessionSeq == 0 || sessionSeq < firstFillSessionSeq) {
+                firstFillSessionSeq = sessionSeq;
+            }
+            lastFillSessionSeq = std::max(lastFillSessionSeq, sessionSeq);
+        } else if (kind == "order_status") {
+            latestStatusSessionSeq = std::max(latestStatusSessionSeq, sessionSeq);
+        } else if (kind == "open_order") {
+            latestOpenOrderSessionSeq = std::max(latestOpenOrderSessionSeq, sessionSeq);
+        }
+    }
+
+    const json anchor = events.front().value("anchor", json::object());
+    std::vector<ProtectedWindowRecord> windows = loadFrozenArtifacts(snapshot, frozenRevisionId).protectedWindows;
+    if (includeLiveTail) {
+        for (const auto& record : snapshot.protectedWindows) {
+            if (record.revisionId > frozenRevisionId) {
+                windows.push_back(record);
+            }
+        }
+    }
+
+    std::optional<ProtectedWindowRecord> selectedWindow;
+    for (const auto& window : windows) {
+        if (!matchesAnchorSelector(window.anchor, traceId, orderId, permId, execId)) {
+            continue;
+        }
+        if (!selectedWindow.has_value() || selectedWindow->revisionId < window.revisionId) {
+            selectedWindow = window;
+        }
+    }
+
+    const std::uint64_t replayTargetSessionSeq = lastFillSessionSeq > 0
+        ? lastFillSessionSeq
+        : (latestStatusSessionSeq > 0 ? latestStatusSessionSeq
+                                      : (latestOpenOrderSessionSeq > 0 ? latestOpenOrderSessionSeq : lastSessionSeq));
+    const std::uint64_t replayFromSessionSeq = firstSessionSeq > 5 ? firstSessionSeq - 5 : 1;
+    const std::uint64_t replayToSessionSeq = std::max(lastSessionSeq, replayTargetSessionSeq + 5);
+
+    json summary = {
+        {"anchor", anchor},
+        {"first_fill_session_seq", firstFillSessionSeq},
+        {"first_session_seq", firstSessionSeq},
+        {"includes_mutable_tail", includeLiveTail},
+        {"last_fill_session_seq", lastFillSessionSeq},
+        {"last_session_seq", lastSessionSeq},
+        {"latest_open_order_session_seq", latestOpenOrderSessionSeq},
+        {"latest_order_status_session_seq", latestStatusSessionSeq},
+        {"replay_from_session_seq", replayFromSessionSeq},
+        {"replay_target_session_seq", replayTargetSessionSeq},
+        {"replay_to_session_seq", replayToSessionSeq},
+        {"returned_events", events.size()},
+        {"served_revision_id", frozenRevisionId}
+    };
+    if (selectedWindow.has_value()) {
+        summary["protected_window"] = protectedWindowToJson(*selectedWindow);
+    }
+    return summary;
 }
 
 std::vector<json> Server::filterEventsByProtectedWindow(const QuerySnapshot& snapshot,
@@ -2644,6 +2853,127 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
+    if (request.operation == "read_order_case") {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        const std::size_t limit = request.limit == 0 ? 200 : request.limit;
+        const std::vector<json> events =
+            filterEventsByAnchor(snapshot,
+                                 request.traceId,
+                                 request.orderId,
+                                 request.permId,
+                                 request.execId,
+                                 limit,
+                                 frozenRevisionId,
+                                 request.includeLiveTail);
+        json orderCaseSummary = json::object();
+        try {
+            orderCaseSummary = buildOrderCaseSummary(snapshot,
+                                                    events,
+                                                    request.traceId,
+                                                    request.orderId,
+                                                    request.permId,
+                                                    request.execId,
+                                                    frozenRevisionId,
+                                                    request.includeLiveTail);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        const json anchorJson = orderCaseSummary.value("anchor", json::object());
+        const BridgeAnchorIdentity anchor = anchorFromJson(anchorJson);
+        const FrozenArtifacts frozenArtifacts = loadFrozenArtifacts(snapshot, frozenRevisionId);
+        std::vector<FindingRecord> relatedFindings = frozenArtifacts.findings;
+        std::vector<IncidentRecord> relatedIncidents = frozenArtifacts.incidents;
+        if (request.includeLiveTail) {
+            for (const auto& record : snapshot.findings) {
+                if (record.revisionId > frozenRevisionId) {
+                    relatedFindings.push_back(record);
+                }
+            }
+            for (const auto& record : snapshot.incidents) {
+                if (record.revisionId > frozenRevisionId) {
+                    relatedIncidents.push_back(record);
+                }
+            }
+        }
+
+        relatedFindings.erase(std::remove_if(relatedFindings.begin(),
+                                             relatedFindings.end(),
+                                             [&](const FindingRecord& record) {
+                                                 return !sameAnchorIdentity(record.overlappingAnchor, anchor);
+                                             }),
+                              relatedFindings.end());
+        std::sort(relatedFindings.begin(), relatedFindings.end(), [](const FindingRecord& left,
+                                                                     const FindingRecord& right) {
+            if (left.lastSessionSeq != right.lastSessionSeq) {
+                return left.lastSessionSeq > right.lastSessionSeq;
+            }
+            return left.findingId > right.findingId;
+        });
+
+        relatedIncidents.erase(std::remove_if(relatedIncidents.begin(),
+                                              relatedIncidents.end(),
+                                              [&](const IncidentRecord& record) {
+                                                  return !sameAnchorIdentity(record.overlappingAnchor, anchor);
+                                              }),
+                               relatedIncidents.end());
+        const std::vector<IncidentRecord> collapsedIncidents = collapseLatestIncidentRevisions(relatedIncidents);
+
+        json findingsJson = json::array();
+        for (const auto& record : relatedFindings) {
+            findingsJson.push_back(findingToJson(record));
+        }
+
+        json incidentsJson = json::array();
+        for (const auto& record : collapsedIncidents) {
+            incidentsJson.push_back(incidentToJson(record));
+        }
+
+        std::string headline = "Order case";
+        if (anchor.orderId > 0) {
+            headline = "Order case for order " + std::to_string(anchor.orderId);
+        } else if (!anchor.execId.empty()) {
+            headline = "Order case for fill " + anchor.execId;
+        } else if (anchor.traceId > 0) {
+            headline = "Order case for trace " + std::to_string(anchor.traceId);
+        }
+
+        std::ostringstream narrative;
+        narrative << "Anchor evidence spans session_seq "
+                  << orderCaseSummary.value("first_session_seq", 0ULL)
+                  << " through " << orderCaseSummary.value("last_session_seq", 0ULL)
+                  << " with " << relatedFindings.size() << " related findings and "
+                  << collapsedIncidents.size() << " ranked incidents.";
+        if (orderCaseSummary.value("last_fill_session_seq", 0ULL) > 0) {
+            narrative << " Replay target is the latest fill at session_seq "
+                      << orderCaseSummary.value("last_fill_session_seq", 0ULL) << ".";
+        }
+
+        response.events = json::array();
+        for (const auto& event : events) {
+            response.events.push_back(event);
+        }
+        orderCaseSummary["related_finding_count"] = relatedFindings.size();
+        orderCaseSummary["related_incident_count"] = collapsedIncidents.size();
+        orderCaseSummary["related_findings"] = findingsJson;
+        orderCaseSummary["related_incidents"] = incidentsJson;
+        orderCaseSummary["case_report"] = {
+            {"headline", headline},
+            {"summary", narrative.str()},
+            {"replay_target_session_seq", orderCaseSummary.value("replay_target_session_seq", 0ULL)},
+            {"replay_from_session_seq", orderCaseSummary.value("replay_from_session_seq", 0ULL)},
+            {"replay_to_session_seq", orderCaseSummary.value("replay_to_session_seq", 0ULL)}
+        };
+        response.summary = std::move(orderCaseSummary);
+        return response;
+    }
+
     if (request.operation == "seek_order_anchor") {
         std::uint64_t frozenRevisionId = 0;
         try {
@@ -2666,84 +2996,18 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             return rejectResponse(request, "order/fill anchor not found");
         }
 
-        std::uint64_t firstSessionSeq = 0;
-        std::uint64_t lastSessionSeq = 0;
-        std::uint64_t firstFillSessionSeq = 0;
-        std::uint64_t lastFillSessionSeq = 0;
-        std::uint64_t latestStatusSessionSeq = 0;
-        std::uint64_t latestOpenOrderSessionSeq = 0;
-        for (const auto& event : events) {
-            const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
-            if (firstSessionSeq == 0 || sessionSeq < firstSessionSeq) {
-                firstSessionSeq = sessionSeq;
-            }
-            lastSessionSeq = std::max(lastSessionSeq, sessionSeq);
-            const std::string kind = event.value("event_kind", std::string());
-            if (kind == "fill_execution") {
-                if (firstFillSessionSeq == 0 || sessionSeq < firstFillSessionSeq) {
-                    firstFillSessionSeq = sessionSeq;
-                }
-                lastFillSessionSeq = std::max(lastFillSessionSeq, sessionSeq);
-            } else if (kind == "order_status") {
-                latestStatusSessionSeq = std::max(latestStatusSessionSeq, sessionSeq);
-            } else if (kind == "open_order") {
-                latestOpenOrderSessionSeq = std::max(latestOpenOrderSessionSeq, sessionSeq);
-            }
-        }
-
-        const json anchor = events.front().value("anchor", json::object());
-        std::vector<ProtectedWindowRecord> windows = loadFrozenArtifacts(snapshot, frozenRevisionId).protectedWindows;
-        if (request.includeLiveTail) {
-            for (const auto& record : snapshot.protectedWindows) {
-                if (record.revisionId > frozenRevisionId) {
-                    windows.push_back(record);
-                }
-            }
-        }
-
-        std::optional<ProtectedWindowRecord> selectedWindow;
-        for (const auto& window : windows) {
-            const bool matchesTrace = request.traceId > 0 && window.anchor.traceId == request.traceId;
-            const bool matchesOrder = request.orderId > 0 && window.anchor.orderId == request.orderId;
-            const bool matchesPerm = request.permId > 0 && window.anchor.permId == request.permId;
-            const bool matchesExec = !request.execId.empty() && window.anchor.execId == request.execId;
-            if (!matchesTrace && !matchesOrder && !matchesPerm && !matchesExec) {
-                continue;
-            }
-            if (!selectedWindow.has_value() || selectedWindow->revisionId < window.revisionId) {
-                selectedWindow = window;
-            }
-        }
-
-        const std::uint64_t replayTargetSessionSeq = lastFillSessionSeq > 0
-            ? lastFillSessionSeq
-            : (latestStatusSessionSeq > 0 ? latestStatusSessionSeq
-                                          : (latestOpenOrderSessionSeq > 0 ? latestOpenOrderSessionSeq : lastSessionSeq));
-        const std::uint64_t replayFromSessionSeq = firstSessionSeq > 5 ? firstSessionSeq - 5 : 1;
-        const std::uint64_t replayToSessionSeq = std::max(lastSessionSeq, replayTargetSessionSeq + 5);
-
         response.events = json::array();
         for (const auto& event : events) {
             response.events.push_back(event);
         }
-        response.summary = {
-            {"anchor", anchor},
-            {"first_fill_session_seq", firstFillSessionSeq},
-            {"first_session_seq", firstSessionSeq},
-            {"includes_mutable_tail", request.includeLiveTail},
-            {"last_fill_session_seq", lastFillSessionSeq},
-            {"last_session_seq", lastSessionSeq},
-            {"latest_open_order_session_seq", latestOpenOrderSessionSeq},
-            {"latest_order_status_session_seq", latestStatusSessionSeq},
-            {"replay_from_session_seq", replayFromSessionSeq},
-            {"replay_target_session_seq", replayTargetSessionSeq},
-            {"replay_to_session_seq", replayToSessionSeq},
-            {"returned_events", response.events.size()},
-            {"served_revision_id", frozenRevisionId}
-        };
-        if (selectedWindow.has_value()) {
-            response.summary["protected_window"] = protectedWindowToJson(*selectedWindow);
-        }
+        response.summary = buildOrderCaseSummary(snapshot,
+                                                events,
+                                                request.traceId,
+                                                request.orderId,
+                                                request.permId,
+                                                request.execId,
+                                                frozenRevisionId,
+                                                request.includeLiveTail);
         return response;
     }
 

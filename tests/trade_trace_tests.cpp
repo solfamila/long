@@ -1587,6 +1587,131 @@ void testTapeEnginePhase3DetectsInsideLiquiditySignals() {
     server.stop();
 }
 
+void testTapeEnginePhase3BuildsTradePressureOrderCase() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-trade-pressure";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-trade-pressure.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for trade-pressure order case test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-trade-pressure";
+    options.runtimeSessionId = "runtime-engine-phase3-trade-pressure";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    auto marketTick = [](std::uint64_t sourceSeq,
+                         int field,
+                         double price,
+                         const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, "market_tick", "BrokerMarketData", "INTC",
+                                                     field == 1 ? "BID" : (field == 2 ? "ASK" : "LAST"),
+                                                     0, 0, 0, "", note, "2026-03-14T09:44:00.000");
+        record.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+        record.marketField = field;
+        record.price = price;
+        return record;
+    };
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8401, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      611, 5101, 0, "", "trade pressure anchor", "2026-03-14T09:44:00.050");
+    orderIntent.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+    options.batchSeq = 131;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the trade-pressure anchor batch: " + error);
+
+    options.batchSeq = 132;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8402, 1, 45.50, "trade pressure bid"),
+        marketTick(8403, 2, 45.51, "trade pressure ask")
+    }, options)), &error), "tape-engine should accept the trade-pressure seed batch: " + error);
+
+    options.batchSeq = 133;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8404, 4, 45.51, "trade pressure print one"),
+        marketTick(8405, 4, 45.51, "trade pressure print two"),
+        marketTick(8406, 4, 45.51, "trade pressure print three")
+    }, options)), &error), "tape-engine should accept the trade-pressure print batch: " + error);
+
+    BridgeOutboxRecord fill = makeBridgeRecord(8407, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                                               611, 5101, 0, "exec-5101-a", "trade pressure fill", "2026-03-14T09:44:00.090");
+    fill.instrumentId = "ib:conid:9401:STK:SMART:USD:INTC";
+    fill.price = 45.51;
+    fill.size = 100.0;
+
+    options.batchSeq = 134;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({fill}, options)), &error),
+           "tape-engine should accept the trade-pressure fill batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+    }, "tape-engine should freeze trade-pressure batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3-trade-pressure";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 trade-pressure findings query should succeed: " + error);
+    bool sawTradePressureFinding = false;
+    for (const auto& item : response.events) {
+        sawTradePressureFinding = sawTradePressureFinding || item.value("kind", std::string()) == "buy_trade_pressure";
+    }
+    expect(sawTradePressureFinding, "phase 3 should detect buy-side trade pressure at the ask");
+
+    tape_engine::QueryRequest caseRequest;
+    caseRequest.requestId = "order-case-phase3-trade-pressure";
+    caseRequest.operation = "read_order_case";
+    caseRequest.orderId = 5101;
+    expect(client.query(caseRequest, &response, &error), "phase 3 order-case query should succeed: " + error);
+    expect(response.summary.value("replay_target_session_seq", 0ULL) == response.summary.value("last_fill_session_seq", 0ULL),
+           "order-case replay target should prefer the latest fill session seq");
+    expect(response.summary.value("related_finding_count", 0ULL) >= 2ULL,
+           "order-case summary should include related findings from the protected anchor window");
+    expect(response.summary.value("related_incident_count", 0ULL) >= 1ULL,
+           "order-case summary should include at least one related incident");
+    expect(response.summary.contains("protected_window"), "order-case summary should surface the selected protected window");
+    expect(response.summary.contains("case_report"), "order-case summary should include a report-style case summary");
+
+    bool sawTradePressureRelatedFinding = false;
+    for (const auto& item : response.summary.value("related_findings", json::array())) {
+        sawTradePressureRelatedFinding = sawTradePressureRelatedFinding || item.value("kind", std::string()) == "buy_trade_pressure";
+    }
+    expect(sawTradePressureRelatedFinding, "order-case related findings should include the trade-pressure signal");
+
+    bool sawTradePressureIncident = false;
+    for (const auto& item : response.summary.value("related_incidents", json::array())) {
+        sawTradePressureIncident = sawTradePressureIncident || item.value("kind", std::string()) == "buy_trade_pressure";
+    }
+    expect(sawTradePressureIncident, "order-case related incidents should include the trade-pressure incident");
+
+    bool sawOrderIntent = false;
+    bool sawFill = false;
+    for (const auto& item : response.events) {
+        const std::string kind = item.value("event_kind", std::string());
+        sawOrderIntent = sawOrderIntent || kind == "order_intent";
+        sawFill = sawFill || kind == "fill_execution";
+    }
+    expect(sawOrderIntent, "order-case evidence should include the order intent");
+    expect(sawFill, "order-case evidence should include the fill execution");
+
+    server.stop();
+}
+
 void testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity() {
     const fs::path rootDir = testDataDir() / "tape-engine-reset-marker";
     const fs::path socketPath = testDataDir() / "tape-engine-reset-marker.sock";
@@ -2598,6 +2723,7 @@ int main() {
         testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
         testTapeEnginePhase3DetectsInsideLiquiditySignals();
+        testTapeEnginePhase3BuildsTradePressureOrderCase();
         testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity();
         testTapeEngineReplaySnapshotRebuildsFrozenMarketState();
         testBridgeMarketDataEmissionExpandsPublicEvents();

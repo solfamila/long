@@ -209,6 +209,11 @@ private:
         double lastEffectiveAsk = 0.0;
         double lastEffectiveBidSize = 0.0;
         double lastEffectiveAskSize = 0.0;
+        int tradePressureSide = 0;
+        std::size_t tradePressureStreakCount = 0;
+        std::uint64_t tradePressureFirstSessionSeq = 0;
+        std::uint64_t tradePressureLastSessionSeq = 0;
+        double tradePressureReferencePrice = 0.0;
         bool hasInside = false;
     };
 
@@ -303,6 +308,14 @@ private:
                                            std::size_t limit,
                                            std::uint64_t frozenRevisionId,
                                            bool includeLiveTail) const;
+    json buildOrderCaseSummary(const QuerySnapshot& snapshot,
+                               const std::vector<json>& events,
+                               std::uint64_t traceId,
+                               long long orderId,
+                               long long permId,
+                               const std::string& execId,
+                               std::uint64_t frozenRevisionId,
+                               bool includeLiveTail) const;
     std::vector<json> filterEventsByProtectedWindow(const QuerySnapshot& snapshot,
                                                     std::uint64_t windowId,
                                                     std::size_t limit,
