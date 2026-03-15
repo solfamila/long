@@ -366,6 +366,12 @@ struct BridgeOutboxSnapshot {
     std::vector<BridgeOutboxRecord> records;
 };
 
+struct BridgeDispatchSnapshot {
+    std::string appSessionId;
+    std::string runtimeSessionId;
+    std::vector<BridgeOutboxRecord> records;
+};
+
 struct SharedData {
     std::recursive_mutex mutex;
     std::recursive_mutex clientMutex;
@@ -827,6 +833,9 @@ bool reserveWebSocketIdempotencyKey(const std::string& key, std::string* error =
 BridgeOutboxEnqueueResult enqueueBridgeOutboxRecord(const BridgeOutboxRecordInput& input);
 void seedBridgeOutboxRecoveryState(const RuntimeRecoverySnapshot& recovery);
 BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems = 100);
+BridgeDispatchSnapshot captureBridgeDispatchSnapshot(std::size_t maxItems = 0);
+std::size_t acknowledgeDeliveredBridgeRecords(const std::vector<BridgeOutboxRecord>& records);
+void noteBridgeTransportUnavailable(const std::string& reason);
 double calculateOpenBuyExposureUnlocked(const std::string& account);
 double calculatePositionMarketValueUnlocked(const std::string& account, const std::string& symbol);
 std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot();

@@ -2842,6 +2842,95 @@ BridgeOutboxSnapshot captureBridgeOutboxSnapshot(std::size_t maxItems) {
     return snapshot;
 }
 
+BridgeDispatchSnapshot captureBridgeDispatchSnapshot(std::size_t maxItems) {
+    BridgeDispatchSnapshot snapshot;
+    const auto published = ensurePublishedSharedDataSnapshot();
+    snapshot.appSessionId = published->appSessionId;
+    snapshot.runtimeSessionId = published->runtimeSessionId;
+    if (published->bridgeOutbox.empty()) {
+        return snapshot;
+    }
+
+    const std::size_t limit = maxItems == 0
+        ? published->bridgeOutbox.size()
+        : std::min(maxItems, published->bridgeOutbox.size());
+    snapshot.records.reserve(limit);
+    for (auto it = published->bridgeOutbox.begin();
+         it != published->bridgeOutbox.end() && snapshot.records.size() < limit;
+         ++it) {
+        snapshot.records.push_back(*it);
+    }
+    return snapshot;
+}
+
+std::size_t acknowledgeDeliveredBridgeRecords(const std::vector<BridgeOutboxRecord>& records) {
+    if (records.empty()) {
+        return 0;
+    }
+    return invokeSharedDataMutation([&]() {
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+
+        std::size_t removed = 0;
+        while (removed < records.size() && !state.bridgeOutbox.empty()) {
+            const BridgeOutboxRecord& expected = records[removed];
+            const BridgeOutboxRecord& queued = state.bridgeOutbox.front();
+            if (queued.sourceSeq != expected.sourceSeq) {
+                break;
+            }
+
+            json deliveredDetails = {
+                {"sourceSeq", static_cast<unsigned long long>(queued.sourceSeq)},
+                {"recordType", queued.recordType}
+            };
+            if (!queued.source.empty()) {
+                deliveredDetails["source"] = queued.source;
+            }
+            if (!queued.symbol.empty()) {
+                deliveredDetails["symbol"] = queued.symbol;
+            }
+            if (!queued.side.empty()) {
+                deliveredDetails["side"] = queued.side;
+            }
+            if (queued.anchor.traceId > 0) {
+                deliveredDetails["traceId"] = static_cast<unsigned long long>(queued.anchor.traceId);
+            }
+            if (queued.anchor.orderId > 0) {
+                deliveredDetails["orderId"] = static_cast<long long>(queued.anchor.orderId);
+            }
+            if (queued.anchor.permId > 0) {
+                deliveredDetails["permId"] = queued.anchor.permId;
+            }
+            if (!queued.anchor.execId.empty()) {
+                deliveredDetails["execId"] = queued.anchor.execId;
+            }
+            appendRuntimeJournalEvent("bridge_outbox_delivered", deliveredDetails);
+
+            state.bridgeOutbox.pop_front();
+            ++removed;
+        }
+
+        state.bridgeRecoveryRequired = (state.bridgeRecoveredPendingCount + static_cast<int>(state.bridgeOutbox.size())) > 0 ||
+                                       (state.bridgeRecoveredLossCount + static_cast<int>(state.bridgeOutboxLossCount)) > 0;
+        if (!state.bridgeRecoveryRequired && state.bridgeOutbox.empty()) {
+            state.bridgeFallbackState = "live_delivery";
+            state.bridgeFallbackReason = "engine_connected";
+        }
+        return removed;
+    });
+}
+
+void noteBridgeTransportUnavailable(const std::string& reason) {
+    invokeSharedDataMutation([&]() {
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        state.bridgeFallbackState = "queued_for_recovery";
+        state.bridgeFallbackReason = reason.empty() ? "engine_unavailable" : reason;
+        state.bridgeRecoveryRequired = (state.bridgeRecoveredPendingCount + static_cast<int>(state.bridgeOutbox.size())) > 0 ||
+                                       (state.bridgeRecoveredLossCount + static_cast<int>(state.bridgeOutboxLossCount)) > 0;
+    });
+}
+
 std::vector<std::pair<OrderId, OrderInfo>> captureOrdersSnapshot() {
     std::vector<std::pair<OrderId, OrderInfo>> ordersSnapshot;
     const auto published = ensurePublishedSharedDataSnapshot();

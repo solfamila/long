@@ -1,6 +1,7 @@
 #include "trading_runtime.h"
 
 #include "app_shared.h"
+#include "bridge_batch_transport.h"
 #include "controller.h"
 #include "mac_observability.h"
 #include "trading_wrapper.h"
@@ -23,6 +24,10 @@ namespace {
 
 constexpr auto kControllerPollInterval = std::chrono::milliseconds(16);
 constexpr auto kOrderWatchdogPollInterval = std::chrono::milliseconds(250);
+constexpr auto kBridgeFlushInterval = std::chrono::milliseconds(1);
+constexpr auto kBridgeRetryInterval = std::chrono::milliseconds(250);
+constexpr char kBridgeSocketEnv[] = "LONG_TAPE_ENGINE_SOCKET";
+constexpr char kDefaultBridgeSocketPath[] = "/tmp/tape-engine.sock";
 thread_local void* tlsActionLoopOwner = nullptr;
 
 std::string makeSessionIdentifier(const char* prefix) {
@@ -39,6 +44,14 @@ std::string makeSessionIdentifier(const char* prefix) {
     return oss.str();
 }
 
+std::string resolveBridgeSocketPath() {
+    const char* const path = std::getenv(kBridgeSocketEnv);
+    if (path != nullptr && path[0] != '\0') {
+        return path;
+    }
+    return kDefaultBridgeSocketPath;
+}
+
 } // namespace
 
 struct TradingRuntime::Impl {
@@ -51,6 +64,7 @@ struct TradingRuntime::Impl {
     std::thread readerThread;
     std::thread controllerThread;
     std::thread actionThread;
+    std::thread bridgeThread;
     std::atomic<bool> readerRunning{false};
     std::atomic<bool> controllerRunning{false};
     mutable std::mutex callbackMutex;
@@ -59,6 +73,10 @@ struct TradingRuntime::Impl {
     std::condition_variable actionCv;
     std::deque<std::function<void()>> actionQueue;
     bool stopActionThread = false;
+    std::mutex bridgeMutex;
+    std::condition_variable bridgeCv;
+    bool stopBridgeThread = false;
+    bool bridgeWakeRequested = false;
     UiInvalidationCallback uiInvalidationCallback;
     ControllerActionCallback controllerActionCallback;
     ControllerState controllerState;
@@ -215,6 +233,7 @@ struct TradingRuntime::Impl {
             if (ranAction && action) {
                 action();
                 publishSharedDataSnapshot();
+                notifyBridgeThread();
             }
             checkOrderWatchdogs();
         }
@@ -247,6 +266,177 @@ struct TradingRuntime::Impl {
             actionQueue.clear();
         }
         actionThread = std::thread(&Impl::actionLoop, this);
+    }
+
+    void notifyBridgeThread() {
+        {
+            std::lock_guard<std::mutex> lock(bridgeMutex);
+            bridgeWakeRequested = true;
+        }
+        bridgeCv.notify_one();
+    }
+
+    void bridgeLoop() {
+        const std::string socketPath = resolveBridgeSocketPath();
+        bridge_batch::UnixDomainSocketTransport transport(socketPath);
+        bridge_batch::Sender sender(transport);
+        bridge_batch::BatchPolicy policy;
+        std::uint64_t nextBatchSeq = 1;
+        std::chrono::steady_clock::time_point flushDeadline{};
+        bool flushDeadlineArmed = false;
+
+        appendRuntimeJournalEvent("bridge_sender_started", {
+            {"socketPath", socketPath},
+            {"flushIntervalMs", static_cast<int>(kBridgeFlushInterval.count())},
+            {"retryIntervalMs", static_cast<int>(kBridgeRetryInterval.count())},
+            {"maxRecords", static_cast<int>(policy.maxRecords)},
+            {"maxPayloadBytes", static_cast<int>(policy.maxPayloadBytes)}
+        });
+
+        while (true) {
+            if (sender.pendingBatchCount() > 0) {
+                const bridge_batch::DrainResult drain = sender.drainPending();
+                if (!drain.deliveredBatches.empty()) {
+                    for (const auto& delivered : drain.deliveredBatches) {
+                        const std::size_t removed = acknowledgeDeliveredBridgeRecords(delivered.records);
+                        if (removed != delivered.records.size()) {
+                            appendRuntimeJournalEvent("bridge_outbox_ack_mismatch", {
+                                {"expected", static_cast<int>(delivered.records.size())},
+                                {"removed", static_cast<int>(removed)},
+                                {"batchSeq", static_cast<unsigned long long>(delivered.header.batchSeq)}
+                            });
+                        }
+                    }
+                    flushDeadlineArmed = false;
+                    continue;
+                }
+                if (drain.blocked) {
+                    noteBridgeTransportUnavailable(drain.error);
+                    std::unique_lock<std::mutex> lock(bridgeMutex);
+                    bridgeWakeRequested = false;
+                    bridgeCv.wait_for(lock, kBridgeRetryInterval, [&]() {
+                        return stopBridgeThread;
+                    });
+                    if (stopBridgeThread) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
+            const BridgeDispatchSnapshot dispatch = captureBridgeDispatchSnapshot(policy.maxRecords + 1);
+            if (dispatch.records.empty()) {
+                flushDeadlineArmed = false;
+                std::unique_lock<std::mutex> lock(bridgeMutex);
+                bridgeCv.wait(lock, [&]() {
+                    return stopBridgeThread || bridgeWakeRequested;
+                });
+                if (stopBridgeThread) {
+                    break;
+                }
+                bridgeWakeRequested = false;
+                continue;
+            }
+
+            bridge_batch::BuildOptions options;
+            options.appSessionId = dispatch.appSessionId;
+            options.runtimeSessionId = dispatch.runtimeSessionId;
+            options.batchSeq = nextBatchSeq;
+
+            const bridge_batch::PreparedBatch prepared =
+                bridge_batch::prepareBatch(dispatch.records, options, policy);
+            if (prepared.batch.records.empty()) {
+                std::unique_lock<std::mutex> lock(bridgeMutex);
+                bridgeCv.wait_for(lock, kBridgeFlushInterval, [&]() {
+                    return stopBridgeThread || bridgeWakeRequested;
+                });
+                if (stopBridgeThread) {
+                    break;
+                }
+                bridgeWakeRequested = false;
+                continue;
+            }
+
+            const bool shouldFlushNow = prepared.immediateFlush ||
+                                        prepared.reachedRecordLimit ||
+                                        prepared.reachedPayloadLimit;
+            if (!shouldFlushNow) {
+                const auto now = std::chrono::steady_clock::now();
+                if (!flushDeadlineArmed) {
+                    flushDeadline = now + kBridgeFlushInterval;
+                    flushDeadlineArmed = true;
+                }
+                if (now < flushDeadline) {
+                    std::unique_lock<std::mutex> lock(bridgeMutex);
+                    bridgeCv.wait_until(lock, flushDeadline, [&]() {
+                        return stopBridgeThread || bridgeWakeRequested;
+                    });
+                    if (stopBridgeThread) {
+                        break;
+                    }
+                    bridgeWakeRequested = false;
+                    continue;
+                }
+            }
+
+            options.flushReason = prepared.immediateFlush
+                ? bridge_batch::FlushReason::ImmediateLifecycle
+                : (prepared.reachedPayloadLimit
+                    ? bridge_batch::FlushReason::ThresholdBytes
+                    : (prepared.reachedRecordLimit
+                        ? bridge_batch::FlushReason::ThresholdRecords
+                        : bridge_batch::FlushReason::TimerElapsed));
+            const bridge_batch::PreparedBatch publishPrepared =
+                bridge_batch::prepareBatch(dispatch.records, options, policy);
+
+            const bridge_batch::PublishResult publish = sender.publish(publishPrepared.batch);
+            ++nextBatchSeq;
+            flushDeadlineArmed = false;
+            if (publish.delivered) {
+                const std::size_t removed = acknowledgeDeliveredBridgeRecords(publishPrepared.batch.records);
+                if (removed != publishPrepared.batch.records.size()) {
+                    appendRuntimeJournalEvent("bridge_outbox_ack_mismatch", {
+                        {"expected", static_cast<int>(publishPrepared.batch.records.size())},
+                        {"removed", static_cast<int>(removed)},
+                        {"batchSeq", static_cast<unsigned long long>(publishPrepared.batch.header.batchSeq)}
+                    });
+                }
+                continue;
+            }
+
+            if (publish.queuedForRetry) {
+                noteBridgeTransportUnavailable(publish.error);
+                std::unique_lock<std::mutex> lock(bridgeMutex);
+                bridgeWakeRequested = false;
+                bridgeCv.wait_for(lock, kBridgeRetryInterval, [&]() {
+                    return stopBridgeThread;
+                });
+                if (stopBridgeThread) {
+                    break;
+                }
+            }
+        }
+    }
+
+    void startBridgeLoop() {
+        {
+            std::lock_guard<std::mutex> lock(bridgeMutex);
+            stopBridgeThread = false;
+            bridgeWakeRequested = false;
+        }
+        bridgeThread = std::thread(&Impl::bridgeLoop, this);
+    }
+
+    void stopBridgeLoop() {
+        {
+            std::lock_guard<std::mutex> lock(bridgeMutex);
+            stopBridgeThread = true;
+            bridgeWakeRequested = true;
+        }
+        bridgeCv.notify_all();
+        if (bridgeThread.joinable()) {
+            bridgeThread.join();
+        }
     }
 
     void stopActionLoop() {
@@ -358,6 +548,7 @@ bool TradingRuntime::start() {
             recovery.bannerText
         });
     });
+    impl_->startBridgeLoop();
 
     std::cout << "=== TWS Trading GUI ===" << std::endl;
     std::cout << "Connecting to TWS at " << connectionConfig.host << ":" << connectionConfig.port << std::endl;
@@ -499,6 +690,7 @@ void TradingRuntime::shutdown() {
 
     impl_->started = false;
     SharedData& state = appState();
+    impl_->stopBridgeLoop();
 
     impl_->controllerRunning.store(false, std::memory_order_relaxed);
     if (impl_->controllerThread.joinable()) {

@@ -7,6 +7,7 @@ Current stack:
 - Apple `GameController.framework` for controller input on macOS
 - Interactive Brokers TWS / Gateway connectivity
 - `ixwebsocket` localhost control server
+- bridge batch sender for `tape-engine` over local Unix domain sockets
 
 Important architecture note:
 - The app now uses native AppKit views instead of `GLFW + Dear ImGui`.
@@ -70,6 +71,12 @@ cmake -S . -B build-phase0 \
 cmake --build build-phase0 --target tws_gui_tests -j4
 ctest --test-dir build-phase0 --output-on-failure
 ```
+
+Phase-1 bridge sender notes:
+
+- `long` now batches queued bridge records into framed MessagePack batches for `tape-engine`.
+- The sender uses the Unix domain socket path from `LONG_TAPE_ENGINE_SOCKET` when set.
+- If that env var is unset, the sender defaults to `/tmp/tape-engine.sock`.
 
 Packaging notes:
 - The app is built as a real macOS `.app` bundle.

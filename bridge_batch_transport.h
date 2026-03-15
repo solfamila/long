@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <deque>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bridge_batch {
@@ -29,6 +30,36 @@ private:
     std::size_t attemptedSendCount_ = 0;
 };
 
+class UnixDomainSocketTransport final : public Transport {
+public:
+    explicit UnixDomainSocketTransport(std::string socketPath);
+
+    bool sendFrame(const std::vector<std::uint8_t>& frame, std::string* error) override;
+
+    const std::string& socketPath() const;
+
+private:
+    std::string socketPath_;
+};
+
+struct BatchPolicy {
+    std::size_t maxRecords = 64;
+    std::size_t maxPayloadBytes = 64 * 1024;
+};
+
+struct PreparedBatch {
+    Batch batch;
+    std::size_t payloadBytes = 0;
+    bool immediateFlush = false;
+    bool reachedRecordLimit = false;
+    bool reachedPayloadLimit = false;
+};
+
+bool recordTypeRequiresImmediateFlush(std::string_view recordType);
+PreparedBatch prepareBatch(const std::vector<BridgeOutboxRecord>& records,
+                           const BuildOptions& options,
+                           const BatchPolicy& policy = {});
+
 struct PublishResult {
     bool delivered = false;
     bool queuedForRetry = false;
@@ -41,6 +72,7 @@ struct DrainResult {
     std::size_t pendingBatchCount = 0;
     bool blocked = false;
     std::string error;
+    std::vector<Batch> deliveredBatches;
 };
 
 class Sender {

@@ -6,13 +6,21 @@
 #include "trading_wrapper.h"
 
 #include <algorithm>
+#include <array>
+#include <cerrno>
+#include <condition_variable>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #define g_data appState()
@@ -166,6 +174,22 @@ BridgeOutboxRecord makeBridgeRecord(std::uint64_t sourceSeq,
     record.note = note;
     record.wallTime = wallTime;
     return record;
+}
+
+std::vector<std::uint8_t> readAllFromFd(int fd) {
+    std::vector<std::uint8_t> bytes;
+    std::array<std::uint8_t, 4096> buffer{};
+    while (true) {
+        const ssize_t readCount = ::read(fd, buffer.data(), buffer.size());
+        if (readCount == 0) {
+            break;
+        }
+        if (readCount < 0) {
+            throw std::runtime_error("read failed: " + std::string(std::strerror(errno)));
+        }
+        bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + readCount);
+    }
+    return bytes;
 }
 
 void testReplayPrefersRichLiveTrace() {
@@ -526,6 +550,173 @@ void testBridgeBatchSenderPreservesOrderingAcrossRetries() {
     expect(deliveredFirst.records.front().sourceSeq == 201, "drain should preserve source ordering in the first batch");
     expect(deliveredSecond.records.front().sourceSeq == 202, "drain should preserve source ordering in the second batch");
     expect(deliveredThird.records.front().sourceSeq == 203, "drain should preserve source ordering in the third batch");
+}
+
+void testBridgeDispatchBatchRespectsThresholdsAndImmediateFlush() {
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-dispatch-thresholds";
+    options.runtimeSessionId = "runtime-dispatch-thresholds";
+    options.flushReason = bridge_batch::FlushReason::Manual;
+    options.batchSeq = 11;
+
+    std::vector<BridgeOutboxRecord> burst;
+    burst.reserve(70);
+    for (std::size_t i = 0; i < 70; ++i) {
+        burst.push_back(makeBridgeRecord(500 + i,
+                                         "depth_update",
+                                         "BookFeed",
+                                         "INTC",
+                                         "BUY",
+                                         900 + i,
+                                         700 + static_cast<OrderId>(i),
+                                         0,
+                                         "",
+                                         "depth burst",
+                                         "2026-03-14T09:32:00.000"));
+    }
+
+    bridge_batch::BatchPolicy policy;
+    policy.maxRecords = 64;
+    policy.maxPayloadBytes = 64 * 1024;
+    const bridge_batch::PreparedBatch thresholdBatch = bridge_batch::prepareBatch(burst, options, policy);
+    expect(thresholdBatch.batch.records.size() == 64, "prepareBatch should cap the batch at the record threshold");
+    expect(thresholdBatch.reachedRecordLimit, "prepareBatch should report when the record threshold forced a flush");
+    expect(!thresholdBatch.immediateFlush, "depth-only batches should wait for threshold or timer flush");
+
+    const std::vector<BridgeOutboxRecord> immediateRecords{
+        makeBridgeRecord(801, "order_intent", "WebSocket", "INTC", "BUY",
+                         71, 501, 0, "", "accepted order intent", "2026-03-14T09:33:00.100"),
+        makeBridgeRecord(802, "depth_update", "BookFeed", "INTC", "BUY",
+                         71, 501, 0, "", "book follow-up", "2026-03-14T09:33:00.120")
+    };
+    const bridge_batch::PreparedBatch immediateBatch = bridge_batch::prepareBatch(immediateRecords, options, policy);
+    expect(immediateBatch.immediateFlush, "order and fill lifecycle records should force immediate flush");
+
+    bridge_batch::BatchPolicy bytePolicy;
+    bytePolicy.maxRecords = 64;
+    bytePolicy.maxPayloadBytes = 420;
+    const std::vector<BridgeOutboxRecord> byteBoundRecords{
+        makeBridgeRecord(901, "depth_update", "BookFeed", "INTC", "BUY",
+                         71, 501, 0, "", std::string(220, 'a'), "2026-03-14T09:34:00.100"),
+        makeBridgeRecord(902, "depth_update", "BookFeed", "INTC", "BUY",
+                         71, 501, 0, "", std::string(220, 'b'), "2026-03-14T09:34:00.120")
+    };
+    const bridge_batch::PreparedBatch byteBatch = bridge_batch::prepareBatch(byteBoundRecords, options, bytePolicy);
+    expect(byteBatch.batch.records.size() == 1, "prepareBatch should stop before exceeding the payload threshold");
+    expect(byteBatch.reachedPayloadLimit, "prepareBatch should report payload-triggered flushes");
+}
+
+void testBridgeDispatchSnapshotAndDeliveryAck() {
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    BridgeOutboxRecordInput firstRecord;
+    firstRecord.recordType = "order_intent";
+    firstRecord.source = "WebSocket";
+    firstRecord.symbol = "INTC";
+    firstRecord.side = "BUY";
+    firstRecord.traceId = 71;
+    firstRecord.orderId = 501;
+    firstRecord.note = "accepted order intent";
+    const BridgeOutboxEnqueueResult first = enqueueBridgeOutboxRecord(firstRecord);
+
+    BridgeOutboxRecordInput secondRecord;
+    secondRecord.recordType = "fill_execution";
+    secondRecord.source = "BrokerExecution";
+    secondRecord.symbol = "INTC";
+    secondRecord.side = "BOT";
+    secondRecord.traceId = 71;
+    secondRecord.orderId = 501;
+    secondRecord.permId = 9501;
+    secondRecord.execId = "EXEC-71";
+    secondRecord.note = "execution details observed";
+    const BridgeOutboxEnqueueResult second = enqueueBridgeOutboxRecord(secondRecord);
+
+    const BridgeDispatchSnapshot dispatch = captureBridgeDispatchSnapshot(10);
+    expect(dispatch.records.size() == 2, "dispatch snapshot should expose queued bridge records oldest-first");
+    expect(dispatch.records.front().sourceSeq == first.sourceSeq, "dispatch snapshot should begin with the oldest queued record");
+    expect(dispatch.records.back().sourceSeq == second.sourceSeq, "dispatch snapshot should preserve acceptance ordering");
+
+    const std::size_t removedFirst = acknowledgeDeliveredBridgeRecords({dispatch.records.front()});
+    expect(removedFirst == 1, "delivery ack should remove the delivered prefix record");
+    BridgeOutboxSnapshot afterFirstAck = captureBridgeOutboxSnapshot(10);
+    expect(afterFirstAck.pendingCount == 1, "delivery ack should decrement the pending outbox count");
+    expect(afterFirstAck.records.size() == 1, "delivery ack should leave only the undelivered tail");
+    expect(afterFirstAck.records.front().sourceSeq == second.sourceSeq, "delivery ack should preserve the remaining undelivered record");
+
+    const std::size_t removedSecond = acknowledgeDeliveredBridgeRecords({dispatch.records.back()});
+    expect(removedSecond == 1, "delivery ack should remove the final queued record");
+    const BridgeOutboxSnapshot afterSecondAck = captureBridgeOutboxSnapshot(10);
+    expect(afterSecondAck.pendingCount == 0, "delivery ack should clear the pending outbox count once all records are delivered");
+    expect(!afterSecondAck.recoveryRequired, "delivery ack should clear recovery-required once no pending or lost records remain");
+    expect(afterSecondAck.fallbackState == "live_delivery", "delivery ack should mark the bridge as live once the outbox is drained");
+    expect(afterSecondAck.fallbackReason == "engine_connected", "delivery ack should surface the live bridge reason once drained");
+
+    const std::vector<json> journalLines = readJsonLines(runtimeJournalLogPath());
+    const auto deliveredCount = static_cast<int>(std::count_if(journalLines.begin(),
+                                                               journalLines.end(),
+                                                               [](const json& line) {
+                                                                   return line.value("event", std::string()) == "bridge_outbox_delivered";
+                                                               }));
+    expect(deliveredCount == 2, "delivery ack should journal one delivery marker per delivered record");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testUnixDomainSocketTransportSendsFramedBatch() {
+    const fs::path socketPath = testDataDir() / "bridge-uds-test.sock";
+    std::error_code ec;
+    fs::remove(socketPath, ec);
+
+    const int serverFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    expect(serverFd >= 0, "unix-domain test server should create a socket");
+
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::strncpy(address.sun_path, socketPath.c_str(), sizeof(address.sun_path) - 1);
+    expect(::bind(serverFd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0,
+           "unix-domain test server should bind successfully");
+    expect(::listen(serverFd, 1) == 0, "unix-domain test server should listen successfully");
+
+    std::vector<std::uint8_t> received;
+    std::string serverError;
+    std::thread server([&]() {
+        const int clientFd = ::accept(serverFd, nullptr, nullptr);
+        if (clientFd < 0) {
+            serverError = "accept failed: " + std::string(std::strerror(errno));
+            return;
+        }
+        received = readAllFromFd(clientFd);
+        ::close(clientFd);
+    });
+
+    const std::vector<BridgeOutboxRecord> records{
+        makeBridgeRecord(1001, "order_intent", "WebSocket", "INTC", "BUY",
+                         71, 501, 0, "", "accepted order intent", "2026-03-14T09:35:00.100")
+    };
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-uds-transport";
+    options.runtimeSessionId = "runtime-uds-transport";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+    options.batchSeq = 21;
+    const bridge_batch::Batch batch = bridge_batch::buildBatch(records, options);
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(batch), &error), "unix-domain transport should deliver a framed batch: " + error);
+
+    server.join();
+    ::close(serverFd);
+    fs::remove(socketPath, ec);
+    expect(serverError.empty(), serverError);
+
+    const bridge_batch::Batch decoded = bridge_batch::decodeFrame(received);
+    expect(decoded.header.batchSeq == 21, "unix-domain transport should preserve the framed batch sequence");
+    expect(decoded.records.size() == 1, "unix-domain transport should preserve the framed bridge record count");
+    expect(decoded.records.front().sourceSeq == 1001, "unix-domain transport should preserve the framed source sequence");
 }
 
 void testBridgeOutboxOverflowWritesExplicitLossMarker() {
@@ -1229,6 +1420,9 @@ int main() {
         testBridgeOutboxSourceSeqPreservesAcceptanceOrderingAndAnchors();
         testBridgeBatchFixtureMatchesGoldenFrame();
         testBridgeBatchSenderPreservesOrderingAcrossRetries();
+        testBridgeDispatchBatchRespectsThresholdsAndImmediateFlush();
+        testBridgeDispatchSnapshotAndDeliveryAck();
+        testUnixDomainSocketTransportSendsFramedBatch();
         testBridgeOutboxOverflowWritesExplicitLossMarker();
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
