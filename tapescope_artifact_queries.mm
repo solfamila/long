@@ -247,7 +247,7 @@ using namespace tapescope_support;
         if (strongSelf == nil || !strongSelf->_client) {
             return;
         }
-        const auto result = strongSelf->_client->exportArtifact(artifactId, format);
+        const auto result = strongSelf->_client->exportArtifactPayload(artifactId, format);
         dispatch_async(dispatch_get_main_queue(), ^{
             TapeScopeWindowController* innerSelf = weakSelf;
             if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_artifactExportRequestToken]) {

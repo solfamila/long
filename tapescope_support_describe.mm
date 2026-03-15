@@ -473,6 +473,19 @@ std::string DescribeArtifactExportResult(const std::string& artifactId,
     return out.str();
 }
 
+std::string DescribeArtifactExportResult(const std::string& artifactId,
+                                         const std::string& exportFormat,
+                                         const tapescope::QueryResult<tapescope::ArtifactExportPayload>& result) {
+    if (!result.ok()) {
+        tapescope::QueryResult<json> proxy;
+        proxy.error = result.error;
+        return DescribeArtifactExportResult(artifactId, exportFormat, proxy);
+    }
+    tapescope::QueryResult<json> proxy;
+    proxy.value = result.value.raw;
+    return DescribeArtifactExportResult(artifactId, exportFormat, proxy);
+}
+
 std::string DescribeSessionQualityResult(const tapescope::RangeQuery& query,
                                          bool includeLiveTail,
                                          const tapescope::QueryResult<json>& result) {

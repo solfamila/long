@@ -145,6 +145,17 @@ struct ReportInventoryPayload {
     std::vector<ReportInventoryRow> caseReports;
 };
 
+struct ArtifactExportPayload {
+    json raw;
+    json summary;
+    json artifactExport;
+    std::string artifactId;
+    std::string format;
+    std::uint64_t servedRevisionId = 0;
+    std::string markdown;
+    json bundle = json::object();
+};
+
 std::string defaultSocketPath();
 
 class QueryClient {
@@ -158,36 +169,55 @@ public:
     [[nodiscard]] QueryResult<std::vector<EventRow>> readLiveTailRows(std::size_t limit = 64) const;
     [[nodiscard]] QueryResult<std::vector<json>> readRange(const RangeQuery& query) const;
     [[nodiscard]] QueryResult<std::vector<EventRow>> readRangeRows(const RangeQuery& query) const;
-    [[nodiscard]] QueryResult<json> readSessionQuality(const RangeQuery& query, bool includeLiveTail = false) const;
+    // Legacy JSON envelopes are retained for compatibility, but the UI and tests
+    // should prefer the typed payload variants below.
+    [[nodiscard]] [[deprecated("Use readSessionQualityPayload() for typed TapeScope quality reads")]]
+    QueryResult<json> readSessionQuality(const RangeQuery& query, bool includeLiveTail = false) const;
     [[nodiscard]] QueryResult<SessionQualityPayload> readSessionQualityPayload(const RangeQuery& query,
                                                                                bool includeLiveTail = false) const;
-    [[nodiscard]] QueryResult<json> readSessionOverview(const RangeQuery& query) const;
+    [[nodiscard]] [[deprecated("Use readSessionOverviewPayload() for typed TapeScope investigation reads")]]
+    QueryResult<json> readSessionOverview(const RangeQuery& query) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readSessionOverviewPayload(const RangeQuery& query) const;
-    [[nodiscard]] QueryResult<json> scanSessionReport(const RangeQuery& query) const;
+    [[nodiscard]] [[deprecated("Use scanSessionReportPayload() for typed TapeScope report reads")]]
+    QueryResult<json> scanSessionReport(const RangeQuery& query) const;
     [[nodiscard]] QueryResult<InvestigationPayload> scanSessionReportPayload(const RangeQuery& query) const;
-    [[nodiscard]] QueryResult<json> listSessionReports(std::size_t limit = 20) const;
+    [[nodiscard]] [[deprecated("Use listSessionReportsPayload() for typed TapeScope report inventory reads")]]
+    QueryResult<json> listSessionReports(std::size_t limit = 20) const;
     [[nodiscard]] QueryResult<ReportInventoryPayload> listSessionReportsPayload(std::size_t limit = 20) const;
-    [[nodiscard]] QueryResult<json> findOrderAnchor(const OrderAnchorQuery& query) const;
+    [[nodiscard]] [[deprecated("Use findOrderAnchorPayload() for typed TapeScope order-anchor reads")]]
+    QueryResult<json> findOrderAnchor(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<EventListPayload> findOrderAnchorPayload(const OrderAnchorQuery& query) const;
-    [[nodiscard]] QueryResult<json> seekOrderAnchor(const OrderAnchorQuery& query) const;
+    [[nodiscard]] [[deprecated("Use seekOrderAnchorPayload() for typed TapeScope replay-target reads")]]
+    QueryResult<json> seekOrderAnchor(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<SeekOrderPayload> seekOrderAnchorPayload(const OrderAnchorQuery& query) const;
-    [[nodiscard]] QueryResult<json> readFinding(std::uint64_t findingId) const;
+    [[nodiscard]] [[deprecated("Use readFindingPayload() for typed TapeScope investigation reads")]]
+    QueryResult<json> readFinding(std::uint64_t findingId) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readFindingPayload(std::uint64_t findingId) const;
-    [[nodiscard]] QueryResult<json> readOrderCase(const OrderAnchorQuery& query) const;
+    [[nodiscard]] [[deprecated("Use readOrderCasePayload() for typed TapeScope investigation reads")]]
+    QueryResult<json> readOrderCase(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readOrderCasePayload(const OrderAnchorQuery& query) const;
-    [[nodiscard]] QueryResult<json> scanOrderCaseReport(const OrderAnchorQuery& query) const;
+    [[nodiscard]] [[deprecated("Use scanOrderCaseReportPayload() for typed TapeScope report reads")]]
+    QueryResult<json> scanOrderCaseReport(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<InvestigationPayload> scanOrderCaseReportPayload(const OrderAnchorQuery& query) const;
-    [[nodiscard]] QueryResult<json> listCaseReports(std::size_t limit = 20) const;
+    [[nodiscard]] [[deprecated("Use listCaseReportsPayload() for typed TapeScope report inventory reads")]]
+    QueryResult<json> listCaseReports(std::size_t limit = 20) const;
     [[nodiscard]] QueryResult<ReportInventoryPayload> listCaseReportsPayload(std::size_t limit = 20) const;
-    [[nodiscard]] QueryResult<json> listIncidents(std::size_t limit = 20) const;
+    [[nodiscard]] [[deprecated("Use listIncidentsPayload() for typed TapeScope incident reads")]]
+    QueryResult<json> listIncidents(std::size_t limit = 20) const;
     [[nodiscard]] QueryResult<IncidentListPayload> listIncidentsPayload(std::size_t limit = 20) const;
-    [[nodiscard]] QueryResult<json> readIncident(std::uint64_t logicalIncidentId) const;
+    [[nodiscard]] [[deprecated("Use readIncidentPayload() for typed TapeScope investigation reads")]]
+    QueryResult<json> readIncident(std::uint64_t logicalIncidentId) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readIncidentPayload(std::uint64_t logicalIncidentId) const;
-    [[nodiscard]] QueryResult<json> readOrderAnchor(std::uint64_t anchorId) const;
+    [[nodiscard]] [[deprecated("Use readOrderAnchorPayload() for typed TapeScope investigation reads")]]
+    QueryResult<json> readOrderAnchor(std::uint64_t anchorId) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readOrderAnchorPayload(std::uint64_t anchorId) const;
-    [[nodiscard]] QueryResult<json> readArtifact(const std::string& artifactId) const;
+    [[nodiscard]] [[deprecated("Use readArtifactPayload() for typed TapeScope investigation reads")]]
+    QueryResult<json> readArtifact(const std::string& artifactId) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readArtifactPayload(const std::string& artifactId) const;
-    [[nodiscard]] QueryResult<json> exportArtifact(const std::string& artifactId, const std::string& exportFormat) const;
+    [[nodiscard]] [[deprecated("Use exportArtifactPayload() for typed TapeScope artifact exports")]]
+    QueryResult<json> exportArtifact(const std::string& artifactId, const std::string& exportFormat) const;
+    [[nodiscard]] QueryResult<ArtifactExportPayload> exportArtifactPayload(const std::string& artifactId,
+                                                                           const std::string& exportFormat) const;
 
     [[nodiscard]] static std::string describeError(const QueryError& error);
 

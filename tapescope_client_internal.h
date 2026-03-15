@@ -46,5 +46,6 @@ QueryResult<SeekOrderPayload> packSeekOrderPayload(const QueryResult<tape_engine
 QueryResult<IncidentListPayload> packIncidentListPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<ReportInventoryPayload> packReportInventoryPayload(const QueryResult<tape_engine::QueryResponse>& response,
                                                                bool sessionReports);
+QueryResult<ArtifactExportPayload> packArtifactExportPayload(const QueryResult<tape_engine::QueryResponse>& response);
 
 } // namespace tapescope::client_internal

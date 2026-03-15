@@ -113,6 +113,9 @@ std::string DescribeReportInventoryResult(const tapescope::QueryResult<tapescope
 std::string DescribeArtifactExportResult(const std::string& artifactId,
                                          const std::string& exportFormat,
                                          const tapescope::QueryResult<json>& result);
+std::string DescribeArtifactExportResult(const std::string& artifactId,
+                                         const std::string& exportFormat,
+                                         const tapescope::QueryResult<tapescope::ArtifactExportPayload>& result);
 std::string DescribeSessionQualityResult(const tapescope::RangeQuery& query,
                                          bool includeLiveTail,
                                          const tapescope::QueryResult<json>& result);

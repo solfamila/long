@@ -425,6 +425,16 @@ QueryResult<json> QueryClient::exportArtifact(const std::string& artifactId, con
     return packSummaryAndEvents(performQuery(request));
 }
 
+QueryResult<ArtifactExportPayload> QueryClient::exportArtifactPayload(const std::string& artifactId,
+                                                                      const std::string& exportFormat) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ExportArtifact,
+                                                    "tapescope-export-artifact");
+    request.artifactId = artifactId;
+    request.exportFormat = exportFormat;
+
+    return packArtifactExportPayload(performQuery(request));
+}
+
 std::string QueryClient::describeError(const QueryError& error) {
     switch (error.kind) {
         case QueryErrorKind::None:

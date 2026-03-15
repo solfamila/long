@@ -325,4 +325,51 @@ QueryResult<ReportInventoryPayload> packReportInventoryPayload(const QueryResult
     return makeSuccess(std::move(payload));
 }
 
+QueryResult<ArtifactExportPayload> packArtifactExportPayload(const QueryResult<tape_engine::QueryResponse>& response) {
+    if (!response.ok()) {
+        return propagateError<ArtifactExportPayload>(response.error);
+    }
+    if (!response.value.summary.is_object()) {
+        return makeError<ArtifactExportPayload>(QueryErrorKind::MalformedResponse,
+                                                "artifact export summary must be an object");
+    }
+
+    ArtifactExportPayload payload;
+    payload.summary = response.value.summary;
+    payload.raw = json::object();
+    payload.raw["summary"] = response.value.summary;
+    payload.raw["events"] = response.value.events;
+    payload.artifactId = payload.summary.value("artifact_id", std::string());
+    payload.format = payload.summary.value("export_format", std::string());
+    payload.servedRevisionId = payload.summary.value("served_revision_id", 0ULL);
+    payload.artifactExport = payload.summary.value("artifact_export", json::object());
+    payload.markdown = payload.summary.value("markdown", std::string());
+    payload.bundle = payload.summary.value("bundle", json::object());
+
+    const std::string exportFormat = payload.artifactExport.value("format", payload.format);
+    if (payload.format.empty()) {
+        payload.format = exportFormat;
+    }
+    if (payload.artifactId.empty()) {
+        payload.artifactId = payload.artifactExport.value("artifact_id", std::string());
+    }
+    if (payload.format.empty()) {
+        return makeError<ArtifactExportPayload>(QueryErrorKind::MalformedResponse,
+                                                "artifact export is missing export format");
+    }
+    if (payload.artifactId.empty()) {
+        return makeError<ArtifactExportPayload>(QueryErrorKind::MalformedResponse,
+                                                "artifact export is missing artifact id");
+    }
+    if (payload.format == "markdown" && payload.markdown.empty()) {
+        return makeError<ArtifactExportPayload>(QueryErrorKind::MalformedResponse,
+                                                "markdown artifact export is missing markdown content");
+    }
+    if (payload.format == "json-bundle" && !payload.bundle.is_object()) {
+        return makeError<ArtifactExportPayload>(QueryErrorKind::MalformedResponse,
+                                                "json-bundle artifact export is missing bundle content");
+    }
+    return makeSuccess(std::move(payload));
+}
+
 } // namespace tapescope::client_internal
