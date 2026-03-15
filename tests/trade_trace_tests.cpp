@@ -281,7 +281,7 @@ void testTradingWrapperSessionReadyAndReconnect() {
 
     TradingWrapper wrapper;
     wrapper.connectAck();
-    wrapper.managedAccounts("U23154741,U23164862");
+    wrapper.managedAccounts("U11111111,U23164862");
     wrapper.nextValidId(113);
 
     {
@@ -289,7 +289,7 @@ void testTradingWrapperSessionReadyAndReconnect() {
         expect(g_data.connected, "wrapper should mark session connected after connectAck/nextValidId");
         expect(!g_data.sessionReady, "session should not be ready until reconciliation completes");
         expect(g_data.sessionState == RuntimeSessionState::Reconciling, "session should enter reconciling after nextValidId");
-        expect(g_data.selectedAccount == "U23154741", "managedAccounts should select configured account");
+        expect(g_data.selectedAccount == "U23164862", "managedAccounts should select configured account");
         expect(g_data.nextOrderId.load(std::memory_order_relaxed) == 113, "nextValidId should update next order id");
     }
 
@@ -421,7 +421,7 @@ void testBorrowTickCallbacksUpdateSnapshotState() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         g_data.connected = true;
         g_data.sessionReady = true;
-        g_data.selectedAccount = "U23154741";
+        g_data.selectedAccount = "U23164862";
         g_data.currentSymbol = "INTC";
         g_data.activeMktDataReqId = 7001;
     }
@@ -475,7 +475,7 @@ void testRuntimePresentationSnapshotCapturesConsistentState() {
         g_data.connected = true;
         g_data.sessionReady = true;
         g_data.sessionState = RuntimeSessionState::SessionReady;
-        g_data.selectedAccount = "U23154741";
+        g_data.selectedAccount = "U23164862";
         g_data.twsHost = "127.0.0.1";
         g_data.twsPort = 7496;
         g_data.twsClientId = 7;
@@ -506,7 +506,7 @@ void testRuntimePresentationSnapshotCapturesConsistentState() {
 
         OrderInfo order;
         order.orderId = 200;
-        order.account = "U23154741";
+        order.account = "U23164862";
         order.symbol = "INTC";
         order.side = "BUY";
         order.quantity = 2.0;
@@ -516,11 +516,11 @@ void testRuntimePresentationSnapshotCapturesConsistentState() {
         g_data.orders[200] = order;
 
         PositionInfo position;
-        position.account = "U23154741";
+        position.account = "U23164862";
         position.symbol = "INTC";
         position.quantity = 5.0;
         position.avgCost = 45.10;
-        g_data.positions[makePositionKey("U23154741", "INTC")] = position;
+        g_data.positions[makePositionKey("U23164862", "INTC")] = position;
 
         TradeTrace trace;
         trace.traceId = 44;
@@ -542,7 +542,7 @@ void testRuntimePresentationSnapshotCapturesConsistentState() {
 
     const RuntimePresentationSnapshot snapshot = captureRuntimePresentationSnapshot("INTC", 10);
     expect(snapshot.status.connected, "presentation snapshot should include connection status");
-    expect(snapshot.status.accountText == "U23154741", "presentation snapshot should include selected account");
+    expect(snapshot.status.accountText == "U23164862", "presentation snapshot should include selected account");
     expect(snapshot.connection.clientId == 7, "presentation snapshot should include runtime connection");
     expect(snapshot.activeSymbol == "INTC", "presentation snapshot should include active symbol");
     expect(snapshot.subscriptionActive, "presentation snapshot should include subscription state");
@@ -600,7 +600,7 @@ void testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         g_data.connected = true;
         g_data.sessionReady = true;
-        g_data.selectedAccount = "U23154741";
+        g_data.selectedAccount = "U23164862";
         g_data.currentSymbol = "INTC";
         g_data.askPrice = 45.65;
         g_data.bidPrice = 45.64;
@@ -610,7 +610,7 @@ void testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking() {
 
         OrderInfo order;
         order.orderId = 200;
-        order.account = "U23154741";
+        order.account = "U23164862";
         order.symbol = "INTC";
         order.side = "BUY";
         order.quantity = 1.0;
@@ -657,7 +657,7 @@ void testRuntimePresentationSnapshotCapturesShortPositionState() {
         g_data.connected = true;
         g_data.sessionReady = true;
         g_data.sessionState = RuntimeSessionState::SessionReady;
-        g_data.selectedAccount = "U23154741";
+        g_data.selectedAccount = "U23164862";
         g_data.currentSymbol = "INTC";
         g_data.askPrice = 45.30;
         g_data.bidPrice = 45.20;
@@ -668,15 +668,15 @@ void testRuntimePresentationSnapshotCapturesShortPositionState() {
         g_data.borrowRate = 0.0175;
 
         PositionInfo shortPosition;
-        shortPosition.account = "U23154741";
+        shortPosition.account = "U23164862";
         shortPosition.symbol = "INTC";
         shortPosition.quantity = -5.0;
         shortPosition.avgCost = 44.80;
-        g_data.positions[makePositionKey("U23154741", "INTC")] = shortPosition;
+        g_data.positions[makePositionKey("U23164862", "INTC")] = shortPosition;
 
         OrderInfo workingShort;
         workingShort.orderId = 801;
-        workingShort.account = "U23154741";
+        workingShort.account = "U23164862";
         workingShort.symbol = "INTC";
         workingShort.side = "SELL";
         workingShort.quantity = 2.0;
@@ -688,7 +688,7 @@ void testRuntimePresentationSnapshotCapturesShortPositionState() {
     publishSharedDataSnapshot();
 
     const RuntimePresentationSnapshot snapshot = captureRuntimePresentationSnapshot("INTC", 10);
-    expect(snapshot.status.accountText == "U23154741", "short-position snapshot should preserve the selected account");
+    expect(snapshot.status.accountText == "U23164862", "short-position snapshot should preserve the selected account");
     expect(snapshot.symbol.hasPosition, "short-position snapshot should report the current short position");
     expect(snapshot.symbol.currentPositionQty == -5.0, "short-position snapshot should preserve the negative quantity");
     expect(snapshot.symbol.availableLongToClose == 0.0, "short-position snapshot should not report long shares available to close");
@@ -785,7 +785,7 @@ void testShortOpenSubmitSucceeds() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         const auto orderIt = g_data.orders.find(orderId);
         expect(orderIt != g_data.orders.end(), "open short success should store the order");
-        expect(orderIt->second.account == "U23154741", "open short should use the configured short account");
+        expect(orderIt->second.account == "U23164862", "open short should use the configured short account");
         expect(orderIt->second.symbol == "INTC", "open short should preserve the submitted symbol");
         expect(orderIt->second.side == "SELL", "open short should store a sell order");
         expect(orderIt->second.quantity == 3.0, "open short should preserve the submitted quantity");
@@ -795,7 +795,7 @@ void testShortOpenSubmitSucceeds() {
         const auto traceIt = g_data.traces.find(traceId);
         expect(traceIt != g_data.traces.end(), "open short success should record a trade trace");
         expect(traceIt->second.orderId == orderId, "open short trace should bind to the submitted order");
-        expect(traceIt->second.account == "U23154741", "open short trace should record the configured short account");
+        expect(traceIt->second.account == "U23164862", "open short trace should record the configured short account");
         expect(traceIt->second.side == "SELL", "open short trace should record a sell side");
         expect(!traceIt->second.closeOnly, "open short trace should not be marked close-only");
         expect(traceIt->second.latestStatus == "Submitted", "open short trace should record the submitted broker status");
@@ -826,15 +826,15 @@ void testBuyToCoverSubmitSucceedsWhenBorrowUnavailable() {
         g_data.borrowAvailability = BorrowAvailability::NoSharesToBorrow;
 
         PositionInfo shortPosition;
-        shortPosition.account = "U23154741";
+        shortPosition.account = "U23164862";
         shortPosition.symbol = "INTC";
         shortPosition.quantity = -5.0;
         shortPosition.avgCost = 99.50;
-        g_data.positions[makePositionKey("U23154741", "INTC")] = shortPosition;
+        g_data.positions[makePositionKey("U23164862", "INTC")] = shortPosition;
 
         OrderInfo existingCover;
         existingCover.orderId = 910;
-        existingCover.account = "U23154741";
+        existingCover.account = "U23164862";
         existingCover.symbol = "INTC";
         existingCover.side = "BUY";
         existingCover.quantity = 2.0;
@@ -865,13 +865,13 @@ void testBuyToCoverSubmitSucceedsWhenBorrowUnavailable() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         const auto orderIt = g_data.orders.find(orderId);
         expect(orderIt != g_data.orders.end(), "buy-to-cover success should store the order");
-        expect(orderIt->second.account == "U23154741", "buy-to-cover should use the configured short account");
+        expect(orderIt->second.account == "U23164862", "buy-to-cover should use the configured short account");
         expect(orderIt->second.side == "BUY", "buy-to-cover should store a buy order");
         expect(orderIt->second.quantity == 3.0, "buy-to-cover should preserve the remaining cover quantity");
 
         const auto traceIt = g_data.traces.find(traceId);
         expect(traceIt != g_data.traces.end(), "buy-to-cover success should record a trade trace");
-        expect(traceIt->second.account == "U23154741", "buy-to-cover trace should record the configured short account");
+        expect(traceIt->second.account == "U23164862", "buy-to-cover trace should record the configured short account");
         expect(traceIt->second.side == "BUY", "buy-to-cover trace should record a buy side");
         expect(traceIt->second.closeOnly, "buy-to-cover trace should be marked close-only");
         expect(traceIt->second.latestStatus == "Submitted", "buy-to-cover trace should record the submitted broker status");
@@ -983,22 +983,22 @@ void testShortOpenValidationUsesShortExposureForMaxOpenNotional() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         g_data.connected = true;
         g_data.sessionReady = true;
-        g_data.selectedAccount = "U23154741";
+        g_data.selectedAccount = "U23164862";
         g_data.currentSymbol = "INTC";
         g_data.maxOrderNotional = 20000.0;
         g_data.maxOpenNotional = 1000.0;
         g_data.borrowAvailability = BorrowAvailability::Borrowable;
 
         PositionInfo position;
-        position.account = "U23154741";
+        position.account = "U23164862";
         position.symbol = "INTC";
         position.quantity = -5.0;
         position.avgCost = 100.0;
-        g_data.positions[makePositionKey("U23154741", "INTC")] = position;
+        g_data.positions[makePositionKey("U23164862", "INTC")] = position;
 
         OrderInfo workingShort;
         workingShort.orderId = 701;
-        workingShort.account = "U23154741";
+        workingShort.account = "U23164862";
         workingShort.symbol = "INTC";
         workingShort.side = "SELL";
         workingShort.quantity = 3.0;
@@ -1044,7 +1044,7 @@ void testOrderWatchdogEscalatesToManualReview() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         OrderInfo order;
         order.orderId = 301;
-        order.account = "U23154741";
+        order.account = "U23164862";
         order.symbol = "INTC";
         order.side = "BUY";
         order.quantity = 1.0;
@@ -1099,7 +1099,7 @@ void testCancelAndPartialFillWatchdogs() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         OrderInfo cancelOrder;
         cancelOrder.orderId = 401;
-        cancelOrder.account = "U23154741";
+        cancelOrder.account = "U23164862";
         cancelOrder.symbol = "INTC";
         cancelOrder.side = "BUY";
         cancelOrder.quantity = 1.0;
@@ -1112,7 +1112,7 @@ void testCancelAndPartialFillWatchdogs() {
 
         OrderInfo partialOrder;
         partialOrder.orderId = 402;
-        partialOrder.account = "U23154741";
+        partialOrder.account = "U23164862";
         partialOrder.symbol = "INTC";
         partialOrder.side = "BUY";
         partialOrder.quantity = 2.0;
@@ -1198,7 +1198,7 @@ void testOpenOrderResolvesReconcilingStateAndFloorsOrderIds() {
         std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
         OrderInfo order;
         order.orderId = 501;
-        order.account = "U23154741";
+        order.account = "U23164862";
         order.symbol = "INTC";
         order.side = "BUY";
         order.quantity = 1.0;
@@ -1221,7 +1221,7 @@ void testOpenOrderResolvesReconcilingStateAndFloorsOrderIds() {
     brokerOrder.action = "BUY";
     brokerOrder.totalQuantity = DecimalFunctions::doubleToDecimal(1.0);
     brokerOrder.lmtPrice = 45.70;
-    brokerOrder.account = "U23154741";
+    brokerOrder.account = "U23164862";
     brokerOrder.permId = 9101;
 
     OrderState brokerState;
@@ -1255,7 +1255,7 @@ void testManualReconcileAndAcknowledgeFlow() {
 
         OrderInfo reconcilable;
         reconcilable.orderId = 601;
-        reconcilable.account = "U23154741";
+        reconcilable.account = "U23164862";
         reconcilable.symbol = "INTC";
         reconcilable.side = "BUY";
         reconcilable.quantity = 1.0;
@@ -1267,7 +1267,7 @@ void testManualReconcileAndAcknowledgeFlow() {
 
         OrderInfo manualReview;
         manualReview.orderId = 602;
-        manualReview.account = "U23154741";
+        manualReview.account = "U23164862";
         manualReview.symbol = "INTC";
         manualReview.side = "SELL";
         manualReview.quantity = 1.0;
