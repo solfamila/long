@@ -111,6 +111,7 @@ Phase-1 bridge sender notes:
 - `seek_order_anchor` now returns replay targets and protected-window context for order/fill investigations, so a client can jump straight to the right `session_seq` and replay window around a fill or order-state transition.
 - `read_order_case` now returns a report-style order/fill investigation summary with replay targets, protected-window context, related findings, and ranked incidents for the selected anchor.
 - `read_order_case` and `read_incident` now include merged investigation timelines and timeline highlights, so clients can render case/incident narratives instead of stitching raw events together themselves.
+- `read_session_overview` now returns a ranked session-level investigation summary with top incidents, top findings, protected-window coverage, timeline highlights, and data-quality scoring for any requested `session_seq` range.
 - `read_session_quality` now summarizes evidence trust for the whole frozen session or any requested `session_seq` range, and case/incident/protected-window reads now surface a `data_quality` block alongside their narrative output.
 - Frozen range/replay reads now snapshot engine state up front and use segment `session_seq` bounds to avoid holding the main engine lock across disk I/O and broad rescans.
 - Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.

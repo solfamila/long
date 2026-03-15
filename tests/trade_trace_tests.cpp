@@ -1205,6 +1205,35 @@ void testTapeEnginePhase3FindingsIncidentsAndProtectedWindows() {
     expect(sawSpreadIncident, "phase 3 incident list should include the spread_widened incident");
     expect(sawOrderOverlap, "phase 3 incident list should report at least one order-overlapping incident");
 
+    tape_engine::QueryRequest overviewRequest;
+    overviewRequest.requestId = "overview-phase3";
+    overviewRequest.operation = "read_session_overview";
+    overviewRequest.fromSessionSeq = 1;
+    overviewRequest.toSessionSeq = 4;
+    overviewRequest.limit = 3;
+    expect(client.query(overviewRequest, &response, &error), "phase 3 session overview query should succeed: " + error);
+    expect(response.events.is_array() && !response.events.empty(), "phase 3 session overview should return ranked incidents as events");
+    expect(response.summary.value("incident_count", 0ULL) >= 1ULL, "phase 3 session overview should count ranked incidents");
+    expect(response.summary.value("finding_count", 0ULL) >= 3ULL, "phase 3 session overview should include the phase 3 findings");
+    expect(response.summary.value("protected_window_count", 0ULL) >= 2ULL, "phase 3 session overview should count protected windows");
+    expect(response.summary.contains("incident_kind_counts"), "phase 3 session overview should summarize incident kinds");
+    expect(response.summary.contains("finding_kind_counts"), "phase 3 session overview should summarize finding kinds");
+    expect(response.summary.contains("protected_window_reason_counts"), "phase 3 session overview should summarize protected-window reasons");
+    expect(response.summary.contains("top_findings"), "phase 3 session overview should include top findings");
+    expect(response.summary.contains("top_protected_windows"), "phase 3 session overview should include top protected windows");
+    expect(response.summary.contains("top_order_anchors"), "phase 3 session overview should include top order anchors");
+    expect(response.summary.contains("timeline"), "phase 3 session overview should include a merged investigation timeline");
+    expect(response.summary.contains("timeline_summary"), "phase 3 session overview should summarize the investigation timeline");
+    expect(response.summary.contains("report_summary"), "phase 3 session overview should include report-level summary text");
+    expect(response.summary.contains("data_quality"), "phase 3 session overview should surface data-quality scoring");
+    expect(response.summary.value("top_findings", json::array()).size() >= 1ULL, "phase 3 session overview should return at least one top finding");
+    expect(response.summary.value("top_protected_windows", json::array()).size() >= 1ULL, "phase 3 session overview should return at least one top protected window");
+    expect(response.summary.value("top_order_anchors", json::array()).size() == 1ULL, "phase 3 session overview should return the anchored order context");
+    expect(response.summary.value("timeline_summary", json::object()).value("incident_count", 0ULL) >= 1ULL,
+           "phase 3 session overview timeline should include at least one incident entry");
+    expect(response.summary.value("incident_kind_counts", json::object()).value("spread_widened", 0ULL) >= 1ULL,
+           "phase 3 session overview should count the spread widening incident");
+
     server.stop();
 }
 

@@ -659,6 +659,59 @@ std::vector<IncidentRecord> collapseLatestIncidentRevisions(const std::vector<In
     return collapsed;
 }
 
+bool rangeOverlaps(std::uint64_t firstSessionSeq,
+                   std::uint64_t lastSessionSeq,
+                   std::uint64_t fromSessionSeq,
+                   std::uint64_t toSessionSeq) {
+    if (toSessionSeq != 0 && firstSessionSeq > toSessionSeq) {
+        return false;
+    }
+    if (fromSessionSeq != 0 && lastSessionSeq < fromSessionSeq) {
+        return false;
+    }
+    return true;
+}
+
+std::vector<ProtectedWindowRecord> collapseLatestProtectedWindowRevisions(const std::vector<ProtectedWindowRecord>& records) {
+    std::map<std::uint64_t, ProtectedWindowRecord> latestByWindowId;
+    for (const auto& record : records) {
+        auto found = latestByWindowId.find(record.windowId);
+        if (found == latestByWindowId.end() ||
+            found->second.revisionId < record.revisionId) {
+            latestByWindowId[record.windowId] = record;
+        }
+    }
+    std::vector<ProtectedWindowRecord> collapsed;
+    collapsed.reserve(latestByWindowId.size());
+    for (const auto& entry : latestByWindowId) {
+        collapsed.push_back(entry.second);
+    }
+    std::sort(collapsed.begin(), collapsed.end(), [](const ProtectedWindowRecord& left,
+                                                     const ProtectedWindowRecord& right) {
+        if (left.lastSessionSeq != right.lastSessionSeq) {
+            return left.lastSessionSeq > right.lastSessionSeq;
+        }
+        return left.windowId > right.windowId;
+    });
+    return collapsed;
+}
+
+template <typename Records, typename KeyFn>
+json buildCountSummary(const Records& records, KeyFn&& keyFn) {
+    std::map<std::string, std::uint64_t> counts;
+    for (const auto& record : records) {
+        const std::string key = keyFn(record);
+        if (!key.empty()) {
+            counts[key] += 1;
+        }
+    }
+    json payload = json::object();
+    for (const auto& [key, count] : counts) {
+        payload[key] = count;
+    }
+    return payload;
+}
+
 
 json anchorToJson(const BridgeAnchorIdentity& anchor) {
     json payload = json::object();
@@ -3113,6 +3166,139 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"to_session_seq", to},
             {"served_revision_id", frozenRevisionId},
             {"data_quality", buildDataQualitySummary(events, request.includeLiveTail, snapshot.instrumentId)}
+        };
+        return response;
+    }
+
+    if (request.operation == "read_session_overview") {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+
+        const std::uint64_t from = request.fromSessionSeq;
+        const std::uint64_t to = request.toSessionSeq == 0
+            ? (snapshot.nextSessionSeq == 0 ? 0 : snapshot.nextSessionSeq - 1)
+            : request.toSessionSeq;
+        const std::size_t limit = request.limit == 0 ? 5 : request.limit;
+        const QueryArtifacts artifacts = buildQueryArtifacts(snapshot, frozenRevisionId, request.includeLiveTail);
+        const std::vector<json> allEvents = mergedEvents(snapshot,
+                                                         frozenRevisionId,
+                                                         request.includeLiveTail,
+                                                         from,
+                                                         to);
+        const std::vector<json> timelineEvents = filterEventsByRange(snapshot,
+                                                                     from == 0 ? 1 : from,
+                                                                     to,
+                                                                     std::min<std::size_t>(32, std::max<std::size_t>(12, limit * 4)),
+                                                                     frozenRevisionId,
+                                                                     request.includeLiveTail);
+
+        std::vector<IncidentRecord> topIncidents;
+        for (const auto& incident : collapseLatestIncidentRevisions(artifacts.incidents)) {
+            if (rangeOverlaps(incident.firstSessionSeq, incident.lastSessionSeq, from, to)) {
+                topIncidents.push_back(incident);
+            }
+        }
+
+        std::vector<FindingRecord> topFindings;
+        for (const auto& finding : artifacts.findings) {
+            if (rangeOverlaps(finding.firstSessionSeq, finding.lastSessionSeq, from, to)) {
+                topFindings.push_back(finding);
+            }
+        }
+        std::sort(topFindings.begin(), topFindings.end(), [](const FindingRecord& left,
+                                                             const FindingRecord& right) {
+            if (left.lastSessionSeq != right.lastSessionSeq) {
+                return left.lastSessionSeq > right.lastSessionSeq;
+            }
+            return left.findingId > right.findingId;
+        });
+
+        std::vector<ProtectedWindowRecord> protectedWindows;
+        for (const auto& window : collapseLatestProtectedWindowRevisions(artifacts.protectedWindows)) {
+            if (rangeOverlaps(window.firstSessionSeq, window.lastSessionSeq, from, to)) {
+                protectedWindows.push_back(window);
+            }
+        }
+
+        std::vector<OrderAnchorRecord> orderAnchors;
+        for (const auto& anchor : artifacts.orderAnchors) {
+            if (rangeOverlaps(anchor.sessionSeq, anchor.sessionSeq, from, to)) {
+                orderAnchors.push_back(anchor);
+            }
+        }
+        std::sort(orderAnchors.begin(), orderAnchors.end(), [](const OrderAnchorRecord& left,
+                                                               const OrderAnchorRecord& right) {
+            if (left.sessionSeq != right.sessionSeq) {
+                return left.sessionSeq > right.sessionSeq;
+            }
+            return left.anchorId > right.anchorId;
+        });
+
+        json timeline = json::array();
+        for (const auto& event : timelineEvents) {
+            timeline.push_back(timelineEntryFromEvent(event));
+        }
+        for (std::size_t i = 0; i < topFindings.size() && i < limit; ++i) {
+            timeline.push_back(timelineEntryFromFinding(topFindings[i]));
+        }
+        for (std::size_t i = 0; i < topIncidents.size() && i < limit; ++i) {
+            timeline.push_back(timelineEntryFromIncident(topIncidents[i]));
+        }
+        timeline = sortAndTrimTimeline(std::move(timeline), 24);
+        const json timelineSummary = buildTimelineSummary(timeline);
+
+        response.events = json::array();
+        for (std::size_t i = 0; i < topIncidents.size() && i < limit; ++i) {
+            response.events.push_back(incidentToJson(topIncidents[i]));
+        }
+
+        json topFindingsJson = json::array();
+        for (std::size_t i = 0; i < topFindings.size() && i < limit; ++i) {
+            topFindingsJson.push_back(findingToJson(topFindings[i]));
+        }
+
+        json topWindowsJson = json::array();
+        for (std::size_t i = 0; i < protectedWindows.size() && i < limit; ++i) {
+            topWindowsJson.push_back(protectedWindowToJson(protectedWindows[i]));
+        }
+
+        json topAnchorsJson = json::array();
+        for (std::size_t i = 0; i < orderAnchors.size() && i < limit; ++i) {
+            topAnchorsJson.push_back(orderAnchorToJson(orderAnchors[i]));
+        }
+
+        json reportSummary{
+            {"headline", "Session overview"},
+            {"summary", "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range."},
+            {"timeline_highlights", buildTimelineHighlights(timeline, 5)},
+            {"top_incident_kind", topIncidents.empty() ? std::string() : topIncidents.front().kind},
+            {"top_incident_title", topIncidents.empty() ? std::string() : topIncidents.front().title}
+        };
+
+        response.summary = {
+            {"from_session_seq", from},
+            {"to_session_seq", to},
+            {"served_revision_id", frozenRevisionId},
+            {"includes_mutable_tail", request.includeLiveTail},
+            {"returned_events", response.events.size()},
+            {"incident_count", topIncidents.size()},
+            {"finding_count", topFindings.size()},
+            {"protected_window_count", protectedWindows.size()},
+            {"order_anchor_count", orderAnchors.size()},
+            {"incident_kind_counts", buildCountSummary(topIncidents, [](const IncidentRecord& record) { return record.kind; })},
+            {"finding_kind_counts", buildCountSummary(topFindings, [](const FindingRecord& record) { return record.kind; })},
+            {"protected_window_reason_counts", buildCountSummary(protectedWindows, [](const ProtectedWindowRecord& record) { return record.reason; })},
+            {"top_findings", topFindingsJson},
+            {"top_protected_windows", topWindowsJson},
+            {"top_order_anchors", topAnchorsJson},
+            {"timeline", timeline},
+            {"timeline_summary", timelineSummary},
+            {"report_summary", reportSummary},
+            {"data_quality", buildDataQualitySummary(allEvents, request.includeLiveTail, snapshot.instrumentId)}
         };
         return response;
     }
