@@ -49,12 +49,22 @@ Package a distributable zip:
 cmake --build build --target tws_gui_zip
 ```
 
-Dependency paths:
-- ixWebSocket is expected at `./ixwebsocket`
-- nlohmann/json is expected at `./nlohmann_json`
+Dependency source of truth:
+- `ixwebsocket` is tracked as a git submodule at `./ixwebsocket`
+  - upstream: `https://github.com/machinezone/IXWebSocket.git`
+  - pinned: `v11.4.6` (`2efe037c9cc96fd536774f17bdb5215161ee5087`)
+- `nlohmann_json` is tracked as a git submodule at `./nlohmann_json`
+  - upstream: `https://github.com/nlohmann/json.git`
+  - pinned: `v3.12.0` (`55f93686c01528224f448c19128836e7df245f72`)
 - The build auto-detects a downloaded IB API under `~/Downloads/twsapi_macunix/...` when present
 
-External dependency paths also work. If you keep `ixwebsocket` and `nlohmann_json`
+Bootstrap submodules after clone (or when working in a dependency-empty checkout):
+
+```bash
+git submodule update --init --recursive
+```
+
+External dependency paths still work. If you keep `ixwebsocket` and `nlohmann_json`
 outside this workspace, pass them explicitly:
 
 ```bash

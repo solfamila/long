@@ -10,10 +10,8 @@ out/
 .cache/
 imgui.ini
 
-# Local vendored dependencies
+# Local workspace-only dependencies
 imgui/
-ixwebsocket/
-nlohmann_json/
 third_party/
 
 # IDE
