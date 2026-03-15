@@ -536,6 +536,83 @@ void testPhase6CaseAndReportArtifactsGenerateStableFilesystemOutputs() {
     resetSharedDataForTesting();
 }
 
+void testPhase7AnalyzerProducesDeterministicFindingsFromPhase6CaseManifest() {
+    clearTestFiles();
+
+    appendTraceLine(makeTraceLine(32, 222, 7002, "Controller", "INTC", "BUY",
+                                  "Trigger", "Controller", "BUY 1 INTC @ 45.72", 0.0));
+    appendTraceLine(makeTraceLine(32, 222, 7002, "Controller", "INTC", "BUY",
+                                  "OrderStatusSeen", "Submitted", "submitted", 10.0));
+    appendTraceLine(makeTraceLine(32, 222, 7002, "Controller", "INTC", "BUY",
+                                  "ExecDetailsSeen", "execDetails", "exch=SMART execId=E32 time=20260315 09:36:01",
+                                  850.0, 45.72, 1, 1.0));
+    appendTraceLine(makeTraceLine(32, 222, 7002, "Controller", "INTC", "BUY",
+                                  "FinalState", "Terminal", "Filled: order complete", 851.0));
+
+    std::string error;
+    Phase6CaseBundleArtifact caseArtifact;
+    expect(generatePhase6CaseBundleArtifact(32, "", &caseArtifact, &error),
+           "phase6 case artifact generation should succeed for phase7 analyzer smoke: " + error);
+
+    Phase7AnalysisOutputArtifact firstArtifact;
+    expect(runPhase7AnalyzerFromPhase6Manifest(caseArtifact.manifestPath, "", "", &firstArtifact, &error),
+           "phase7 analyzer should succeed on phase6 case manifest: " + error);
+    const std::string firstManifestText = readTextFile(fs::path(firstArtifact.manifestPath));
+    const std::string firstFindingsText = readTextFile(fs::path(firstArtifact.findingsPath));
+
+    Phase7AnalysisOutputArtifact secondArtifact;
+    expect(runPhase7AnalyzerFromPhase6Manifest(caseArtifact.manifestPath, "", "", &secondArtifact, &error),
+           "phase7 analyzer rerun should succeed on the same source manifest: " + error);
+    const std::string secondManifestText = readTextFile(fs::path(secondArtifact.manifestPath));
+    const std::string secondFindingsText = readTextFile(fs::path(secondArtifact.findingsPath));
+
+    expect(firstArtifact.artifactId == secondArtifact.artifactId,
+           "phase7 analyzer should use deterministic artifact ids for the same source manifest");
+    expect(firstArtifact.artifactRootDir == secondArtifact.artifactRootDir,
+           "phase7 analyzer should use deterministic artifact output paths for the same source manifest");
+    expect(firstManifestText == secondManifestText,
+           "phase7 analyzer manifest output should be stable across reruns with the same input");
+    expect(firstFindingsText == secondFindingsText,
+           "phase7 analyzer findings output should be stable across reruns with the same input");
+
+    const json manifest = json::parse(firstManifestText);
+    expect(manifest.value("artifact_type", std::string()) == "phase7.analysis_output.v1",
+           "phase7 analyzer manifest should declare analysis_output artifact type");
+    expect(manifest.value("contract_version", std::string()) == "phase7-analyzer-playbook-v1",
+           "phase7 analyzer manifest should declare phase7 contract version");
+    expect(manifest.value("analyzer_pass_id", std::string()) == "phase7.trace_fill_integrity.v1",
+           "phase7 analyzer should use the default deterministic pass id when one is not supplied");
+    expect(manifest["source_artifact"].value("artifact_type", std::string()) == "phase6.case_bundle.v1",
+           "phase7 analyzer manifest should preserve the source phase6 artifact type");
+    expect(manifest["source_artifact"].value("manifest_path", std::string()) == caseArtifact.manifestPath,
+           "phase7 analyzer manifest should preserve the source manifest path");
+    expect(manifest["findings_summary"].value("total_count", 0) == 1,
+           "phase7 analyzer smoke should produce one deterministic finding");
+    expect(manifest["findings_summary"]["severity_counts"].value("info", 0) == 1,
+           "phase7 analyzer smoke should classify the stable fixture finding as info");
+
+    const json findings = json::parse(firstFindingsText);
+    expect(findings.is_array() && findings.size() == 1,
+           "phase7 analyzer findings payload should contain one finding record");
+    const json& finding = findings.at(0);
+    const std::string expectedFindingId =
+        "phase7.trace_fill_integrity.v1/" + manifest["source_artifact"].value("artifact_id", std::string());
+    expect(finding.value("finding_id", std::string()) == expectedFindingId,
+           "phase7 analyzer finding id should be deterministic for the source artifact");
+    expect(finding.value("severity", std::string()) == "info",
+           "phase7 analyzer smoke finding should be info for matching fill counts");
+    expect(finding.value("category", std::string()) == "trace_integrity",
+           "phase7 analyzer smoke should emit the expected finding category");
+    expect(finding["details"].value("manifest_trace_fill_count", 0) == 1,
+           "phase7 analyzer smoke should preserve manifest trace_fill_count evidence");
+    expect(finding["details"].value("observed_fills_csv_rows", 0) == 1,
+           "phase7 analyzer smoke should preserve observed fills.csv row evidence");
+
+    std::cout << "PHASE7_ANALYZER_SMOKE analysis=" << firstArtifact.artifactRootDir
+              << " manifest=" << firstArtifact.manifestPath
+              << " findings=" << firstArtifact.findingsPath << '\n';
+}
+
 void testWebSocketRuntimeGuards() {
     clearTestFiles();
 
@@ -2109,6 +2186,7 @@ int main() {
         testTraceIdFloorRecoversFromLog();
         testReplayHandlesPartialFillsAndCommission();
         testPhase6CaseAndReportArtifactsGenerateStableFilesystemOutputs();
+        testPhase7AnalyzerProducesDeterministicFindingsFromPhase6CaseManifest();
         testWebSocketRuntimeGuards();
         testRecoverySnapshotReportsAbnormalShutdown();
         testBridgeOutboxSourceSeqPreservesAcceptanceOrderingAndAnchors();

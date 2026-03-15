@@ -2,6 +2,8 @@
 
 #include "app_shared.h"
 
+#include <cstddef>
+
 struct TraceExportBundle {
     std::string baseName;
     std::string reportText;
@@ -32,6 +34,20 @@ struct Phase6CaseBundleArtifact {
     std::string bridgeRecordsPath;
 };
 
+struct Phase7AnalysisOutputArtifact {
+    std::string artifactType = "phase7.analysis_output.v1";
+    std::string contractVersion = "phase7-analyzer-playbook-v1";
+    std::string artifactId;
+    std::string artifactRootDir;
+    std::string manifestPath;
+    std::string findingsPath;
+    std::string sourceArtifactType;
+    std::string sourceArtifactId;
+    std::string sourceManifestPath;
+    std::string analyzerPassId = "phase7.trace_fill_integrity.v1";
+    std::size_t findingCount = 0;
+};
+
 bool replayTradeTraceSnapshotFromLog(std::uint64_t traceId,
                                      TradeTraceSnapshot* outSnapshot,
                                      std::string* error = nullptr,
@@ -57,3 +73,8 @@ bool generatePhase6CaseBundleArtifact(std::uint64_t traceId,
                                       const std::string& artifactRootDirectory,
                                       Phase6CaseBundleArtifact* outArtifact,
                                       std::string* error = nullptr);
+bool runPhase7AnalyzerFromPhase6Manifest(const std::string& sourceManifestPath,
+                                         const std::string& artifactRootDirectory,
+                                         const std::string& analyzerPassId,
+                                         Phase7AnalysisOutputArtifact* outArtifact,
+                                         std::string* error = nullptr);

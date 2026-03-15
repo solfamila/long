@@ -1,9 +1,11 @@
 #include "trace_exporter.h"
 #include "trading_ui_format.h"
 
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -17,6 +19,112 @@ namespace fs = std::filesystem;
 constexpr const char* kPhase6ContractVersion = "phase6-case-report-v1";
 constexpr const char* kPhase6ReportArtifactType = "phase6.report_output.v1";
 constexpr const char* kPhase6CaseBundleArtifactType = "phase6.case_bundle.v1";
+constexpr const char* kPhase7ContractVersion = "phase7-analyzer-playbook-v1";
+constexpr const char* kPhase7AnalysisArtifactType = "phase7.analysis_output.v1";
+constexpr const char* kPhase7DefaultAnalyzerPassId = "phase7.trace_fill_integrity.v1";
+
+fs::path resolvePhase7ArtifactsRoot(const std::string& artifactRootDirectory) {
+    if (!artifactRootDirectory.empty()) {
+        return fs::path(artifactRootDirectory);
+    }
+    return fs::path(appDataDirectory()) / "phase7_artifacts";
+}
+
+std::string normalizeArtifactToken(const std::string& value) {
+    std::string normalized;
+    normalized.reserve(value.size());
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) != 0 || ch == '-' || ch == '_') {
+            normalized.push_back(static_cast<char>(ch));
+        } else {
+            normalized.push_back('-');
+        }
+    }
+
+    if (normalized.empty()) {
+        return "unknown";
+    }
+    return normalized;
+}
+
+bool readTextFile(const fs::path& path, std::string* outText, std::string* error) {
+    if (outText == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output text buffer";
+        }
+        return false;
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in.is_open()) {
+        if (error != nullptr) {
+            *error = "Failed to open file for read: " + path.string();
+        }
+        return false;
+    }
+
+    *outText = std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return true;
+}
+
+bool readJsonFile(const fs::path& path, json* outJson, std::string* error) {
+    if (outJson == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output json buffer";
+        }
+        return false;
+    }
+
+    std::string text;
+    if (!readTextFile(path, &text, error)) {
+        return false;
+    }
+
+    const json parsed = json::parse(text, nullptr, false);
+    if (parsed.is_discarded()) {
+        if (error != nullptr) {
+            *error = "Failed to parse json file: " + path.string();
+        }
+        return false;
+    }
+
+    *outJson = parsed;
+    return true;
+}
+
+bool countCsvDataRows(const fs::path& path, std::size_t* outRows, std::string* error) {
+    if (outRows == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output row counter";
+        }
+        return false;
+    }
+
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        if (error != nullptr) {
+            *error = "Failed to open csv file for read: " + path.string();
+        }
+        return false;
+    }
+
+    std::string line;
+    bool headerSeen = false;
+    std::size_t rows = 0;
+    while (std::getline(in, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        if (!headerSeen) {
+            headerSeen = true;
+            continue;
+        }
+        ++rows;
+    }
+
+    *outRows = rows;
+    return true;
+}
 
 std::string utcTimestampForId() {
     const auto now = std::chrono::system_clock::now();
@@ -307,6 +415,82 @@ bool writePhase6ReportOutputArtifactAtPath(std::uint64_t traceId,
     }
     artifact.manifestPath = manifestPath.string();
     *outArtifact = std::move(artifact);
+    return true;
+}
+
+bool resolvePhase6ReportManifestForAnalysis(const fs::path& sourceManifestPath,
+                                            const json& sourceManifest,
+                                            fs::path* outReportManifestPath,
+                                            json* outReportManifest,
+                                            std::string* outSourceArtifactType,
+                                            std::string* outSourceArtifactId,
+                                            std::string* error) {
+    if (outReportManifestPath == nullptr ||
+        outReportManifest == nullptr ||
+        outSourceArtifactType == nullptr ||
+        outSourceArtifactId == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing analysis output container";
+        }
+        return false;
+    }
+
+    const std::string sourceContractVersion = sourceManifest.value("contract_version", std::string());
+    if (sourceContractVersion != kPhase6ContractVersion) {
+        if (error != nullptr) {
+            *error = "Unsupported source contract version: " + sourceContractVersion;
+        }
+        return false;
+    }
+
+    const std::string sourceArtifactType = sourceManifest.value("artifact_type", std::string());
+    const std::string sourceArtifactId = sourceManifest.value("artifact_id", std::string());
+    if (sourceArtifactId.empty()) {
+        if (error != nullptr) {
+            *error = "Source manifest is missing artifact_id";
+        }
+        return false;
+    }
+
+    if (sourceArtifactType == kPhase6ReportArtifactType) {
+        *outReportManifestPath = sourceManifestPath;
+        *outReportManifest = sourceManifest;
+    } else if (sourceArtifactType == kPhase6CaseBundleArtifactType) {
+        const json reportOutput = sourceManifest.value("report_output", json::object());
+        const std::string relativeReportManifestPath = reportOutput.value("manifest_path", std::string());
+        if (relativeReportManifestPath.empty()) {
+            if (error != nullptr) {
+                *error = "Case bundle manifest is missing report_output.manifest_path";
+            }
+            return false;
+        }
+
+        const fs::path reportManifestPath = sourceManifestPath.parent_path() / fs::path(relativeReportManifestPath);
+        json reportManifest;
+        if (!readJsonFile(reportManifestPath, &reportManifest, error)) {
+            return false;
+        }
+
+        const std::string reportArtifactType = reportManifest.value("artifact_type", std::string());
+        const std::string reportContractVersion = reportManifest.value("contract_version", std::string());
+        if (reportArtifactType != kPhase6ReportArtifactType || reportContractVersion != kPhase6ContractVersion) {
+            if (error != nullptr) {
+                *error = "Case bundle references unsupported report_output manifest";
+            }
+            return false;
+        }
+
+        *outReportManifestPath = reportManifestPath;
+        *outReportManifest = std::move(reportManifest);
+    } else {
+        if (error != nullptr) {
+            *error = "Unsupported source artifact_type: " + sourceArtifactType;
+        }
+        return false;
+    }
+
+    *outSourceArtifactType = sourceArtifactType;
+    *outSourceArtifactId = sourceArtifactId;
     return true;
 }
 
@@ -1174,6 +1358,149 @@ bool generatePhase6CaseBundleArtifact(std::uint64_t traceId,
     artifact.manifestPath = caseManifestPath.string();
     artifact.reportOutput = std::move(reportArtifact);
     artifact.bridgeRecordsPath = std::move(bridgeRecordsPath);
+    *outArtifact = std::move(artifact);
+    return true;
+}
+
+bool runPhase7AnalyzerFromPhase6Manifest(const std::string& sourceManifestPath,
+                                         const std::string& artifactRootDirectory,
+                                         const std::string& analyzerPassId,
+                                         Phase7AnalysisOutputArtifact* outArtifact,
+                                         std::string* error) {
+    if (outArtifact == nullptr) {
+        if (error != nullptr) {
+            *error = "Missing output artifact";
+        }
+        return false;
+    }
+    if (sourceManifestPath.empty()) {
+        if (error != nullptr) {
+            *error = "Missing source manifest path";
+        }
+        return false;
+    }
+
+    const std::string resolvedAnalyzerPassId =
+        analyzerPassId.empty() ? std::string(kPhase7DefaultAnalyzerPassId) : analyzerPassId;
+    const fs::path sourcePath = fs::path(sourceManifestPath);
+
+    json sourceManifest;
+    if (!readJsonFile(sourcePath, &sourceManifest, error)) {
+        return false;
+    }
+
+    fs::path reportManifestPath;
+    json reportManifest;
+    std::string sourceArtifactType;
+    std::string sourceArtifactId;
+    if (!resolvePhase6ReportManifestForAnalysis(sourcePath,
+                                                sourceManifest,
+                                                &reportManifestPath,
+                                                &reportManifest,
+                                                &sourceArtifactType,
+                                                &sourceArtifactId,
+                                                error)) {
+        return false;
+    }
+
+    const json files = reportManifest.value("files", json::object());
+    const std::string fillsRelativePath = files.value("fills_csv", std::string("fills.csv"));
+    const fs::path fillsPath = reportManifestPath.parent_path() / fs::path(fillsRelativePath);
+
+    std::size_t observedFillRows = 0;
+    if (!countCsvDataRows(fillsPath, &observedFillRows, error)) {
+        return false;
+    }
+
+    const json revisionContext = reportManifest.value("revision_context", json::object());
+    const std::size_t manifestFillCount = revisionContext.value("trace_fill_count", static_cast<std::size_t>(0));
+    const bool mismatch = observedFillRows != manifestFillCount;
+
+    const std::string findingId = resolvedAnalyzerPassId + "/" + sourceArtifactId;
+    const std::string severity = mismatch ? "warning" : "info";
+    const std::string summary = mismatch
+        ? "fills.csv row count does not match report manifest trace_fill_count"
+        : "fills.csv row count matches report manifest trace_fill_count";
+    const json findings = json::array({
+        json{
+            {"finding_id", findingId},
+            {"severity", severity},
+            {"category", "trace_integrity"},
+            {"summary", summary},
+            {"evidence_refs", json::array({
+                sourcePath.string(),
+                reportManifestPath.string(),
+                fillsPath.string()
+            })},
+            {"details", {
+                {"manifest_trace_fill_count", manifestFillCount},
+                {"observed_fills_csv_rows", observedFillRows}
+            }}
+        }
+    });
+
+    json severityCounts = json::object();
+    severityCounts[severity] = 1;
+
+    const std::string artifactId =
+        "analysis-" + normalizeArtifactToken(sourceArtifactId) + "-" + normalizeArtifactToken(resolvedAnalyzerPassId);
+    const fs::path artifactDir =
+        resolvePhase7ArtifactsRoot(artifactRootDirectory) /
+        "analysis_output.v1" /
+        artifactId;
+    if (!ensureDirectoryExists(artifactDir, error)) {
+        return false;
+    }
+
+    const fs::path findingsPath = artifactDir / "findings.json";
+    if (!writeTextFile(findingsPath, findings.dump(2) + "\n", error)) {
+        return false;
+    }
+
+    const json manifest{
+        {"contract_version", kPhase7ContractVersion},
+        {"artifact_type", kPhase7AnalysisArtifactType},
+        {"artifact_id", artifactId},
+        {"analyzer_pass_id", resolvedAnalyzerPassId},
+        {"source_artifact", {
+            {"artifact_type", sourceArtifactType},
+            {"contract_version", sourceManifest.value("contract_version", std::string())},
+            {"artifact_id", sourceArtifactId},
+            {"manifest_path", sourcePath.string()}
+        }},
+        {"replay_context", {
+            {"trace_anchor", reportManifest.value("trace_anchor", json::object())},
+            {"revision_context", revisionContext},
+            {"source_generated_at_utc", reportManifest.value("generated_at_utc", json(nullptr))}
+        }},
+        {"findings_summary", {
+            {"total_count", findings.size()},
+            {"severity_counts", severityCounts},
+            {"has_actionable_findings", mismatch}
+        }},
+        {"files", {
+            {"findings_json", "findings.json"},
+            {"report_manifest_path", reportManifestPath.string()}
+        }}
+    };
+
+    const fs::path manifestPath = artifactDir / "manifest.json";
+    if (!writeTextFile(manifestPath, manifest.dump(2) + "\n", error)) {
+        return false;
+    }
+
+    Phase7AnalysisOutputArtifact artifact;
+    artifact.artifactType = kPhase7AnalysisArtifactType;
+    artifact.contractVersion = kPhase7ContractVersion;
+    artifact.artifactId = artifactId;
+    artifact.artifactRootDir = artifactDir.string();
+    artifact.manifestPath = manifestPath.string();
+    artifact.findingsPath = findingsPath.string();
+    artifact.sourceArtifactType = sourceArtifactType;
+    artifact.sourceArtifactId = sourceArtifactId;
+    artifact.sourceManifestPath = sourcePath.string();
+    artifact.analyzerPassId = resolvedAnalyzerPassId;
+    artifact.findingCount = findings.size();
     *outArtifact = std::move(artifact);
     return true;
 }
