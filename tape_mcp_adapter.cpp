@@ -4,11 +4,15 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
+
+#include "trace_exporter.h"
 
 namespace tape_mcp {
 
@@ -43,6 +47,175 @@ json emptyObjectSchema() {
         {"properties", json::object()},
         {"additionalProperties", false}
     };
+}
+
+std::optional<std::uint64_t> asUint64(const json& value);
+std::optional<long long> asInt64(const json& value);
+std::optional<std::string> asNonEmptyString(const json& value);
+
+json emptyPhase6Anchor() {
+    return json{
+        {"trace_id", nullptr},
+        {"order_id", nullptr},
+        {"perm_id", nullptr},
+        {"exec_id", nullptr}
+    };
+}
+
+void applyTraceAnchor(const TradeTrace& trace, json* outAnchor) {
+    if (outAnchor == nullptr) {
+        return;
+    }
+    (*outAnchor)["trace_id"] = trace.traceId;
+    (*outAnchor)["order_id"] = static_cast<long long>(trace.orderId);
+    (*outAnchor)["perm_id"] = trace.permId;
+    (*outAnchor)["exec_id"] = nullptr;
+    for (const auto& fill : trace.fills) {
+        if (!fill.execId.empty()) {
+            (*outAnchor)["exec_id"] = fill.execId;
+            break;
+        }
+    }
+}
+
+json loadJsonFileOrNull(const std::string& pathText) {
+    if (pathText.empty()) {
+        return nullptr;
+    }
+    std::ifstream in(pathText, std::ios::binary);
+    if (!in.is_open()) {
+        return nullptr;
+    }
+    json parsed = json::parse(in, nullptr, false);
+    if (parsed.is_discarded()) {
+        return nullptr;
+    }
+    return parsed;
+}
+
+json reportArtifactResult(const Phase6ReportOutputArtifact& artifact) {
+    return json{
+        {"artifact_type", artifact.artifactType},
+        {"contract_version", artifact.contractVersion},
+        {"artifact_id", artifact.artifactId},
+        {"artifact_root_dir", artifact.artifactRootDir},
+        {"manifest_path", artifact.manifestPath},
+        {"report_path", artifact.reportPath},
+        {"summary_path", artifact.summaryPath},
+        {"fills_path", artifact.fillsPath},
+        {"timeline_path", artifact.timelinePath}
+    };
+}
+
+json caseArtifactResult(const Phase6CaseBundleArtifact& artifact) {
+    return json{
+        {"artifact_type", artifact.artifactType},
+        {"contract_version", artifact.contractVersion},
+        {"artifact_id", artifact.artifactId},
+        {"artifact_root_dir", artifact.artifactRootDir},
+        {"manifest_path", artifact.manifestPath},
+        {"bridge_records_path", artifact.bridgeRecordsPath.empty() ? json(nullptr) : json(artifact.bridgeRecordsPath)},
+        {"report_output", reportArtifactResult(artifact.reportOutput)}
+    };
+}
+
+struct ResolvedPhase6Anchor {
+    std::uint64_t traceId = 0;
+    json requestedAnchor = emptyPhase6Anchor();
+    json resolvedAnchor = emptyPhase6Anchor();
+};
+
+std::optional<ResolvedPhase6Anchor> resolvePhase6AnchorFromArgs(const json& args,
+                                                                std::string* errorCode,
+                                                                std::string* errorMessage) {
+    auto fail = [&](std::string code, std::string message) -> std::optional<ResolvedPhase6Anchor> {
+        if (errorCode != nullptr) {
+            *errorCode = std::move(code);
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = std::move(message);
+        }
+        return std::nullopt;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Phase 6 tool arguments must be an object.");
+    }
+
+    ResolvedPhase6Anchor anchor;
+    std::optional<std::uint64_t> traceId;
+    std::optional<long long> orderId;
+    std::optional<long long> permId;
+    std::optional<std::string> execId;
+    int provided = 0;
+
+    if (args.contains("trace_id")) {
+        traceId = asUint64(args.at("trace_id"));
+        if (!traceId.has_value() || *traceId == 0) {
+            return fail("invalid_arguments", "trace_id must be a positive integer.");
+        }
+        anchor.requestedAnchor["trace_id"] = *traceId;
+        ++provided;
+    }
+    if (args.contains("order_id")) {
+        orderId = asInt64(args.at("order_id"));
+        if (!orderId.has_value() || *orderId <= 0) {
+            return fail("invalid_arguments", "order_id must be a positive integer.");
+        }
+        anchor.requestedAnchor["order_id"] = *orderId;
+        ++provided;
+    }
+    if (args.contains("perm_id")) {
+        permId = asInt64(args.at("perm_id"));
+        if (!permId.has_value() || *permId <= 0) {
+            return fail("invalid_arguments", "perm_id must be a positive integer.");
+        }
+        anchor.requestedAnchor["perm_id"] = *permId;
+        ++provided;
+    }
+    if (args.contains("exec_id")) {
+        execId = asNonEmptyString(args.at("exec_id"));
+        if (!execId.has_value()) {
+            return fail("invalid_arguments", "exec_id must be a non-empty string.");
+        }
+        anchor.requestedAnchor["exec_id"] = *execId;
+        ++provided;
+    }
+
+    if (provided != 1) {
+        return fail("invalid_arguments",
+                    "Exactly one of trace_id, order_id, perm_id, or exec_id is required.");
+    }
+
+    if (traceId.has_value()) {
+        anchor.traceId = *traceId;
+        TradeTraceSnapshot snapshot;
+        if (replayTradeTraceSnapshotFromLog(*traceId, &snapshot, nullptr)) {
+            applyTraceAnchor(snapshot.trace, &anchor.resolvedAnchor);
+        } else {
+            anchor.resolvedAnchor = anchor.requestedAnchor;
+        }
+        return anchor;
+    }
+
+    TradeTraceSnapshot snapshot;
+    std::string replayError;
+    const bool resolved = replayTradeTraceSnapshotByIdentityFromLog(
+        static_cast<OrderId>(orderId.value_or(0)),
+        permId.value_or(0),
+        execId.value_or(std::string()),
+        &snapshot,
+        &replayError);
+    if (!resolved || !snapshot.found || snapshot.trace.traceId == 0) {
+        return fail("trace_not_found",
+                    replayError.empty()
+                        ? "No matching trace found for the provided anchor."
+                        : replayError);
+    }
+
+    anchor.traceId = snapshot.trace.traceId;
+    applyTraceAnchor(snapshot.trace, &anchor.resolvedAnchor);
+    return anchor;
 }
 
 std::optional<std::uint64_t> asUint64(const json& value) {
@@ -357,13 +530,59 @@ std::vector<ToolSpec> buildToolSpecs() {
         true,
         false
     });
+    specs.push_back(ToolSpec{
+        "tapescript_report_generate",
+        "Generate a Phase 6 report output artifact for a resolved trace anchor.",
+        json{
+            {"type", "object"},
+            {"properties", json{
+                {"trace_id", json{{"type", "integer"}, {"minimum", 1}}},
+                {"order_id", json{{"type", "integer"}, {"minimum", 1}}},
+                {"perm_id", json{{"type", "integer"}, {"minimum", 1}}},
+                {"exec_id", json{{"type", "string"}, {"minLength", 1}}}
+            }},
+            {"oneOf", json::array({
+                json{{"required", json::array({"trace_id"})}},
+                json{{"required", json::array({"order_id"})}},
+                json{{"required", json::array({"perm_id"})}},
+                json{{"required", json::array({"exec_id"})}}
+            })},
+            {"additionalProperties", false}
+        },
+        "phase6_report_generate_local",
+        true,
+        false
+    });
+    specs.push_back(ToolSpec{
+        "tapescript_export_range",
+        "Generate a Phase 6 case bundle artifact for a resolved trace anchor.",
+        json{
+            {"type", "object"},
+            {"properties", json{
+                {"trace_id", json{{"type", "integer"}, {"minimum", 1}}},
+                {"order_id", json{{"type", "integer"}, {"minimum", 1}}},
+                {"perm_id", json{{"type", "integer"}, {"minimum", 1}}},
+                {"exec_id", json{{"type", "string"}, {"minLength", 1}}},
+                {"first_session_seq", json{{"type", "integer"}, {"minimum", 1}}},
+                {"last_session_seq", json{{"type", "integer"}, {"minimum", 1}}}
+            }},
+            {"oneOf", json::array({
+                json{{"required", json::array({"trace_id"})}},
+                json{{"required", json::array({"order_id"})}},
+                json{{"required", json::array({"perm_id"})}},
+                json{{"required", json::array({"exec_id"})}}
+            })},
+            {"additionalProperties", false}
+        },
+        "phase6_export_range_local",
+        true,
+        false
+    });
 
-    constexpr std::array<const char*, 5> deferredTools{
+    constexpr std::array<const char*, 3> deferredTools{
         "tapescript_analyzer_run",
         "tapescript_findings_list",
-        "tapescript_playbook_apply",
-        "tapescript_report_generate",
-        "tapescript_export_range"
+        "tapescript_playbook_apply"
     };
     for (const char* toolName : deferredTools) {
         specs.push_back(ToolSpec{
@@ -521,6 +740,12 @@ json Adapter::invokeSupportedReadTool(const ToolSpec& tool, const json& args) co
     }
     if (tool.name == "tapescript_find_order_anchor") {
         return invokeFindOrderAnchorTool(tool, args);
+    }
+    if (tool.name == "tapescript_report_generate") {
+        return invokeReportGenerateTool(tool, args);
+    }
+    if (tool.name == "tapescript_export_range") {
+        return invokeExportRangeTool(tool, args);
     }
 
     return makeToolResult(makeErrorEnvelope(
@@ -951,6 +1176,266 @@ json Adapter::invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) 
         std::move(revision)));
 }
 
+json Adapter::invokeReportGenerateTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_report_generate arguments must be an object.",
+            false,
+            revisionUnavailable()));
+    }
+    if (hasUnexpectedKeys(args, {"trace_id", "order_id", "perm_id", "exec_id"})) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_report_generate accepts only trace_id, order_id, perm_id, or exec_id.",
+            false,
+            revisionUnavailable()));
+    }
+
+    std::string anchorErrorCode;
+    std::string anchorErrorMessage;
+    const std::optional<ResolvedPhase6Anchor> resolvedAnchor =
+        resolvePhase6AnchorFromArgs(args, &anchorErrorCode, &anchorErrorMessage);
+    if (!resolvedAnchor.has_value()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            anchorErrorCode.empty() ? "invalid_arguments" : anchorErrorCode,
+            anchorErrorMessage.empty()
+                ? "Failed to resolve a trace anchor for report generation."
+                : anchorErrorMessage,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    Phase6ReportOutputArtifact artifact;
+    std::string artifactError;
+    if (!generatePhase6ReportOutputArtifact(resolvedAnchor->traceId, "", &artifact, &artifactError)) {
+        const bool traceMissing =
+            artifactError.find("not found") != std::string::npos ||
+            artifactError.find("No matching trace") != std::string::npos;
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            traceMissing ? "trace_not_found" : "artifact_generation_failed",
+            artifactError.empty() ? "Phase 6 report artifact generation failed." : artifactError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const json manifest = loadJsonFileOrNull(artifact.manifestPath);
+    json result{
+        {"trace_anchor_request", resolvedAnchor->requestedAnchor},
+        {"trace_anchor", resolvedAnchor->resolvedAnchor},
+        {"artifact", reportArtifactResult(artifact)},
+        {"report_output", reportArtifactResult(artifact)},
+        {"generated_artifacts", json::array({
+            json{
+                {"artifact_type", artifact.artifactType},
+                {"artifact_id", artifact.artifactId},
+                {"manifest_path", artifact.manifestPath}
+            }
+        })}
+    };
+    if (manifest.is_object()) {
+        result["report_metadata"] = json{
+            {"generated_at_utc", manifest.value("generated_at_utc", std::string())},
+            {"evidence", manifest.value("evidence", json::object())},
+            {"revision_context", manifest.value("revision_context", json::object())}
+        };
+    }
+
+    json revision = makeReadRevision("snapshot");
+    revision["source"] = "artifact_manifest";
+    return makeToolResult(makeSuccessEnvelope(
+        tool.name,
+        tool.engineCommand,
+        std::move(result),
+        std::move(revision)));
+}
+
+json Adapter::invokeExportRangeTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_export_range arguments must be an object.",
+            false,
+            revisionUnavailable()));
+    }
+    if (hasUnexpectedKeys(args,
+                          {"trace_id", "order_id", "perm_id", "exec_id",
+                           "first_session_seq", "last_session_seq"})) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_export_range accepts only trace_id, order_id, perm_id, exec_id, first_session_seq, and last_session_seq.",
+            false,
+            revisionUnavailable()));
+    }
+
+    const bool hasFirst = args.contains("first_session_seq");
+    const bool hasLast = args.contains("last_session_seq");
+    std::optional<std::uint64_t> firstSessionSeq;
+    std::optional<std::uint64_t> lastSessionSeq;
+    if (hasFirst != hasLast) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            "invalid_arguments",
+            "tapescript_export_range requires first_session_seq and last_session_seq together when specifying a window.",
+            false,
+            revisionUnavailable()));
+    }
+    if (hasFirst) {
+        firstSessionSeq = asUint64(args.at("first_session_seq"));
+        lastSessionSeq = asUint64(args.at("last_session_seq"));
+        if (!firstSessionSeq.has_value() || !lastSessionSeq.has_value() ||
+            *firstSessionSeq == 0 || *lastSessionSeq == 0) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "tapescript_export_range window values must be positive integers.",
+                false,
+                revisionUnavailable()));
+        }
+        if (*firstSessionSeq > *lastSessionSeq) {
+            return makeToolResult(makeErrorEnvelope(
+                tool.name,
+                tool.engineCommand,
+                true,
+                false,
+                "invalid_arguments",
+                "tapescript_export_range requires first_session_seq <= last_session_seq.",
+                false,
+                revisionUnavailable()));
+        }
+    }
+
+    const bool hasAnchor =
+        args.contains("trace_id") || args.contains("order_id") ||
+        args.contains("perm_id") || args.contains("exec_id");
+    if (!hasAnchor && hasFirst) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            true,
+            "deferred_behavior",
+            "Range-only export without a trace anchor is deferred in this Phase 6 slice.",
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    std::string anchorErrorCode;
+    std::string anchorErrorMessage;
+    const std::optional<ResolvedPhase6Anchor> resolvedAnchor =
+        resolvePhase6AnchorFromArgs(args, &anchorErrorCode, &anchorErrorMessage);
+    if (!resolvedAnchor.has_value()) {
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            anchorErrorCode.empty() ? "invalid_arguments" : anchorErrorCode,
+            anchorErrorMessage.empty()
+                ? "Failed to resolve a trace anchor for case export."
+                : anchorErrorMessage,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    Phase6CaseBundleArtifact artifact;
+    std::string artifactError;
+    if (!generatePhase6CaseBundleArtifact(resolvedAnchor->traceId, "", &artifact, &artifactError)) {
+        const bool traceMissing =
+            artifactError.find("not found") != std::string::npos ||
+            artifactError.find("No matching trace") != std::string::npos;
+        return makeToolResult(makeErrorEnvelope(
+            tool.name,
+            tool.engineCommand,
+            true,
+            false,
+            traceMissing ? "trace_not_found" : "artifact_generation_failed",
+            artifactError.empty() ? "Phase 6 case bundle generation failed." : artifactError,
+            false,
+            makeReadRevision("snapshot")));
+    }
+
+    const json caseManifest = loadJsonFileOrNull(artifact.manifestPath);
+    const json reportManifest = loadJsonFileOrNull(artifact.reportOutput.manifestPath);
+
+    json result{
+        {"trace_anchor_request", resolvedAnchor->requestedAnchor},
+        {"trace_anchor", resolvedAnchor->resolvedAnchor},
+        {"requested_window", hasFirst
+            ? json{
+                {"first_session_seq", *firstSessionSeq},
+                {"last_session_seq", *lastSessionSeq}
+            }
+            : json(nullptr)},
+        {"artifact", caseArtifactResult(artifact)},
+        {"case_bundle", caseArtifactResult(artifact)},
+        {"report_output", reportArtifactResult(artifact.reportOutput)},
+        {"generated_artifacts", json::array({
+            json{
+                {"artifact_type", artifact.artifactType},
+                {"artifact_id", artifact.artifactId},
+                {"manifest_path", artifact.manifestPath}
+            },
+            json{
+                {"artifact_type", artifact.reportOutput.artifactType},
+                {"artifact_id", artifact.reportOutput.artifactId},
+                {"manifest_path", artifact.reportOutput.manifestPath}
+            }
+        })}
+    };
+    if (caseManifest.is_object()) {
+        result["case_metadata"] = json{
+            {"generated_at_utc", caseManifest.value("generated_at_utc", std::string())},
+            {"bridge_payload", caseManifest.value("bridge_payload", json::object())},
+            {"revision_context", caseManifest.value("revision_context", json::object())}
+        };
+    }
+    if (reportManifest.is_object()) {
+        result["report_metadata"] = json{
+            {"generated_at_utc", reportManifest.value("generated_at_utc", std::string())},
+            {"evidence", reportManifest.value("evidence", json::object())}
+        };
+    }
+
+    json revision = makeReadRevision("snapshot");
+    revision["source"] = "artifact_manifest";
+    return makeToolResult(makeSuccessEnvelope(
+        tool.name,
+        tool.engineCommand,
+        std::move(result),
+        std::move(revision)));
+}
+
 json Adapter::invokeReservedDeferredTool(const ToolSpec& tool) const {
     return makeToolResult(makeErrorEnvelope(
         tool.name,
@@ -958,7 +1443,7 @@ json Adapter::invokeReservedDeferredTool(const ToolSpec& tool) const {
         false,
         true,
         "deferred_tool",
-        "Tool is explicitly deferred by the Phase 5 compatibility contract.",
+        "Tool is explicitly deferred by the Phase 6 tool-slice contract.",
         false,
         revisionUnavailable()));
 }

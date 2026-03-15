@@ -133,6 +133,8 @@ set(TAPE_MCP_SOURCES
     tape_mcp_adapter.cpp
     tape_mcp_engine_rpc.cpp
     tapescope_client.cpp
+    trace_exporter.cpp
+    tape_mcp_phase6_runtime_stubs.cpp
 )
 
 set(TAPE_ENGINE_SOURCES
@@ -163,6 +165,7 @@ target_include_directories(TapeScope PRIVATE
 
 target_include_directories(tape_mcp PRIVATE
     "${CMAKE_SOURCE_DIR}"
+    "${IXWEBSOCKET_DIR}"
     "${NLOHMANN_JSON_INCLUDE_DIR}"
 )
 
@@ -173,6 +176,23 @@ target_link_libraries(TapeScope PRIVATE
 target_link_libraries(tape_mcp PRIVATE
     Threads::Threads
 )
+
+if(TARGET twsapi)
+    target_link_libraries(tape_mcp PRIVATE twsapi)
+    target_include_directories(tape_mcp PRIVATE
+        "${VENDORED_IB_API_DIR}"
+        ${IB_API_EXTRA_INCLUDE_DIRS}
+    )
+elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
+    target_include_directories(tape_mcp PRIVATE "${IB_API_INCLUDE_DIR}")
+else()
+    target_include_directories(tape_mcp PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+    target_compile_definitions(tape_mcp PRIVATE
+        TWS_GUI_MOCK_IBAPI=1
+        TWS_HAS_PROTOBUF_API=1
+        TWS_HAS_ORDER_CANCEL_OBJECT=1
+    )
+endif()
 
 if(NOT TAPESCOPE_ISOLATED_BUILD)
     target_include_directories(tws_gui PRIVATE
@@ -495,10 +515,13 @@ if(NOT TAPESCOPE_ISOLATED_BUILD AND BUILD_TESTING)
         tape_mcp_adapter.cpp
         tape_mcp_engine_rpc.cpp
         tapescope_client.cpp
+        trace_exporter.cpp
+        tape_mcp_phase6_runtime_stubs.cpp
     )
 
     target_include_directories(tape_mcp_contract_tests PRIVATE
         "${CMAKE_SOURCE_DIR}"
+        "${IXWEBSOCKET_DIR}"
         "${NLOHMANN_JSON_INCLUDE_DIR}"
     )
     target_compile_definitions(tape_mcp_contract_tests PRIVATE
@@ -507,6 +530,22 @@ if(NOT TAPESCOPE_ISOLATED_BUILD AND BUILD_TESTING)
     target_link_libraries(tape_mcp_contract_tests PRIVATE
         Threads::Threads
     )
+    if(TARGET twsapi)
+        target_link_libraries(tape_mcp_contract_tests PRIVATE twsapi)
+        target_include_directories(tape_mcp_contract_tests PRIVATE
+            "${VENDORED_IB_API_DIR}"
+            ${IB_API_EXTRA_INCLUDE_DIRS}
+        )
+    elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
+        target_include_directories(tape_mcp_contract_tests PRIVATE "${IB_API_INCLUDE_DIR}")
+    else()
+        target_include_directories(tape_mcp_contract_tests PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+        target_compile_definitions(tape_mcp_contract_tests PRIVATE
+            TWS_GUI_MOCK_IBAPI=1
+            TWS_HAS_PROTOBUF_API=1
+            TWS_HAS_ORDER_CANCEL_OBJECT=1
+        )
+    endif()
     add_dependencies(tape_mcp_contract_tests tape_mcp)
 
     add_test(NAME tape_mcp_contract_tests COMMAND tape_mcp_contract_tests)

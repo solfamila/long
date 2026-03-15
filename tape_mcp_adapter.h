@@ -50,6 +50,8 @@ private:
     [[nodiscard]] json invokeReadLiveTailTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadRangeTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeFindOrderAnchorTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReportGenerateTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeExportRangeTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReservedDeferredTool(const ToolSpec& tool) const;
     [[nodiscard]] json makeToolResult(const json& envelope) const;
     [[nodiscard]] json makeSuccessEnvelope(const std::string& toolName,

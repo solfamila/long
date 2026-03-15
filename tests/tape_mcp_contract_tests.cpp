@@ -1,4 +1,5 @@
 #include "tape_mcp_adapter.h"
+#include "app_shared.h"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <limits>
@@ -50,9 +52,78 @@ const fs::path& testDataDir() {
         if (created == nullptr) {
             throw std::runtime_error("mkdtemp failed");
         }
+        ::setenv("TWS_GUI_DATA_DIR", created, 1);
         return fs::path(created);
     }();
     return path;
+}
+
+void clearPhase6FixtureFiles() {
+    std::error_code ec;
+    fs::create_directories(testDataDir(), ec);
+    fs::remove(tradeTraceLogPath(), ec);
+    fs::remove(runtimeJournalLogPath(), ec);
+    fs::remove_all(testDataDir() / "phase6_artifacts", ec);
+}
+
+json makeTraceLine(std::uint64_t traceId,
+                   OrderId orderId,
+                   long long permId,
+                   const std::string& symbol,
+                   const std::string& side,
+                   const std::string& eventType,
+                   const std::string& stage,
+                   const std::string& details,
+                   double sinceTriggerMs,
+                   double price = 0.0,
+                   int shares = 0,
+                   double cumFilled = -1.0) {
+    json line;
+    line["traceId"] = traceId;
+    line["orderId"] = static_cast<long long>(orderId);
+    line["permId"] = permId;
+    line["source"] = "tape_mcp_contract_tests";
+    line["symbol"] = symbol;
+    line["side"] = side;
+    line["requestedQty"] = 10;
+    line["limitPrice"] = 45.64;
+    line["closeOnly"] = false;
+    line["eventType"] = eventType;
+    line["stage"] = stage;
+    line["details"] = details;
+    line["wallTime"] = "09:30:00.000";
+    line["sinceTriggerMs"] = sinceTriggerMs;
+    if (price > 0.0) {
+        line["price"] = price;
+    }
+    if (shares > 0) {
+        line["shares"] = shares;
+    }
+    if (cumFilled >= 0.0) {
+        line["cumFilled"] = cumFilled;
+    }
+    return line;
+}
+
+void appendTraceLine(const json& line) {
+    std::ofstream out(tradeTraceLogPath(), std::ios::app);
+    expect(out.is_open(), "phase6 fixture should open trace log for append");
+    out << line.dump() << '\n';
+}
+
+void seedPhase6TraceFixture() {
+    clearPhase6FixtureFiles();
+    appendTraceLine(makeTraceLine(31, 221, 7001, "INTC", "BUY",
+                                  "Trigger", "Trigger", "manual submit", 0.0));
+    appendTraceLine(makeTraceLine(31, 221, 7001, "INTC", "BUY",
+                                  "ValidationStart", "Validation", "risk checks", 2.0));
+    appendTraceLine(makeTraceLine(31, 221, 7001, "INTC", "BUY",
+                                  "OrderStatusSeen", "Submitted", "Submitted", 8.0));
+    appendTraceLine(makeTraceLine(31, 221, 7001, "INTC", "BUY",
+                                  "ExecDetailsSeen", "PartialFill", "execId=EXEC-31 exch=NYSE time=09:30:00.500",
+                                  21.0, 45.66, 5, 5.0));
+    appendTraceLine(makeTraceLine(31, 221, 7001, "INTC", "BUY",
+                                  "FinalState", "Filled", "Filled: broker complete", 35.0));
 }
 
 fs::path makeUniqueSocketPath(const std::string& prefix) {
@@ -174,6 +245,18 @@ void expectRevisionShape(const json& revision) {
     expect(revision.contains("staleness"), "meta.revision should include staleness");
 }
 
+bool toolsListContainsName(const json& tools, const std::string& expectedName) {
+    if (!tools.is_array()) {
+        return false;
+    }
+    for (const auto& tool : tools) {
+        if (tool.is_object() && tool.value("name", std::string()) == expectedName) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void testDeferredAndUnsupportedEnvelopes() {
     tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{
         .engineSocketPath = makeUniqueSocketPath("unused").string(),
@@ -199,6 +282,16 @@ void testDeferredAndUnsupportedEnvelopes() {
            "unknown tool should set meta.supported=false");
     expect(!unsupportedEnvelope.value("meta", json::object()).value("deferred", true),
            "unknown tool should set meta.deferred=false");
+
+    const json reportEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_report_generate", json::object()));
+    expect(!reportEnvelope.value("ok", true),
+           "report_generate with missing anchor should return ok=false");
+    expect(reportEnvelope.value("error", json::object()).value("code", std::string()) == "invalid_arguments",
+           "report_generate with missing anchor should return invalid_arguments");
+    expect(reportEnvelope.value("meta", json::object()).value("supported", false),
+           "report_generate should remain a supported tool when arguments are invalid");
+    expect(!reportEnvelope.value("meta", json::object()).value("deferred", true),
+           "report_generate invalid arguments should not be marked deferred");
 }
 
 void testStatusSuccessEnvelopeAndRevision() {
@@ -395,6 +488,104 @@ void testReadRangeAndFindAnchorShaping() {
         expect(revision.value("staleness", std::string()) == "snapshot",
                "find_order_anchor revision staleness should be snapshot");
     }
+}
+
+void testPhase6ReportAndCaseToolShaping() {
+    seedPhase6TraceFixture();
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{
+        .engineSocketPath = makeUniqueSocketPath("unused-phase6").string(),
+        .clientName = "tape-mcp-contract-tests"
+    });
+
+    const json reportEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_report_generate", json{{"trace_id", 31}}));
+    expect(reportEnvelope.value("ok", false), "report_generate should return ok=true");
+    expect(reportEnvelope.value("meta", json::object()).value("supported", false),
+           "report_generate should set meta.supported=true");
+    expect(!reportEnvelope.value("meta", json::object()).value("deferred", true),
+           "report_generate should set meta.deferred=false");
+    expect(reportEnvelope.value("meta", json::object()).value("engine_command", std::string()) == "phase6_report_generate_local",
+           "report_generate should set the local phase6 engine_command marker");
+
+    const json reportResult = reportEnvelope.value("result", json::object());
+    const json reportArtifact = reportResult.value("artifact", json::object());
+    expect(reportArtifact.value("artifact_type", std::string()) == "phase6.report_output.v1",
+           "report_generate should surface report artifact_type");
+    const std::string reportManifestPath = reportArtifact.value("manifest_path", std::string());
+    expect(!reportManifestPath.empty(), "report_generate should return a manifest path");
+    expect(fs::exists(reportManifestPath), "report_generate manifest path should exist");
+    expect(fs::exists(reportArtifact.value("report_path", std::string())),
+           "report_generate report_path should exist");
+    expect(fs::exists(reportArtifact.value("summary_path", std::string())),
+           "report_generate summary_path should exist");
+    expect(fs::exists(reportArtifact.value("fills_path", std::string())),
+           "report_generate fills_path should exist");
+    expect(fs::exists(reportArtifact.value("timeline_path", std::string())),
+           "report_generate timeline_path should exist");
+
+    {
+        std::ifstream in(reportManifestPath, std::ios::binary);
+        expect(in.is_open(), "report_generate should write a readable manifest file");
+        const json manifest = json::parse(in, nullptr, false);
+        expect(!manifest.is_discarded(), "report_generate manifest should parse as json");
+        expect(manifest.value("artifact_type", std::string()) == "phase6.report_output.v1",
+               "report manifest should declare phase6.report_output.v1");
+    }
+
+    const json exportEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_export_range", json{
+            {"order_id", 221},
+            {"first_session_seq", 30},
+            {"last_session_seq", 35}
+        }));
+    expect(exportEnvelope.value("ok", false), "export_range should return ok=true");
+    expect(exportEnvelope.value("meta", json::object()).value("supported", false),
+           "export_range should set meta.supported=true");
+    expect(!exportEnvelope.value("meta", json::object()).value("deferred", true),
+           "export_range should set meta.deferred=false");
+    expect(exportEnvelope.value("meta", json::object()).value("engine_command", std::string()) == "phase6_export_range_local",
+           "export_range should set the local phase6 engine_command marker");
+
+    const json exportResult = exportEnvelope.value("result", json::object());
+    const json caseArtifact = exportResult.value("artifact", json::object());
+    expect(caseArtifact.value("artifact_type", std::string()) == "phase6.case_bundle.v1",
+           "export_range should surface case bundle artifact_type");
+    const std::string caseManifestPath = caseArtifact.value("manifest_path", std::string());
+    expect(!caseManifestPath.empty(), "export_range should return a case manifest path");
+    expect(fs::exists(caseManifestPath), "export_range case manifest path should exist");
+
+    const json nestedReport = exportResult.value("report_output", json::object());
+    expect(nestedReport.value("artifact_type", std::string()) == "phase6.report_output.v1",
+           "export_range should expose nested report output metadata");
+    expect(fs::exists(nestedReport.value("manifest_path", std::string())),
+           "export_range nested report manifest should exist");
+
+    const json requestedWindow = exportResult.value("requested_window", json::object());
+    expect(requestedWindow.value("first_session_seq", 0ULL) == 30ULL,
+           "export_range should preserve first_session_seq in result shaping");
+    expect(requestedWindow.value("last_session_seq", 0ULL) == 35ULL,
+           "export_range should preserve last_session_seq in result shaping");
+
+    {
+        std::ifstream in(caseManifestPath, std::ios::binary);
+        expect(in.is_open(), "export_range should write a readable case manifest file");
+        const json manifest = json::parse(in, nullptr, false);
+        expect(!manifest.is_discarded(), "export_range case manifest should parse as json");
+        expect(manifest.value("artifact_type", std::string()) == "phase6.case_bundle.v1",
+               "case manifest should declare phase6.case_bundle.v1");
+    }
+
+    const json rangeOnlyEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_export_range", json{
+            {"first_session_seq", 30},
+            {"last_session_seq", 35}
+        }));
+    expect(!rangeOnlyEnvelope.value("ok", true),
+           "range-only export_range should return ok=false in this slice");
+    expect(rangeOnlyEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_behavior",
+           "range-only export_range should return deferred_behavior");
+    expect(rangeOnlyEnvelope.value("meta", json::object()).value("deferred", false),
+           "range-only export_range should set meta.deferred=true");
 }
 
 void testErrorAndInvalidArgumentEnvelopes() {
@@ -622,6 +813,7 @@ void stopProcess(const ChildProcess& child) {
 }
 
 void testMcpStdioHarnessRegression() {
+    seedPhase6TraceFixture();
     const ChildProcess child = launchTapeMcp(makeUniqueSocketPath("stdio-engine-missing"));
 
     writeJsonRpcMessage(child.writeFd, json{
@@ -646,6 +838,10 @@ void testMcpStdioHarnessRegression() {
     const json tools = listResponse.value("result", json::object()).value("tools", json::array());
     expect(tools.is_array(), "tools/list response should include tools array");
     expect(!tools.empty(), "tools/list response should contain registered tools");
+    expect(toolsListContainsName(tools, "tapescript_report_generate"),
+           "tools/list should expose tapescript_report_generate in the phase6 slice");
+    expect(toolsListContainsName(tools, "tapescript_export_range"),
+           "tools/list should expose tapescript_export_range in the phase6 slice");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
@@ -667,6 +863,66 @@ void testMcpStdioHarnessRegression() {
         {"id", 4},
         {"method", "tools/call"},
         {"params", {
+            {"name", "tapescript_report_generate"},
+            {"arguments", json{{"trace_id", 31}}}
+        }}
+    });
+    const json reportResponse = readJsonRpcMessage(child.readFd);
+    const json reportEnvelope = reportResponse.value("result", json::object())
+        .value("structuredContent", json::object());
+    expect(reportEnvelope.value("ok", false),
+           "stdio report_generate should return ok=true with local artifact generation");
+    const json reportArtifact = reportEnvelope.value("result", json::object())
+        .value("artifact", json::object());
+    expect(fs::exists(reportArtifact.value("manifest_path", std::string())),
+           "stdio report_generate should write a manifest path");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 5},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_export_range"},
+            {"arguments", json{
+                {"trace_id", 31},
+                {"first_session_seq", 30},
+                {"last_session_seq", 35}
+            }}
+        }}
+    });
+    const json exportResponse = readJsonRpcMessage(child.readFd);
+    const json exportEnvelope = exportResponse.value("result", json::object())
+        .value("structuredContent", json::object());
+    expect(exportEnvelope.value("ok", false),
+           "stdio export_range should return ok=true with local case bundle generation");
+    const json caseArtifact = exportEnvelope.value("result", json::object())
+        .value("artifact", json::object());
+    expect(fs::exists(caseArtifact.value("manifest_path", std::string())),
+           "stdio export_range should write a case manifest path");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 6},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_export_range"},
+            {"arguments", json{
+                {"first_session_seq", 30},
+                {"last_session_seq", 35}
+            }}
+        }}
+    });
+    const json deferredBehaviorResponse = readJsonRpcMessage(child.readFd);
+    const json deferredBehaviorEnvelope = deferredBehaviorResponse.value("result", json::object())
+        .value("structuredContent", json::object());
+    expect(deferredBehaviorEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_behavior",
+           "stdio export_range should keep range-only behavior explicitly deferred");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 7},
+        {"method", "tools/call"},
+        {"params", {
             {"name", "tapescript_status"},
             {"arguments", json::object()}
         }}
@@ -675,7 +931,7 @@ void testMcpStdioHarnessRegression() {
     const json unavailableEnvelope = unavailableResponse.value("result", json::object())
         .value("structuredContent", json::object());
     expect(unavailableEnvelope.value("error", json::object()).value("code", std::string()) == "engine_unavailable",
-           "stdio tools/call should surface engine_unavailable when engine socket is absent");
+           "stdio status should still surface engine_unavailable when engine socket is absent");
 
     stopProcess(child);
 }
@@ -688,6 +944,7 @@ int main() {
         testStatusSuccessEnvelopeAndRevision();
         testReadLiveTailDerivesRevisionFromEvents();
         testReadRangeAndFindAnchorShaping();
+        testPhase6ReportAndCaseToolShaping();
         testErrorAndInvalidArgumentEnvelopes();
         testMcpStdioHarnessRegression();
     } catch (const std::exception& error) {
