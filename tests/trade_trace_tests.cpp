@@ -1498,8 +1498,13 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
     findingsRequest.operation = "list_findings";
     expect(client.query(findingsRequest, &response, &error), "phase 3 collapse findings query should succeed: " + error);
     expect(response.events.is_array() && response.events.size() >= 3, "phase 3 collapse should retain multiple spread findings");
-    expect(response.events.at(0).value("kind", std::string()) == "spread_widened", "latest collapse finding should be spread_widened");
-    expect(response.events.at(1).value("kind", std::string()) == "spread_widened", "second latest collapse finding should also be spread_widened");
+    std::size_t spreadFindingCount = 0;
+    for (const auto& item : response.events) {
+        if (item.value("kind", std::string()) == "spread_widened") {
+            ++spreadFindingCount;
+        }
+    }
+    expect(spreadFindingCount >= 3, "phase 3 collapse should retain all spread-widened findings even when richer analyzers add newer findings");
 
     tape_engine::QueryRequest incidentsRequest;
     incidentsRequest.requestId = "incidents-phase3-collapse";
@@ -1531,6 +1536,8 @@ void testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents() {
     expect(response.summary.value("incident_revision_count", 0ULL) == 3ULL, "incident drilldown should report all incident revisions");
     expect(response.summary.value("related_finding_count", 0ULL) == 3ULL, "incident drilldown should report all related findings");
     expect(response.summary.contains("score_breakdown"), "incident drilldown should include a score breakdown");
+    expect(response.summary.value("score_breakdown", json::object()).contains("data_quality_penalty_factor"),
+           "incident drilldown score breakdown should expose the data-quality penalty factor");
     expect(response.summary.contains("why_it_matters"), "incident drilldown should include a why-it-matters summary");
     expect(response.summary.contains("protected_window"), "incident drilldown should include the incident protected window");
     expect(response.summary.contains("data_quality"), "incident drilldown should include data-quality scoring");
@@ -1779,6 +1786,233 @@ void testTapeEnginePhase3DetectsDisplayInstabilitySignals() {
     server.stop();
 }
 
+void testTapeEnginePhase3DetectsPullFollowThroughAndQuoteFlickerSignals() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-pull-flicker";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-pull-flicker.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9361:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for pull-follow-through/quote-flicker signal test: " + startError);
+
+    auto marketRecord = [](std::uint64_t sourceSeq,
+                           const std::string& recordType,
+                           const std::string& side,
+                           int marketField,
+                           int bookPosition,
+                           int bookOperation,
+                           int bookSide,
+                           double price,
+                           double size,
+                           const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, recordType, "BrokerMarketData", "INTC", side,
+                                                     0, 0, 0, "", note, "2026-03-14T09:43:38.000");
+        record.instrumentId = "ib:conid:9361:STK:SMART:USD:INTC";
+        record.marketField = marketField;
+        record.bookPosition = bookPosition;
+        record.bookOperation = bookOperation;
+        record.bookSide = bookSide;
+        record.price = price;
+        record.size = size;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-pull-flicker";
+    options.runtimeSessionId = "runtime-engine-phase3-pull-flicker";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8361, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      536, 4351, 0, "", "pull/flicker anchor", "2026-03-14T09:43:38.050");
+    orderIntent.instrumentId = "ib:conid:9361:STK:SMART:USD:INTC";
+    options.batchSeq = 1261;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the pull/flicker anchor batch: " + error);
+
+    options.batchSeq = 1262;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketRecord(8362, "market_tick", "BID", 1, -1, -1, -1, 45.60, std::numeric_limits<double>::quiet_NaN(), "pull/flicker bid"),
+        marketRecord(8363, "market_tick", "ASK", 2, -1, -1, -1, 45.61, std::numeric_limits<double>::quiet_NaN(), "pull/flicker ask"),
+        marketRecord(8364, "market_depth", "ASK", -1, 0, 0, 0, 45.61, 400.0, "pull/flicker ask insert"),
+        marketRecord(8365, "market_depth", "BID", -1, 0, 0, 1, 45.60, 500.0, "pull/flicker bid insert")
+    }, options)), &error), "tape-engine should accept the pull/flicker seed batch: " + error);
+
+    options.batchSeq = 1263;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketRecord(8366, "market_depth", "ASK", -1, 0, 1, 0, 45.61, 100.0, "pull/flicker ask thin"),
+        marketRecord(8367, "market_depth", "ASK", -1, 0, 1, 0, 45.63, 100.0, "pull/flicker ask move one"),
+        marketRecord(8368, "market_depth", "ASK", -1, 0, 1, 0, 45.62, 110.0, "pull/flicker ask move two"),
+        marketRecord(8369, "market_depth", "ASK", -1, 0, 1, 0, 45.64, 90.0, "pull/flicker ask move three")
+    }, options)), &error), "tape-engine should accept the pull/flicker change batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() >= 3;
+    }, "tape-engine should freeze pull-follow-through and quote-flicker batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3-pull-flicker";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 pull-follow-through findings query should succeed: " + error);
+    bool sawPullFollowThrough = false;
+    bool sawQuoteFlicker = false;
+    for (const auto& item : response.events) {
+        const std::string kind = item.value("kind", std::string());
+        sawPullFollowThrough = sawPullFollowThrough || kind == "ask_pull_follow_through";
+        sawQuoteFlicker = sawQuoteFlicker || kind == "ask_quote_flicker";
+    }
+    expect(sawPullFollowThrough, "phase 3 should detect ask pull follow-through after inside liquidity pulls");
+    expect(sawQuoteFlicker, "phase 3 should detect repeated ask quote flicker at the touch");
+
+    tape_engine::QueryRequest incidentsRequest;
+    incidentsRequest.requestId = "incidents-phase3-pull-flicker";
+    incidentsRequest.operation = "list_incidents";
+    expect(client.query(incidentsRequest, &response, &error), "phase 3 pull/flicker incidents query should succeed: " + error);
+    double pullFollowThroughScore = 0.0;
+    double quoteFlickerScore = 0.0;
+    for (const auto& item : response.events) {
+        if (item.value("kind", std::string()) == "ask_pull_follow_through") {
+            pullFollowThroughScore = item.value("score", 0.0);
+        } else if (item.value("kind", std::string()) == "ask_quote_flicker") {
+            quoteFlickerScore = item.value("score", 0.0);
+        }
+    }
+    expect(pullFollowThroughScore > 0.5, "phase 3 pull follow-through should surface as a ranked incident");
+    expect(quoteFlickerScore > 0.5, "phase 3 quote flicker should surface as a ranked incident");
+    expect(pullFollowThroughScore > quoteFlickerScore,
+           "phase 3 ranking should score pull follow-through above quote flicker because it is closer to realized follow-through");
+
+    server.stop();
+}
+
+void testTapeEnginePhase3DetectsTradeAfterDepletionAndAbsorptionPersistenceSignals() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-depletion-absorption";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-depletion-absorption.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9366:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for depletion/absorption signal test: " + startError);
+
+    auto marketRecord = [](std::uint64_t sourceSeq,
+                           const std::string& recordType,
+                           const std::string& side,
+                           int marketField,
+                           int bookPosition,
+                           int bookOperation,
+                           int bookSide,
+                           double price,
+                           double size,
+                           const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, recordType, "BrokerMarketData", "INTC", side,
+                                                     0, 0, 0, "", note, "2026-03-14T09:43:40.000");
+        record.instrumentId = "ib:conid:9366:STK:SMART:USD:INTC";
+        record.marketField = marketField;
+        record.bookPosition = bookPosition;
+        record.bookOperation = bookOperation;
+        record.bookSide = bookSide;
+        record.price = price;
+        record.size = size;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-depletion-absorption";
+    options.runtimeSessionId = "runtime-engine-phase3-depletion-absorption";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(83660, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      537, 4366, 0, "", "depletion/absorption anchor", "2026-03-14T09:43:40.050");
+    orderIntent.instrumentId = "ib:conid:9366:STK:SMART:USD:INTC";
+    options.batchSeq = 1266;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the depletion/absorption anchor batch: " + error);
+
+    options.batchSeq = 1267;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketRecord(83661, "market_tick", "BID", 1, -1, -1, -1, 45.70, std::numeric_limits<double>::quiet_NaN(), "depletion/absorption bid"),
+        marketRecord(83662, "market_tick", "ASK", 2, -1, -1, -1, 45.71, std::numeric_limits<double>::quiet_NaN(), "depletion/absorption ask"),
+        marketRecord(83663, "market_depth", "ASK", -1, 0, 0, 0, 45.71, 400.0, "depletion/absorption ask insert"),
+        marketRecord(83664, "market_depth", "BID", -1, 0, 0, 1, 45.70, 500.0, "depletion/absorption bid insert")
+    }, options)), &error), "tape-engine should accept the depletion/absorption seed batch: " + error);
+
+    options.batchSeq = 1268;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketRecord(83665, "market_depth", "ASK", -1, 0, 1, 0, 45.71, 100.0, "depletion ask thin"),
+        marketRecord(83666, "market_tick", "LAST", 4, -1, -1, -1, 45.71, std::numeric_limits<double>::quiet_NaN(), "trade after depletion"),
+        marketRecord(83667, "market_depth", "ASK", -1, 0, 1, 0, 45.71, 380.0, "absorption ask refill"),
+        marketRecord(83668, "market_tick", "LAST", 4, -1, -1, -1, 45.71, std::numeric_limits<double>::quiet_NaN(), "touch trade after refill"),
+        marketRecord(83669, "market_depth", "ASK", -1, 0, 1, 0, 45.71, 360.0, "absorption ask holds")
+    }, options)), &error), "tape-engine should accept the depletion/absorption change batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() >= 3;
+    }, "tape-engine should freeze depletion/absorption batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3-depletion-absorption";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 depletion/absorption findings query should succeed: " + error);
+    bool sawTradeAfterDepletion = false;
+    bool sawAbsorptionPersistence = false;
+    for (const auto& item : response.events) {
+        const std::string kind = item.value("kind", std::string());
+        sawTradeAfterDepletion = sawTradeAfterDepletion || kind == "ask_trade_after_depletion";
+        sawAbsorptionPersistence = sawAbsorptionPersistence || kind == "ask_absorption_persistence";
+    }
+    expect(sawTradeAfterDepletion, "phase 3 should detect trade-after-depletion at the depleted ask");
+    expect(sawAbsorptionPersistence, "phase 3 should detect ask absorption persistence after refill holds");
+
+    tape_engine::QueryRequest incidentsRequest;
+    incidentsRequest.requestId = "incidents-phase3-depletion-absorption";
+    incidentsRequest.operation = "list_incidents";
+    expect(client.query(incidentsRequest, &response, &error), "phase 3 depletion/absorption incidents query should succeed: " + error);
+    bool sawTradeAfterDepletionIncident = false;
+    bool sawAbsorptionPersistenceIncident = false;
+    for (const auto& item : response.events) {
+        const std::string kind = item.value("kind", std::string());
+        if (kind == "ask_trade_after_depletion" && item.value("score", 0.0) > 0.5) {
+            sawTradeAfterDepletionIncident = true;
+        }
+        if (kind == "ask_absorption_persistence" && item.value("score", 0.0) > 0.5) {
+            sawAbsorptionPersistenceIncident = true;
+        }
+    }
+    expect(sawTradeAfterDepletionIncident, "phase 3 trade-after-depletion should surface as a ranked incident");
+    expect(sawAbsorptionPersistenceIncident, "phase 3 absorption persistence should surface as a ranked incident");
+
+    server.stop();
+}
+
 void testTapeEnginePhase3DetectsFillInvalidationSignals() {
     const fs::path rootDir = testDataDir() / "tape-engine-phase3-fill-invalidation";
     const fs::path socketPath = testDataDir() / "tape-engine-phase3-fill-invalidation.sock";
@@ -1886,6 +2120,104 @@ void testTapeEnginePhase3DetectsFillInvalidationSignals() {
         sawInvalidationRelatedFinding = sawInvalidationRelatedFinding || item.value("kind", std::string()) == "buy_fill_invalidation";
     }
     expect(sawInvalidationRelatedFinding, "order-case related findings should include the fill invalidation signal");
+
+    server.stop();
+}
+
+void testTapeEnginePhase3BuildsOrderWindowMarketImpactFinding() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase3-market-impact";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase3-market-impact.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9391:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for order-window market-impact test: " + startError);
+
+    auto marketTick = [](std::uint64_t sourceSeq,
+                         int field,
+                         double price,
+                         const std::string& note) {
+        BridgeOutboxRecord record = makeBridgeRecord(sourceSeq, "market_tick", "BrokerMarketData", "INTC",
+                                                     field == 1 ? "BID" : (field == 2 ? "ASK" : "LAST"),
+                                                     0, 0, 0, "", note, "2026-03-14T09:43:50.000");
+        record.instrumentId = "ib:conid:9391:STK:SMART:USD:INTC";
+        record.marketField = field;
+        record.price = price;
+        return record;
+    };
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase3-market-impact";
+    options.runtimeSessionId = "runtime-engine-phase3-market-impact";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8391, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      551, 4451, 0, "", "market-impact anchor", "2026-03-14T09:43:50.050");
+    orderIntent.instrumentId = "ib:conid:9391:STK:SMART:USD:INTC";
+    options.batchSeq = 131;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the market-impact anchor batch: " + error);
+
+    options.batchSeq = 132;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8392, 1, 45.80, "market impact bid"),
+        marketTick(8393, 2, 45.81, "market impact ask")
+    }, options)), &error), "tape-engine should accept the market-impact seed batch: " + error);
+
+    BridgeOutboxRecord fill = makeBridgeRecord(8394, "fill_execution", "BrokerExecution", "INTC", "BOT",
+                                               551, 4451, 0, "exec-4451-a", "market impact fill", "2026-03-14T09:43:50.070");
+    fill.instrumentId = "ib:conid:9391:STK:SMART:USD:INTC";
+    fill.price = 45.81;
+    fill.size = 100.0;
+    options.batchSeq = 133;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({fill}, options)), &error),
+           "tape-engine should accept the market-impact fill batch: " + error);
+
+    options.batchSeq = 134;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({
+        marketTick(8395, 1, 45.75, "market impact bid down"),
+        marketTick(8396, 2, 45.77, "market impact ask down")
+    }, options)), &error), "tape-engine should accept the market-impact follow-through batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+    }, "tape-engine should freeze order-window market-impact batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest findingsRequest;
+    findingsRequest.requestId = "findings-phase3-market-impact";
+    findingsRequest.operation = "list_findings";
+    expect(client.query(findingsRequest, &response, &error), "phase 3 market-impact findings query should succeed: " + error);
+    bool sawMarketImpactFinding = false;
+    for (const auto& item : response.events) {
+        sawMarketImpactFinding = sawMarketImpactFinding || item.value("kind", std::string()) == "order_window_market_impact";
+    }
+    expect(sawMarketImpactFinding, "phase 3 deferred lane should emit an order-window market-impact finding");
+
+    tape_engine::QueryRequest caseRequest;
+    caseRequest.requestId = "order-case-phase3-market-impact";
+    caseRequest.operation = "read_order_case";
+    caseRequest.orderId = 4451;
+    expect(client.query(caseRequest, &response, &error), "phase 3 market-impact order-case query should succeed: " + error);
+    bool sawMarketImpactRelatedFinding = false;
+    for (const auto& item : response.summary.value("related_findings", json::array())) {
+        sawMarketImpactRelatedFinding = sawMarketImpactRelatedFinding || item.value("kind", std::string()) == "order_window_market_impact";
+    }
+    expect(sawMarketImpactRelatedFinding, "order-case related findings should include the order-window market-impact analysis");
 
     server.stop();
 }
@@ -2001,12 +2333,23 @@ void testTapeEnginePhase3BuildsTradePressureOrderCase() {
 
     bool sawTradePressureRelatedFinding = false;
     bool sawOrderFillContext = false;
+    bool sawOrderFillContextRichSummary = false;
     for (const auto& item : response.summary.value("related_findings", json::array())) {
         sawTradePressureRelatedFinding = sawTradePressureRelatedFinding || item.value("kind", std::string()) == "buy_trade_pressure";
-        sawOrderFillContext = sawOrderFillContext || item.value("kind", std::string()) == "order_fill_context";
+        if (item.value("kind", std::string()) == "order_fill_context") {
+            sawOrderFillContext = true;
+            const std::string summary = item.value("summary", std::string());
+            sawOrderFillContextRichSummary =
+                sawOrderFillContextRichSummary ||
+                summary.find("adverse excursion") != std::string::npos ||
+                summary.find("mid ") != std::string::npos ||
+                summary.find("bid range ") != std::string::npos;
+        }
     }
     expect(sawTradePressureRelatedFinding, "order-case related findings should include the trade-pressure signal");
     expect(sawOrderFillContext, "order-case related findings should include the deferred order-fill context analysis");
+    expect(sawOrderFillContextRichSummary,
+           "order-case related findings should surface the richer fill-context summary");
 
     bool sawTradePressureIncident = false;
     for (const auto& item : response.summary.value("related_incidents", json::array())) {
@@ -3050,7 +3393,10 @@ int main() {
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
         testTapeEnginePhase3DetectsInsideLiquiditySignals();
         testTapeEnginePhase3DetectsDisplayInstabilitySignals();
+        testTapeEnginePhase3DetectsPullFollowThroughAndQuoteFlickerSignals();
+        testTapeEnginePhase3DetectsTradeAfterDepletionAndAbsorptionPersistenceSignals();
         testTapeEnginePhase3DetectsFillInvalidationSignals();
+        testTapeEnginePhase3BuildsOrderWindowMarketImpactFinding();
         testTapeEnginePhase3BuildsTradePressureOrderCase();
         testTapeEngineResetMarkerPreservesCanonicalInstrumentIdentity();
         testTapeEngineReplaySnapshotRebuildsFrozenMarketState();

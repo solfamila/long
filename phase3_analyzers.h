@@ -59,6 +59,27 @@ struct HotAnalyzerInput {
     std::uint64_t fillInvalidationFirstSessionSeq = 0;
     double fillInvalidationFillPrice = 0.0;
     double fillInvalidationObservedPrice = 0.0;
+    bool pullFollowThroughTriggered = false;
+    std::string pullFollowThroughKind;
+    std::uint64_t pullFollowThroughFirstSessionSeq = 0;
+    double pullFollowThroughReferencePrice = 0.0;
+    double pullFollowThroughObservedPrice = 0.0;
+    bool quoteFlickerTriggered = false;
+    std::string quoteFlickerKind;
+    std::uint64_t quoteFlickerFirstSessionSeq = 0;
+    std::size_t quoteFlickerChangeCount = 0;
+    double quoteFlickerObservedPrice = 0.0;
+    bool tradeAfterDepletionTriggered = false;
+    std::string tradeAfterDepletionKind;
+    std::uint64_t tradeAfterDepletionFirstSessionSeq = 0;
+    double tradeAfterDepletionReferencePrice = 0.0;
+    double tradeAfterDepletionTradePrice = 0.0;
+    bool absorptionPersistenceTriggered = false;
+    std::string absorptionPersistenceKind;
+    std::uint64_t absorptionPersistenceFirstSessionSeq = 0;
+    std::size_t absorptionPersistenceStableUpdates = 0;
+    std::size_t absorptionPersistenceTouchTrades = 0;
+    double absorptionPersistencePrice = 0.0;
 };
 
 struct DeferredAnalyzerInput {

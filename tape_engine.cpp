@@ -125,6 +125,9 @@ constexpr double kTouchTradeTolerance = 1e-6;
 constexpr std::size_t kDisplayInstabilityMinCycles = 2;
 constexpr std::uint64_t kDisplayInstabilitySeqWindow = 8;
 constexpr double kFillInvalidationMinMove = 0.02;
+constexpr std::uint64_t kLiquidityFollowThroughSeqWindow = 6;
+constexpr std::uint64_t kQuoteFlickerSeqWindow = 8;
+constexpr std::size_t kQuoteFlickerMinChanges = 3;
 
 bool hasAnchorIdentity(const BridgeAnchorIdentity& anchor) {
     return anchor.traceId > 0 || anchor.orderId > 0 || anchor.permId > 0 || !anchor.execId.empty();
@@ -241,10 +244,76 @@ int severityRank(const std::string& severity) {
     return 0;
 }
 
+double severityScoreWeight(const std::string& severity) {
+    if (severity == "critical") {
+        return 3.0;
+    }
+    if (severity == "error") {
+        return 2.75;
+    }
+    if (severity == "warning") {
+        return 2.5;
+    }
+    if (severity == "info") {
+        return 1.0;
+    }
+    return 0.9;
+}
+
+double incidentKindWeight(std::string_view kind) {
+    if (kind == "buy_fill_invalidation" || kind == "sell_fill_invalidation") {
+        return 2.35;
+    }
+    if (kind == "ask_pull_follow_through" || kind == "bid_pull_follow_through") {
+        return 2.1;
+    }
+    if (kind == "order_window_market_impact") {
+        return 1.95;
+    }
+    if (kind == "source_gap" || kind == "source_reset") {
+        return 1.9;
+    }
+    if (kind == "buy_trade_pressure" || kind == "sell_trade_pressure") {
+        return 1.75;
+    }
+    if (kind == "ask_quote_flicker" || kind == "bid_quote_flicker" ||
+        kind == "ask_display_instability" || kind == "bid_display_instability") {
+        return 1.6;
+    }
+    if (kind == "ask_liquidity_thinned" || kind == "bid_liquidity_thinned") {
+        return 1.35;
+    }
+    if (kind == "spread_widened") {
+        return 1.25;
+    }
+    if (kind == "ask_liquidity_refilled" || kind == "bid_liquidity_refilled") {
+        return 1.15;
+    }
+    if (kind == "order_fill_context" || kind == "order_flow_timeline") {
+        return 0.95;
+    }
+    return 1.0;
+}
+
+double spanScoreWeight(std::uint64_t firstSessionSeq, std::uint64_t lastSessionSeq) {
+    const std::uint64_t span = lastSessionSeq > firstSessionSeq ? (lastSessionSeq - firstSessionSeq) : 0;
+    return 1.0 + std::min(0.35, static_cast<double>(span) * 0.035);
+}
+
+double incidentQualityPenaltyFactor(const json& dataQuality) {
+    const double qualityScore = std::clamp(dataQuality.value("score", 100.0), 0.0, 100.0);
+    const double scoreFactor = 0.55 + (qualityScore / 100.0) * 0.45;
+    const std::size_t issueCount = dataQuality.value("issues", json::array()).size();
+    const double issueFactor = std::max(0.72, 1.0 - static_cast<double>(std::min<std::size_t>(3, issueCount)) * 0.08);
+    return std::clamp(scoreFactor * issueFactor, 0.5, 1.0);
+}
+
 double incidentScoreContribution(const FindingRecord& finding) {
-    const double severityWeight = finding.severity == "warning" ? 2.5 : 1.0;
+    const double severityWeight = severityScoreWeight(finding.severity);
     const double overlapWeight = finding.overlapsOrder ? 1.75 : 1.0;
-    return severityWeight * std::max(0.25, finding.confidence) * overlapWeight;
+    const double kindWeight = incidentKindWeight(finding.kind);
+    const double rangeWeight = spanScoreWeight(finding.firstSessionSeq, finding.lastSessionSeq);
+    return severityWeight * std::max(0.25, finding.confidence) * overlapWeight * kindWeight * rangeWeight;
 }
 
 std::string incidentWhyItMatters(const IncidentRecord& incident) {
@@ -259,10 +328,26 @@ std::string incidentWhyItMatters(const IncidentRecord& incident) {
     if (incident.kind == "ask_liquidity_refilled" || incident.kind == "bid_liquidity_refilled") {
         return "Displayed inside liquidity refilled at the touch, which can signal absorption or support/resistance rebuilding.";
     }
+    if (incident.kind == "ask_absorption_persistence" || incident.kind == "bid_absorption_persistence") {
+        return "Refilled touch liquidity stayed in place long enough to matter, which is a stronger absorption cue than a one-off refill print.";
+    }
     if (incident.kind == "buy_trade_pressure" || incident.kind == "sell_trade_pressure") {
         return incident.kind == "buy_trade_pressure"
             ? "Repeated prints lifted the ask, which can indicate buyers pressing the offer and raising short-term execution risk for passive buys."
             : "Repeated prints hit the bid, which can indicate sellers pressing the bid and weakening short-term support for passive sells.";
+    }
+    if (incident.kind == "ask_trade_after_depletion" || incident.kind == "bid_trade_after_depletion") {
+        return incident.kind == "ask_trade_after_depletion"
+            ? "A trade printed through the depleted ask immediately after liquidity thinned, which is a stronger continuation clue than depletion alone."
+            : "A trade printed through the depleted bid immediately after liquidity thinned, which is a stronger continuation clue than depletion alone.";
+    }
+    if (incident.kind == "ask_pull_follow_through" || incident.kind == "bid_pull_follow_through") {
+        return incident.kind == "ask_pull_follow_through"
+            ? "Ask liquidity pulled and the market followed upward immediately after, which is stronger than a simple displayed-size change."
+            : "Bid liquidity pulled and the market followed downward immediately after, which is stronger than a simple displayed-size change.";
+    }
+    if (incident.kind == "ask_quote_flicker" || incident.kind == "bid_quote_flicker") {
+        return "The touch repriced repeatedly over a short sequence window, which makes the visible inside less stable for queue and timing decisions.";
     }
     if (incident.kind == "ask_display_instability" || incident.kind == "bid_display_instability") {
         return "Displayed touch liquidity repeatedly disappeared and reappeared at the same price, which can make the visible book less trustworthy for queue and fill decisions.";
@@ -272,23 +357,39 @@ std::string incidentWhyItMatters(const IncidentRecord& incident) {
             ? "After the buy fill, the best bid moved materially lower, which is a strong sign that the immediate execution thesis failed."
             : "After the sell fill, the best ask moved materially higher, which is a strong sign that the immediate execution thesis failed.";
     }
+    if (incident.kind == "order_window_market_impact") {
+        return "The order window ended with a measurable mid/spread change, which is a useful proxy for whether the market moved with or against the execution.";
+    }
     if (incident.kind == "source_gap" || incident.kind == "source_reset") {
         return "Source continuity changed, so any interpretation around this window needs to account for data-quality risk.";
     }
     return "This incident groups correlated evidence into one revision-pinned investigation unit.";
 }
 
-json incidentScoreBreakdown(const IncidentRecord& incident) {
+json incidentScoreBreakdown(const IncidentRecord& incident, const json* dataQuality = nullptr) {
     const double findingCount = std::max<double>(1.0, static_cast<double>(incident.findingCount));
-    return json{
+    const double severityWeight = severityScoreWeight(incident.severity);
+    const double overlapWeight = incident.overlapsOrder ? 1.75 : 1.0;
+    const double kindWeight = incidentKindWeight(incident.kind);
+    const double rangeWeight = spanScoreWeight(incident.firstSessionSeq, incident.lastSessionSeq);
+    json payload{
         {"score", incident.score},
         {"finding_count", incident.findingCount},
         {"average_score_per_finding", incident.score / findingCount},
         {"confidence", incident.confidence},
         {"severity", incident.severity},
         {"overlaps_order", incident.overlapsOrder},
-        {"score_model", "severity_weight * confidence * overlap_weight, accumulated per finding"}
+        {"severity_weight", severityWeight},
+        {"overlap_weight", overlapWeight},
+        {"kind_weight", kindWeight},
+        {"range_weight", rangeWeight},
+        {"score_model", "severity_weight * confidence * overlap_weight * kind_weight * range_weight, accumulated per finding"}
     };
+    if (dataQuality != nullptr) {
+        payload["data_quality_penalty_factor"] = incidentQualityPenaltyFactor(*dataQuality);
+        payload["data_quality_score"] = dataQuality->value("score", 100.0);
+    }
+    return payload;
 }
 
 std::string eventTimelineStage(const std::string& kind) {
@@ -1913,6 +2014,219 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         : 0.0;
     const bool hasInside = effectiveBid > 0.0 && effectiveAsk > 0.0 && effectiveAsk >= effectiveBid;
 
+    auto qualifiesLiquidityThinning = [](double previousSize, double currentSize) {
+        if (previousSize < kLiquidityChangeMinShares || currentSize <= 0.0) {
+            return false;
+        }
+        const double delta = currentSize - previousSize;
+        const double ratio = previousSize > 0.0 ? std::fabs(delta) / previousSize : 0.0;
+        return delta <= -kLiquidityChangeMinShares && ratio >= kLiquidityChangeMinRatio;
+    };
+    auto qualifiesLiquidityRefill = [](double previousSize, double currentSize) {
+        if (previousSize < kLiquidityChangeMinShares || currentSize <= 0.0) {
+            return false;
+        }
+        const double delta = currentSize - previousSize;
+        const double ratio = previousSize > 0.0 ? std::fabs(delta) / previousSize : 0.0;
+        return delta >= kLiquidityChangeMinShares && ratio >= kLiquidityChangeMinRatio;
+    };
+
+    const bool askThinDetected = event.eventKind == "market_depth" &&
+        hadInside && hasInside &&
+        previousAsk > 0.0 &&
+        std::fabs(previousAsk - effectiveAsk) <= kTouchTradeTolerance &&
+        qualifiesLiquidityThinning(previousAskSize, effectiveAskSize);
+    const bool bidThinDetected = event.eventKind == "market_depth" &&
+        hadInside && hasInside &&
+        previousBid > 0.0 &&
+        std::fabs(previousBid - effectiveBid) <= kTouchTradeTolerance &&
+        qualifiesLiquidityThinning(previousBidSize, effectiveBidSize);
+    const bool askRefillDetected = event.eventKind == "market_depth" &&
+        hadInside && hasInside &&
+        previousAsk > 0.0 &&
+        std::fabs(previousAsk - effectiveAsk) <= kTouchTradeTolerance &&
+        qualifiesLiquidityRefill(previousAskSize, effectiveAskSize);
+    const bool bidRefillDetected = event.eventKind == "market_depth" &&
+        hadInside && hasInside &&
+        previousBid > 0.0 &&
+        std::fabs(previousBid - effectiveBid) <= kTouchTradeTolerance &&
+        qualifiesLiquidityRefill(previousBidSize, effectiveBidSize);
+
+    if (askThinDetected) {
+        AnalyzerBookState::RecentTouchLiquidityShift shift;
+        shift.price = effectiveAsk;
+        shift.previousSize = previousAskSize;
+        shift.currentSize = effectiveAskSize;
+        shift.sessionSeq = event.sessionSeq;
+        shift.tsEngineNs = event.tsEngineNs;
+        analyzerBookState_.recentAskThinning = std::move(shift);
+    }
+    if (bidThinDetected) {
+        AnalyzerBookState::RecentTouchLiquidityShift shift;
+        shift.price = effectiveBid;
+        shift.previousSize = previousBidSize;
+        shift.currentSize = effectiveBidSize;
+        shift.sessionSeq = event.sessionSeq;
+        shift.tsEngineNs = event.tsEngineNs;
+        analyzerBookState_.recentBidThinning = std::move(shift);
+    }
+    if (askRefillDetected) {
+        AnalyzerBookState::RecentTouchRefillWatch watch;
+        watch.price = effectiveAsk;
+        watch.refillSize = effectiveAskSize;
+        watch.sessionSeq = event.sessionSeq;
+        watch.tsEngineNs = event.tsEngineNs;
+        analyzerBookState_.recentAskRefill = std::move(watch);
+    }
+    if (bidRefillDetected) {
+        AnalyzerBookState::RecentTouchRefillWatch watch;
+        watch.price = effectiveBid;
+        watch.refillSize = effectiveBidSize;
+        watch.sessionSeq = event.sessionSeq;
+        watch.tsEngineNs = event.tsEngineNs;
+        analyzerBookState_.recentBidRefill = std::move(watch);
+    }
+
+    bool tradeAfterDepletionTriggered = false;
+    std::string tradeAfterDepletionKind;
+    std::uint64_t tradeAfterDepletionFirstSessionSeq = 0;
+    double tradeAfterDepletionReferencePrice = 0.0;
+    double tradeAfterDepletionTradePrice = 0.0;
+    auto updateTradeAfterDepletion = [&](std::optional<AnalyzerBookState::RecentTouchLiquidityShift>& watch,
+                                         bool askSide) {
+        if (!watch.has_value()) {
+            return;
+        }
+        if (event.sessionSeq > watch->sessionSeq + kLiquidityFollowThroughSeqWindow) {
+            watch.reset();
+            return;
+        }
+        if (event.eventKind != "market_tick" ||
+            event.bridgeRecord.marketField != 4 ||
+            !std::isfinite(event.bridgeRecord.price) ||
+            watch->sawTradeAfterDepletion) {
+            return;
+        }
+        const bool touchedDepletedSide = askSide
+            ? event.bridgeRecord.price >= watch->price - kTouchTradeTolerance
+            : event.bridgeRecord.price <= watch->price + kTouchTradeTolerance;
+        if (!touchedDepletedSide) {
+            return;
+        }
+        tradeAfterDepletionTriggered = true;
+        tradeAfterDepletionKind = askSide ? "ask_trade_after_depletion" : "bid_trade_after_depletion";
+        tradeAfterDepletionFirstSessionSeq = watch->sessionSeq;
+        tradeAfterDepletionReferencePrice = watch->price;
+        tradeAfterDepletionTradePrice = event.bridgeRecord.price;
+        watch->sawTradeAfterDepletion = true;
+    };
+    updateTradeAfterDepletion(analyzerBookState_.recentAskThinning, true);
+    if (!tradeAfterDepletionTriggered) {
+        updateTradeAfterDepletion(analyzerBookState_.recentBidThinning, false);
+    }
+
+    bool pullFollowThroughTriggered = false;
+    std::string pullFollowThroughKind;
+    std::uint64_t pullFollowThroughFirstSessionSeq = 0;
+    double pullFollowThroughReferencePrice = 0.0;
+    double pullFollowThroughObservedPrice = 0.0;
+    auto updatePullFollowThrough = [&](std::optional<AnalyzerBookState::RecentTouchLiquidityShift>& watch,
+                                       bool askSide,
+                                       double currentPrice,
+                                       double currentSize) {
+        if (!watch.has_value()) {
+            return;
+        }
+        if (event.sessionSeq <= watch->sessionSeq) {
+            return;
+        }
+        if (event.sessionSeq > watch->sessionSeq + kLiquidityFollowThroughSeqWindow) {
+            watch.reset();
+            return;
+        }
+
+        const bool tradeFollowThrough = event.eventKind == "market_tick" &&
+            event.bridgeRecord.marketField == 4 &&
+            std::isfinite(event.bridgeRecord.price) &&
+            (askSide
+                ? event.bridgeRecord.price >= watch->price - kTouchTradeTolerance
+                : event.bridgeRecord.price <= watch->price + kTouchTradeTolerance);
+        const bool touchMoved = currentPrice > 0.0 &&
+            (askSide
+                ? currentPrice > watch->price + kTouchTradeTolerance
+                : currentPrice < watch->price - kTouchTradeTolerance);
+        const bool replenished = currentPrice > 0.0 &&
+            std::fabs(currentPrice - watch->price) <= kTouchTradeTolerance &&
+            currentSize >= watch->previousSize * 0.8;
+        if (tradeFollowThrough || touchMoved) {
+            pullFollowThroughTriggered = true;
+            pullFollowThroughKind = askSide ? "ask_pull_follow_through" : "bid_pull_follow_through";
+            pullFollowThroughFirstSessionSeq = watch->sessionSeq;
+            pullFollowThroughReferencePrice = watch->price;
+            pullFollowThroughObservedPrice = tradeFollowThrough ? event.bridgeRecord.price : currentPrice;
+            watch.reset();
+        } else if (replenished) {
+            watch.reset();
+        }
+    };
+    updatePullFollowThrough(analyzerBookState_.recentAskThinning, true, effectiveAsk, effectiveAskSize);
+    if (!pullFollowThroughTriggered) {
+        updatePullFollowThrough(analyzerBookState_.recentBidThinning, false, effectiveBid, effectiveBidSize);
+    }
+
+    bool absorptionPersistenceTriggered = false;
+    std::string absorptionPersistenceKind;
+    std::uint64_t absorptionPersistenceFirstSessionSeq = 0;
+    std::size_t absorptionPersistenceStableUpdates = 0;
+    std::size_t absorptionPersistenceTouchTrades = 0;
+    double absorptionPersistencePrice = 0.0;
+    auto updateAbsorptionPersistence = [&](std::optional<AnalyzerBookState::RecentTouchRefillWatch>& watch,
+                                           bool askSide,
+                                           double currentPrice,
+                                           double currentSize) {
+        if (!watch.has_value()) {
+            return;
+        }
+        if (event.sessionSeq <= watch->sessionSeq) {
+            return;
+        }
+        if (event.sessionSeq > watch->sessionSeq + kLiquidityFollowThroughSeqWindow) {
+            watch.reset();
+            return;
+        }
+        if (currentPrice <= 0.0 || std::fabs(currentPrice - watch->price) > kTouchTradeTolerance) {
+            watch.reset();
+            return;
+        }
+        if (currentSize < watch->refillSize * 0.6) {
+            watch.reset();
+            return;
+        }
+        watch->stableUpdateCount += 1;
+        if (event.eventKind == "market_tick" &&
+            event.bridgeRecord.marketField == 4 &&
+            std::isfinite(event.bridgeRecord.price) &&
+            (askSide
+                ? event.bridgeRecord.price >= watch->price - kTouchTradeTolerance
+                : event.bridgeRecord.price <= watch->price + kTouchTradeTolerance)) {
+            watch->touchTradeCount += 1;
+        }
+        if ((watch->stableUpdateCount >= 2 && watch->touchTradeCount >= 1) ||
+            watch->stableUpdateCount >= 3) {
+            absorptionPersistenceTriggered = true;
+            absorptionPersistenceKind = askSide ? "ask_absorption_persistence" : "bid_absorption_persistence";
+            absorptionPersistenceFirstSessionSeq = watch->sessionSeq;
+            absorptionPersistenceStableUpdates = watch->stableUpdateCount;
+            absorptionPersistenceTouchTrades = watch->touchTradeCount;
+            absorptionPersistencePrice = watch->price;
+            watch.reset();
+        }
+    };
+    updateAbsorptionPersistence(analyzerBookState_.recentAskRefill, true, effectiveAsk, effectiveAskSize);
+    if (!absorptionPersistenceTriggered) {
+        updateAbsorptionPersistence(analyzerBookState_.recentBidRefill, false, effectiveBid, effectiveBidSize);
+    }
+
     bool fillInvalidationTriggered = false;
     std::string fillInvalidationKind;
     std::uint64_t fillInvalidationFirstSessionSeq = 0;
@@ -1969,6 +2283,91 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         if (analyzerBookState_.tradePressureStreakCount == kTradePressureMinStreak) {
             tradePressureTriggered = true;
             tradePressureKind = tradePressureSide > 0 ? "buy_trade_pressure" : "sell_trade_pressure";
+        }
+    }
+
+    auto resetQuoteFlicker = [](auto* state, double price) {
+        state->lastPrice = price;
+        state->firstChangeSessionSeq = 0;
+        state->lastChangeSessionSeq = 0;
+        state->changeCount = 0;
+    };
+
+    auto updateQuoteFlicker = [&](auto* state,
+                                  const std::string& kind,
+                                  double previousPrice,
+                                  double currentPrice) {
+        if (previousPrice <= 0.0 || currentPrice <= 0.0) {
+            resetQuoteFlicker(state, currentPrice);
+            return std::tuple<bool, std::string, std::size_t, std::uint64_t, double>{
+                false, std::string(), 0, 0, 0.0
+            };
+        }
+        if (std::fabs(previousPrice - currentPrice) <= kTouchTradeTolerance) {
+            if (state->lastChangeSessionSeq > 0 &&
+                event.sessionSeq > state->lastChangeSessionSeq + kQuoteFlickerSeqWindow) {
+                resetQuoteFlicker(state, currentPrice);
+            }
+            return std::tuple<bool, std::string, std::size_t, std::uint64_t, double>{
+                false, std::string(), 0, 0, 0.0
+            };
+        }
+        if (state->lastChangeSessionSeq == 0 ||
+            event.sessionSeq > state->lastChangeSessionSeq + kQuoteFlickerSeqWindow) {
+            state->firstChangeSessionSeq = event.sessionSeq;
+            state->changeCount = 1;
+        } else {
+            state->changeCount += 1;
+        }
+        state->lastChangeSessionSeq = event.sessionSeq;
+        state->lastPrice = currentPrice;
+        if (state->changeCount >= kQuoteFlickerMinChanges) {
+            const auto firstSessionSeq = state->firstChangeSessionSeq;
+            const auto changeCount = state->changeCount;
+            resetQuoteFlicker(state, currentPrice);
+            return std::tuple<bool, std::string, std::size_t, std::uint64_t, double>{
+                true, kind, changeCount, firstSessionSeq, currentPrice
+            };
+        }
+        return std::tuple<bool, std::string, std::size_t, std::uint64_t, double>{
+            false, std::string(), 0, 0, 0.0
+        };
+    };
+
+    bool quoteFlickerTriggered = false;
+    std::string quoteFlickerKind;
+    std::size_t quoteFlickerChangeCount = 0;
+    std::uint64_t quoteFlickerFirstSessionSeq = 0;
+    double quoteFlickerObservedPrice = 0.0;
+    if (hadInside && hasInside &&
+        (event.eventKind == "market_tick" || event.eventKind == "market_depth")) {
+        if (previousAsk > 0.0) {
+            auto [triggered, kind, changeCount, firstChangeSessionSeq, observedPrice] =
+                updateQuoteFlicker(&analyzerBookState_.askQuoteFlicker,
+                                   "ask_quote_flicker",
+                                   previousAsk,
+                                   effectiveAsk);
+            if (triggered) {
+                quoteFlickerTriggered = true;
+                quoteFlickerKind = std::move(kind);
+                quoteFlickerChangeCount = changeCount;
+                quoteFlickerFirstSessionSeq = firstChangeSessionSeq;
+                quoteFlickerObservedPrice = observedPrice;
+            }
+        }
+        if (!quoteFlickerTriggered && previousBid > 0.0) {
+            auto [triggered, kind, changeCount, firstChangeSessionSeq, observedPrice] =
+                updateQuoteFlicker(&analyzerBookState_.bidQuoteFlicker,
+                                   "bid_quote_flicker",
+                                   previousBid,
+                                   effectiveBid);
+            if (triggered) {
+                quoteFlickerTriggered = true;
+                quoteFlickerKind = std::move(kind);
+                quoteFlickerChangeCount = changeCount;
+                quoteFlickerFirstSessionSeq = firstChangeSessionSeq;
+                quoteFlickerObservedPrice = observedPrice;
+            }
         }
     }
 
@@ -2146,7 +2545,28 @@ void Server::updatePhase3StateUnlocked(const EngineEvent& event) {
         .fillInvalidationKind = fillInvalidationKind,
         .fillInvalidationFirstSessionSeq = fillInvalidationFirstSessionSeq,
         .fillInvalidationFillPrice = fillInvalidationFillPrice,
-        .fillInvalidationObservedPrice = fillInvalidationObservedPrice
+        .fillInvalidationObservedPrice = fillInvalidationObservedPrice,
+        .tradeAfterDepletionTriggered = tradeAfterDepletionTriggered,
+        .tradeAfterDepletionKind = tradeAfterDepletionKind,
+        .tradeAfterDepletionFirstSessionSeq = tradeAfterDepletionFirstSessionSeq,
+        .tradeAfterDepletionReferencePrice = tradeAfterDepletionReferencePrice,
+        .tradeAfterDepletionTradePrice = tradeAfterDepletionTradePrice,
+        .absorptionPersistenceTriggered = absorptionPersistenceTriggered,
+        .absorptionPersistenceKind = absorptionPersistenceKind,
+        .absorptionPersistenceFirstSessionSeq = absorptionPersistenceFirstSessionSeq,
+        .absorptionPersistenceStableUpdates = absorptionPersistenceStableUpdates,
+        .absorptionPersistenceTouchTrades = absorptionPersistenceTouchTrades,
+        .absorptionPersistencePrice = absorptionPersistencePrice,
+        .pullFollowThroughTriggered = pullFollowThroughTriggered,
+        .pullFollowThroughKind = pullFollowThroughKind,
+        .pullFollowThroughFirstSessionSeq = pullFollowThroughFirstSessionSeq,
+        .pullFollowThroughReferencePrice = pullFollowThroughReferencePrice,
+        .pullFollowThroughObservedPrice = pullFollowThroughObservedPrice,
+        .quoteFlickerTriggered = quoteFlickerTriggered,
+        .quoteFlickerKind = quoteFlickerKind,
+        .quoteFlickerFirstSessionSeq = quoteFlickerFirstSessionSeq,
+        .quoteFlickerChangeCount = quoteFlickerChangeCount,
+        .quoteFlickerObservedPrice = quoteFlickerObservedPrice
     };
 
     std::vector<AnalyzerFindingSpec> analyzerFindings;
@@ -2795,6 +3215,83 @@ json Server::buildOrderCaseSummary(const QuerySnapshot& snapshot,
     return summary;
 }
 
+std::optional<ProtectedWindowRecord> Server::latestIncidentProtectedWindow(const QueryArtifacts& artifacts,
+                                                                           std::uint64_t logicalIncidentId) const {
+    std::optional<ProtectedWindowRecord> selectedWindow;
+    for (const auto& record : artifacts.protectedWindows) {
+        if (record.logicalIncidentId != logicalIncidentId) {
+            continue;
+        }
+        if (!selectedWindow.has_value() || selectedWindow->revisionId < record.revisionId) {
+            selectedWindow = record;
+        }
+    }
+    return selectedWindow;
+}
+
+json Server::buildIncidentDataQualitySummary(const QuerySnapshot& snapshot,
+                                             const QueryArtifacts& artifacts,
+                                             const IncidentRecord& incident,
+                                             std::uint64_t frozenRevisionId,
+                                             bool includeLiveTail) const {
+    std::vector<json> events;
+    const auto incidentWindow = latestIncidentProtectedWindow(artifacts, incident.logicalIncidentId);
+    if (incidentWindow.has_value()) {
+        events = filterEventsByProtectedWindow(snapshot,
+                                               artifacts,
+                                               incidentWindow->windowId,
+                                               64,
+                                               frozenRevisionId,
+                                               includeLiveTail,
+                                               nullptr);
+    }
+    if (events.empty()) {
+        events = mergedEvents(snapshot,
+                              frozenRevisionId,
+                              includeLiveTail,
+                              incident.firstSessionSeq,
+                              incident.lastSessionSeq);
+    }
+    return buildDataQualitySummary(events, includeLiveTail, incident.instrumentId);
+}
+
+IncidentRecord Server::applyIncidentDataQualityPenalty(const IncidentRecord& incident,
+                                                       const json& dataQuality) const {
+    IncidentRecord adjusted = incident;
+    const double penaltyFactor = incidentQualityPenaltyFactor(dataQuality);
+    adjusted.confidence *= penaltyFactor;
+    adjusted.score *= (0.7 + 0.3 * penaltyFactor);
+    return adjusted;
+}
+
+std::vector<IncidentRecord> Server::collapseAdjustedIncidents(const QuerySnapshot& snapshot,
+                                                              const QueryArtifacts& artifacts,
+                                                              const std::vector<IncidentRecord>& records,
+                                                              std::uint64_t frozenRevisionId,
+                                                              bool includeLiveTail) const {
+    std::vector<IncidentRecord> adjusted;
+    adjusted.reserve(records.size());
+    for (const auto& incident : collapseLatestIncidentRevisions(records)) {
+        adjusted.push_back(applyIncidentDataQualityPenalty(
+            incident,
+            buildIncidentDataQualitySummary(snapshot, artifacts, incident, frozenRevisionId, includeLiveTail)));
+    }
+    std::sort(adjusted.begin(), adjusted.end(), [](const IncidentRecord& left,
+                                                   const IncidentRecord& right) {
+        if (left.score != right.score) {
+            return left.score > right.score;
+        }
+        if (left.confidence != right.confidence) {
+            return left.confidence > right.confidence;
+        }
+        if (left.tsEngineNs != right.tsEngineNs) {
+            return left.tsEngineNs > right.tsEngineNs;
+        }
+        return left.logicalIncidentId > right.logicalIncidentId;
+    });
+    return adjusted;
+}
+
 std::vector<json> Server::filterEventsByProtectedWindow(const QuerySnapshot& snapshot,
                                                         const QueryArtifacts& artifacts,
                                                         std::uint64_t windowId,
@@ -3197,7 +3694,11 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                                      request.includeLiveTail);
 
         std::vector<IncidentRecord> topIncidents;
-        for (const auto& incident : collapseLatestIncidentRevisions(artifacts.incidents)) {
+        for (const auto& incident : collapseAdjustedIncidents(snapshot,
+                                                              artifacts,
+                                                              artifacts.incidents,
+                                                              frozenRevisionId,
+                                                              request.includeLiveTail)) {
             if (rangeOverlaps(incident.firstSessionSeq, incident.lastSessionSeq, from, to)) {
                 topIncidents.push_back(incident);
             }
@@ -3276,7 +3777,8 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"summary", "Ranked incidents, findings, protected windows, and data-quality scoring for the requested session range."},
             {"timeline_highlights", buildTimelineHighlights(timeline, 5)},
             {"top_incident_kind", topIncidents.empty() ? std::string() : topIncidents.front().kind},
-            {"top_incident_title", topIncidents.empty() ? std::string() : topIncidents.front().title}
+            {"top_incident_title", topIncidents.empty() ? std::string() : topIncidents.front().title},
+            {"top_incident_why_it_matters", topIncidents.empty() ? std::string() : incidentWhyItMatters(topIncidents.front())}
         };
 
         response.summary = {
@@ -3341,7 +3843,11 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             }
         } else if (request.operation == "list_incidents") {
             const std::vector<IncidentRecord>& records = artifacts.incidents;
-            const std::vector<IncidentRecord> collapsed = collapseLatestIncidentRevisions(records);
+            const std::vector<IncidentRecord> collapsed = collapseAdjustedIncidents(snapshot,
+                                                                                   artifacts,
+                                                                                   records,
+                                                                                   frozenRevisionId,
+                                                                                   request.includeLiveTail);
             for (const auto& record : collapsed) {
                 if (response.events.size() >= limit) {
                     break;
@@ -3391,7 +3897,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                                          const IncidentRecord& right) {
             return left.incidentRevisionId < right.incidentRevisionId;
         });
-        const IncidentRecord& latestIncident = incidentRevisions.back();
+        IncidentRecord latestIncident = incidentRevisions.back();
 
         relatedFindings.erase(std::remove_if(relatedFindings.begin(),
                                              relatedFindings.end(),
@@ -3407,14 +3913,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             return left.findingId > right.findingId;
         });
 
-        std::optional<ProtectedWindowRecord> incidentWindow;
-        for (const auto& record : protectedWindows) {
-            if (record.logicalIncidentId == latestIncident.logicalIncidentId) {
-                if (!incidentWindow.has_value() || incidentWindow->revisionId < record.revisionId) {
-                    incidentWindow = record;
-                }
-            }
-        }
+        std::optional<ProtectedWindowRecord> incidentWindow = latestIncidentProtectedWindow(artifacts, latestIncident.logicalIncidentId);
 
         const std::size_t limit = request.limit == 0 ? relatedFindings.size() : request.limit;
         response.events = json::array();
@@ -3457,6 +3956,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                              latestIncident.firstSessionSeq,
                                              latestIncident.lastSessionSeq);
         }
+        const json incidentDataQuality = buildDataQualitySummary(dataQualityEvents,
+                                                                 request.includeLiveTail,
+                                                                 latestIncident.instrumentId);
+        latestIncident = applyIncidentDataQualityPenalty(latestIncident, incidentDataQuality);
         for (const auto& finding : relatedFindings) {
             timeline.push_back(timelineEntryFromFinding(finding));
         }
@@ -3471,12 +3974,12 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"served_revision_id", frozenRevisionId},
             {"latest_incident", incidentToJson(latestIncident)},
             {"incident_revision_count", incidentRevisions.size()},
-            {"score_breakdown", incidentScoreBreakdown(latestIncident)},
+            {"score_breakdown", incidentScoreBreakdown(latestIncident, &incidentDataQuality)},
             {"why_it_matters", incidentWhyItMatters(latestIncident)},
             {"report_summary", reportSummary},
             {"timeline", timeline},
             {"timeline_summary", timelineSummary},
-            {"data_quality", buildDataQualitySummary(dataQualityEvents, request.includeLiveTail, latestIncident.instrumentId)},
+            {"data_quality", incidentDataQuality},
             {"returned_events", response.events.size()},
             {"related_finding_count", relatedFindings.size()},
             {"incident_revisions", revisionsJson}
@@ -3656,7 +4159,11 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                   return !anchorsShareIdentity(record.overlappingAnchor, anchor);
                                               }),
                                relatedIncidents.end());
-        const std::vector<IncidentRecord> collapsedIncidents = collapseLatestIncidentRevisions(relatedIncidents);
+        const std::vector<IncidentRecord> collapsedIncidents = collapseAdjustedIncidents(snapshot,
+                                                                                         artifacts,
+                                                                                         relatedIncidents,
+                                                                                         frozenRevisionId,
+                                                                                         request.includeLiveTail);
 
         json findingsJson = json::array();
         for (const auto& record : relatedFindings) {

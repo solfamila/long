@@ -235,6 +235,31 @@ private:
             std::uint64_t expiryTsEngineNs = 0;
         };
 
+        struct RecentTouchLiquidityShift {
+            double price = 0.0;
+            double previousSize = 0.0;
+            double currentSize = 0.0;
+            std::uint64_t sessionSeq = 0;
+            std::uint64_t tsEngineNs = 0;
+            bool sawTradeAfterDepletion = false;
+        };
+
+        struct RecentTouchRefillWatch {
+            double price = 0.0;
+            double refillSize = 0.0;
+            std::uint64_t sessionSeq = 0;
+            std::uint64_t tsEngineNs = 0;
+            std::size_t stableUpdateCount = 0;
+            std::size_t touchTradeCount = 0;
+        };
+
+        struct QuoteFlickerSideState {
+            double lastPrice = 0.0;
+            std::uint64_t firstChangeSessionSeq = 0;
+            std::uint64_t lastChangeSessionSeq = 0;
+            std::size_t changeCount = 0;
+        };
+
         double bidTickPrice = 0.0;
         double askTickPrice = 0.0;
         double lastTradePrice = 0.0;
@@ -252,6 +277,12 @@ private:
         DisplayInstabilitySideState askDisplayInstability;
         DisplayInstabilitySideState bidDisplayInstability;
         std::optional<ActiveFillWatch> activeFillWatch;
+        std::optional<RecentTouchLiquidityShift> recentAskThinning;
+        std::optional<RecentTouchLiquidityShift> recentBidThinning;
+        std::optional<RecentTouchRefillWatch> recentAskRefill;
+        std::optional<RecentTouchRefillWatch> recentBidRefill;
+        QuoteFlickerSideState askQuoteFlicker;
+        QuoteFlickerSideState bidQuoteFlicker;
         bool hasInside = false;
     };
 
@@ -367,6 +398,20 @@ private:
                                const std::string& execId,
                                std::uint64_t frozenRevisionId,
                                bool includeLiveTail) const;
+    std::optional<ProtectedWindowRecord> latestIncidentProtectedWindow(const QueryArtifacts& artifacts,
+                                                                       std::uint64_t logicalIncidentId) const;
+    json buildIncidentDataQualitySummary(const QuerySnapshot& snapshot,
+                                         const QueryArtifacts& artifacts,
+                                         const IncidentRecord& incident,
+                                         std::uint64_t frozenRevisionId,
+                                         bool includeLiveTail) const;
+    IncidentRecord applyIncidentDataQualityPenalty(const IncidentRecord& incident,
+                                                   const json& dataQuality) const;
+    std::vector<IncidentRecord> collapseAdjustedIncidents(const QuerySnapshot& snapshot,
+                                                          const QueryArtifacts& artifacts,
+                                                          const std::vector<IncidentRecord>& records,
+                                                          std::uint64_t frozenRevisionId,
+                                                          bool includeLiveTail) const;
     std::vector<json> filterEventsByProtectedWindow(const QuerySnapshot& snapshot,
                                                     const QueryArtifacts& artifacts,
                                                     std::uint64_t windowId,
