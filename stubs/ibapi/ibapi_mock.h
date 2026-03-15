@@ -207,6 +207,12 @@ public:
 
     void reqOpenOrders() {}
 
+    void reqIds(int) {
+        if (wrapper_) {
+            wrapper_->nextValidId(nextOrderId_.load());
+        }
+    }
+
     void reqExecutions(int reqId, const ExecutionFilter&) {
         if (wrapper_) {
             wrapper_->execDetailsEnd(reqId);
