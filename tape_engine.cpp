@@ -605,23 +605,53 @@ void Server::writeSegment(const PendingSegment& segment) {
     }
 }
 
-std::uint64_t Server::resolveFrozenRevisionUnlocked(std::uint64_t requestedRevisionId) const {
+Server::QuerySnapshot Server::captureQuerySnapshot() const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    QuerySnapshot snapshot;
+    snapshot.dataDir = config_.dataDir;
+    snapshot.socketPath = config_.socketPath;
+    snapshot.instrumentId = config_.instrumentId;
+    snapshot.lastManifestHash = lastManifestHash_;
+    snapshot.writerFailure = writerFailure_;
+    snapshot.nextSessionSeq = nextSessionSeq_;
+    snapshot.nextSegmentId = nextSegmentId_;
+    snapshot.nextRevisionId = nextRevisionId_;
+    snapshot.latestFrozenRevisionId = latestFrozenRevisionId_;
+    snapshot.latestFrozenSessionSeq = latestFrozenSessionSeq_;
+    snapshot.segments = segments_;
+    snapshot.liveEvents.assign(liveRing_.begin(), liveRing_.end());
+    return snapshot;
+}
+
+std::uint64_t Server::resolveFrozenRevision(const QuerySnapshot& snapshot,
+                                            std::uint64_t requestedRevisionId) const {
     if (requestedRevisionId == 0) {
-        return latestFrozenRevisionId_;
+        return snapshot.latestFrozenRevisionId;
     }
-    if (requestedRevisionId > latestFrozenRevisionId_) {
+    if (requestedRevisionId > snapshot.latestFrozenRevisionId) {
         throw std::runtime_error("requested revision_id is not frozen yet");
     }
     return requestedRevisionId;
 }
 
-std::vector<json> Server::loadAllEventsUnlocked(std::uint64_t frozenRevisionId) const {
+std::vector<json> Server::loadEvents(const QuerySnapshot& snapshot,
+                                     std::uint64_t frozenRevisionId,
+                                     std::uint64_t fromSessionSeq,
+                                     std::uint64_t throughSessionSeq) const {
     std::vector<json> events;
-    for (const auto& segment : segments_) {
+    for (const auto& segment : snapshot.segments) {
         if (segment.revisionId > frozenRevisionId) {
             continue;
         }
-        const std::filesystem::path segmentPath = config_.dataDir / "segments" / segment.fileName;
+
+        if (fromSessionSeq > 0 && segment.lastSessionSeq < fromSessionSeq) {
+            continue;
+        }
+        if (throughSessionSeq > 0 && segment.firstSessionSeq > throughSessionSeq) {
+            continue;
+        }
+
+        const std::filesystem::path segmentPath = snapshot.dataDir / "segments" / segment.fileName;
         std::ifstream in(segmentPath, std::ios::binary);
         if (!in.is_open()) {
             continue;
@@ -658,19 +688,29 @@ std::vector<json> Server::loadAllEventsUnlocked(std::uint64_t frozenRevisionId) 
     return events;
 }
 
-std::vector<json> Server::mergedEventsUnlocked(std::uint64_t frozenRevisionId, bool includeLiveTail) const {
-    std::vector<json> events = loadAllEventsUnlocked(frozenRevisionId);
+std::vector<json> Server::mergedEvents(const QuerySnapshot& snapshot,
+                                       std::uint64_t frozenRevisionId,
+                                       bool includeLiveTail,
+                                       std::uint64_t fromSessionSeq,
+                                       std::uint64_t throughSessionSeq) const {
+    std::vector<json> events = loadEvents(snapshot, frozenRevisionId, fromSessionSeq, throughSessionSeq);
     if (!includeLiveTail) {
         return events;
     }
 
     std::unordered_set<std::uint64_t> seenSessionSeq;
-    seenSessionSeq.reserve(events.size() + liveRing_.size());
+    seenSessionSeq.reserve(events.size() + snapshot.liveEvents.size());
     for (const auto& event : events) {
         seenSessionSeq.insert(event.value("session_seq", 0ULL));
     }
-    for (const auto& event : liveRing_) {
+    for (const auto& event : snapshot.liveEvents) {
         if (event.revisionId > 0 && event.revisionId <= frozenRevisionId) {
+            continue;
+        }
+        if (fromSessionSeq > 0 && event.sessionSeq < fromSessionSeq) {
+            continue;
+        }
+        if (throughSessionSeq > 0 && event.sessionSeq > throughSessionSeq) {
             continue;
         }
         if (seenSessionSeq.insert(event.sessionSeq).second) {
@@ -684,13 +724,14 @@ std::vector<json> Server::mergedEventsUnlocked(std::uint64_t frozenRevisionId, b
     return events;
 }
 
-std::vector<json> Server::filterEventsByRangeUnlocked(std::uint64_t fromSessionSeq,
-                                                      std::uint64_t toSessionSeq,
-                                                      std::size_t limit,
-                                                      std::uint64_t frozenRevisionId,
-                                                      bool includeLiveTail) const {
+std::vector<json> Server::filterEventsByRange(const QuerySnapshot& snapshot,
+                                              std::uint64_t fromSessionSeq,
+                                              std::uint64_t toSessionSeq,
+                                              std::size_t limit,
+                                              std::uint64_t frozenRevisionId,
+                                              bool includeLiveTail) const {
     std::vector<json> results;
-    const auto allEvents = mergedEventsUnlocked(frozenRevisionId, includeLiveTail);
+    const auto allEvents = mergedEvents(snapshot, frozenRevisionId, includeLiveTail, fromSessionSeq, toSessionSeq);
     for (const auto& event : allEvents) {
         const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
         if (sessionSeq < fromSessionSeq) {
@@ -708,15 +749,16 @@ std::vector<json> Server::filterEventsByRangeUnlocked(std::uint64_t fromSessionS
     return results;
 }
 
-std::vector<json> Server::filterEventsByAnchorUnlocked(std::uint64_t traceId,
-                                                       long long orderId,
-                                                       long long permId,
-                                                       const std::string& execId,
-                                                       std::size_t limit,
-                                                       std::uint64_t frozenRevisionId,
-                                                       bool includeLiveTail) const {
+std::vector<json> Server::filterEventsByAnchor(const QuerySnapshot& snapshot,
+                                               std::uint64_t traceId,
+                                               long long orderId,
+                                               long long permId,
+                                               const std::string& execId,
+                                               std::size_t limit,
+                                               std::uint64_t frozenRevisionId,
+                                               bool includeLiveTail) const {
     std::vector<json> results;
-    const auto allEvents = mergedEventsUnlocked(frozenRevisionId, includeLiveTail);
+    const auto allEvents = mergedEvents(snapshot, frozenRevisionId, includeLiveTail, 0, 0);
     for (const auto& event : allEvents) {
         const json anchor = event.value("anchor", json::object());
         const bool matchesTrace = traceId > 0 && anchor.value("trace_id", 0ULL) == traceId;
@@ -734,11 +776,16 @@ std::vector<json> Server::filterEventsByAnchorUnlocked(std::uint64_t traceId,
     return results;
 }
 
-json Server::buildReplaySnapshotUnlocked(std::uint64_t targetSessionSeq,
-                                         std::size_t depthLimit,
-                                         std::uint64_t frozenRevisionId,
-                                         bool includeLiveTail) const {
-    const std::vector<json> allEvents = mergedEventsUnlocked(frozenRevisionId, includeLiveTail);
+json Server::buildReplaySnapshot(const QuerySnapshot& snapshot,
+                                 std::uint64_t targetSessionSeq,
+                                 std::size_t depthLimit,
+                                 std::uint64_t frozenRevisionId,
+                                 bool includeLiveTail) const {
+    const std::vector<json> allEvents = mergedEvents(snapshot,
+                                                     frozenRevisionId,
+                                                     includeLiveTail,
+                                                     0,
+                                                     targetSessionSeq);
     if (targetSessionSeq == 0 && !allEvents.empty()) {
         targetSessionSeq = allEvents.back().value("session_seq", 0ULL);
     }
@@ -957,25 +1004,25 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         std::lock_guard<std::mutex> lock(writerMutex_);
         return writerQueue_.size();
     }();
-    std::lock_guard<std::mutex> lock(stateMutex_);
+    const QuerySnapshot snapshot = captureQuerySnapshot();
     if (request.operation == "status") {
         response.summary = {
-            {"data_dir", config_.dataDir.string()},
-            {"instrument_id", config_.instrumentId},
-            {"last_manifest_hash", lastManifestHash_},
-            {"latest_frozen_revision_id", latestFrozenRevisionId_},
-            {"latest_frozen_session_seq", latestFrozenSessionSeq_},
-            {"latest_session_seq", nextSessionSeq_ > 0 ? nextSessionSeq_ - 1 : 0},
-            {"live_event_count", liveRing_.size()},
-            {"next_revision_id", nextRevisionId_},
-            {"next_segment_id", nextSegmentId_},
-            {"next_session_seq", nextSessionSeq_},
-            {"segment_count", segments_.size()},
-            {"socket_path", config_.socketPath},
+            {"data_dir", snapshot.dataDir.string()},
+            {"instrument_id", snapshot.instrumentId},
+            {"last_manifest_hash", snapshot.lastManifestHash},
+            {"latest_frozen_revision_id", snapshot.latestFrozenRevisionId},
+            {"latest_frozen_session_seq", snapshot.latestFrozenSessionSeq},
+            {"latest_session_seq", snapshot.nextSessionSeq > 0 ? snapshot.nextSessionSeq - 1 : 0},
+            {"live_event_count", snapshot.liveEvents.size()},
+            {"next_revision_id", snapshot.nextRevisionId},
+            {"next_segment_id", snapshot.nextSegmentId},
+            {"next_session_seq", snapshot.nextSessionSeq},
+            {"segment_count", snapshot.segments.size()},
+            {"socket_path", snapshot.socketPath},
             {"writer_backlog_segments", writerBacklog}
         };
-        if (!writerFailure_.empty()) {
-            response.summary["writer_error"] = writerFailure_;
+        if (!snapshot.writerFailure.empty()) {
+            response.summary["writer_error"] = snapshot.writerFailure;
         }
         return response;
     }
@@ -983,15 +1030,15 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
     if (request.operation == "read_live_tail") {
         const std::size_t limit = request.limit == 0 ? 50 : request.limit;
         response.summary = {
-            {"base_revision_id", latestFrozenRevisionId_},
+            {"base_revision_id", snapshot.latestFrozenRevisionId},
             {"includes_mutable_tail", true},
-            {"live_tail_high_water_seq", liveRing_.empty() ? 0 : liveRing_.back().sessionSeq},
+            {"live_tail_high_water_seq", snapshot.liveEvents.empty() ? 0 : snapshot.liveEvents.back().sessionSeq},
             {"returned_events", 0}
         };
-        std::size_t start = liveRing_.size() > limit ? liveRing_.size() - limit : 0;
+        std::size_t start = snapshot.liveEvents.size() > limit ? snapshot.liveEvents.size() - limit : 0;
         response.events = json::array();
-        for (std::size_t i = start; i < liveRing_.size(); ++i) {
-            response.events.push_back(eventToJson(liveRing_[i]));
+        for (std::size_t i = start; i < snapshot.liveEvents.size(); ++i) {
+            response.events.push_back(eventToJson(snapshot.liveEvents[i]));
         }
         response.summary["returned_events"] = response.events.size();
         return response;
@@ -1000,14 +1047,19 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
     if (request.operation == "read_range") {
         std::uint64_t frozenRevisionId = 0;
         try {
-            frozenRevisionId = resolveFrozenRevisionUnlocked(request.revisionId);
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
         } catch (const std::exception& error) {
             return rejectResponse(request, error.what());
         }
         const std::uint64_t from = request.fromSessionSeq == 0 ? 1 : request.fromSessionSeq;
         const std::uint64_t to = request.toSessionSeq;
         const std::size_t limit = request.limit == 0 ? 200 : request.limit;
-        const std::vector<json> events = filterEventsByRangeUnlocked(from, to, limit, frozenRevisionId, request.includeLiveTail);
+        const std::vector<json> events = filterEventsByRange(snapshot,
+                                                             from,
+                                                             to,
+                                                             limit,
+                                                             frozenRevisionId,
+                                                             request.includeLiveTail);
         response.events = json::array();
         for (const auto& event : events) {
             response.events.push_back(event);
@@ -1020,7 +1072,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"to_session_seq", to}
         };
         if (request.includeLiveTail) {
-            response.summary["live_tail_high_water_seq"] = liveRing_.empty() ? 0 : liveRing_.back().sessionSeq;
+            response.summary["live_tail_high_water_seq"] = snapshot.liveEvents.empty() ? 0 : snapshot.liveEvents.back().sessionSeq;
         }
         return response;
     }
@@ -1028,19 +1080,20 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
     if (request.operation == "find_order_anchor") {
         std::uint64_t frozenRevisionId = 0;
         try {
-            frozenRevisionId = resolveFrozenRevisionUnlocked(request.revisionId);
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
         } catch (const std::exception& error) {
             return rejectResponse(request, error.what());
         }
         const std::size_t limit = request.limit == 0 ? 100 : request.limit;
         const std::vector<json> events =
-            filterEventsByAnchorUnlocked(request.traceId,
-                                         request.orderId,
-                                         request.permId,
-                                         request.execId,
-                                         limit,
-                                         frozenRevisionId,
-                                         request.includeLiveTail);
+            filterEventsByAnchor(snapshot,
+                                 request.traceId,
+                                 request.orderId,
+                                 request.permId,
+                                 request.execId,
+                                 limit,
+                                 frozenRevisionId,
+                                 request.includeLiveTail);
         response.events = json::array();
         for (const auto& event : events) {
             response.events.push_back(event);
@@ -1060,15 +1113,16 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
     if (request.operation == "replay_snapshot") {
         std::uint64_t frozenRevisionId = 0;
         try {
-            frozenRevisionId = resolveFrozenRevisionUnlocked(request.revisionId);
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
         } catch (const std::exception& error) {
             return rejectResponse(request, error.what());
         }
         const std::size_t depthLimit = request.limit == 0 ? 5 : request.limit;
-        response.summary = buildReplaySnapshotUnlocked(request.targetSessionSeq,
-                                                      depthLimit,
-                                                      frozenRevisionId,
-                                                      request.includeLiveTail);
+        response.summary = buildReplaySnapshot(snapshot,
+                                              request.targetSessionSeq,
+                                              depthLimit,
+                                              frozenRevisionId,
+                                              request.includeLiveTail);
         response.summary["served_revision_id"] = frozenRevisionId;
         response.events = json::array();
         return response;

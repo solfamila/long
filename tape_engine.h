@@ -105,6 +105,21 @@ private:
         std::unordered_set<std::uint64_t> recentSourceSeqSet;
     };
 
+    struct QuerySnapshot {
+        std::filesystem::path dataDir;
+        std::string socketPath;
+        std::string instrumentId;
+        std::string lastManifestHash;
+        std::string writerFailure;
+        std::uint64_t nextSessionSeq = 1;
+        std::uint64_t nextSegmentId = 1;
+        std::uint64_t nextRevisionId = 1;
+        std::uint64_t latestFrozenRevisionId = 0;
+        std::uint64_t latestFrozenSessionSeq = 0;
+        std::vector<SegmentInfo> segments;
+        std::vector<EngineEvent> liveEvents;
+    };
+
     void acceptLoop();
     void handleClientConnection(int clientFd);
     void sequencerLoop();
@@ -124,25 +139,36 @@ private:
     std::string resolveInstrumentId(const BridgeOutboxRecord& record) const;
     void rememberSourceSeqUnlocked(ConnectionCursor& cursor, std::uint64_t sourceSeq);
     void resetSourceSeqWindowUnlocked(ConnectionCursor& cursor);
-    std::uint64_t resolveFrozenRevisionUnlocked(std::uint64_t requestedRevisionId) const;
-    std::vector<json> loadAllEventsUnlocked(std::uint64_t frozenRevisionId) const;
-    std::vector<json> mergedEventsUnlocked(std::uint64_t frozenRevisionId, bool includeLiveTail) const;
-    std::vector<json> filterEventsByRangeUnlocked(std::uint64_t fromSessionSeq,
-                                                  std::uint64_t toSessionSeq,
-                                                  std::size_t limit,
-                                                  std::uint64_t frozenRevisionId,
-                                                  bool includeLiveTail) const;
-    std::vector<json> filterEventsByAnchorUnlocked(std::uint64_t traceId,
-                                                   long long orderId,
-                                                   long long permId,
-                                                   const std::string& execId,
-                                                   std::size_t limit,
-                                                   std::uint64_t frozenRevisionId,
-                                                   bool includeLiveTail) const;
-    json buildReplaySnapshotUnlocked(std::uint64_t targetSessionSeq,
-                                     std::size_t depthLimit,
-                                     std::uint64_t frozenRevisionId,
-                                     bool includeLiveTail) const;
+    QuerySnapshot captureQuerySnapshot() const;
+    std::uint64_t resolveFrozenRevision(const QuerySnapshot& snapshot, std::uint64_t requestedRevisionId) const;
+    std::vector<json> loadEvents(const QuerySnapshot& snapshot,
+                                 std::uint64_t frozenRevisionId,
+                                 std::uint64_t fromSessionSeq,
+                                 std::uint64_t throughSessionSeq) const;
+    std::vector<json> mergedEvents(const QuerySnapshot& snapshot,
+                                   std::uint64_t frozenRevisionId,
+                                   bool includeLiveTail,
+                                   std::uint64_t fromSessionSeq,
+                                   std::uint64_t throughSessionSeq) const;
+    std::vector<json> filterEventsByRange(const QuerySnapshot& snapshot,
+                                          std::uint64_t fromSessionSeq,
+                                          std::uint64_t toSessionSeq,
+                                          std::size_t limit,
+                                          std::uint64_t frozenRevisionId,
+                                          bool includeLiveTail) const;
+    std::vector<json> filterEventsByAnchor(const QuerySnapshot& snapshot,
+                                           std::uint64_t traceId,
+                                           long long orderId,
+                                           long long permId,
+                                           const std::string& execId,
+                                           std::size_t limit,
+                                           std::uint64_t frozenRevisionId,
+                                           bool includeLiveTail) const;
+    json buildReplaySnapshot(const QuerySnapshot& snapshot,
+                             std::uint64_t targetSessionSeq,
+                             std::size_t depthLimit,
+                             std::uint64_t frozenRevisionId,
+                             bool includeLiveTail) const;
 
     EngineConfig config_;
     mutable std::mutex stateMutex_;

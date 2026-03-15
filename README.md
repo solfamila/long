@@ -100,6 +100,7 @@ Phase-1 bridge sender notes:
 - `tape_engine` writes per-batch binary MessagePack segment payloads plus JSON metadata and a hash-linked `manifest.jsonl` under `LONG_TAPE_ENGINE_DATA_DIR`.
 - If `LONG_TAPE_ENGINE_DATA_DIR` is unset, the daemon defaults to `/tmp/tape-engine`.
 - The daemon now answers `status`, `read_live_tail`, `read_range`, `replay_snapshot`, and `find_order_anchor` queries over the same framed MessagePack UDS transport.
+- Frozen range/replay reads now snapshot engine state up front and use segment `session_seq` bounds to avoid holding the main engine lock across disk I/O and broad rescans.
 - Query responses now expose frozen-revision state such as `latest_frozen_revision_id`, `served_revision_id`, and optional mutable-tail overlay via `--include-live-tail`.
 - `long` now emits normalized public market records (`market_tick`, `market_depth`) alongside widened private lifecycle records including `open_order`, `order_status`, `commission_report`, `cancel_request`, `broker_error`, and `order_reject`.
 - Bridge records now carry canonical `instrument_id`, receive/exchange timestamps, and vendor sequence placeholders so the engine can preserve stronger forensic provenance.
