@@ -58,14 +58,27 @@ Dependency source of truth:
   - pinned: `v3.12.0` (`55f93686c01528224f448c19128836e7df245f72`)
 - The build auto-detects a downloaded IB API under `~/Downloads/twsapi_macunix/...` when present
 
-Bootstrap submodules after clone (or when working in a dependency-empty checkout):
+Bootstrap dependencies after clone (or in a dependency-empty workspace):
+
+```bash
+./scripts/bootstrap_deps.sh
+```
+
+CI can run the same command during checkout setup. If you only want submodule
+restore without README pin checks:
+
+```bash
+./scripts/bootstrap_deps.sh --skip-readme-check
+```
+
+Equivalent raw git command (used by the script):
 
 ```bash
 git submodule update --init --recursive
 ```
 
-External dependency paths still work. If you keep `ixwebsocket` and `nlohmann_json`
-outside this workspace, pass them explicitly:
+External dependency paths still work. If you keep `ixwebsocket` and
+`nlohmann_json` outside this workspace, pass them explicitly:
 
 ```bash
 cmake -S . -B build \

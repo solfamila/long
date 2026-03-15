@@ -85,19 +85,19 @@ if(TAPESCOPE_ISOLATED_BUILD)
         message(FATAL_ERROR
             "TapeScope isolated build requires nlohmann/json headers at ${NLOHMANN_JSON_DIR} "
             "or in a supported system include path. "
-            "If using repo-tracked dependencies, run: git submodule update --init --recursive")
+            "If using repo-tracked dependencies, run: ./scripts/bootstrap_deps.sh")
     endif()
 else()
     if(NOT EXISTS "${IXWEBSOCKET_DIR}/CMakeLists.txt")
         message(FATAL_ERROR
             "IXWebSocket sources not found at ${IXWEBSOCKET_DIR}. "
-            "Run: git submodule update --init --recursive "
+            "Run: ./scripts/bootstrap_deps.sh "
             "or override -DIXWEBSOCKET_DIR=/absolute/path/to/ixwebsocket")
     endif()
     if(NOT EXISTS "${NLOHMANN_JSON_DIR}/single_include/nlohmann/json.hpp")
         message(FATAL_ERROR
             "nlohmann/json headers not found at ${NLOHMANN_JSON_DIR}. "
-            "Run: git submodule update --init --recursive "
+            "Run: ./scripts/bootstrap_deps.sh "
             "or override -DNLOHMANN_JSON_DIR=/absolute/path/to/nlohmann_json")
     endif()
     set(NLOHMANN_JSON_INCLUDE_DIR "${NLOHMANN_JSON_DIR}/single_include")
