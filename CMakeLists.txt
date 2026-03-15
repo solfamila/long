@@ -97,6 +97,33 @@ add_subdirectory("${IXWEBSOCKET_DIR}" "${CMAKE_BINARY_DIR}/third_party/ixwebsock
 
 add_executable(tws_gui MACOSX_BUNDLE ${APP_SOURCES})
 
+add_library(tape_engine_ingest STATIC
+    tape_engine_ingest.cpp
+)
+
+target_include_directories(tape_engine_ingest PUBLIC
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
+target_link_libraries(tape_engine_ingest PUBLIC
+    Threads::Threads
+)
+
+add_executable(tape-engine
+    tape_engine_main.cpp
+)
+
+target_include_directories(tape-engine PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
+target_link_libraries(tape-engine PRIVATE
+    tape_engine_ingest
+    Threads::Threads
+)
+
 target_include_directories(tws_gui PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${IXWEBSOCKET_DIR}"
@@ -361,6 +388,22 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME tws_gui_trace_tests COMMAND tws_gui_tests)
+
+    add_executable(tape_engine_ingest_tests
+        tests/tape_engine_ingest_tests.cpp
+    )
+
+    target_include_directories(tape_engine_ingest_tests PRIVATE
+        "${CMAKE_SOURCE_DIR}"
+        "${NLOHMANN_JSON_DIR}/single_include"
+    )
+
+    target_link_libraries(tape_engine_ingest_tests PRIVATE
+        tape_engine_ingest
+        Threads::Threads
+    )
+
+    add_test(NAME tape_engine_ingest_tests COMMAND tape_engine_ingest_tests)
 endif()
 
 set_source_files_properties(
