@@ -36,6 +36,11 @@
   },
   "prompts_list": [
     {
+      "name": "analyze_bundle_with_phase7",
+      "required_args": [],
+      "title": "Analyze Bundle With Phase 7"
+    },
+    {
       "name": "export_artifact_for_sharing",
       "required_args": [
         "artifact_id"
@@ -82,6 +87,20 @@
       "title": "Replay Key Moment"
     },
     {
+      "name": "review_phase7_findings",
+      "required_args": [
+        "analysis_artifact_id"
+      ],
+      "title": "Review Phase 7 Findings"
+    },
+    {
+      "name": "review_phase7_playbook",
+      "required_args": [
+        "playbook_artifact_id"
+      ],
+      "title": "Review Phase 7 Playbook"
+    },
+    {
       "name": "summarize_latest_session_incidents",
       "required_args": [],
       "title": "Summarize Latest Session Incidents"
@@ -89,6 +108,8 @@
   ],
   "resource_read_case_report_markdown": {
     "contains_order_case": true,
+    "contains_phase7_analysis": false,
+    "contains_phase7_playbook": false,
     "contains_session_overview": false,
     "content_count": 1,
     "has_text": true,
@@ -2516,6 +2537,19 @@
   },
   "tools_list": [
     {
+      "input_required": [],
+      "name": "tapescript_analyzer_run",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "generated_artifacts",
+        "analysis_profile",
+        "finding_count",
+        "replay_context",
+        "findings"
+      ]
+    },
+    {
       "input_required": [
         "artifact_id",
         "export_format"
@@ -2563,6 +2597,17 @@
       "output_required": [
         "returned_count",
         "events"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_findings_list",
+      "output_required": [
+        "analysis_artifact",
+        "analysis_profile",
+        "finding_count",
+        "replay_context",
+        "findings"
       ]
     },
     {
@@ -2631,6 +2676,18 @@
       "output_required": [
         "returned_count",
         "session_reports"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_playbook_apply",
+      "output_required": [
+        "analysis_artifact",
+        "playbook_artifact",
+        "mode",
+        "filtered_finding_ids",
+        "planned_actions",
+        "replay_context"
       ]
     },
     {

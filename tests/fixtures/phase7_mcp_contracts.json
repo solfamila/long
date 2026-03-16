@@ -1,0 +1,449 @@
+{
+  "tapescript_analyzer_run": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_analyzer_run_local",
+      "result_schema": "phase7.analysis-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_analyzer_run"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+      },
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "finding_count": 2,
+      "findings": [
+        {
+          "category": "evidence_confidence",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "severity": "warning",
+          "summary": "Evidence confidence is degraded (score 73.0): missing receive timestamps=3, exchange timestamps=0, vendor sequence numbers=0."
+        },
+        {
+          "category": "trace_integrity",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "severity": "warning",
+          "summary": "Trace integrity degraded: 1 gap marker(s) and 0 reset marker(s) were preserved in the exported evidence window."
+        }
+      ],
+      "generated_artifacts": [
+        {
+          "artifact_id": "phase7-analysis:<id>",
+          "artifact_type": "phase7.analysis_output.v1",
+          "contract_version": "phase7-analyzer-playbook-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+        }
+      ],
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_findings_list": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_findings_list_local",
+      "result_schema": "phase7.findings-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_findings_list"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+      },
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "finding_count": 2,
+      "findings": [
+        {
+          "category": "evidence_confidence",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "severity": "warning",
+          "summary": "Evidence confidence is degraded (score 73.0): missing receive timestamps=3, exchange timestamps=0, vendor sequence numbers=0."
+        },
+        {
+          "category": "trace_integrity",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "severity": "warning",
+          "summary": "Trace integrity degraded: 1 gap marker(s) and 0 reset marker(s) were preserved in the exported evidence window."
+        }
+      ],
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_playbook_apply_dry_run": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_playbook_apply_guarded_local",
+      "result_schema": "phase7.playbook-plan.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_playbook_apply"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+      },
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "mode": "dry_run",
+      "planned_actions": [
+        {
+          "action_id": "phase7-action-af994b9431765ae0",
+          "action_type": "phase7.review_evidence_confidence.v1",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "title": "Review evidence confidence limits"
+        },
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook-ea20366cdc4601a4/manifest.json"
+      },
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_playbook_apply_deferred": {
+    "error": {
+      "code": "deferred_behavior",
+      "message": "mode=apply is intentionally deferred in the guarded Phase 7 slice; rerun with mode=dry_run."
+    },
+    "meta": {
+      "deferred": true,
+      "engine_operation": "phase7_playbook_apply_guarded_local",
+      "result_schema": "phase7.playbook-plan.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_playbook_apply"
+    },
+    "ok": false,
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "prompts_list_phase7": [
+    {
+      "name": "analyze_bundle_with_phase7",
+      "required_args": [],
+      "title": "Analyze Bundle With Phase 7"
+    },
+    {
+      "name": "export_artifact_for_sharing",
+      "required_args": [
+        "artifact_id"
+      ],
+      "title": "Export Artifact For Sharing"
+    },
+    {
+      "name": "investigate_bad_fill",
+      "required_args": [],
+      "title": "Investigate Bad Fill"
+    },
+    {
+      "name": "investigate_incident",
+      "required_args": [
+        "logical_incident_id"
+      ],
+      "title": "Investigate Incident"
+    },
+    {
+      "name": "investigate_order_case",
+      "required_args": [],
+      "title": "Investigate Order Case"
+    },
+    {
+      "name": "investigate_session_range",
+      "required_args": [
+        "first_session_seq",
+        "last_session_seq"
+      ],
+      "title": "Investigate Session Range"
+    },
+    {
+      "name": "investigate_source_gap",
+      "required_args": [
+        "logical_incident_id"
+      ],
+      "title": "Investigate Source Gap"
+    },
+    {
+      "name": "replay_key_moment",
+      "required_args": [
+        "target_session_seq"
+      ],
+      "title": "Replay Key Moment"
+    },
+    {
+      "name": "review_phase7_findings",
+      "required_args": [
+        "analysis_artifact_id"
+      ],
+      "title": "Review Phase 7 Findings"
+    },
+    {
+      "name": "review_phase7_playbook",
+      "required_args": [
+        "playbook_artifact_id"
+      ],
+      "title": "Review Phase 7 Playbook"
+    },
+    {
+      "name": "summarize_latest_session_incidents",
+      "required_args": [],
+      "title": "Summarize Latest Session Incidents"
+    }
+  ],
+  "prompt_analyze_bundle_with_phase7": {
+    "description": "Guide an agent through running the local Phase 7 analyzer against a portable session/case bundle and persisting findings.",
+    "prompt": "analyze_bundle_with_phase7",
+    "message_count": 1,
+    "first_role": "user",
+    "text": "Run `tapescript_analyzer_run` against `/tmp/example-case-bundle.msgpack` using `case_bundle_path`. Then call `tapescript_findings_list` on the returned `analysis_artifact_id`, reopen the durable analysis resource with `resources/read` on `tape://phase7/analysis/<analysis_artifact_id>`, and if follow-up planning is needed call `tapescript_playbook_apply` in `dry_run` mode. Return: analyzer profile, durable artifact ids, ranked findings, replay context, and the best next investigation actions."
+  },
+  "prompt_review_phase7_findings": {
+    "description": "Guide an agent through reopening a stored Phase 7 analysis artifact, summarizing findings, and planning follow-up actions.",
+    "prompt": "review_phase7_findings",
+    "message_count": 1,
+    "first_role": "user",
+    "text": "Review stored Phase 7 analysis artifact `phase7-analysis-1234abcd`. Start with `tapescript_findings_list`, then reopen the persisted JSON and markdown resources with `resources/read` on `tape://phase7/analysis/phase7-analysis-1234abcd` and `tape://phase7/analysis/phase7-analysis-1234abcd/markdown`. If the findings warrant action planning, call `tapescript_playbook_apply` in `dry_run` mode. Return: top findings, confidence, replay context, and recommended next tools."
+  },
+  "prompt_review_phase7_playbook": {
+    "description": "Guide an agent through reopening a stored Phase 7 playbook artifact and converting it into an investigation plan.",
+    "prompt": "review_phase7_playbook",
+    "message_count": 1,
+    "first_role": "user",
+    "text": "Review stored Phase 7 playbook artifact `phase7-playbook-1234abcd`. Reopen it with `resources/read` on `tape://phase7/playbook/phase7-playbook-1234abcd` and `tape://phase7/playbook/phase7-playbook-1234abcd/markdown`, then follow the referenced analysis artifact back through `tapescript_findings_list`. Return: action order, affected findings, suggested tools, and whether any step still needs manual confirmation."
+  },
+  "resources_list_phase7": [
+    {
+      "uri": "tape://phase7/analysis/<id>",
+      "mime_type": "application/json"
+    },
+    {
+      "uri": "tape://phase7/analysis/<id>/markdown",
+      "mime_type": "text/markdown"
+    },
+    {
+      "uri": "tape://phase7/playbook/<id>",
+      "mime_type": "application/json"
+    },
+    {
+      "uri": "tape://phase7/playbook/<id>/markdown",
+      "mime_type": "text/markdown"
+    }
+  ],
+  "resource_read_phase7_analysis": {
+    "ok": true,
+    "content_count": 1,
+    "uri": "tape://phase7/analysis/<id>",
+    "mime_type": "application/json",
+    "payload": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "finding_count": 2,
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      },
+      "findings": [
+        {
+          "category": "evidence_confidence",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "severity": "warning",
+          "summary": "Evidence confidence is degraded (score 73.0): missing receive timestamps=3, exchange timestamps=0, vendor sequence numbers=0."
+        },
+        {
+          "category": "trace_integrity",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "severity": "warning",
+          "summary": "Trace integrity degraded: 1 gap marker(s) and 0 reset marker(s) were preserved in the exported evidence window."
+        }
+      ]
+    }
+  },
+  "resource_read_phase7_analysis_markdown": {
+    "ok": true,
+    "content_count": 1,
+    "uri": "tape://phase7/analysis/<id>/markdown",
+    "mime_type": "text/markdown",
+    "has_text": true,
+    "contains_order_case": false,
+    "contains_session_overview": false,
+    "contains_phase7_analysis": true,
+    "contains_phase7_playbook": false
+  },
+  "resource_read_phase7_playbook": {
+    "ok": true,
+    "content_count": 1,
+    "uri": "tape://phase7/playbook/<id>",
+    "mime_type": "application/json",
+    "payload": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+      },
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook-ea20366cdc4601a4/manifest.json"
+      },
+      "mode": "dry_run",
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "planned_actions": [
+        {
+          "action_id": "phase7-action-af994b9431765ae0",
+          "action_type": "phase7.review_evidence_confidence.v1",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "title": "Review evidence confidence limits"
+        },
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      }
+    }
+  },
+  "resource_read_phase7_playbook_markdown": {
+    "ok": true,
+    "content_count": 1,
+    "uri": "tape://phase7/playbook/<id>/markdown",
+    "mime_type": "text/markdown",
+    "has_text": true,
+    "contains_order_case": false,
+    "contains_session_overview": false,
+    "contains_phase7_analysis": false,
+    "contains_phase7_playbook": true
+  }
+}
