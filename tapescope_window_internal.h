@@ -255,8 +255,14 @@ struct ProbeSnapshot {
     NSTextField* _phase7JournalLedgerFilterField;
     NSPopUpButton* _phase7JournalStatusFilterPopup;
     NSPopUpButton* _phase7JournalRecoveryFilterPopup;
+    NSPopUpButton* _phase7JournalRecoveryStateFilterPopup;
+    NSPopUpButton* _phase7JournalResumePolicyFilterPopup;
+    NSPopUpButton* _phase7JournalResolutionFilterPopup;
     NSPopUpButton* _phase7JournalSortPopup;
     NSPopUpButton* _phase7ApplyRecoveryFilterPopup;
+    NSPopUpButton* _phase7ApplyRecoveryStateFilterPopup;
+    NSPopUpButton* _phase7ApplyResumePolicyFilterPopup;
+    NSPopUpButton* _phase7ApplyResolutionFilterPopup;
     NSButton* _phase7ClearFiltersButton;
     NSButton* _phase7ChooseBundleButton;
     NSButton* _phase7RunAnalysisButton;

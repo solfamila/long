@@ -1,4 +1,7 @@
 void testTapeScopeClientReadsPhase4EngineSeam() {
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
     const fs::path rootDir = testDataDir() / "tapescope-phase4-client";
     const fs::path socketPath = testDataDir() / "tapescope-phase4-client.sock";
     std::error_code ec;
@@ -1032,6 +1035,179 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                "recovery_required",
            "TapeScope recovery-filtered phase7 execution apply inventory should preserve the requested recovery-state filter");
 
+    expect(!dispatchPhase7ExecutionJournalStart.value.artifact.entries.empty() &&
+               dispatchPhase7ExecutionJournalStart.value.artifact.entries.front().executionRequest
+                   .value("requested_order_ids", json::array())
+                   .is_array() &&
+               !dispatchPhase7ExecutionJournalStart.value.artifact.entries.front().executionRequest
+                    .value("requested_order_ids", json::array())
+                    .empty(),
+           "TapeScope dispatch-specific execution journal should expose a runtime-backed reconciliation request");
+    const std::string runtimeDispatchJournalEntryId =
+        dispatchPhase7ExecutionJournalStart.value.artifact.entries.front().journalEntryId;
+    expect(!runtimeDispatchJournalEntryId.empty(),
+           "TapeScope dispatch-specific execution journal should expose a runtime-backed journal entry id");
+    const OrderId runtimeDispatchOrderId = static_cast<OrderId>(
+        dispatchPhase7ExecutionJournalStart.value.artifact.entries.front().executionRequest
+            .value("requested_order_ids", json::array())
+            .front()
+            .get<long long>());
+    constexpr std::uint64_t runtimeDispatchTraceId = 97421;
+    constexpr long long runtimeDispatchPermId = 57421;
+    {
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        auto& order = state.orders[runtimeDispatchOrderId];
+        order.orderId = runtimeDispatchOrderId;
+        order.symbol = "INTC";
+        order.side = "BUY";
+        order.account = "DU900001";
+        order.quantity = 30.0;
+        order.limitPrice = 46.11;
+        order.status = "Submitted";
+        order.filledQty = 10.0;
+        order.remainingQty = 20.0;
+        order.avgFillPrice = 46.11;
+        order.localState = LocalOrderState::PartiallyFilled;
+        order.seenExecIds.clear();
+        order.seenExecIds.insert("E-PHASE7-TAPESCOPE-1");
+
+        TradeTrace trace;
+        trace.traceId = runtimeDispatchTraceId;
+        trace.orderId = runtimeDispatchOrderId;
+        trace.permId = runtimeDispatchPermId;
+        trace.source = "phase7-tapescope-runtime-bridge";
+        trace.symbol = order.symbol;
+        trace.side = order.side;
+        trace.account = order.account;
+        trace.requestedQty = static_cast<int>(order.quantity);
+        trace.limitPrice = order.limitPrice;
+        trace.latestStatus = "Submitted";
+        trace.terminalStatus.clear();
+        FillSlice firstFill;
+        firstFill.execId = "E-PHASE7-TAPESCOPE-1";
+        firstFill.shares = 10;
+        firstFill.price = 46.11;
+        firstFill.cumQty = 10.0;
+        firstFill.avgPrice = 46.11;
+        firstFill.exchange = "SIM";
+        trace.fills.push_back(firstFill);
+        state.traces[trace.traceId] = trace;
+        state.traceRecency.push_back(trace.traceId);
+        state.latestTraceId = trace.traceId;
+        state.traceIdByOrderId[runtimeDispatchOrderId] = trace.traceId;
+        state.traceIdByPermId[runtimeDispatchPermId] = trace.traceId;
+        state.traceIdByExecId[firstFill.execId] = trace.traceId;
+    }
+    publishSharedDataSnapshot();
+
+    std::string runtimeBridgeCode;
+    std::string runtimeBridgeMessage;
+    tape_phase7::ExecutionJournalArtifact recoverableRuntimeJournal;
+    std::vector<std::string> recoverableRuntimeJournalEntryIds;
+    std::string recoverableRuntimeJournalAuditEventId;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   dispatchPhase7ExecutionJournalStart.value.artifact
+                                                                       .journalArtifact.artifactId,
+                                                                   {runtimeDispatchJournalEntryId},
+                                                                   "tapescope-runtime-bridge",
+                                                                   "Runtime recovered a live partial fill.",
+                                                                   &recoverableRuntimeJournal,
+                                                                   &recoverableRuntimeJournalEntryIds,
+                                                                   &recoverableRuntimeJournalAuditEventId,
+                                                                   &runtimeBridgeCode,
+                                                                   &runtimeBridgeMessage),
+           "TapeScope runtime-backed execution journal reconciliation should succeed: " + runtimeBridgeCode + " " +
+               runtimeBridgeMessage);
+    tape_phase7::ExecutionApplyArtifact recoverableRuntimeApply;
+    std::vector<std::string> recoverableRuntimeApplyEntryIds;
+    std::string recoverableRuntimeApplyAuditEventId;
+    expect(tape_phase7::synchronizeExecutionApplyFromJournal(
+               {},
+               phase7ExecutionApplyStart.value.artifact.applyArtifact.artifactId,
+               "tapescope-runtime-bridge",
+               "Mirror the recoverable runtime reconciliation into apply.",
+               &recoverableRuntimeApply,
+               &recoverableRuntimeApplyEntryIds,
+               &recoverableRuntimeApplyAuditEventId,
+               &runtimeBridgeCode,
+               &runtimeBridgeMessage),
+           "TapeScope runtime-backed execution apply synchronization should succeed: " + runtimeBridgeCode + " " +
+               runtimeBridgeMessage);
+    const auto recoverableRuntimeJournalRead = client.readExecutionJournalArtifactPayload(
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId);
+    expect(recoverableRuntimeJournalRead.ok(),
+           "TapeScope runtime-backed execution journal reread should succeed: " +
+               tapescope::QueryClient::describeError(recoverableRuntimeJournalRead.error));
+    const json recoverableJournalTriage =
+        tape_phase7::latestExecutionJournalTriageSummary(recoverableRuntimeJournalRead.value);
+    expect(recoverableJournalTriage.value("restart_resume_policy", std::string()) == "continue_recovery" &&
+               recoverableJournalTriage.value("resolution", std::string()) == "resolved_partially_filled",
+           "TapeScope runtime-backed execution journal reread should surface the recoverable partial-fill triage");
+    const auto recoverableRuntimeApplyRead =
+        client.readExecutionApplyArtifactPayload(phase7ExecutionApplyStart.value.artifact.applyArtifact.artifactId);
+    expect(recoverableRuntimeApplyRead.ok(),
+           "TapeScope runtime-backed execution apply reread should succeed: " +
+               tapescope::QueryClient::describeError(recoverableRuntimeApplyRead.error));
+    const json recoverableApplyTriage =
+        tape_phase7::latestExecutionApplyTriageSummary(recoverableRuntimeApplyRead.value);
+    expect(recoverableApplyTriage.value("restart_resume_policy", std::string()) == "continue_recovery" &&
+               recoverableApplyTriage.value("resolution", std::string()) == "resolved_partially_filled",
+           "TapeScope runtime-backed execution apply reread should surface the recoverable partial-fill triage");
+
+    tapescope::Phase7ExecutionJournalInventorySelection triagedJournalSelection;
+    triagedJournalSelection.ledgerArtifactId =
+        dispatchReadyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId;
+    triagedJournalSelection.recoveryState = "recovery_required";
+    triagedJournalSelection.restartRecoveryState = "recoverable";
+    triagedJournalSelection.restartResumePolicy = "continue_recovery";
+    triagedJournalSelection.latestExecutionResolution = "resolved_partially_filled";
+    triagedJournalSelection.sortBy = "attention_desc";
+    triagedJournalSelection.limit = 10;
+    const auto triagedPhase7ExecutionJournals = client.listExecutionJournalArtifactsPayload(triagedJournalSelection);
+    expect(triagedPhase7ExecutionJournals.ok(),
+           "TapeScope triage-filtered phase7 execution journal inventory should succeed: " +
+               tapescope::QueryClient::describeError(triagedPhase7ExecutionJournals.error));
+    expect(triagedPhase7ExecutionJournals.value.matchedCount >= 1 &&
+               !triagedPhase7ExecutionJournals.value.artifacts.empty() &&
+               triagedPhase7ExecutionJournals.value.artifacts.front().journalArtifact.artifactId ==
+                   dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+           "TapeScope triage-filtered phase7 execution journal inventory should return the matching recoverable journal");
+    expect(triagedPhase7ExecutionJournals.value.appliedFilters.value("restart_recovery_state", std::string()) ==
+                   "recoverable" &&
+               triagedPhase7ExecutionJournals.value.appliedFilters.value("restart_resume_policy", std::string()) ==
+                   "continue_recovery" &&
+               triagedPhase7ExecutionJournals.value.appliedFilters.value("latest_execution_resolution", std::string()) ==
+                   "resolved_partially_filled",
+           "TapeScope triage-filtered phase7 execution journal inventory should preserve the requested execution triage filters");
+
+    tapescope::Phase7ExecutionApplyInventorySelection triagedApplySelection;
+    triagedApplySelection.journalArtifactId =
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId;
+    triagedApplySelection.recoveryState = "recovery_required";
+    triagedApplySelection.restartRecoveryState = "recoverable";
+    triagedApplySelection.restartResumePolicy = "continue_recovery";
+    triagedApplySelection.latestExecutionResolution = "resolved_partially_filled";
+    triagedApplySelection.sortBy = "attention_desc";
+    triagedApplySelection.limit = 10;
+    const auto triagedPhase7ExecutionApplies = client.listExecutionApplyArtifactsPayload(triagedApplySelection);
+    expect(triagedPhase7ExecutionApplies.ok(),
+           "TapeScope triage-filtered phase7 execution apply inventory should succeed: " +
+               tapescope::QueryClient::describeError(triagedPhase7ExecutionApplies.error));
+    expect(triagedPhase7ExecutionApplies.value.matchedCount >= 1 &&
+               !triagedPhase7ExecutionApplies.value.artifacts.empty() &&
+               triagedPhase7ExecutionApplies.value.artifacts.front().applyArtifact.artifactId ==
+                   phase7ExecutionApplyStart.value.artifact.applyArtifact.artifactId,
+           "TapeScope triage-filtered phase7 execution apply inventory should return the matching recoverable apply");
+    expect(triagedPhase7ExecutionApplies.value.appliedFilters.value("restart_recovery_state", std::string()) ==
+                   "recoverable" &&
+               triagedPhase7ExecutionApplies.value.appliedFilters.value("restart_resume_policy", std::string()) ==
+                   "continue_recovery" &&
+               triagedPhase7ExecutionApplies.value.appliedFilters.value("latest_execution_resolution", std::string()) ==
+                   "resolved_partially_filled",
+           "TapeScope triage-filtered phase7 execution apply inventory should preserve the requested execution triage filters");
+
     const std::vector<std::string> applyEntryIds = {
         phase7ExecutionApplyStart.value.artifact.entries.front().applyEntryId
     };
@@ -1170,6 +1346,8 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
            "TapeScope typed order-anchor read should expose the linked artifact id");
 
     server.stop();
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
 }
 
 void testTapeScopeBundlePreviewDecisionHelpers() {

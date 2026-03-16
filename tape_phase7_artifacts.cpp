@@ -3223,6 +3223,24 @@ json latestExecutionResultSummaryForEntries(const std::vector<Entry>& entries) {
     };
 }
 
+json latestExecutionTriageSummaryFromLatestResult(const json& latestSummary) {
+    if (!latestSummary.is_object()) {
+        return json(nullptr);
+    }
+    const json executionResultSummary = latestSummary.value("execution_result_summary", json::object());
+    if (!executionResultSummary.is_object() || executionResultSummary.empty()) {
+        return json(nullptr);
+    }
+    return {
+        {"resolution", executionResultSummary.value("resolution", json(nullptr))},
+        {"restart_resume_policy", executionResultSummary.value("restart_resume_policy", json(nullptr))},
+        {"restart_recovery_state", executionResultSummary.value("restart_recovery_state", json(nullptr))},
+        {"manual_review_required", executionResultSummary.value("manual_review_required", false)},
+        {"latest_exec_id", executionResultSummary.value("latest_exec_id", json(nullptr))},
+        {"broker_identity", executionResultSummary.value("broker_identity", json::object())}
+    };
+}
+
 json executionJournalEntryToJson(const ExecutionJournalEntry& entry) {
     return {
         {"journal_entry_id", entry.journalEntryId},
@@ -3291,6 +3309,10 @@ ExecutionLedgerReviewSummary summarizeExecutionLedgerReviewSummary(const Executi
 
 json latestExecutionJournalResultSummary(const ExecutionJournalArtifact& artifact) {
     return latestExecutionResultSummaryForEntries(artifact.entries);
+}
+
+json latestExecutionJournalTriageSummary(const ExecutionJournalArtifact& artifact) {
+    return latestExecutionTriageSummaryFromLatestResult(latestExecutionJournalResultSummary(artifact));
 }
 
 json executionLedgerReviewSummaryToJson(const ExecutionLedgerReviewSummary& summary) {
@@ -3412,6 +3434,10 @@ json latestExecutionJournalAuditSummary(const ExecutionJournalArtifact& artifact
 
 json latestExecutionApplyResultSummary(const ExecutionApplyArtifact& artifact) {
     return latestExecutionResultSummaryForEntries(artifact.entries);
+}
+
+json latestExecutionApplyTriageSummary(const ExecutionApplyArtifact& artifact) {
+    return latestExecutionTriageSummaryFromLatestResult(latestExecutionApplyResultSummary(artifact));
 }
 
 ExecutionApplySummary summarizeExecutionApplySummary(const ExecutionApplyArtifact& artifact) {

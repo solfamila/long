@@ -1225,6 +1225,9 @@ json projectPhase7ExecutionJournalInventoryResult(const json& result) {
             {"recovery_state", result.value("applied_filters", json::object()).contains("recovery_state")
                                    ? result.value("applied_filters", json::object()).at("recovery_state")
                                    : json(nullptr)},
+            {"restart_recovery_state", result.value("applied_filters", json::object()).contains("restart_recovery_state")
+                                           ? result.value("applied_filters", json::object()).at("restart_recovery_state")
+                                           : json(nullptr)},
             {"sort_by", result.value("applied_filters", json::object()).contains("sort_by")
                             ? result.value("applied_filters", json::object()).at("sort_by")
                             : json("generated_at_desc")},
@@ -1411,6 +1414,9 @@ json projectPhase7ExecutionApplyInventoryResult(const json& result) {
             {"recovery_state", result.value("applied_filters", json::object()).contains("recovery_state")
                                    ? result.value("applied_filters", json::object()).at("recovery_state")
                                    : json(nullptr)},
+            {"restart_recovery_state", result.value("applied_filters", json::object()).contains("restart_recovery_state")
+                                           ? result.value("applied_filters", json::object()).at("restart_recovery_state")
+                                           : json(nullptr)},
             {"sort_by", result.value("applied_filters", json::object()).contains("sort_by")
                             ? result.value("applied_filters", json::object()).at("sort_by")
                             : json("generated_at_desc")},
@@ -3674,6 +3680,16 @@ void testTapeMcpPhase7Contracts() {
     }));
     expect(runtimeRecoverableJournalInventoryRaw.value("ok", false),
            "phase7 runtime bridge focused list_execution_journals should return ok=true");
+    const json runtimeRecoverableJournalTriageInventoryRaw = envelopeFromToolResult(adapter.callTool("tapescript_list_execution_journals", json{
+        {"execution_ledger_artifact_id", dispatchLedgerArtifactId},
+        {"recovery_state", "recovery_required"},
+        {"restart_recovery_state", "recoverable"},
+        {"restart_resume_policy", "continue_recovery"},
+        {"latest_execution_resolution", "resolved_partially_filled"},
+        {"limit", 10}
+    }));
+    expect(runtimeRecoverableJournalTriageInventoryRaw.value("ok", false),
+           "phase7 runtime bridge focused triage list_execution_journals should return ok=true");
     const json runtimeRecoverableReadApplyRaw = envelopeFromToolResult(adapter.callTool("tapescript_read_execution_apply", json{
         {"execution_apply_artifact_id", executionApplyArtifactId}
     }));
@@ -3685,6 +3701,16 @@ void testTapeMcpPhase7Contracts() {
     }));
     expect(runtimeRecoverableApplyInventoryRaw.value("ok", false),
            "phase7 runtime bridge focused list_execution_applies should return ok=true");
+    const json runtimeRecoverableApplyTriageInventoryRaw = envelopeFromToolResult(adapter.callTool("tapescript_list_execution_applies", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId},
+        {"recovery_state", "recovery_required"},
+        {"restart_recovery_state", "recoverable"},
+        {"restart_resume_policy", "continue_recovery"},
+        {"latest_execution_resolution", "resolved_partially_filled"},
+        {"limit", 10}
+    }));
+    expect(runtimeRecoverableApplyTriageInventoryRaw.value("ok", false),
+           "phase7 runtime bridge focused triage list_execution_applies should return ok=true");
 
     {
         SharedData& state = appState();
@@ -3757,6 +3783,15 @@ void testTapeMcpPhase7Contracts() {
     }));
     expect(runtimeTerminalJournalInventoryRaw.value("ok", false),
            "phase7 runtime bridge focused terminal list_execution_journals should return ok=true");
+    const json runtimeTerminalJournalTriageInventoryRaw = envelopeFromToolResult(adapter.callTool("tapescript_list_execution_journals", json{
+        {"execution_ledger_artifact_id", dispatchLedgerArtifactId},
+        {"restart_recovery_state", "terminal_completed"},
+        {"restart_resume_policy", "completed"},
+        {"latest_execution_resolution", "resolved_filled"},
+        {"limit", 10}
+    }));
+    expect(runtimeTerminalJournalTriageInventoryRaw.value("ok", false),
+           "phase7 runtime bridge focused terminal triage list_execution_journals should return ok=true");
     const json runtimeTerminalReadApplyRaw = envelopeFromToolResult(adapter.callTool("tapescript_read_execution_apply", json{
         {"execution_apply_artifact_id", executionApplyArtifactId}
     }));
@@ -3768,18 +3803,102 @@ void testTapeMcpPhase7Contracts() {
     }));
     expect(runtimeTerminalApplyInventoryRaw.value("ok", false),
            "phase7 runtime bridge focused terminal list_execution_applies should return ok=true");
+    const json runtimeTerminalApplyTriageInventoryRaw = envelopeFromToolResult(adapter.callTool("tapescript_list_execution_applies", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId},
+        {"restart_recovery_state", "terminal_completed"},
+        {"restart_resume_policy", "completed"},
+        {"latest_execution_resolution", "resolved_filled"},
+        {"limit", 10}
+    }));
+    expect(runtimeTerminalApplyTriageInventoryRaw.value("ok", false),
+           "phase7 runtime bridge focused terminal triage list_execution_applies should return ok=true");
 
     const json runtimeRecoverableJournalRow = phase7InventoryRowByArtifactId(
         runtimeRecoverableJournalInventoryRaw, "execution_journals", "execution_journal", dispatchJournalArtifactId);
+    const json runtimeRecoverableJournalTriageRow = phase7InventoryRowByArtifactId(
+        runtimeRecoverableJournalTriageInventoryRaw, "execution_journals", "execution_journal", dispatchJournalArtifactId);
     const json runtimeRecoverableApplyRow = phase7InventoryRowByArtifactId(
         runtimeRecoverableApplyInventoryRaw, "execution_applies", "execution_apply", executionApplyArtifactId);
+    const json runtimeRecoverableApplyTriageRow = phase7InventoryRowByArtifactId(
+        runtimeRecoverableApplyTriageInventoryRaw, "execution_applies", "execution_apply", executionApplyArtifactId);
     const json runtimeTerminalJournalRow = phase7InventoryRowByArtifactId(
         runtimeTerminalJournalInventoryRaw, "execution_journals", "execution_journal", dispatchJournalArtifactId);
+    const json runtimeTerminalJournalTriageRow = phase7InventoryRowByArtifactId(
+        runtimeTerminalJournalTriageInventoryRaw, "execution_journals", "execution_journal", dispatchJournalArtifactId);
     const json runtimeTerminalApplyRow = phase7InventoryRowByArtifactId(
         runtimeTerminalApplyInventoryRaw, "execution_applies", "execution_apply", executionApplyArtifactId);
+    const json runtimeTerminalApplyTriageRow = phase7InventoryRowByArtifactId(
+        runtimeTerminalApplyTriageInventoryRaw, "execution_applies", "execution_apply", executionApplyArtifactId);
     expect(runtimeRecoverableJournalRow.is_object() && runtimeRecoverableApplyRow.is_object() &&
                runtimeTerminalJournalRow.is_object() && runtimeTerminalApplyRow.is_object(),
            "phase7 runtime bridge focused MCP projection should find the dispatch journal/apply rows in inventory results");
+    expect(runtimeRecoverableJournalTriageRow.is_object() && runtimeRecoverableApplyTriageRow.is_object() &&
+               runtimeTerminalJournalTriageRow.is_object() && runtimeTerminalApplyTriageRow.is_object(),
+           "phase7 runtime bridge focused MCP triage filters should keep the matching runtime-backed journal/apply rows");
+    expect(runtimeRecoverableReadJournalRaw.value("result", json::object()).value("restart_recovery_state", std::string()) ==
+                   "recoverable" &&
+               runtimeRecoverableReadJournalRaw.value("result", json::object()).value("restart_resume_policy", std::string()) ==
+                   "continue_recovery" &&
+               runtimeRecoverableReadJournalRaw.value("result", json::object()).value("latest_execution_resolution", std::string()) ==
+                   "resolved_partially_filled" &&
+               runtimeRecoverableReadApplyRaw.value("result", json::object()).value("restart_recovery_state", std::string()) ==
+                   "recoverable" &&
+               runtimeRecoverableReadApplyRaw.value("result", json::object()).value("restart_resume_policy", std::string()) ==
+                   "continue_recovery" &&
+               runtimeRecoverableReadApplyRaw.value("result", json::object()).value("latest_execution_resolution", std::string()) ==
+                   "resolved_partially_filled",
+           "phase7 runtime bridge focused MCP read payloads should expose recoverable execution triage at the top level");
+    expect(runtimeTerminalReadJournalRaw.value("result", json::object()).value("restart_recovery_state", std::string()) ==
+                   "terminal_completed" &&
+               runtimeTerminalReadJournalRaw.value("result", json::object()).value("restart_resume_policy", std::string()) ==
+                   "completed" &&
+               runtimeTerminalReadJournalRaw.value("result", json::object()).value("latest_execution_resolution", std::string()) ==
+                   "resolved_filled" &&
+               runtimeTerminalReadApplyRaw.value("result", json::object()).value("restart_recovery_state", std::string()) ==
+                   "terminal_completed" &&
+               runtimeTerminalReadApplyRaw.value("result", json::object()).value("restart_resume_policy", std::string()) ==
+                   "completed" &&
+               runtimeTerminalReadApplyRaw.value("result", json::object()).value("latest_execution_resolution", std::string()) ==
+                   "resolved_filled",
+           "phase7 runtime bridge focused MCP terminal payloads should expose completed execution triage at the top level");
+    expect(runtimeRecoverableJournalTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("restart_recovery_state", std::string()) == "recoverable" &&
+               runtimeRecoverableJournalTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("restart_resume_policy", std::string()) == "continue_recovery" &&
+               runtimeRecoverableJournalTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("latest_execution_resolution", std::string()) == "resolved_partially_filled" &&
+               runtimeRecoverableApplyTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("restart_recovery_state", std::string()) == "recoverable" &&
+               runtimeRecoverableApplyTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("restart_resume_policy", std::string()) == "continue_recovery" &&
+               runtimeRecoverableApplyTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("latest_execution_resolution", std::string()) == "resolved_partially_filled",
+           "phase7 runtime bridge focused MCP recoverable inventories should preserve the requested execution triage filters");
+    expect(runtimeTerminalJournalTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("restart_recovery_state", std::string()) == "terminal_completed" &&
+               runtimeTerminalJournalTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("restart_resume_policy", std::string()) == "completed" &&
+               runtimeTerminalJournalTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("latest_execution_resolution", std::string()) == "resolved_filled" &&
+               runtimeTerminalApplyTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("restart_recovery_state", std::string()) == "terminal_completed" &&
+               runtimeTerminalApplyTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("restart_resume_policy", std::string()) == "completed" &&
+               runtimeTerminalApplyTriageInventoryRaw.value("result", json::object())
+                   .value("applied_filters", json::object())
+                   .value("latest_execution_resolution", std::string()) == "resolved_filled",
+           "phase7 runtime bridge focused MCP terminal inventories should preserve the requested execution triage filters");
 
     const json runtimeProjection = {
         {"read_execution_journal_recoverable",

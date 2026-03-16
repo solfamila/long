@@ -194,8 +194,14 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         {"journal_ledger_filter", ToStdString(_phase7JournalLedgerFilterField.stringValue)},
         {"journal_status_filter", ToStdString(_phase7JournalStatusFilterPopup.titleOfSelectedItem)},
         {"journal_recovery_filter", ToStdString(_phase7JournalRecoveryFilterPopup.titleOfSelectedItem)},
+        {"journal_recovery_state_filter", ToStdString(_phase7JournalRecoveryStateFilterPopup.titleOfSelectedItem)},
+        {"journal_resume_filter", ToStdString(_phase7JournalResumePolicyFilterPopup.titleOfSelectedItem)},
+        {"journal_resolution_filter", ToStdString(_phase7JournalResolutionFilterPopup.titleOfSelectedItem)},
         {"journal_sort", ToStdString(_phase7JournalSortPopup.titleOfSelectedItem)},
         {"apply_recovery_filter", ToStdString(_phase7ApplyRecoveryFilterPopup.titleOfSelectedItem)},
+        {"apply_recovery_state_filter", ToStdString(_phase7ApplyRecoveryStateFilterPopup.titleOfSelectedItem)},
+        {"apply_resume_filter", ToStdString(_phase7ApplyResumePolicyFilterPopup.titleOfSelectedItem)},
+        {"apply_resolution_filter", ToStdString(_phase7ApplyResolutionFilterPopup.titleOfSelectedItem)},
         {"journal_actor", ToStdString(_phase7JournalActorField.stringValue)},
         {"execution_capability", ToStdString(_phase7ExecutionCapabilityField.stringValue)},
         {"execution_status", ToStdString(_phase7ExecutionStatusPopup.titleOfSelectedItem)},
@@ -319,6 +325,19 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     if (!phase7JournalRecoveryFilter.empty()) {
         [_phase7JournalRecoveryFilterPopup selectItemWithTitle:ToNSString(phase7JournalRecoveryFilter)];
     }
+    const std::string phase7JournalRecoveryStateFilter =
+        phase7.value("journal_recovery_state_filter", std::string());
+    if (!phase7JournalRecoveryStateFilter.empty()) {
+        [_phase7JournalRecoveryStateFilterPopup selectItemWithTitle:ToNSString(phase7JournalRecoveryStateFilter)];
+    }
+    const std::string phase7JournalResumeFilter = phase7.value("journal_resume_filter", std::string());
+    if (!phase7JournalResumeFilter.empty()) {
+        [_phase7JournalResumePolicyFilterPopup selectItemWithTitle:ToNSString(phase7JournalResumeFilter)];
+    }
+    const std::string phase7JournalResolutionFilter = phase7.value("journal_resolution_filter", std::string());
+    if (!phase7JournalResolutionFilter.empty()) {
+        [_phase7JournalResolutionFilterPopup selectItemWithTitle:ToNSString(phase7JournalResolutionFilter)];
+    }
     const std::string phase7JournalSort = phase7.value("journal_sort", std::string());
     if (!phase7JournalSort.empty()) {
         [_phase7JournalSortPopup selectItemWithTitle:ToNSString(phase7JournalSort)];
@@ -326,6 +345,19 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     const std::string phase7ApplyRecoveryFilter = phase7.value("apply_recovery_filter", std::string());
     if (!phase7ApplyRecoveryFilter.empty()) {
         [_phase7ApplyRecoveryFilterPopup selectItemWithTitle:ToNSString(phase7ApplyRecoveryFilter)];
+    }
+    const std::string phase7ApplyRecoveryStateFilter =
+        phase7.value("apply_recovery_state_filter", std::string());
+    if (!phase7ApplyRecoveryStateFilter.empty()) {
+        [_phase7ApplyRecoveryStateFilterPopup selectItemWithTitle:ToNSString(phase7ApplyRecoveryStateFilter)];
+    }
+    const std::string phase7ApplyResumeFilter = phase7.value("apply_resume_filter", std::string());
+    if (!phase7ApplyResumeFilter.empty()) {
+        [_phase7ApplyResumePolicyFilterPopup selectItemWithTitle:ToNSString(phase7ApplyResumeFilter)];
+    }
+    const std::string phase7ApplyResolutionFilter = phase7.value("apply_resolution_filter", std::string());
+    if (!phase7ApplyResolutionFilter.empty()) {
+        [_phase7ApplyResolutionFilterPopup selectItemWithTitle:ToNSString(phase7ApplyResolutionFilter)];
     }
     _phase7JournalActorField.stringValue = ToNSString(phase7.value("journal_actor", std::string("tapescope")));
     _phase7ExecutionCapabilityField.stringValue =

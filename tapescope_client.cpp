@@ -111,6 +111,11 @@ json phase7ExecutionJournalAppliedFilters(const Phase7ExecutionJournalInventoryS
         {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
         {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
         {"journal_status", selection.journalStatus.empty() ? json(nullptr) : json(selection.journalStatus)},
+        {"restart_recovery_state",
+         selection.restartRecoveryState.empty() ? json(nullptr) : json(selection.restartRecoveryState)},
+        {"restart_resume_policy", selection.restartResumePolicy.empty() ? json(nullptr) : json(selection.restartResumePolicy)},
+        {"latest_execution_resolution",
+         selection.latestExecutionResolution.empty() ? json(nullptr) : json(selection.latestExecutionResolution)},
         {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
         {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
         {"matched_count", matchedCount}
@@ -130,6 +135,11 @@ json phase7ExecutionApplyAppliedFilters(const Phase7ExecutionApplyInventorySelec
         {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
         {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
         {"apply_status", selection.applyStatus.empty() ? json(nullptr) : json(selection.applyStatus)},
+        {"restart_recovery_state",
+         selection.restartRecoveryState.empty() ? json(nullptr) : json(selection.restartRecoveryState)},
+        {"restart_resume_policy", selection.restartResumePolicy.empty() ? json(nullptr) : json(selection.restartResumePolicy)},
+        {"latest_execution_resolution",
+         selection.latestExecutionResolution.empty() ? json(nullptr) : json(selection.latestExecutionResolution)},
         {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
         {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
         {"matched_count", matchedCount}
@@ -152,6 +162,29 @@ bool matchesPhase7RecoveryState(std::string_view recoveryState, const RecoverySu
         return recovery.staleRecoveryRequired;
     }
     return false;
+}
+
+bool matchesLatestExecutionTriage(std::string_view restartRecoveryState,
+                                  std::string_view restartResumePolicy,
+                                  std::string_view latestExecutionResolution,
+                                  const json& triageSummary) {
+    if (!triageSummary.is_object()) {
+        return restartRecoveryState.empty() && restartResumePolicy.empty() &&
+               latestExecutionResolution.empty();
+    }
+    if (!restartRecoveryState.empty() &&
+        triageSummary.value("restart_recovery_state", std::string()) != restartRecoveryState) {
+        return false;
+    }
+    if (!restartResumePolicy.empty() &&
+        triageSummary.value("restart_resume_policy", std::string()) != restartResumePolicy) {
+        return false;
+    }
+    if (!latestExecutionResolution.empty() &&
+        triageSummary.value("resolution", std::string()) != latestExecutionResolution) {
+        return false;
+    }
+    return true;
 }
 
 void sortPhase7Analyses(std::vector<Phase7AnalysisArtifact>* artifacts, std::string_view sortBy) {
@@ -411,6 +444,12 @@ Phase7ExecutionJournalInventoryPayload selectPhase7ExecutionJournals(
                                         tape_phase7::summarizeExecutionJournalRecovery(artifact))) {
             return false;
         }
+        if (!matchesLatestExecutionTriage(selection.restartRecoveryState,
+                                          selection.restartResumePolicy,
+                                          selection.latestExecutionResolution,
+                                          tape_phase7::latestExecutionJournalTriageSummary(artifact))) {
+            return false;
+        }
         return true;
     };
 
@@ -508,6 +547,12 @@ Phase7ExecutionApplyInventoryPayload selectPhase7ExecutionApplies(
         }
         if (!matchesPhase7RecoveryState(selection.recoveryState,
                                         tape_phase7::summarizeExecutionApplyRecovery(artifact))) {
+            return false;
+        }
+        if (!matchesLatestExecutionTriage(selection.restartRecoveryState,
+                                          selection.restartResumePolicy,
+                                          selection.latestExecutionResolution,
+                                          tape_phase7::latestExecutionApplyTriageSummary(artifact))) {
             return false;
         }
         return true;

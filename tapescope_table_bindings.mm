@@ -494,12 +494,19 @@ using namespace tapescope_support;
     } else if (tableView == _phase7JournalTableView) {
         const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(*executionJournalArtifactItem);
         const auto latestAudit = tape_phase7::latestExecutionJournalAuditSummary(*executionJournalArtifactItem);
+        const auto triageSummary = tape_phase7::latestExecutionJournalTriageSummary(*executionJournalArtifactItem);
         if ([columnId isEqualToString:@"artifact_id"]) {
             value = executionJournalArtifactItem->journalArtifact.artifactId;
         } else if ([columnId isEqualToString:@"ledger_artifact_id"]) {
             value = executionJournalArtifactItem->ledgerArtifact.artifactId;
         } else if ([columnId isEqualToString:@"journal_status"]) {
             value = executionJournalArtifactItem->journalStatus;
+        } else if ([columnId isEqualToString:@"restart_recovery_state"]) {
+            value = triageSummary.is_object() ? triageSummary.value("restart_recovery_state", std::string()) : std::string();
+        } else if ([columnId isEqualToString:@"restart_resume_policy"]) {
+            value = triageSummary.is_object() ? triageSummary.value("restart_resume_policy", std::string()) : std::string();
+        } else if ([columnId isEqualToString:@"latest_execution_resolution"]) {
+            value = triageSummary.is_object() ? triageSummary.value("resolution", std::string()) : std::string();
         } else if ([columnId isEqualToString:@"queued_count"]) {
             value = std::to_string(executionSummary.queuedCount);
         } else if ([columnId isEqualToString:@"submitted_count"]) {
@@ -516,12 +523,19 @@ using namespace tapescope_support;
     } else if (tableView == _phase7ApplyTableView) {
         const auto applySummary = tape_phase7::summarizeExecutionApplySummary(*executionApplyArtifactItem);
         const auto latestAudit = tape_phase7::latestExecutionApplyAuditSummary(*executionApplyArtifactItem);
+        const auto triageSummary = tape_phase7::latestExecutionApplyTriageSummary(*executionApplyArtifactItem);
         if ([columnId isEqualToString:@"artifact_id"]) {
             value = executionApplyArtifactItem->applyArtifact.artifactId;
         } else if ([columnId isEqualToString:@"journal_artifact_id"]) {
             value = executionApplyArtifactItem->journalArtifact.artifactId;
         } else if ([columnId isEqualToString:@"apply_status"]) {
             value = executionApplyArtifactItem->applyStatus;
+        } else if ([columnId isEqualToString:@"restart_recovery_state"]) {
+            value = triageSummary.is_object() ? triageSummary.value("restart_recovery_state", std::string()) : std::string();
+        } else if ([columnId isEqualToString:@"restart_resume_policy"]) {
+            value = triageSummary.is_object() ? triageSummary.value("restart_resume_policy", std::string()) : std::string();
+        } else if ([columnId isEqualToString:@"latest_execution_resolution"]) {
+            value = triageSummary.is_object() ? triageSummary.value("resolution", std::string()) : std::string();
         } else if ([columnId isEqualToString:@"submitted_count"]) {
             value = std::to_string(applySummary.submittedCount);
         } else if ([columnId isEqualToString:@"terminal_count"]) {

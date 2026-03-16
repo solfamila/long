@@ -1070,6 +1070,40 @@ json phase7ExecutionRecoverySummarySchema() {
 json phase7ExecutionResultSummarySchema();
 json phase7LatestExecutionResultSummarySchema();
 
+json phase7ExecutionRestartResumePolicySchema() {
+    return stringEnumSchema({
+        "continue_recovery",
+        "await_cancel_ack",
+        "completed",
+        "terminal_no_resume",
+        "manual_review_required",
+        "unknown"
+    });
+}
+
+json phase7ExecutionLatestResolutionSchema() {
+    return stringEnumSchema({
+        "resolved_working",
+        "resolved_partially_filled",
+        "resolved_filled",
+        "resolved_cancelled",
+        "resolved_rejected",
+        "resolved_inactive",
+        "manual_review_required"
+    });
+}
+
+json phase7ExecutionLatestRecoveryStateSchema() {
+    return stringEnumSchema({
+        "recoverable",
+        "awaiting_cancel_ack",
+        "terminal_completed",
+        "terminal_no_resume",
+        "manual_review_required",
+        "unknown"
+    });
+}
+
 json phase7ExecutionJournalFiltersSchema() {
     return json{
         {"type", "object"},
@@ -1086,6 +1120,18 @@ json phase7ExecutionJournalFiltersSchema() {
                 phase7ExecutionRecoveryStateSchema(),
                 json{{"type", "null"}}
             })}}},
+            {"restart_recovery_state", json{{"oneOf", json::array({
+                phase7ExecutionLatestRecoveryStateSchema(),
+                json{{"type", "null"}}
+            })}}},
+            {"restart_resume_policy", json{{"oneOf", json::array({
+                phase7ExecutionRestartResumePolicySchema(),
+                json{{"type", "null"}}
+            })}}},
+            {"latest_execution_resolution", json{{"oneOf", json::array({
+                phase7ExecutionLatestResolutionSchema(),
+                json{{"type", "null"}}
+            })}}},
             {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})},
             {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
             {"matched_count", nonNegativeIntegerSchema()}
@@ -1096,6 +1142,9 @@ json phase7ExecutionJournalFiltersSchema() {
             "analysis_artifact_id",
             "source_artifact_id",
             "journal_status",
+            "restart_recovery_state",
+            "restart_resume_policy",
+            "latest_execution_resolution",
             "sort_by",
             "limit",
             "matched_count"
@@ -1299,6 +1348,9 @@ json phase7ExecutionJournalResultSchema() {
             {"runtime_recovery_summary", phase7ExecutionRecoverySummarySchema()},
             {"latest_audit_event", phase7ExecutionJournalAuditSummarySchema()},
             {"latest_execution_result_summary", phase7LatestExecutionResultSummarySchema()},
+            {"latest_execution_resolution", json{{"oneOf", json::array({phase7ExecutionLatestResolutionSchema(), json{{"type", "null"}}})}}},
+            {"restart_resume_policy", json{{"oneOf", json::array({phase7ExecutionRestartResumePolicySchema(), json{{"type", "null"}}})}}},
+            {"restart_recovery_state", json{{"oneOf", json::array({phase7ExecutionLatestRecoveryStateSchema(), json{{"type", "null"}}})}}},
             {"entries", json{{"type", "array"}, {"items", phase7ExecutionJournalEntrySchema()}}},
             {"audit_trail", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
@@ -1321,6 +1373,9 @@ json phase7ExecutionJournalResultSchema() {
             "runtime_recovery_summary",
             "latest_audit_event",
             "latest_execution_result_summary",
+            "latest_execution_resolution",
+            "restart_resume_policy",
+            "restart_recovery_state",
             "entries",
             "audit_trail",
             "replay_context"
@@ -1362,6 +1417,9 @@ json phase7ExecutionJournalRowSchema() {
             {"runtime_recovery_summary", phase7ExecutionRecoverySummarySchema()},
             {"latest_audit_event", phase7ExecutionJournalAuditSummarySchema()},
             {"latest_execution_result_summary", phase7LatestExecutionResultSummarySchema()},
+            {"latest_execution_resolution", json{{"oneOf", json::array({phase7ExecutionLatestResolutionSchema(), json{{"type", "null"}}})}}},
+            {"restart_resume_policy", json{{"oneOf", json::array({phase7ExecutionRestartResumePolicySchema(), json{{"type", "null"}}})}}},
+            {"restart_recovery_state", json{{"oneOf", json::array({phase7ExecutionLatestRecoveryStateSchema(), json{{"type", "null"}}})}}},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
         }},
         {"required", json::array({
@@ -1378,6 +1436,9 @@ json phase7ExecutionJournalRowSchema() {
             "runtime_recovery_summary",
             "latest_audit_event",
             "latest_execution_result_summary",
+            "latest_execution_resolution",
+            "restart_resume_policy",
+            "restart_recovery_state",
             "replay_context"
         })},
         {"additionalProperties", false}
@@ -1414,6 +1475,18 @@ json phase7ExecutionApplyFiltersSchema() {
                 phase7ExecutionRecoveryStateSchema(),
                 json{{"type", "null"}}
             })}}},
+            {"restart_recovery_state", json{{"oneOf", json::array({
+                phase7ExecutionLatestRecoveryStateSchema(),
+                json{{"type", "null"}}
+            })}}},
+            {"restart_resume_policy", json{{"oneOf", json::array({
+                phase7ExecutionRestartResumePolicySchema(),
+                json{{"type", "null"}}
+            })}}},
+            {"latest_execution_resolution", json{{"oneOf", json::array({
+                phase7ExecutionLatestResolutionSchema(),
+                json{{"type", "null"}}
+            })}}},
             {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})},
             {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
             {"matched_count", nonNegativeIntegerSchema()}
@@ -1425,6 +1498,9 @@ json phase7ExecutionApplyFiltersSchema() {
             "analysis_artifact_id",
             "source_artifact_id",
             "apply_status",
+            "restart_recovery_state",
+            "restart_resume_policy",
+            "latest_execution_resolution",
             "sort_by",
             "limit",
             "matched_count"
@@ -1537,6 +1613,9 @@ json phase7ExecutionApplyResultSchema() {
             {"runtime_recovery_summary", phase7ExecutionRecoverySummarySchema()},
             {"latest_audit_event", phase7ExecutionApplyAuditSummarySchema()},
             {"latest_execution_result_summary", phase7LatestExecutionResultSummarySchema()},
+            {"latest_execution_resolution", json{{"oneOf", json::array({phase7ExecutionLatestResolutionSchema(), json{{"type", "null"}}})}}},
+            {"restart_resume_policy", json{{"oneOf", json::array({phase7ExecutionRestartResumePolicySchema(), json{{"type", "null"}}})}}},
+            {"restart_recovery_state", json{{"oneOf", json::array({phase7ExecutionLatestRecoveryStateSchema(), json{{"type", "null"}}})}}},
             {"entries", json{{"type", "array"}, {"items", phase7ExecutionApplyEntrySchema()}}},
             {"audit_trail", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
@@ -1560,6 +1639,9 @@ json phase7ExecutionApplyResultSchema() {
             "runtime_recovery_summary",
             "latest_audit_event",
             "latest_execution_result_summary",
+            "latest_execution_resolution",
+            "restart_resume_policy",
+            "restart_recovery_state",
             "entries",
             "audit_trail",
             "replay_context"
@@ -1602,6 +1684,9 @@ json phase7ExecutionApplyRowSchema() {
             {"runtime_recovery_summary", phase7ExecutionRecoverySummarySchema()},
             {"latest_audit_event", phase7ExecutionApplyAuditSummarySchema()},
             {"latest_execution_result_summary", phase7LatestExecutionResultSummarySchema()},
+            {"latest_execution_resolution", json{{"oneOf", json::array({phase7ExecutionLatestResolutionSchema(), json{{"type", "null"}}})}}},
+            {"restart_resume_policy", json{{"oneOf", json::array({phase7ExecutionRestartResumePolicySchema(), json{{"type", "null"}}})}}},
+            {"restart_recovery_state", json{{"oneOf", json::array({phase7ExecutionLatestRecoveryStateSchema(), json{{"type", "null"}}})}}},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
         }},
         {"required", json::array({
@@ -1619,6 +1704,9 @@ json phase7ExecutionApplyRowSchema() {
             "runtime_recovery_summary",
             "latest_audit_event",
             "latest_execution_result_summary",
+            "latest_execution_resolution",
+            "restart_resume_policy",
+            "restart_recovery_state",
             "replay_context"
         })},
         {"additionalProperties", false}
@@ -3851,6 +3939,9 @@ struct Phase7ExecutionJournalInventorySelection {
     std::string sourceArtifactId;
     std::string journalStatus;
     std::string recoveryState;
+    std::string restartRecoveryState;
+    std::string restartResumePolicy;
+    std::string latestExecutionResolution;
     std::string sortBy = "generated_at_desc";
 };
 
@@ -3892,6 +3983,9 @@ struct Phase7ExecutionApplyInventorySelection {
     std::string sourceArtifactId;
     std::string applyStatus;
     std::string recoveryState;
+    std::string restartRecoveryState;
+    std::string restartResumePolicy;
+    std::string latestExecutionResolution;
     std::string sortBy = "generated_at_desc";
 };
 
@@ -4911,9 +5005,12 @@ bool parsePhase7ExecutionJournalInventoryArgs(const json& args,
                            "source_artifact_id",
                            "journal_status",
                            "recovery_state",
+                           "restart_recovery_state",
+                           "restart_resume_policy",
+                           "latest_execution_resolution",
                            "sort_by"})) {
         return fail("invalid_arguments",
-                    "execution journal inventory arguments support only limit, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, journal_status, recovery_state, and sort_by");
+                    "execution journal inventory arguments support only limit, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, journal_status, recovery_state, restart_recovery_state, restart_resume_policy, latest_execution_resolution, and sort_by");
     }
 
     Phase7ExecutionJournalInventorySelection selection;
@@ -4976,6 +5073,49 @@ bool parsePhase7ExecutionJournalInventoryArgs(const json& args,
         }
         selection.recoveryState = *recoveryState;
     }
+    if (args.contains("restart_recovery_state")) {
+        const auto restartRecoveryState = asNonEmptyString(args.at("restart_recovery_state"));
+        if (!restartRecoveryState.has_value() ||
+            (*restartRecoveryState != "recoverable" &&
+             *restartRecoveryState != "awaiting_cancel_ack" &&
+             *restartRecoveryState != "terminal_completed" &&
+             *restartRecoveryState != "terminal_no_resume" &&
+             *restartRecoveryState != "manual_review_required" &&
+             *restartRecoveryState != "unknown")) {
+            return fail("invalid_arguments",
+                        "restart_recovery_state must be one of recoverable, awaiting_cancel_ack, terminal_completed, terminal_no_resume, manual_review_required, or unknown");
+        }
+        selection.restartRecoveryState = *restartRecoveryState;
+    }
+    if (args.contains("restart_resume_policy")) {
+        const auto restartResumePolicy = asNonEmptyString(args.at("restart_resume_policy"));
+        if (!restartResumePolicy.has_value() ||
+            (*restartResumePolicy != "continue_recovery" &&
+             *restartResumePolicy != "await_cancel_ack" &&
+             *restartResumePolicy != "completed" &&
+             *restartResumePolicy != "terminal_no_resume" &&
+             *restartResumePolicy != "manual_review_required" &&
+             *restartResumePolicy != "unknown")) {
+            return fail("invalid_arguments",
+                        "restart_resume_policy must be one of continue_recovery, await_cancel_ack, completed, terminal_no_resume, manual_review_required, or unknown");
+        }
+        selection.restartResumePolicy = *restartResumePolicy;
+    }
+    if (args.contains("latest_execution_resolution")) {
+        const auto latestExecutionResolution = asNonEmptyString(args.at("latest_execution_resolution"));
+        if (!latestExecutionResolution.has_value() ||
+            (*latestExecutionResolution != "resolved_working" &&
+             *latestExecutionResolution != "resolved_partially_filled" &&
+             *latestExecutionResolution != "resolved_filled" &&
+             *latestExecutionResolution != "resolved_cancelled" &&
+             *latestExecutionResolution != "resolved_rejected" &&
+             *latestExecutionResolution != "resolved_inactive" &&
+             *latestExecutionResolution != "manual_review_required")) {
+            return fail("invalid_arguments",
+                        "latest_execution_resolution must be one of resolved_working, resolved_partially_filled, resolved_filled, resolved_cancelled, resolved_rejected, resolved_inactive, or manual_review_required");
+        }
+        selection.latestExecutionResolution = *latestExecutionResolution;
+    }
     if (args.contains("sort_by")) {
         const auto sortBy = asNonEmptyString(args.at("sort_by"));
         if (!sortBy.has_value() ||
@@ -5018,9 +5158,12 @@ bool parsePhase7ExecutionApplyInventoryArgs(const json& args,
                            "source_artifact_id",
                            "apply_status",
                            "recovery_state",
+                           "restart_recovery_state",
+                           "restart_resume_policy",
+                           "latest_execution_resolution",
                            "sort_by"})) {
         return fail("invalid_arguments",
-                    "execution apply inventory arguments support only limit, execution_journal_artifact_id, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, apply_status, recovery_state, and sort_by");
+                    "execution apply inventory arguments support only limit, execution_journal_artifact_id, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, apply_status, recovery_state, restart_recovery_state, restart_resume_policy, latest_execution_resolution, and sort_by");
     }
 
     Phase7ExecutionApplyInventorySelection selection;
@@ -5089,6 +5232,49 @@ bool parsePhase7ExecutionApplyInventoryArgs(const json& args,
                         "recovery_state must be one of recovery_required or stale_recovery_required");
         }
         selection.recoveryState = *recoveryState;
+    }
+    if (args.contains("restart_recovery_state")) {
+        const auto restartRecoveryState = asNonEmptyString(args.at("restart_recovery_state"));
+        if (!restartRecoveryState.has_value() ||
+            (*restartRecoveryState != "recoverable" &&
+             *restartRecoveryState != "awaiting_cancel_ack" &&
+             *restartRecoveryState != "terminal_completed" &&
+             *restartRecoveryState != "terminal_no_resume" &&
+             *restartRecoveryState != "manual_review_required" &&
+             *restartRecoveryState != "unknown")) {
+            return fail("invalid_arguments",
+                        "restart_recovery_state must be one of recoverable, awaiting_cancel_ack, terminal_completed, terminal_no_resume, manual_review_required, or unknown");
+        }
+        selection.restartRecoveryState = *restartRecoveryState;
+    }
+    if (args.contains("restart_resume_policy")) {
+        const auto restartResumePolicy = asNonEmptyString(args.at("restart_resume_policy"));
+        if (!restartResumePolicy.has_value() ||
+            (*restartResumePolicy != "continue_recovery" &&
+             *restartResumePolicy != "await_cancel_ack" &&
+             *restartResumePolicy != "completed" &&
+             *restartResumePolicy != "terminal_no_resume" &&
+             *restartResumePolicy != "manual_review_required" &&
+             *restartResumePolicy != "unknown")) {
+            return fail("invalid_arguments",
+                        "restart_resume_policy must be one of continue_recovery, await_cancel_ack, completed, terminal_no_resume, manual_review_required, or unknown");
+        }
+        selection.restartResumePolicy = *restartResumePolicy;
+    }
+    if (args.contains("latest_execution_resolution")) {
+        const auto latestExecutionResolution = asNonEmptyString(args.at("latest_execution_resolution"));
+        if (!latestExecutionResolution.has_value() ||
+            (*latestExecutionResolution != "resolved_working" &&
+             *latestExecutionResolution != "resolved_partially_filled" &&
+             *latestExecutionResolution != "resolved_filled" &&
+             *latestExecutionResolution != "resolved_cancelled" &&
+             *latestExecutionResolution != "resolved_rejected" &&
+             *latestExecutionResolution != "resolved_inactive" &&
+             *latestExecutionResolution != "manual_review_required")) {
+            return fail("invalid_arguments",
+                        "latest_execution_resolution must be one of resolved_working, resolved_partially_filled, resolved_filled, resolved_cancelled, resolved_rejected, resolved_inactive, or manual_review_required");
+        }
+        selection.latestExecutionResolution = *latestExecutionResolution;
     }
     if (args.contains("sort_by")) {
         const auto sortBy = asNonEmptyString(args.at("sort_by"));
@@ -5468,6 +5654,7 @@ json phase7ExecutionJournalPayload(const tape_phase7::ExecutionJournalArtifact& 
     }
     const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(journal);
     const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(journal);
+    const json triageSummary = tape_phase7::latestExecutionJournalTriageSummary(journal);
     json payload = {
         {"source_artifact", tape_phase7::artifactRefToJson(journal.sourceArtifact)},
         {"analysis_artifact", tape_phase7::artifactRefToJson(journal.analysisArtifact)},
@@ -5486,6 +5673,9 @@ json phase7ExecutionJournalPayload(const tape_phase7::ExecutionJournalArtifact& 
         {"runtime_recovery_summary", tape_phase7::executionRecoverySummaryToJson(recoverySummary)},
         {"latest_audit_event", tape_phase7::latestExecutionJournalAuditSummary(journal)},
         {"latest_execution_result_summary", tape_phase7::latestExecutionJournalResultSummary(journal)},
+        {"latest_execution_resolution", triageSummary.is_object() ? triageSummary.value("resolution", json(nullptr)) : json(nullptr)},
+        {"restart_resume_policy", triageSummary.is_object() ? triageSummary.value("restart_resume_policy", json(nullptr)) : json(nullptr)},
+        {"restart_recovery_state", triageSummary.is_object() ? triageSummary.value("restart_recovery_state", json(nullptr)) : json(nullptr)},
         {"entries", std::move(entries)},
         {"audit_trail", journal.auditTrail},
         {"replay_context", journal.replayContext}
@@ -5512,6 +5702,7 @@ json phase7ExecutionJournalInventoryPayload(const std::vector<tape_phase7::Execu
     for (const auto& artifact : artifacts) {
         const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(artifact);
         const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(artifact);
+        const json triageSummary = tape_phase7::latestExecutionJournalTriageSummary(artifact);
         rows.push_back({
             {"execution_journal", tape_phase7::artifactRefToJson(artifact.journalArtifact)},
             {"execution_ledger", tape_phase7::artifactRefToJson(artifact.ledgerArtifact)},
@@ -5526,6 +5717,9 @@ json phase7ExecutionJournalInventoryPayload(const std::vector<tape_phase7::Execu
             {"runtime_recovery_summary", tape_phase7::executionRecoverySummaryToJson(recoverySummary)},
             {"latest_audit_event", tape_phase7::latestExecutionJournalAuditSummary(artifact)},
             {"latest_execution_result_summary", tape_phase7::latestExecutionJournalResultSummary(artifact)},
+            {"latest_execution_resolution", triageSummary.is_object() ? triageSummary.value("resolution", json(nullptr)) : json(nullptr)},
+            {"restart_resume_policy", triageSummary.is_object() ? triageSummary.value("restart_resume_policy", json(nullptr)) : json(nullptr)},
+            {"restart_recovery_state", triageSummary.is_object() ? triageSummary.value("restart_recovery_state", json(nullptr)) : json(nullptr)},
             {"replay_context", artifact.replayContext}
         });
     }
@@ -5535,6 +5729,11 @@ json phase7ExecutionJournalInventoryPayload(const std::vector<tape_phase7::Execu
         {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
         {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
         {"journal_status", selection.journalStatus.empty() ? json(nullptr) : json(selection.journalStatus)},
+        {"restart_recovery_state",
+         selection.restartRecoveryState.empty() ? json(nullptr) : json(selection.restartRecoveryState)},
+        {"restart_resume_policy", selection.restartResumePolicy.empty() ? json(nullptr) : json(selection.restartResumePolicy)},
+        {"latest_execution_resolution",
+         selection.latestExecutionResolution.empty() ? json(nullptr) : json(selection.latestExecutionResolution)},
         {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
         {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
         {"matched_count", matchedCount}
@@ -5557,6 +5756,7 @@ json phase7ExecutionApplyPayload(const tape_phase7::ExecutionApplyArtifact& appl
     }
     const auto executionSummary = tape_phase7::summarizeExecutionApplySummary(apply);
     const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(apply);
+    const json triageSummary = tape_phase7::latestExecutionApplyTriageSummary(apply);
     json payload = {
         {"source_artifact", tape_phase7::artifactRefToJson(apply.sourceArtifact)},
         {"analysis_artifact", tape_phase7::artifactRefToJson(apply.analysisArtifact)},
@@ -5576,6 +5776,9 @@ json phase7ExecutionApplyPayload(const tape_phase7::ExecutionApplyArtifact& appl
         {"runtime_recovery_summary", tape_phase7::executionRecoverySummaryToJson(recoverySummary)},
         {"latest_audit_event", tape_phase7::latestExecutionApplyAuditSummary(apply)},
         {"latest_execution_result_summary", tape_phase7::latestExecutionApplyResultSummary(apply)},
+        {"latest_execution_resolution", triageSummary.is_object() ? triageSummary.value("resolution", json(nullptr)) : json(nullptr)},
+        {"restart_resume_policy", triageSummary.is_object() ? triageSummary.value("restart_resume_policy", json(nullptr)) : json(nullptr)},
+        {"restart_recovery_state", triageSummary.is_object() ? triageSummary.value("restart_recovery_state", json(nullptr)) : json(nullptr)},
         {"entries", std::move(entries)},
         {"audit_trail", apply.auditTrail},
         {"replay_context", apply.replayContext}
@@ -5602,6 +5805,7 @@ json phase7ExecutionApplyInventoryPayload(const std::vector<tape_phase7::Executi
     for (const auto& artifact : artifacts) {
         const auto executionSummary = tape_phase7::summarizeExecutionApplySummary(artifact);
         const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(artifact);
+        const json triageSummary = tape_phase7::latestExecutionApplyTriageSummary(artifact);
         rows.push_back({
             {"execution_apply", tape_phase7::artifactRefToJson(artifact.applyArtifact)},
             {"execution_journal", tape_phase7::artifactRefToJson(artifact.journalArtifact)},
@@ -5617,6 +5821,9 @@ json phase7ExecutionApplyInventoryPayload(const std::vector<tape_phase7::Executi
             {"runtime_recovery_summary", tape_phase7::executionRecoverySummaryToJson(recoverySummary)},
             {"latest_audit_event", tape_phase7::latestExecutionApplyAuditSummary(artifact)},
             {"latest_execution_result_summary", tape_phase7::latestExecutionApplyResultSummary(artifact)},
+            {"latest_execution_resolution", triageSummary.is_object() ? triageSummary.value("resolution", json(nullptr)) : json(nullptr)},
+            {"restart_resume_policy", triageSummary.is_object() ? triageSummary.value("restart_resume_policy", json(nullptr)) : json(nullptr)},
+            {"restart_recovery_state", triageSummary.is_object() ? triageSummary.value("restart_recovery_state", json(nullptr)) : json(nullptr)},
             {"replay_context", artifact.replayContext}
         });
     }
@@ -5627,6 +5834,11 @@ json phase7ExecutionApplyInventoryPayload(const std::vector<tape_phase7::Executi
         {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
         {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
         {"apply_status", selection.applyStatus.empty() ? json(nullptr) : json(selection.applyStatus)},
+        {"restart_recovery_state",
+         selection.restartRecoveryState.empty() ? json(nullptr) : json(selection.restartRecoveryState)},
+        {"restart_resume_policy", selection.restartResumePolicy.empty() ? json(nullptr) : json(selection.restartResumePolicy)},
+        {"latest_execution_resolution",
+         selection.latestExecutionResolution.empty() ? json(nullptr) : json(selection.latestExecutionResolution)},
         {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
         {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
         {"matched_count", matchedCount}
@@ -5653,6 +5865,28 @@ bool matchesPhase7RecoveryState(std::string_view recoveryState, const RecoverySu
         return recovery.staleRecoveryRequired;
     }
     return false;
+}
+
+bool matchesLatestExecutionTriage(std::string_view restartRecoveryState,
+                                  std::string_view restartResumePolicy,
+                                  std::string_view latestExecutionResolution,
+                                  const json& triageSummary) {
+    if (!triageSummary.is_object()) {
+        return restartRecoveryState.empty() && restartResumePolicy.empty() && latestExecutionResolution.empty();
+    }
+    if (!restartRecoveryState.empty() &&
+        triageSummary.value("restart_recovery_state", std::string()) != restartRecoveryState) {
+        return false;
+    }
+    if (!restartResumePolicy.empty() &&
+        triageSummary.value("restart_resume_policy", std::string()) != restartResumePolicy) {
+        return false;
+    }
+    if (!latestExecutionResolution.empty() &&
+        triageSummary.value("resolution", std::string()) != latestExecutionResolution) {
+        return false;
+    }
+    return true;
 }
 
 std::string toolContractVersion(const ToolSpec& tool) {
@@ -9036,6 +9270,12 @@ json Adapter::invokeListExecutionJournalsTool(const ToolSpec& tool, const json& 
                                                                        tape_phase7::summarizeExecutionJournalRecovery(artifact))) {
                                            return true;
                                        }
+                                       if (!matchesLatestExecutionTriage(selection.restartRecoveryState,
+                                                                         selection.restartResumePolicy,
+                                                                         selection.latestExecutionResolution,
+                                                                         tape_phase7::latestExecutionJournalTriageSummary(artifact))) {
+                                           return true;
+                                       }
                                        return false;
                                    }),
                     artifacts.end());
@@ -9339,6 +9579,12 @@ json Adapter::invokeListExecutionAppliesTool(const ToolSpec& tool, const json& a
                                        }
                                        if (!matchesPhase7RecoveryState(selection.recoveryState,
                                                                        tape_phase7::summarizeExecutionApplyRecovery(artifact))) {
+                                           return true;
+                                       }
+                                       if (!matchesLatestExecutionTriage(selection.restartRecoveryState,
+                                                                         selection.restartResumePolicy,
+                                                                         selection.latestExecutionResolution,
+                                                                         tape_phase7::latestExecutionApplyTriageSummary(artifact))) {
                                            return true;
                                        }
                                        return false;

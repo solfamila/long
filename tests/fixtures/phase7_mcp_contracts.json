@@ -1966,6 +1966,7 @@
         "matched_count": 1,
         "playbook_artifact_id": null,
         "recovery_state": null,
+        "restart_recovery_state": null,
         "sort_by": "generated_at_desc",
         "source_artifact_id": null
       },
@@ -2081,6 +2082,7 @@
         "matched_count": 1,
         "playbook_artifact_id": null,
         "recovery_state": "recovery_required",
+        "restart_recovery_state": null,
         "sort_by": "attention_desc",
         "source_artifact_id": null
       },
@@ -2196,6 +2198,7 @@
         "matched_count": 1,
         "playbook_artifact_id": null,
         "recovery_state": null,
+        "restart_recovery_state": null,
         "sort_by": "generated_at_desc",
         "source_artifact_id": null
       },
@@ -2310,6 +2313,7 @@
         "matched_count": 1,
         "playbook_artifact_id": null,
         "recovery_state": null,
+        "restart_recovery_state": null,
         "sort_by": "generated_at_desc",
         "source_artifact_id": null
       },
@@ -2418,6 +2422,7 @@
         "matched_count": 1,
         "playbook_artifact_id": null,
         "recovery_state": "recovery_required",
+        "restart_recovery_state": null,
         "sort_by": "attention_desc",
         "source_artifact_id": null
       },
@@ -2526,6 +2531,7 @@
         "matched_count": 1,
         "playbook_artifact_id": null,
         "recovery_state": null,
+        "restart_recovery_state": null,
         "sort_by": "generated_at_desc",
         "source_artifact_id": null
       },

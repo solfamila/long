@@ -876,6 +876,87 @@ std::string SelectedPhase7RecoveryFilter(NSPopUpButton* popup) {
     return {};
 }
 
+std::string SelectedPhase7ResumePolicyFilter(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return {};
+    }
+    const std::string value = ToStdString(popup.titleOfSelectedItem);
+    if (value == "Continue Recovery") {
+        return "continue_recovery";
+    }
+    if (value == "Await Cancel Ack") {
+        return "await_cancel_ack";
+    }
+    if (value == "Completed") {
+        return "completed";
+    }
+    if (value == "Terminal No Resume") {
+        return "terminal_no_resume";
+    }
+    if (value == "Manual Review") {
+        return "manual_review_required";
+    }
+    if (value == "Unknown") {
+        return "unknown";
+    }
+    return {};
+}
+
+std::string SelectedPhase7RecoveryStateFilter(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return {};
+    }
+    const std::string value = ToStdString(popup.titleOfSelectedItem);
+    if (value == "Recoverable") {
+        return "recoverable";
+    }
+    if (value == "Await Cancel Ack") {
+        return "awaiting_cancel_ack";
+    }
+    if (value == "Terminal Completed") {
+        return "terminal_completed";
+    }
+    if (value == "Terminal No Resume") {
+        return "terminal_no_resume";
+    }
+    if (value == "Manual Review") {
+        return "manual_review_required";
+    }
+    if (value == "Unknown") {
+        return "unknown";
+    }
+    return {};
+}
+
+std::string SelectedPhase7ResolutionFilter(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return {};
+    }
+    const std::string value = ToStdString(popup.titleOfSelectedItem);
+    if (value == "Working") {
+        return "resolved_working";
+    }
+    if (value == "Partially Filled") {
+        return "resolved_partially_filled";
+    }
+    if (value == "Filled") {
+        return "resolved_filled";
+    }
+    if (value == "Cancelled") {
+        return "resolved_cancelled";
+    }
+    if (value == "Rejected") {
+        return "resolved_rejected";
+    }
+    if (value == "Inactive") {
+        return "resolved_inactive";
+    }
+    if (value == "Manual Review") {
+        return "manual_review_required";
+    }
+    return {};
+}
+
 std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInventoryPayload& analyses,
                                           const tapescope::Phase7PlaybookInventoryPayload& playbooks,
                                           const tapescope::Phase7ExecutionLedgerInventoryPayload& ledgers,
@@ -1204,6 +1285,37 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                                                             @"Needs Recovery",
                                                             @"Stale Recovery"]];
     [journalFilters addArrangedSubview:_phase7JournalRecoveryFilterPopup];
+    _phase7JournalRecoveryStateFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 190, 24)
+                                                                        pullsDown:NO];
+    [_phase7JournalRecoveryStateFilterPopup addItemsWithTitles:@[@"All Runtime State",
+                                                                 @"Recoverable",
+                                                                 @"Await Cancel Ack",
+                                                                 @"Terminal Completed",
+                                                                 @"Terminal No Resume",
+                                                                 @"Manual Review",
+                                                                 @"Unknown"]];
+    [journalFilters addArrangedSubview:_phase7JournalRecoveryStateFilterPopup];
+    _phase7JournalResumePolicyFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 170, 24)
+                                                                      pullsDown:NO];
+    [_phase7JournalResumePolicyFilterPopup addItemsWithTitles:@[@"All Resume",
+                                                                @"Continue Recovery",
+                                                                @"Await Cancel Ack",
+                                                                @"Completed",
+                                                                @"Terminal No Resume",
+                                                                @"Manual Review",
+                                                                @"Unknown"]];
+    [journalFilters addArrangedSubview:_phase7JournalResumePolicyFilterPopup];
+    _phase7JournalResolutionFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 170, 24)
+                                                                    pullsDown:NO];
+    [_phase7JournalResolutionFilterPopup addItemsWithTitles:@[@"All Resolution",
+                                                              @"Working",
+                                                              @"Partially Filled",
+                                                              @"Filled",
+                                                              @"Cancelled",
+                                                              @"Rejected",
+                                                              @"Inactive",
+                                                              @"Manual Review"]];
+    [journalFilters addArrangedSubview:_phase7JournalResolutionFilterPopup];
     _phase7JournalSortPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24) pullsDown:NO];
     [_phase7JournalSortPopup addItemsWithTitles:@[@"Newest First", @"Needs Attention", @"Source Artifact"]];
     [journalFilters addArrangedSubview:_phase7JournalSortPopup];
@@ -1219,6 +1331,37 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                                                           @"Needs Recovery",
                                                           @"Stale Recovery"]];
     [applyFilters addArrangedSubview:_phase7ApplyRecoveryFilterPopup];
+    _phase7ApplyRecoveryStateFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 190, 24)
+                                                                      pullsDown:NO];
+    [_phase7ApplyRecoveryStateFilterPopup addItemsWithTitles:@[@"All Runtime State",
+                                                               @"Recoverable",
+                                                               @"Await Cancel Ack",
+                                                               @"Terminal Completed",
+                                                               @"Terminal No Resume",
+                                                               @"Manual Review",
+                                                               @"Unknown"]];
+    [applyFilters addArrangedSubview:_phase7ApplyRecoveryStateFilterPopup];
+    _phase7ApplyResumePolicyFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 170, 24)
+                                                                    pullsDown:NO];
+    [_phase7ApplyResumePolicyFilterPopup addItemsWithTitles:@[@"All Resume",
+                                                              @"Continue Recovery",
+                                                              @"Await Cancel Ack",
+                                                              @"Completed",
+                                                              @"Terminal No Resume",
+                                                              @"Manual Review",
+                                                              @"Unknown"]];
+    [applyFilters addArrangedSubview:_phase7ApplyResumePolicyFilterPopup];
+    _phase7ApplyResolutionFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 170, 24)
+                                                                  pullsDown:NO];
+    [_phase7ApplyResolutionFilterPopup addItemsWithTitles:@[@"All Resolution",
+                                                            @"Working",
+                                                            @"Partially Filled",
+                                                            @"Filled",
+                                                            @"Cancelled",
+                                                            @"Rejected",
+                                                            @"Inactive",
+                                                            @"Manual Review"]];
+    [applyFilters addArrangedSubview:_phase7ApplyResolutionFilterPopup];
     [stack addArrangedSubview:applyFilters];
 
     [stack addArrangedSubview:MakeSectionLabel(@"Analyzer Profiles")];
@@ -1269,6 +1412,9 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     AddTableColumn(_phase7JournalTableView, @"artifact_id", @"artifact_id", 220.0);
     AddTableColumn(_phase7JournalTableView, @"ledger_artifact_id", @"ledger_artifact_id", 220.0);
     AddTableColumn(_phase7JournalTableView, @"journal_status", @"journal_status", 170.0);
+    AddTableColumn(_phase7JournalTableView, @"restart_recovery_state", @"runtime_state", 170.0);
+    AddTableColumn(_phase7JournalTableView, @"restart_resume_policy", @"resume_policy", 160.0);
+    AddTableColumn(_phase7JournalTableView, @"latest_execution_resolution", @"resolution", 170.0);
     AddTableColumn(_phase7JournalTableView, @"queued_count", @"queued", 90.0);
     AddTableColumn(_phase7JournalTableView, @"submitted_count", @"submitted", 90.0);
     AddTableColumn(_phase7JournalTableView, @"terminal_count", @"terminal", 90.0);
@@ -1282,6 +1428,9 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     AddTableColumn(_phase7ApplyTableView, @"artifact_id", @"artifact_id", 220.0);
     AddTableColumn(_phase7ApplyTableView, @"journal_artifact_id", @"journal_artifact_id", 220.0);
     AddTableColumn(_phase7ApplyTableView, @"apply_status", @"apply_status", 170.0);
+    AddTableColumn(_phase7ApplyTableView, @"restart_recovery_state", @"runtime_state", 170.0);
+    AddTableColumn(_phase7ApplyTableView, @"restart_resume_policy", @"resume_policy", 160.0);
+    AddTableColumn(_phase7ApplyTableView, @"latest_execution_resolution", @"resolution", 170.0);
     AddTableColumn(_phase7ApplyTableView, @"submitted_count", @"submitted", 90.0);
     AddTableColumn(_phase7ApplyTableView, @"terminal_count", @"terminal", 90.0);
     AddTableColumn(_phase7ApplyTableView, @"latest_audit_event", @"latest_audit", 320.0);
@@ -1354,6 +1503,9 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     journalSelection.sourceArtifactId = playbookSelection.sourceArtifactId;
     journalSelection.journalStatus = SelectedPhase7JournalStatusFilter(_phase7JournalStatusFilterPopup);
     journalSelection.recoveryState = SelectedPhase7RecoveryFilter(_phase7JournalRecoveryFilterPopup);
+    journalSelection.restartRecoveryState = SelectedPhase7RecoveryStateFilter(_phase7JournalRecoveryStateFilterPopup);
+    journalSelection.restartResumePolicy = SelectedPhase7ResumePolicyFilter(_phase7JournalResumePolicyFilterPopup);
+    journalSelection.latestExecutionResolution = SelectedPhase7ResolutionFilter(_phase7JournalResolutionFilterPopup);
     journalSelection.sortBy = SelectedPhase7JournalSort(_phase7JournalSortPopup);
     journalSelection.limit = 20;
 
@@ -1364,6 +1516,9 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     applySelection.analysisArtifactId = playbookSelection.analysisArtifactId;
     applySelection.sourceArtifactId = playbookSelection.sourceArtifactId;
     applySelection.recoveryState = SelectedPhase7RecoveryFilter(_phase7ApplyRecoveryFilterPopup);
+    applySelection.restartRecoveryState = SelectedPhase7RecoveryStateFilter(_phase7ApplyRecoveryStateFilterPopup);
+    applySelection.restartResumePolicy = SelectedPhase7ResumePolicyFilter(_phase7ApplyResumePolicyFilterPopup);
+    applySelection.latestExecutionResolution = SelectedPhase7ResolutionFilter(_phase7ApplyResolutionFilterPopup);
     applySelection.sortBy = "generated_at_desc";
     applySelection.limit = 20;
 
@@ -1534,7 +1689,13 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                          journalSelection.ledgerArtifactId.empty() &&
                          journalSelection.journalStatus.empty() &&
                          journalSelection.recoveryState.empty() &&
-                         applySelection.recoveryState.empty())
+                         journalSelection.restartRecoveryState.empty() &&
+                         journalSelection.restartResumePolicy.empty() &&
+                         journalSelection.latestExecutionResolution.empty() &&
+                         applySelection.recoveryState.empty() &&
+                         applySelection.restartRecoveryState.empty() &&
+                         applySelection.restartResumePolicy.empty() &&
+                         applySelection.latestExecutionResolution.empty())
                             ? @"No Phase 7 analysis, playbook, ledger, execution-journal, or controlled-apply artifacts are available yet."
                             : @"Phase 7 filters matched no analysis, playbook, ledger, execution-journal, or controlled-apply artifacts.";
                     innerSelf->_phase7StateLabel.textColor = TapeInkMutedColor();
@@ -1562,8 +1723,14 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7JournalLedgerFilterField.stringValue = @"";
     [_phase7JournalStatusFilterPopup selectItemWithTitle:@"All Journals"];
     [_phase7JournalRecoveryFilterPopup selectItemWithTitle:@"All Recovery"];
+    [_phase7JournalRecoveryStateFilterPopup selectItemWithTitle:@"All Runtime State"];
+    [_phase7JournalResumePolicyFilterPopup selectItemWithTitle:@"All Resume"];
+    [_phase7JournalResolutionFilterPopup selectItemWithTitle:@"All Resolution"];
     [_phase7JournalSortPopup selectItemWithTitle:@"Newest First"];
     [_phase7ApplyRecoveryFilterPopup selectItemWithTitle:@"All Recovery"];
+    [_phase7ApplyRecoveryStateFilterPopup selectItemWithTitle:@"All Runtime State"];
+    [_phase7ApplyResumePolicyFilterPopup selectItemWithTitle:@"All Resume"];
+    [_phase7ApplyResolutionFilterPopup selectItemWithTitle:@"All Resolution"];
     [self refreshPhase7Artifacts:nil];
 }
 
