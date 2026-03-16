@@ -435,6 +435,34 @@ QueryResult<ArtifactExportPayload> QueryClient::exportArtifactPayload(const std:
     return packArtifactExportPayload(performQuery(request));
 }
 
+QueryResult<BundleExportPayload> QueryClient::exportSessionBundlePayload(std::uint64_t reportId) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ExportSessionBundle,
+                                                    "tapescope-export-session-bundle");
+    request.reportId = reportId;
+    return packBundleExportPayload(performQuery(request));
+}
+
+QueryResult<BundleExportPayload> QueryClient::exportCaseBundlePayload(std::uint64_t reportId) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ExportCaseBundle,
+                                                    "tapescope-export-case-bundle");
+    request.reportId = reportId;
+    return packBundleExportPayload(performQuery(request));
+}
+
+QueryResult<CaseBundleImportPayload> QueryClient::importCaseBundlePayload(const std::string& bundlePath) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ImportCaseBundle,
+                                                    "tapescope-import-case-bundle");
+    request.bundlePath = bundlePath;
+    return packCaseBundleImportPayload(performQuery(request));
+}
+
+QueryResult<ImportedCaseListPayload> QueryClient::listImportedCasesPayload(std::size_t limit) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListImportedCases,
+                                                    "tapescope-list-imported-cases");
+    applyLimit(&request, limit);
+    return packImportedCaseListPayload(performQuery(request));
+}
+
 std::string QueryClient::describeError(const QueryError& error) {
     switch (error.kind) {
         case QueryErrorKind::None:

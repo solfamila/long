@@ -162,6 +162,45 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(!typedCaseReportList.value.caseReports.empty(),
            "TapeScope typed case-report list should parse report rows for the UI");
 
+    const std::uint64_t sessionReportId = typedSessionReportList.value.sessionReports.front().reportId;
+    expect(sessionReportId > 0, "TapeScope session-report inventory should expose a durable report id");
+    const auto typedSessionBundleExport = client.exportSessionBundlePayload(sessionReportId);
+    expect(typedSessionBundleExport.ok(), "TapeScope typed session-bundle export should succeed: " +
+                                              tapescope::QueryClient::describeError(typedSessionBundleExport.error));
+    expect(!typedSessionBundleExport.value.bundlePath.empty() &&
+               fs::exists(typedSessionBundleExport.value.bundlePath),
+           "TapeScope typed session-bundle export should surface a written bundle path");
+
+    const std::uint64_t caseReportId = typedCaseReportList.value.caseReports.front().reportId;
+    expect(caseReportId > 0, "TapeScope case-report inventory should expose a durable report id");
+    const auto typedCaseBundleExport = client.exportCaseBundlePayload(caseReportId);
+    expect(typedCaseBundleExport.ok(), "TapeScope typed case-bundle export should succeed: " +
+                                           tapescope::QueryClient::describeError(typedCaseBundleExport.error));
+    expect(!typedCaseBundleExport.value.bundlePath.empty() &&
+               fs::exists(typedCaseBundleExport.value.bundlePath),
+           "TapeScope typed case-bundle export should surface a written bundle path");
+
+    const auto typedCaseBundleImport = client.importCaseBundlePayload(typedCaseBundleExport.value.bundlePath);
+    expect(typedCaseBundleImport.ok(), "TapeScope typed case-bundle import should succeed: " +
+                                           tapescope::QueryClient::describeError(typedCaseBundleImport.error));
+    expect(!typedCaseBundleImport.value.artifactId.empty() &&
+               typedCaseBundleImport.value.artifactId.rfind("imported-case:", 0) == 0,
+           "TapeScope typed case-bundle import should surface an imported-case artifact id");
+
+    const auto typedImportedCaseList = client.listImportedCasesPayload(10);
+    expect(typedImportedCaseList.ok(), "TapeScope typed imported-case list should succeed: " +
+                                           tapescope::QueryClient::describeError(typedImportedCaseList.error));
+    expect(!typedImportedCaseList.value.importedCases.empty(),
+           "TapeScope typed imported-case list should parse imported-case rows for the UI");
+
+    const auto typedImportedArtifact = client.readArtifactPayload(typedCaseBundleImport.value.artifactId);
+    expect(typedImportedArtifact.ok(), "TapeScope typed imported-case artifact read should succeed: " +
+                                           tapescope::QueryClient::describeError(typedImportedArtifact.error));
+    expect(typedImportedArtifact.value.artifactId == typedCaseBundleImport.value.artifactId,
+           "TapeScope typed imported-case artifact read should preserve the imported artifact id");
+    expect(typedImportedArtifact.value.artifactKind == "imported_case_bundle",
+           "TapeScope typed imported-case artifact read should surface the imported bundle artifact kind");
+
     const auto typedIncidents = client.listIncidentsPayload(10);
     expect(typedIncidents.ok(), "TapeScope typed incident list should succeed: " +
                                     tapescope::QueryClient::describeError(typedIncidents.error));

@@ -10,6 +10,7 @@ namespace {
 using namespace tapescope_support;
 
 constexpr std::size_t kRecentHistoryLimit = 24;
+constexpr std::size_t kBundleHistoryLimit = 32;
 NSString* const kTapeScopeStateDefaultsKey = @"TapeScopeStateV1";
 
 std::string InvestigationHeadline(const tapescope::InvestigationPayload& payload,
@@ -83,6 +84,70 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     return item;
 }
 
+- (NSTabViewItem*)bundleHistoryTabItem {
+    const auto paneWithStack = MakePaneWithStack();
+    NSStackView* stack = paneWithStack.stack;
+    NSView* pane = paneWithStack.view;
+
+    [stack addArrangedSubview:MakeIntroLabel(@"Bundle history: reopen exported and imported Phase 6 bundles, reveal their on-disk locations, jump back to source artifacts, and load their replay windows.",
+                                             2)];
+
+    NSStackView* controls = MakeControlRow();
+    _bundleHistoryOpenButton = [NSButton buttonWithTitle:@"Open Selected"
+                                                  target:self
+                                                  action:@selector(openSelectedBundleHistory:)];
+    _bundleHistoryOpenButton.enabled = NO;
+    [controls addArrangedSubview:_bundleHistoryOpenButton];
+
+    _bundleHistoryOpenSourceButton = [NSButton buttonWithTitle:@"Open Source"
+                                                        target:self
+                                                        action:@selector(openSelectedBundleHistorySource:)];
+    _bundleHistoryOpenSourceButton.enabled = NO;
+    [controls addArrangedSubview:_bundleHistoryOpenSourceButton];
+
+    _bundleHistoryRevealButton = [NSButton buttonWithTitle:@"Reveal Path"
+                                                    target:self
+                                                    action:@selector(revealSelectedBundleHistoryPath:)];
+    _bundleHistoryRevealButton.enabled = NO;
+    [controls addArrangedSubview:_bundleHistoryRevealButton];
+
+    _bundleHistoryLoadRangeButton = [NSButton buttonWithTitle:@"Load Range"
+                                                       target:self
+                                                       action:@selector(loadReplayRangeFromBundleHistory:)];
+    _bundleHistoryLoadRangeButton.enabled = NO;
+    [controls addArrangedSubview:_bundleHistoryLoadRangeButton];
+
+    _bundleHistoryClearButton = [NSButton buttonWithTitle:@"Clear History"
+                                                   target:self
+                                                   action:@selector(clearBundleHistory:)];
+    _bundleHistoryClearButton.enabled = NO;
+    [controls addArrangedSubview:_bundleHistoryClearButton];
+    [stack addArrangedSubview:controls];
+
+    _bundleHistoryStateLabel = MakeLabel(@"Bundle history will populate as you export or import Phase 6 bundles.",
+                                         [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                         [NSColor secondaryLabelColor]);
+    [stack addArrangedSubview:_bundleHistoryStateLabel];
+
+    _bundleHistoryTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_bundleHistoryTableView, @"kind", @"kind", 140.0);
+    AddTableColumn(_bundleHistoryTableView, @"bundle_id", @"bundle_id", 180.0);
+    AddTableColumn(_bundleHistoryTableView, @"headline", @"headline", 450.0);
+    ConfigureTablePrimaryAction(_bundleHistoryTableView, self, @selector(openSelectedBundleHistory:));
+    [stack addArrangedSubview:MakeTableScrollView(_bundleHistoryTableView, 180.0)];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Selected Bundle Entry")];
+
+    _bundleHistoryTextView = MakeReadOnlyTextView();
+    _bundleHistoryTextView.string = @"Export or import a Phase 6 bundle and it will appear here with its artifact linkage and replay metadata.";
+    [stack addArrangedSubview:MakeScrollView(_bundleHistoryTextView, 250.0)];
+
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"BundleHistoryPane"];
+    item.label = @"BundleHistoryPane";
+    item.view = pane;
+    return item;
+}
+
 - (tapescope::json)capturePersistentState {
     tapescope::json state = tapescope::json::object();
     if (_tabView.selectedTabViewItem.identifier != nil &&
@@ -91,6 +156,7 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     }
     state["polling_paused"] = (_pollingPaused == YES);
     state["recent_history"] = _recentHistoryItems;
+    state["bundle_history"] = _bundleHistoryItems;
     state["overview"] = tapescope::json{{"first_session_seq", ToStdString(_overviewFirstField.stringValue)},
                                         {"last_session_seq", ToStdString(_overviewLastField.stringValue)}};
     state["range"] = tapescope::json{{"first_session_seq", ToStdString(_rangeFirstField.stringValue)},
@@ -112,6 +178,7 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     state["incident"] = tapescope::json{{"logical_incident_id", ToStdString(_incidentIdField.stringValue)}};
     state["artifact"] = tapescope::json{{"artifact_id", ToStdString(_artifactIdField.stringValue)},
                                         {"export_format", ToStdString(_artifactExportFormatPopup.titleOfSelectedItem)}};
+    state["report_inventory"] = tapescope::json{{"bundle_path", ToStdString(_bundleImportPathField.stringValue)}};
     return state;
 }
 
@@ -185,6 +252,9 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         [_artifactExportFormatPopup selectItemWithTitle:ToNSString(exportFormat)];
     }
 
+    const tapescope::json reportInventory = state.value("report_inventory", tapescope::json::object());
+    _bundleImportPathField.stringValue = ToNSString(reportInventory.value("bundle_path", std::string()));
+
     _recentHistoryItems.clear();
     const tapescope::json recentHistory = state.value("recent_history", tapescope::json::array());
     if (recentHistory.is_array()) {
@@ -202,6 +272,28 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         _recentStateLabel.textColor = TapeInkMutedColor();
         [_recentTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
         _recentTextView.string = ToNSString(DescribeRecentHistoryEntry(_recentHistoryItems.front()));
+    }
+
+    _bundleHistoryItems.clear();
+    const tapescope::json bundleHistory = state.value("bundle_history", tapescope::json::array());
+    if (bundleHistory.is_array()) {
+        for (const auto& item : bundleHistory) {
+            if (item.is_object()) {
+                _bundleHistoryItems.push_back(item);
+            }
+        }
+    }
+    [_bundleHistoryTableView reloadData];
+    _bundleHistoryClearButton.enabled = !_bundleHistoryItems.empty();
+    _bundleHistoryOpenButton.enabled = NO;
+    _bundleHistoryOpenSourceButton.enabled = NO;
+    _bundleHistoryRevealButton.enabled = NO;
+    _bundleHistoryLoadRangeButton.enabled = NO;
+    if (!_bundleHistoryItems.empty()) {
+        _bundleHistoryStateLabel.stringValue = @"Restored bundle history from the last TapeScope session.";
+        _bundleHistoryStateLabel.textColor = TapeInkMutedColor();
+        [_bundleHistoryTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+        _bundleHistoryTextView.string = ToNSString(DescribeRecentHistoryEntry(_bundleHistoryItems.front()));
     }
 
     const std::string selectedTab = state.value("selected_tab", std::string());
@@ -242,6 +334,44 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     _recentOpenButton.enabled = YES;
     [_recentTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
     _recentTextView.string = ToNSString(DescribeRecentHistoryEntry(_recentHistoryItems.front()));
+    [self persistApplicationState];
+}
+
+- (void)recordBundleHistoryEntry:(tapescope::json)entry {
+    if (!entry.is_object()) {
+        return;
+    }
+
+    const std::string key = entry.value("kind", std::string()) + "|" + entry.value("target_id", std::string());
+    _bundleHistoryItems.erase(std::remove_if(_bundleHistoryItems.begin(),
+                                             _bundleHistoryItems.end(),
+                                             [&](const tapescope::json& item) {
+                                                 return (item.value("kind", std::string()) + "|" +
+                                                         item.value("target_id", std::string())) == key;
+                                             }),
+                              _bundleHistoryItems.end());
+    _bundleHistoryItems.insert(_bundleHistoryItems.begin(), std::move(entry));
+    if (_bundleHistoryItems.size() > kBundleHistoryLimit) {
+        _bundleHistoryItems.resize(kBundleHistoryLimit);
+    }
+    [_bundleHistoryTableView reloadData];
+    _bundleHistoryClearButton.enabled = !_bundleHistoryItems.empty();
+    if (_bundleHistoryItems.empty()) {
+        _bundleHistoryStateLabel.stringValue = @"Bundle history is empty.";
+        _bundleHistoryStateLabel.textColor = TapeInkMutedColor();
+        _bundleHistoryOpenButton.enabled = NO;
+        _bundleHistoryOpenSourceButton.enabled = NO;
+        _bundleHistoryRevealButton.enabled = NO;
+        _bundleHistoryLoadRangeButton.enabled = NO;
+        _bundleHistoryTextView.string = @"Export or import a Phase 6 bundle to build bundle history.";
+        return;
+    }
+    _bundleHistoryStateLabel.stringValue = @"Bundle history updated.";
+    _bundleHistoryStateLabel.textColor = [NSColor systemGreenColor];
+    _bundleHistoryOpenButton.enabled = YES;
+    _bundleHistoryRevealButton.enabled = YES;
+    [_bundleHistoryTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    _bundleHistoryTextView.string = ToNSString(DescribeRecentHistoryEntry(_bundleHistoryItems.front()));
     [self persistApplicationState];
 }
 
@@ -345,6 +475,31 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         }
         return;
     }
+    if (kind == "bundle") {
+        const std::string bundlePath = entry.value("bundle_path", std::string());
+        if (!bundlePath.empty()) {
+            _bundleImportPathField.stringValue = ToNSString(bundlePath);
+            [_tabView selectTabViewItemWithIdentifier:@"BundleHistoryPane"];
+            [self revealSelectedBundleHistoryPath:nil];
+        }
+        return;
+    }
+    if (kind == "session_bundle" || kind == "case_bundle" || kind == "imported_case_bundle") {
+        const std::string artifactId = entry.value("artifact_id", std::string());
+        if (!artifactId.empty()) {
+            _artifactIdField.stringValue = ToNSString(artifactId);
+            [_tabView selectTabViewItemWithIdentifier:@"ArtifactPane"];
+            [self fetchArtifact:nil];
+            return;
+        }
+        const std::string bundlePath = entry.value("bundle_path", std::string());
+        if (!bundlePath.empty()) {
+            _bundleImportPathField.stringValue = ToNSString(bundlePath);
+            [_tabView selectTabViewItemWithIdentifier:@"BundleHistoryPane"];
+            [self revealSelectedBundleHistoryPath:nil];
+        }
+        return;
+    }
     if (kind == "range") {
         const std::uint64_t firstSessionSeq = entry.value("first_session_seq", 0ULL);
         const std::uint64_t lastSessionSeq = entry.value("last_session_seq", 0ULL);
@@ -368,6 +523,78 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     [self openRecentHistoryEntry:_recentHistoryItems.at(static_cast<std::size_t>(selected))];
 }
 
+- (void)openSelectedBundleHistory:(id)sender {
+    (void)sender;
+    const NSInteger selected = _bundleHistoryTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _bundleHistoryItems.size()) {
+        _bundleHistoryStateLabel.stringValue = @"Select a bundle-history row first.";
+        _bundleHistoryStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    [self openRecentHistoryEntry:_bundleHistoryItems.at(static_cast<std::size_t>(selected))];
+}
+
+- (void)openSelectedBundleHistorySource:(id)sender {
+    (void)sender;
+    const NSInteger selected = _bundleHistoryTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _bundleHistoryItems.size()) {
+        _bundleHistoryStateLabel.stringValue = @"Select a bundle-history row first.";
+        _bundleHistoryStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& entry = _bundleHistoryItems.at(static_cast<std::size_t>(selected));
+    const std::string artifactId = entry.value("source_artifact_id", std::string());
+    if (artifactId.empty()) {
+        _bundleHistoryStateLabel.stringValue = @"Selected bundle entry is missing a source artifact id.";
+        _bundleHistoryStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    _artifactIdField.stringValue = ToNSString(artifactId);
+    [_tabView selectTabViewItemWithIdentifier:@"ArtifactPane"];
+    [self fetchArtifact:nil];
+}
+
+- (void)revealSelectedBundleHistoryPath:(id)sender {
+    (void)sender;
+    const NSInteger selected = _bundleHistoryTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _bundleHistoryItems.size()) {
+        _bundleHistoryStateLabel.stringValue = @"Select a bundle-history row first.";
+        _bundleHistoryStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& entry = _bundleHistoryItems.at(static_cast<std::size_t>(selected));
+    const std::string bundlePath = entry.value("bundle_path", std::string());
+    if (bundlePath.empty()) {
+        _bundleHistoryStateLabel.stringValue = @"Selected bundle entry is missing a bundle path.";
+        _bundleHistoryStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    _bundleImportPathField.stringValue = ToNSString(bundlePath);
+    [self revealSelectedBundlePath:nil];
+    _bundleHistoryStateLabel.stringValue = _reportInventoryStateLabel.stringValue;
+    _bundleHistoryStateLabel.textColor = _reportInventoryStateLabel.textColor;
+}
+
+- (void)loadReplayRangeFromBundleHistory:(id)sender {
+    (void)sender;
+    const NSInteger selected = _bundleHistoryTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _bundleHistoryItems.size()) {
+        _bundleHistoryStateLabel.stringValue = @"Select a bundle-history row first.";
+        _bundleHistoryStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& entry = _bundleHistoryItems.at(static_cast<std::size_t>(selected));
+    const std::uint64_t firstSessionSeq = entry.value("first_session_seq", 0ULL);
+    const std::uint64_t lastSessionSeq = entry.value("last_session_seq", 0ULL);
+    tapescope::RangeQuery range;
+    range.firstSessionSeq = firstSessionSeq;
+    range.lastSessionSeq = lastSessionSeq;
+    [self loadReplayRange:range
+                available:(firstSessionSeq > 0 && lastSessionSeq >= firstSessionSeq)
+               stateLabel:_bundleHistoryStateLabel
+           missingMessage:@"Selected bundle entry is missing a replayable session_seq window."];
+}
+
 - (void)clearRecentHistory:(id)sender {
     (void)sender;
     _recentHistoryItems.clear();
@@ -377,6 +604,21 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     _recentStateLabel.stringValue = @"Recent history cleared.";
     _recentStateLabel.textColor = TapeInkMutedColor();
     _recentTextView.string = @"Open investigations to repopulate recent history.";
+    [self persistApplicationState];
+}
+
+- (void)clearBundleHistory:(id)sender {
+    (void)sender;
+    _bundleHistoryItems.clear();
+    [_bundleHistoryTableView reloadData];
+    _bundleHistoryOpenButton.enabled = NO;
+    _bundleHistoryOpenSourceButton.enabled = NO;
+    _bundleHistoryRevealButton.enabled = NO;
+    _bundleHistoryLoadRangeButton.enabled = NO;
+    _bundleHistoryClearButton.enabled = NO;
+    _bundleHistoryStateLabel.stringValue = @"Bundle history cleared.";
+    _bundleHistoryStateLabel.textColor = TapeInkMutedColor();
+    _bundleHistoryTextView.string = @"Export or import a Phase 6 bundle to repopulate bundle history.";
     [self persistApplicationState];
 }
 

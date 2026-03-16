@@ -638,6 +638,21 @@ using namespace tapescope_support;
                                                target:self
                                                action:@selector(exportArtifactPreview:)];
     [controls addArrangedSubview:_artifactExportButton];
+    _artifactExportBundleButton = [NSButton buttonWithTitle:@"Export Bundle"
+                                                     target:self
+                                                     action:@selector(exportLoadedArtifactBundle:)];
+    _artifactExportBundleButton.enabled = NO;
+    [controls addArrangedSubview:_artifactExportBundleButton];
+    _artifactRevealBundleButton = [NSButton buttonWithTitle:@"Reveal Bundle"
+                                                     target:self
+                                                     action:@selector(revealLoadedArtifactBundle:)];
+    _artifactRevealBundleButton.enabled = NO;
+    [controls addArrangedSubview:_artifactRevealBundleButton];
+    _artifactOpenSourceButton = [NSButton buttonWithTitle:@"Open Source Artifact"
+                                                   target:self
+                                                   action:@selector(openLoadedArtifactSource:)];
+    _artifactOpenSourceButton.enabled = NO;
+    [controls addArrangedSubview:_artifactOpenSourceButton];
     _artifactOpenSelectedEvidenceButton = [NSButton buttonWithTitle:@"Open Selected Evidence"
                                                              target:self
                                                              action:@selector(openSelectedArtifactEvidence:)];
@@ -672,7 +687,7 @@ using namespace tapescope_support;
     const auto paneWithStack = MakePaneWithStack();
     NSStackView* stack = paneWithStack.stack;
     NSView* pane = paneWithStack.view;
-    [stack addArrangedSubview:MakeIntroLabel(@"Durable reports: browse session and case report artifacts already persisted by tape_engine.",
+    [stack addArrangedSubview:MakeIntroLabel(@"Durable reports and bundles: browse persisted session/case reports, export portable Phase 6 bundles, import case bundles, and reopen imported cases.",
                                              2)];
 
     NSStackView* controls = MakeControlRow();
@@ -688,13 +703,93 @@ using namespace tapescope_support;
     _reportInventoryOpenSessionButton.enabled = NO;
     [controls addArrangedSubview:_reportInventoryOpenSessionButton];
 
+    _reportInventoryExportSessionBundleButton = [NSButton buttonWithTitle:@"Export Session Bundle"
+                                                                   target:self
+                                                                   action:@selector(exportSelectedSessionBundle:)];
+    _reportInventoryExportSessionBundleButton.enabled = NO;
+    [controls addArrangedSubview:_reportInventoryExportSessionBundleButton];
+
     _reportInventoryOpenCaseButton = [NSButton buttonWithTitle:@"Open Selected Case"
                                                         target:self
                                                         action:@selector(openSelectedCaseReport:)];
     _reportInventoryOpenCaseButton.enabled = NO;
     [controls addArrangedSubview:_reportInventoryOpenCaseButton];
 
+    _reportInventoryExportCaseBundleButton = [NSButton buttonWithTitle:@"Export Case Bundle"
+                                                                target:self
+                                                                action:@selector(exportSelectedCaseBundle:)];
+    _reportInventoryExportCaseBundleButton.enabled = NO;
+    [controls addArrangedSubview:_reportInventoryExportCaseBundleButton];
+
     [stack addArrangedSubview:controls];
+
+    NSStackView* importControls = MakeControlRow();
+    [importControls addArrangedSubview:MakeLabel(@"bundle_path",
+                                                 [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                 [NSColor secondaryLabelColor])];
+    _bundleImportPathField = MakeMonospacedField(360.0, nil, @"Choose a case bundle to import");
+    [importControls addArrangedSubview:_bundleImportPathField];
+
+    _bundleChooseImportButton = [NSButton buttonWithTitle:@"Choose Bundle…"
+                                                   target:self
+                                                   action:@selector(chooseImportBundlePath:)];
+    [importControls addArrangedSubview:_bundleChooseImportButton];
+
+    _bundleImportButton = [NSButton buttonWithTitle:@"Import Bundle"
+                                             target:self
+                                             action:@selector(importSelectedBundlePath:)];
+    [importControls addArrangedSubview:_bundleImportButton];
+
+    _bundlePreviewButton = [NSButton buttonWithTitle:@"Preview Bundle"
+                                              target:self
+                                              action:@selector(previewBundlePath:)];
+    [importControls addArrangedSubview:_bundlePreviewButton];
+
+    _bundleRevealPathButton = [NSButton buttonWithTitle:@"Reveal Path"
+                                                 target:self
+                                                 action:@selector(revealSelectedBundlePath:)];
+    [importControls addArrangedSubview:_bundleRevealPathButton];
+
+    _reportInventoryOpenImportedButton = [NSButton buttonWithTitle:@"Open Imported Case"
+                                                            target:self
+                                                            action:@selector(openSelectedImportedCase:)];
+    _reportInventoryOpenImportedButton.enabled = NO;
+    [importControls addArrangedSubview:_reportInventoryOpenImportedButton];
+
+    _reportInventoryLoadImportedRangeButton = [NSButton buttonWithTitle:@"Load Imported Range"
+                                                                 target:self
+                                                                 action:@selector(loadReplayRangeFromImportedCase:)];
+    _reportInventoryLoadImportedRangeButton.enabled = NO;
+    [importControls addArrangedSubview:_reportInventoryLoadImportedRangeButton];
+
+    _reportInventoryOpenImportedSourceButton = [NSButton buttonWithTitle:@"Open Source Artifact"
+                                                                  target:self
+                                                                  action:@selector(openSelectedImportedSourceArtifact:)];
+    _reportInventoryOpenImportedSourceButton.enabled = NO;
+    [importControls addArrangedSubview:_reportInventoryOpenImportedSourceButton];
+
+    [stack addArrangedSubview:importControls];
+
+    NSStackView* previewControls = MakeControlRow();
+    _bundlePreviewLoadRangeButton = [NSButton buttonWithTitle:@"Load Preview Range"
+                                                       target:self
+                                                       action:@selector(loadReplayRangeFromPreviewedBundle:)];
+    _bundlePreviewLoadRangeButton.enabled = NO;
+    [previewControls addArrangedSubview:_bundlePreviewLoadRangeButton];
+
+    _bundlePreviewOpenSourceButton = [NSButton buttonWithTitle:@"Open Preview Source"
+                                                        target:self
+                                                        action:@selector(openPreviewBundleSourceArtifact:)];
+    _bundlePreviewOpenSourceButton.enabled = NO;
+    [previewControls addArrangedSubview:_bundlePreviewOpenSourceButton];
+
+    _bundlePreviewOpenImportedButton = [NSButton buttonWithTitle:@"Open Matching Imported"
+                                                          target:self
+                                                          action:@selector(openMatchingImportedBundle:)];
+    _bundlePreviewOpenImportedButton.enabled = NO;
+    [previewControls addArrangedSubview:_bundlePreviewOpenImportedButton];
+
+    [stack addArrangedSubview:previewControls];
 
     _reportInventoryStateLabel = MakeLabel(@"No report inventory loaded yet.",
                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
@@ -721,9 +816,33 @@ using namespace tapescope_support;
     ConfigureTablePrimaryAction(_caseReportTableView, self, @selector(openSelectedCaseReport:));
     [stack addArrangedSubview:MakeTableScrollView(_caseReportTableView, 140.0)];
 
+    [stack addArrangedSubview:MakeSectionLabel(@"Imported Case Bundles")];
+
+    _importedCaseTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_importedCaseTableView, @"imported_case_id", @"imported_case_id", 130.0);
+    AddTableColumn(_importedCaseTableView, @"artifact_id", @"artifact_id", 210.0);
+    AddTableColumn(_importedCaseTableView, @"source_revision_id", @"source_revision_id", 130.0);
+    AddTableColumn(_importedCaseTableView, @"headline", @"headline", 330.0);
+    ConfigureTablePrimaryAction(_importedCaseTableView, self, @selector(openSelectedImportedCase:));
+    [stack addArrangedSubview:MakeTableScrollView(_importedCaseTableView, 140.0)];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Workflow Summary")];
+
     _reportInventoryTextView = MakeReadOnlyTextView();
-    _reportInventoryTextView.string = @"Refresh report inventory, then select a row to inspect its metadata or open it in ArtifactPane.";
-    [stack addArrangedSubview:MakeScrollView(_reportInventoryTextView, 220.0)];
+    _reportInventoryTextView.string = @"Refresh report inventory to browse durable reports, export portable bundles, import case bundles, and reopen imported cases in ArtifactPane.";
+    [stack addArrangedSubview:MakeScrollView(_reportInventoryTextView, 130.0)];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Imported Case Detail")];
+
+    _importedCaseTextView = MakeReadOnlyTextView();
+    _importedCaseTextView.string = @"Select an imported case row to inspect import diagnostics, source artifact linkage, and replay boundaries.";
+    [stack addArrangedSubview:MakeScrollView(_importedCaseTextView, 150.0)];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Bundle Preview")];
+
+    _bundlePreviewTextView = MakeReadOnlyTextView();
+    _bundlePreviewTextView.string = @"Choose or generate a Phase 6 bundle path, then preview it here before import.";
+    [stack addArrangedSubview:MakeScrollView(_bundlePreviewTextView, 160.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"ReportInventoryPane"];
     item.label = @"ReportInventoryPane";
@@ -751,7 +870,7 @@ using namespace tapescope_support;
                                    [NSColor labelColor]);
     [headerStack addArrangedSubview:title];
 
-    NSTextField* subtitle = MakeLabel(@"Phase 4: native status, live-tail, overview, incident, replay-target, range, quality, finding, anchor, order case, report inventory, and artifact/export panes backed by the engine query seam.",
+    NSTextField* subtitle = MakeLabel(@"Phase 4/6: native status, live-tail, overview, incident, replay-target, range, quality, finding, anchor, order case, report inventory, artifact/export, and portable bundle workflows backed by the engine query seam.",
                                       [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium],
                                       TapeInkMutedColor());
     subtitle.lineBreakMode = NSLineBreakByWordWrapping;
@@ -819,6 +938,7 @@ using namespace tapescope_support;
     [_tabView addTabViewItem:[self textTabItemWithLabel:@"StatusPane" textView:&_statusTextView]];
     [_tabView addTabViewItem:[self liveEventsTabItem]];
     [_tabView addTabViewItem:[self recentHistoryTabItem]];
+    [_tabView addTabViewItem:[self bundleHistoryTabItem]];
     [_tabView addTabViewItem:[self overviewTabItem]];
     [_tabView addTabViewItem:[self incidentTabItem]];
     [_tabView addTabViewItem:[self seekTabItem]];

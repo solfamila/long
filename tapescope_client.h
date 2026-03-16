@@ -33,6 +33,10 @@ using SeekOrderPayload = tape_payloads::SeekOrderPayload;
 using IncidentListPayload = tape_payloads::IncidentListPayload;
 using ReportInventoryRow = tape_payloads::ReportInventoryRow;
 using ReportInventoryPayload = tape_payloads::ReportInventoryPayload;
+using BundleExportPayload = tape_payloads::BundleExportPayload;
+using ImportedCaseRow = tape_payloads::ImportedCaseRow;
+using ImportedCaseListPayload = tape_payloads::ImportedCaseListPayload;
+using CaseBundleImportPayload = tape_payloads::CaseBundleImportPayload;
 using ArtifactExportPayload = tape_payloads::ArtifactExportPayload;
 
 struct ClientConfig {
@@ -108,6 +112,10 @@ public:
     QueryResult<json> exportArtifact(const std::string& artifactId, const std::string& exportFormat) const;
     [[nodiscard]] QueryResult<ArtifactExportPayload> exportArtifactPayload(const std::string& artifactId,
                                                                            const std::string& exportFormat) const;
+    [[nodiscard]] QueryResult<BundleExportPayload> exportSessionBundlePayload(std::uint64_t reportId) const;
+    [[nodiscard]] QueryResult<BundleExportPayload> exportCaseBundlePayload(std::uint64_t reportId) const;
+    [[nodiscard]] QueryResult<CaseBundleImportPayload> importCaseBundlePayload(const std::string& bundlePath) const;
+    [[nodiscard]] QueryResult<ImportedCaseListPayload> listImportedCasesPayload(std::size_t limit = 20) const;
 
     [[nodiscard]] static std::string describeError(const QueryError& error);
 

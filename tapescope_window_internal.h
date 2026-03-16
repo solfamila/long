@@ -41,6 +41,7 @@ struct ProbeSnapshot {
     std::uint64_t _seekRequestToken;
     std::uint64_t _reportInventoryRequestToken;
     std::uint64_t _artifactExportRequestToken;
+    std::uint64_t _bundleWorkflowRequestToken;
 
     NSBox* _bannerBox;
     NSTextField* _bannerLabel;
@@ -68,6 +69,16 @@ struct ProbeSnapshot {
     NSTableView* _recentTableView;
     NSTextView* _recentTextView;
     std::vector<tapescope::json> _recentHistoryItems;
+
+    NSButton* _bundleHistoryOpenButton;
+    NSButton* _bundleHistoryOpenSourceButton;
+    NSButton* _bundleHistoryRevealButton;
+    NSButton* _bundleHistoryLoadRangeButton;
+    NSButton* _bundleHistoryClearButton;
+    NSTextField* _bundleHistoryStateLabel;
+    NSTableView* _bundleHistoryTableView;
+    NSTextView* _bundleHistoryTextView;
+    std::vector<tapescope::json> _bundleHistoryItems;
 
     NSTextField* _overviewFirstField;
     NSTextField* _overviewLastField;
@@ -173,23 +184,55 @@ struct ProbeSnapshot {
     NSButton* _artifactFetchButton;
     NSPopUpButton* _artifactExportFormatPopup;
     NSButton* _artifactExportButton;
+    NSButton* _artifactExportBundleButton;
+    NSButton* _artifactRevealBundleButton;
+    NSButton* _artifactOpenSourceButton;
     NSButton* _artifactOpenSelectedEvidenceButton;
     NSTextField* _artifactStateLabel;
     NSTableView* _artifactEvidenceTableView;
     NSTextView* _artifactTextView;
     BOOL _artifactInFlight;
+    std::uint64_t _loadedArtifactReportId;
+    std::string _loadedArtifactKind;
+    std::string _loadedArtifactBundlePath;
+    std::string _loadedArtifactSourceArtifactId;
     std::unique_ptr<tapescope::InvestigationPaneController> _artifactPane;
 
     NSButton* _reportInventoryRefreshButton;
     NSButton* _reportInventoryOpenSessionButton;
+    NSButton* _reportInventoryExportSessionBundleButton;
     NSButton* _reportInventoryOpenCaseButton;
+    NSButton* _reportInventoryExportCaseBundleButton;
+    NSTextField* _bundleImportPathField;
+    NSButton* _bundleChooseImportButton;
+    NSButton* _bundleImportButton;
+    NSButton* _bundleRevealPathButton;
+    NSButton* _bundlePreviewButton;
+    NSButton* _bundlePreviewLoadRangeButton;
+    NSButton* _bundlePreviewOpenSourceButton;
+    NSButton* _bundlePreviewOpenImportedButton;
+    NSButton* _reportInventoryOpenImportedButton;
+    NSButton* _reportInventoryLoadImportedRangeButton;
+    NSButton* _reportInventoryOpenImportedSourceButton;
     NSTextField* _reportInventoryStateLabel;
     NSTableView* _sessionReportTableView;
     NSTableView* _caseReportTableView;
+    NSTableView* _importedCaseTableView;
     NSTextView* _reportInventoryTextView;
+    NSTextView* _importedCaseTextView;
+    NSTextView* _bundlePreviewTextView;
     BOOL _reportInventoryInFlight;
+    BOOL _bundleWorkflowInFlight;
+    std::string _lastBundleWorkflowSummary;
+    std::string _previewedBundleId;
+    std::string _previewedBundleType;
+    std::string _previewedBundleSourceArtifactId;
+    std::string _previewedImportedArtifactId;
+    std::uint64_t _previewedBundleFirstSessionSeq;
+    std::uint64_t _previewedBundleLastSessionSeq;
     std::vector<tapescope::ReportInventoryRow> _latestSessionReports;
     std::vector<tapescope::ReportInventoryRow> _latestCaseReports;
+    std::vector<tapescope::ImportedCaseRow> _latestImportedCases;
     std::vector<std::pair<NSTableView*, tapescope::InvestigationPaneController*>> _evidencePaneBindings;
 }
 
@@ -202,9 +245,12 @@ struct ProbeSnapshot {
 @interface TapeScopeWindowController (RecentHistory)
 
 - (NSTabViewItem*)recentHistoryTabItem;
+- (NSTabViewItem*)bundleHistoryTabItem;
 - (tapescope::json)capturePersistentState;
 - (void)persistApplicationState;
 - (void)restoreApplicationState;
+- (void)recordRecentHistoryEntry:(tapescope::json)entry;
+- (void)recordBundleHistoryEntry:(tapescope::json)entry;
 - (void)recordRecentHistoryForKind:(const std::string&)kind
                           targetId:(const std::string&)targetId
                            payload:(const tapescope::InvestigationPayload&)payload
@@ -213,6 +259,11 @@ struct ProbeSnapshot {
                           metadata:(const tapescope::json&)metadata;
 - (void)openSelectedRecentHistory:(id)sender;
 - (void)clearRecentHistory:(id)sender;
+- (void)openSelectedBundleHistory:(id)sender;
+- (void)openSelectedBundleHistorySource:(id)sender;
+- (void)revealSelectedBundleHistoryPath:(id)sender;
+- (void)loadReplayRangeFromBundleHistory:(id)sender;
+- (void)clearBundleHistory:(id)sender;
 
 @end
 
@@ -286,7 +337,30 @@ struct ProbeSnapshot {
 - (void)openSelectedIncident:(id)sender;
 - (void)fetchArtifact:(id)sender;
 - (void)exportArtifactPreview:(id)sender;
+- (void)exportLoadedArtifactBundle:(id)sender;
+- (void)revealLoadedArtifactBundle:(id)sender;
+- (void)openLoadedArtifactSource:(id)sender;
 - (void)openSelectedArtifactEvidence:(id)sender;
 - (void)refreshReportInventory:(id)sender;
+- (void)refreshReportInventoryDetailText;
+- (void)exportSelectedSessionBundle:(id)sender;
+- (void)exportSelectedCaseBundle:(id)sender;
+- (void)chooseImportBundlePath:(id)sender;
+- (void)importSelectedBundlePath:(id)sender;
+- (void)previewBundlePath:(id)sender;
+- (void)loadReplayRangeFromPreviewedBundle:(id)sender;
+- (void)openPreviewBundleSourceArtifact:(id)sender;
+- (void)openMatchingImportedBundle:(id)sender;
+- (void)revealSelectedBundlePath:(id)sender;
+- (void)loadReplayRangeFromImportedCase:(id)sender;
+- (void)openSelectedImportedSourceArtifact:(id)sender;
+
+@end
+
+@interface TapeScopeWindowController (TableBindings)
+
+- (void)openSelectedSessionReport:(id)sender;
+- (void)openSelectedCaseReport:(id)sender;
+- (void)openSelectedImportedCase:(id)sender;
 
 @end

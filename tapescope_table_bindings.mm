@@ -55,12 +55,36 @@ using namespace tapescope_support;
     [self fetchArtifact:nil];
 }
 
+- (void)openSelectedImportedCase:(id)sender {
+    (void)sender;
+    const NSInteger selected = _importedCaseTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _latestImportedCases.size()) {
+        _reportInventoryStateLabel.stringValue = @"Select an imported case row first.";
+        _reportInventoryStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const std::string artifactId = _latestImportedCases.at(static_cast<std::size_t>(selected)).artifactId;
+    if (artifactId.empty()) {
+        _reportInventoryStateLabel.stringValue = @"Selected imported case is missing an artifact id.";
+        _reportInventoryStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    _artifactIdField.stringValue = ToNSString(artifactId);
+    if (_tabView != nil) {
+        [_tabView selectTabViewItemWithIdentifier:@"ArtifactPane"];
+    }
+    [self fetchArtifact:nil];
+}
+
 - (NSInteger)numberOfRowsInTableView:(NSTableView*)tableView {
     if (tableView == _liveTableView) {
         return static_cast<NSInteger>(_liveEvents.size());
     }
     if (tableView == _recentTableView) {
         return static_cast<NSInteger>(_recentHistoryItems.size());
+    }
+    if (tableView == _bundleHistoryTableView) {
+        return static_cast<NSInteger>(_bundleHistoryItems.size());
     }
     if (tableView == _overviewIncidentTableView) {
         return static_cast<NSInteger>(_overviewIncidents.size());
@@ -98,6 +122,9 @@ using namespace tapescope_support;
     if (tableView == _caseReportTableView) {
         return static_cast<NSInteger>(_latestCaseReports.size());
     }
+    if (tableView == _importedCaseTableView) {
+        return static_cast<NSInteger>(_latestImportedCases.size());
+    }
     return 0;
 }
 
@@ -112,6 +139,7 @@ using namespace tapescope_support;
     const tapescope::EventRow* eventItem = nullptr;
     const tapescope::IncidentListRow* incidentItem = nullptr;
     const tapescope::ReportInventoryRow* reportItem = nullptr;
+    const tapescope::ImportedCaseRow* importedCaseItem = nullptr;
     if (tableView == _liveTableView) {
         if (static_cast<std::size_t>(row) >= _liveEvents.size()) {
             return nil;
@@ -122,6 +150,11 @@ using namespace tapescope_support;
             return nil;
         }
         item = &_recentHistoryItems.at(static_cast<std::size_t>(row));
+    } else if (tableView == _bundleHistoryTableView) {
+        if (static_cast<std::size_t>(row) >= _bundleHistoryItems.size()) {
+            return nil;
+        }
+        item = &_bundleHistoryItems.at(static_cast<std::size_t>(row));
     } else if (tableView == _overviewIncidentTableView) {
         if (static_cast<std::size_t>(row) >= _overviewIncidents.size()) {
             return nil;
@@ -182,6 +215,11 @@ using namespace tapescope_support;
             return nil;
         }
         reportItem = &_latestCaseReports.at(static_cast<std::size_t>(row));
+    } else if (tableView == _importedCaseTableView) {
+        if (static_cast<std::size_t>(row) >= _latestImportedCases.size()) {
+            return nil;
+        }
+        importedCaseItem = &_latestImportedCases.at(static_cast<std::size_t>(row));
     } else {
         return nil;
     }
@@ -209,6 +247,14 @@ using namespace tapescope_support;
             value = item->value("kind", std::string());
         } else if ([columnId isEqualToString:@"target_id"]) {
             value = item->value("target_id", std::string());
+        } else {
+            value = item->value("headline", item->value("detail", std::string()));
+        }
+    } else if (tableView == _bundleHistoryTableView) {
+        if ([columnId isEqualToString:@"kind"]) {
+            value = item->value("kind", std::string());
+        } else if ([columnId isEqualToString:@"bundle_id"]) {
+            value = item->value("bundle_id", item->value("target_id", std::string()));
         } else {
             value = item->value("headline", item->value("detail", std::string()));
         }
@@ -297,6 +343,16 @@ using namespace tapescope_support;
         } else {
             value = reportItem->headline;
         }
+    } else if (tableView == _importedCaseTableView) {
+        if ([columnId isEqualToString:@"imported_case_id"]) {
+            value = std::to_string(importedCaseItem->importedCaseId);
+        } else if ([columnId isEqualToString:@"artifact_id"]) {
+            value = importedCaseItem->artifactId;
+        } else if ([columnId isEqualToString:@"source_revision_id"]) {
+            value = std::to_string(importedCaseItem->sourceRevisionId);
+        } else {
+            value = importedCaseItem->headline;
+        }
     }
 
     cell.textField.stringValue = ToNSString(value);
@@ -325,6 +381,32 @@ using namespace tapescope_support;
         }
         const auto& item = _recentHistoryItems.at(static_cast<std::size_t>(selected));
         _recentTextView.string = ToNSString(DescribeRecentHistoryEntry(item));
+        return;
+    }
+
+    if (tableView == _bundleHistoryTableView) {
+        const NSInteger selected = _bundleHistoryTableView.selectedRow;
+        if (selected < 0 || static_cast<std::size_t>(selected) >= _bundleHistoryItems.size()) {
+            _bundleHistoryOpenButton.enabled = NO;
+            _bundleHistoryOpenSourceButton.enabled = NO;
+            _bundleHistoryRevealButton.enabled = NO;
+            _bundleHistoryLoadRangeButton.enabled = NO;
+            _bundleHistoryTextView.string = @"Select a bundle-history row to inspect its metadata and reopen it.";
+            return;
+        }
+        const auto& item = _bundleHistoryItems.at(static_cast<std::size_t>(selected));
+        _bundleHistoryOpenButton.enabled = true;
+        _bundleHistoryOpenSourceButton.enabled = !item.value("source_artifact_id", std::string()).empty();
+        _bundleHistoryRevealButton.enabled = !item.value("bundle_path", std::string()).empty();
+        const std::uint64_t firstSessionSeq = item.value("first_session_seq", 0ULL);
+        const std::uint64_t lastSessionSeq = item.value("last_session_seq", 0ULL);
+        _bundleHistoryLoadRangeButton.enabled = (firstSessionSeq > 0 && lastSessionSeq >= firstSessionSeq);
+        _bundleHistoryTextView.string = ToNSString(DescribeRecentHistoryEntry(item));
+        const std::string bundlePath = item.value("bundle_path", std::string());
+        if (!bundlePath.empty()) {
+            _bundleImportPathField.stringValue = ToNSString(bundlePath);
+            [self previewBundlePath:nil];
+        }
         return;
     }
 
@@ -382,22 +464,25 @@ using namespace tapescope_support;
     if (tableView == _sessionReportTableView) {
         const NSInteger selected = _sessionReportTableView.selectedRow;
         _reportInventoryOpenSessionButton.enabled = (selected >= 0);
-        if (selected < 0 || static_cast<std::size_t>(selected) >= _latestSessionReports.size()) {
-            return;
-        }
-        const auto& item = _latestSessionReports.at(static_cast<std::size_t>(selected));
-        _reportInventoryTextView.string = ToNSString(item.raw.dump(2));
+        _reportInventoryExportSessionBundleButton.enabled = (selected >= 0);
+        [self refreshReportInventoryDetailText];
         return;
     }
 
     if (tableView == _caseReportTableView) {
         const NSInteger selected = _caseReportTableView.selectedRow;
         _reportInventoryOpenCaseButton.enabled = (selected >= 0);
-        if (selected < 0 || static_cast<std::size_t>(selected) >= _latestCaseReports.size()) {
-            return;
-        }
-        const auto& item = _latestCaseReports.at(static_cast<std::size_t>(selected));
-        _reportInventoryTextView.string = ToNSString(item.raw.dump(2));
+        _reportInventoryExportCaseBundleButton.enabled = (selected >= 0);
+        [self refreshReportInventoryDetailText];
+        return;
+    }
+
+    if (tableView == _importedCaseTableView) {
+        const NSInteger selected = _importedCaseTableView.selectedRow;
+        _reportInventoryOpenImportedButton.enabled = (selected >= 0);
+        _reportInventoryLoadImportedRangeButton.enabled = (selected >= 0);
+        _reportInventoryOpenImportedSourceButton.enabled = (selected >= 0);
+        [self refreshReportInventoryDetailText];
     }
 }
 

@@ -134,6 +134,53 @@ struct ReportInventoryPayload {
     std::vector<ReportInventoryRow> caseReports;
 };
 
+struct BundleExportPayload {
+    json raw;
+    json summary;
+    json artifact;
+    json bundle;
+    json sourceArtifact;
+    json sourceReport;
+    std::string artifactId;
+    std::string bundleId;
+    std::string bundleType;
+    std::string bundlePath;
+    std::uint64_t servedRevisionId = 0;
+};
+
+struct ImportedCaseRow {
+    std::uint64_t importedCaseId = 0;
+    std::string artifactId;
+    std::string bundleId;
+    std::string bundleType;
+    std::string sourceArtifactId;
+    std::uint64_t sourceReportId = 0;
+    std::uint64_t sourceRevisionId = 0;
+    std::uint64_t firstSessionSeq = 0;
+    std::uint64_t lastSessionSeq = 0;
+    std::string instrumentId;
+    std::string headline;
+    std::string fileName;
+    std::string sourceBundlePath;
+    std::string payloadSha256;
+    json raw;
+};
+
+struct ImportedCaseListPayload {
+    json raw;
+    std::vector<ImportedCaseRow> importedCases;
+};
+
+struct CaseBundleImportPayload {
+    json raw;
+    json summary;
+    json artifact;
+    ImportedCaseRow importedCase;
+    bool duplicateImport = false;
+    std::string importStatus;
+    std::string artifactId;
+};
+
 struct ArtifactExportPayload {
     json raw;
     json summary;
@@ -184,6 +231,9 @@ QueryResult<SeekOrderPayload> packSeekOrderPayload(const QueryResult<tape_engine
 QueryResult<IncidentListPayload> packIncidentListPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<ReportInventoryPayload> packReportInventoryPayload(const QueryResult<tape_engine::QueryResponse>& response,
                                                                bool sessionReports);
+QueryResult<BundleExportPayload> packBundleExportPayload(const QueryResult<tape_engine::QueryResponse>& response);
+QueryResult<ImportedCaseListPayload> packImportedCaseListPayload(const QueryResult<tape_engine::QueryResponse>& response);
+QueryResult<CaseBundleImportPayload> packCaseBundleImportPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<ArtifactExportPayload> packArtifactExportPayload(const QueryResult<tape_engine::QueryResponse>& response);
 
 } // namespace tape_payloads
