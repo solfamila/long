@@ -54,7 +54,10 @@ enum class ToolId {
     VerifyBundle,
     ImportCaseBundle,
     ListImportedCases,
-    ReadSessionQuality
+    ReadSessionQuality,
+    AnalyzerRun,
+    FindingsList,
+    PlaybookApply
 };
 
 struct ToolSpec {
@@ -66,6 +69,8 @@ struct ToolSpec {
     std::string outputSchemaId;
     tape_engine::QueryOperation engineOperation = tape_engine::QueryOperation::Unknown;
     bool progressEligible = false;
+    std::string contractVersion;
+    std::string engineCommand;
 };
 
 ParsedAdapterArgs parseAdapterArgs(int argc, char** argv);
@@ -119,6 +124,9 @@ private:
     [[nodiscard]] json invokeImportCaseBundleTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeListImportedCasesTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadSessionQualityTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeFindingsListTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokePlaybookApplyTool(const ToolSpec& tool, const json& args) const;
 
     [[nodiscard]] json makeToolResult(const json& envelope) const;
     [[nodiscard]] json makeSuccessEnvelope(const ToolSpec& tool, json result, json revision) const;
@@ -130,7 +138,8 @@ private:
                                          const std::string& errorCode,
                                          const std::string& errorMessage,
                                          bool retryable,
-                                         json revision) const;
+                                         json revision,
+                                         std::string contractVersion = {}) const;
 
     std::vector<ToolSpec> tools_;
     EngineRpcClient engineRpc_;

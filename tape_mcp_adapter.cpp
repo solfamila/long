@@ -1,4 +1,5 @@
 #include "tape_mcp_adapter.h"
+#include "tape_phase7_artifacts.h"
 #include "tape_query_payloads.h"
 
 #include <algorithm>
@@ -16,6 +17,7 @@ namespace tape_mcp {
 namespace {
 
 constexpr const char* kContractVersion = "phase5-mcp-v1";
+constexpr const char* kPhase7ContractVersion = tape_phase7::kContractVersion;
 constexpr const char* kServerVersion = "0.1.0";
 constexpr const char* kProtocolVersion = "2024-11-05";
 constexpr std::uint32_t kToolEnvelopeVersion = 1;
@@ -494,6 +496,106 @@ json bundleVerifyResultSchema() {
     };
 }
 
+json phase7FindingSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"finding_id", stringSchema()},
+            {"severity", stringSchema()},
+            {"category", stringSchema()},
+            {"summary", stringSchema()},
+            {"evidence_refs", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}}
+        }},
+        {"required", json::array({"finding_id", "severity", "category", "summary", "evidence_refs"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7PlaybookActionSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"action_id", stringSchema()},
+            {"action_type", stringSchema()},
+            {"finding_id", stringSchema()},
+            {"title", stringSchema()},
+            {"summary", stringSchema()},
+            {"suggested_tools", json{{"type", "array"}, {"items", stringSchema()}}}
+        }},
+        {"required", json::array({"action_id", "action_type", "finding_id", "title", "summary", "suggested_tools"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalyzerResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"generated_artifacts", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
+            {"analysis_profile", stringSchema()},
+            {"finding_count", nonNegativeIntegerSchema()},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"findings", json{{"type", "array"}, {"items", phase7FindingSchema()}}}
+        }},
+        {"required", json::array({
+            "source_artifact",
+            "analysis_artifact",
+            "generated_artifacts",
+            "analysis_profile",
+            "finding_count",
+            "replay_context",
+            "findings"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7FindingsListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_profile", stringSchema()},
+            {"finding_count", nonNegativeIntegerSchema()},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"findings", json{{"type", "array"}, {"items", phase7FindingSchema()}}}
+        }},
+        {"required", json::array({
+            "analysis_artifact",
+            "analysis_profile",
+            "finding_count",
+            "replay_context",
+            "findings"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7PlaybookResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"planned_actions", json{{"type", "array"}, {"items", phase7PlaybookActionSchema()}}},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "analysis_artifact",
+            "playbook_artifact",
+            "mode",
+            "filtered_finding_ids",
+            "planned_actions",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
 json seekOrderResultSchema() {
     return json{
         {"type", "object"},
@@ -632,6 +734,12 @@ std::string toolTitle(const ToolSpec& tool) {
             return "List Imported Cases";
         case ToolId::ReadSessionQuality:
             return "Read Session Quality";
+        case ToolId::AnalyzerRun:
+            return "Run Analyzer";
+        case ToolId::FindingsList:
+            return "List Analyzer Findings";
+        case ToolId::PlaybookApply:
+            return "Apply Guarded Playbook";
     }
     return tool.name;
 }
@@ -645,6 +753,8 @@ json toolAnnotationsForSpec(const ToolSpec& tool) {
         case ToolId::ExportCaseBundle:
         case ToolId::VerifyBundle:
         case ToolId::ImportCaseBundle:
+        case ToolId::AnalyzerRun:
+        case ToolId::PlaybookApply:
             return toolAnnotations(false, true, false);
         default:
             return toolAnnotations(true, true, false);
@@ -703,6 +813,15 @@ json toolInputSchemaForList(const ToolSpec& tool) {
             return withSchemaExamples(std::move(schema), {json{{"limit", 20}}});
         case ToolId::ReadSessionQuality:
             return withSchemaExamples(std::move(schema), {json{{"first_session_seq", 1}, {"last_session_seq", 200}}});
+        case ToolId::AnalyzerRun:
+            return withSchemaExamples(std::move(schema), {json{{"case_bundle_path", "/tmp/case-bundle-report-000001.msgpack"}}});
+        case ToolId::FindingsList:
+            return withSchemaExamples(std::move(schema), {json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}}});
+        case ToolId::PlaybookApply:
+            return withSchemaExamples(std::move(schema), {
+                json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}},
+                json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}, {"mode", "apply"}}
+            });
         case ToolId::Status:
         default:
             return schema;
@@ -792,6 +911,32 @@ std::vector<PromptSpec> buildPromptSpecs() {
                 {"first_session_seq", "Optional first session seq if the latest range is already known.", false},
                 {"last_session_seq", "Optional last session seq if the latest range is already known.", false},
                 {"revision_id", "Optional frozen revision to pin the summary.", false}
+            }
+        },
+        {
+            "analyze_bundle_with_phase7",
+            "Analyze Bundle With Phase 7",
+            "Guide an agent through running the local Phase 7 analyzer against a portable session/case bundle and persisting findings.",
+            {
+                {"case_bundle_path", "Portable Phase 6 case-bundle path.", false},
+                {"report_bundle_path", "Portable Phase 6 session/report bundle path.", false},
+                {"analysis_profile", "Optional analysis profile id.", false}
+            }
+        },
+        {
+            "review_phase7_findings",
+            "Review Phase 7 Findings",
+            "Guide an agent through reopening a stored Phase 7 analysis artifact, summarizing findings, and planning follow-up actions.",
+            {
+                {"analysis_artifact_id", "Stored Phase 7 analysis artifact id.", true}
+            }
+        },
+        {
+            "review_phase7_playbook",
+            "Review Phase 7 Playbook",
+            "Guide an agent through reopening a stored Phase 7 playbook artifact and converting it into an investigation plan.",
+            {
+                {"playbook_artifact_id", "Stored Phase 7 playbook artifact id.", true}
             }
         }
     };
@@ -961,6 +1106,46 @@ std::string promptMessageForPrompt(const PromptSpec& prompt, const json& args) {
         out << ". Use `tapescript_read_session_overview`, `tapescript_list_incidents`, and `tapescript_read_session_quality`, and if the summary should persist, call `tapescript_scan_session_report`. Return: top incidents, confidence/uncertainty, any source-gap or bad-fill evidence, and the best next drilldowns.";
         return out.str();
     }
+    if (prompt.name == "analyze_bundle_with_phase7") {
+        const std::string caseBundlePath = promptStringArg(args, "case_bundle_path");
+        const std::string reportBundlePath = promptStringArg(args, "report_bundle_path");
+        const std::string analysisProfile = promptStringArg(args, "analysis_profile");
+        const std::string bundlePath = !caseBundlePath.empty() ? caseBundlePath : reportBundlePath;
+        const std::string bundleKey = !caseBundlePath.empty() ? "case_bundle_path" : "report_bundle_path";
+        std::ostringstream out;
+        out << "Run `tapescript_analyzer_run` against "
+            << (!bundlePath.empty() ? ("`" + bundlePath + "`") : "the provided portable bundle")
+            << " using `" << bundleKey << "`";
+        if (!analysisProfile.empty()) {
+            out << " and `analysis_profile=\"" << analysisProfile << "\"`";
+        }
+        out << ". Then call `tapescript_findings_list` on the returned `analysis_artifact_id`, reopen the durable analysis resource with `resources/read` on `tape://phase7/analysis/<analysis_artifact_id>`, and if follow-up planning is needed call `tapescript_playbook_apply` in `dry_run` mode. Return: analyzer profile, durable artifact ids, ranked findings, replay context, and the best next investigation actions.";
+        return out.str();
+    }
+    if (prompt.name == "review_phase7_findings") {
+        const std::string analysisArtifactId = promptStringArg(args, "analysis_artifact_id");
+        std::ostringstream out;
+        out << "Review stored Phase 7 analysis artifact `"
+            << (analysisArtifactId.empty() ? "<analysis_artifact_id>" : analysisArtifactId)
+            << "`. Start with `tapescript_findings_list`, then reopen the persisted JSON and markdown resources with `resources/read` on `tape://phase7/analysis/"
+            << (analysisArtifactId.empty() ? "<analysis_artifact_id>" : analysisArtifactId)
+            << "` and `tape://phase7/analysis/"
+            << (analysisArtifactId.empty() ? "<analysis_artifact_id>" : analysisArtifactId)
+            << "/markdown`. If the findings warrant action planning, call `tapescript_playbook_apply` in `dry_run` mode. Return: top findings, confidence, replay context, and recommended next tools.";
+        return out.str();
+    }
+    if (prompt.name == "review_phase7_playbook") {
+        const std::string playbookArtifactId = promptStringArg(args, "playbook_artifact_id");
+        std::ostringstream out;
+        out << "Review stored Phase 7 playbook artifact `"
+            << (playbookArtifactId.empty() ? "<playbook_artifact_id>" : playbookArtifactId)
+            << "`. Reopen it with `resources/read` on `tape://phase7/playbook/"
+            << (playbookArtifactId.empty() ? "<playbook_artifact_id>" : playbookArtifactId)
+            << "` and `tape://phase7/playbook/"
+            << (playbookArtifactId.empty() ? "<playbook_artifact_id>" : playbookArtifactId)
+            << "/markdown`, then follow the referenced analysis artifact back through `tapescript_findings_list`. Return: action order, affected findings, suggested tools, and whether any step still needs manual confirmation.";
+        return out.str();
+    }
     return prompt.description;
 }
 
@@ -971,12 +1156,17 @@ enum class ResourceKind {
     SessionArtifactMarkdown,
     SessionArtifactJsonBundle,
     CaseArtifactMarkdown,
-    CaseArtifactJsonBundle
+    CaseArtifactJsonBundle,
+    Phase7AnalysisJson,
+    Phase7AnalysisMarkdown,
+    Phase7PlaybookJson,
+    Phase7PlaybookMarkdown
 };
 
 struct ParsedResourceUri {
     ResourceKind kind = ResourceKind::Unknown;
     std::uint64_t reportId = 0;
+    std::string artifactId;
 };
 
 std::string sessionReportUri(std::uint64_t reportId) {
@@ -993,6 +1183,22 @@ std::string sessionArtifactUri(std::uint64_t reportId, const char* format) {
 
 std::string caseArtifactUri(std::uint64_t reportId, const char* format) {
     return "tape://artifact/case-report/" + std::to_string(reportId) + "/" + format;
+}
+
+std::string phase7AnalysisUri(std::string_view artifactId) {
+    return "tape://phase7/analysis/" + std::string(artifactId);
+}
+
+std::string phase7AnalysisMarkdownUri(std::string_view artifactId) {
+    return "tape://phase7/analysis/" + std::string(artifactId) + "/markdown";
+}
+
+std::string phase7PlaybookUri(std::string_view artifactId) {
+    return "tape://phase7/playbook/" + std::string(artifactId);
+}
+
+std::string phase7PlaybookMarkdownUri(std::string_view artifactId) {
+    return "tape://phase7/playbook/" + std::string(artifactId) + "/markdown";
 }
 
 ParsedResourceUri parseResourceUri(std::string_view uri) {
@@ -1017,6 +1223,8 @@ ParsedResourceUri parseResourceUri(std::string_view uri) {
     constexpr std::string_view kCaseReportPrefix = "tape://report/case/";
     constexpr std::string_view kSessionArtifactPrefix = "tape://artifact/session-report/";
     constexpr std::string_view kCaseArtifactPrefix = "tape://artifact/case-report/";
+    constexpr std::string_view kPhase7AnalysisPrefix = "tape://phase7/analysis/";
+    constexpr std::string_view kPhase7PlaybookPrefix = "tape://phase7/playbook/";
 
     if (text.rfind(std::string(kSessionReportPrefix), 0) == 0) {
         parsed.kind = ResourceKind::SessionReportJson;
@@ -1051,6 +1259,30 @@ ParsedResourceUri parseResourceUri(std::string_view uri) {
             } else if (format == "json-bundle") {
                 parsed.kind = ResourceKind::CaseArtifactJsonBundle;
             }
+        }
+        return parsed;
+    }
+    if (text.rfind(std::string(kPhase7AnalysisPrefix), 0) == 0) {
+        const std::size_t formatPos = text.find('/', kPhase7AnalysisPrefix.size());
+        parsed.artifactId = text.substr(
+            kPhase7AnalysisPrefix.size(),
+            (formatPos == std::string::npos ? text.size() : formatPos) - kPhase7AnalysisPrefix.size());
+        if (formatPos == std::string::npos) {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7AnalysisJson;
+        } else if (text.substr(formatPos + 1) == "markdown") {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7AnalysisMarkdown;
+        }
+        return parsed;
+    }
+    if (text.rfind(std::string(kPhase7PlaybookPrefix), 0) == 0) {
+        const std::size_t formatPos = text.find('/', kPhase7PlaybookPrefix.size());
+        parsed.artifactId = text.substr(
+            kPhase7PlaybookPrefix.size(),
+            (formatPos == std::string::npos ? text.size() : formatPos) - kPhase7PlaybookPrefix.size());
+        if (formatPos == std::string::npos) {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7PlaybookJson;
+        } else if (text.substr(formatPos + 1) == "markdown") {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7PlaybookMarkdown;
         }
         return parsed;
     }
@@ -1156,6 +1388,58 @@ json bundlePathInputSchema() {
             {"bundle_path", stringSchema()}
         }},
         {"required", json::array({"bundle_path"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalyzerInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"case_bundle_path", stringSchema()},
+            {"report_bundle_path", stringSchema()},
+            {"case_manifest_path", stringSchema()},
+            {"report_manifest_path", stringSchema()},
+            {"analysis_profile", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"case_bundle_path"})}},
+            json{{"required", json::array({"report_bundle_path"})}},
+            json{{"required", json::array({"case_manifest_path"})}},
+            json{{"required", json::array({"report_manifest_path"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalysisRefInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_manifest_path", stringSchema()},
+            {"analysis_artifact_id", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"analysis_manifest_path"})}},
+            json{{"required", json::array({"analysis_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7PlaybookInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_manifest_path", stringSchema()},
+            {"analysis_artifact_id", stringSchema()},
+            {"finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"analysis_manifest_path"})}},
+            json{{"required", json::array({"analysis_artifact_id"})}}
+        })},
         {"additionalProperties", false}
     };
 }
@@ -1444,7 +1728,37 @@ std::vector<ToolSpec> buildToolSpecs() {
          sessionRangeInputSchema(true, false),
          qualityResultSchema(),
          "phase5.session-quality.v1",
-         tape_engine::QueryOperation::ReadSessionQuality}
+         tape_engine::QueryOperation::ReadSessionQuality},
+        {ToolId::AnalyzerRun,
+         "tapescript_analyzer_run",
+         "Run a local Phase 7 analyzer pass against a portable session or case bundle.",
+         phase7AnalyzerInputSchema(),
+         phase7AnalyzerResultSchema(),
+         "phase7.analysis-run.v1",
+         tape_engine::QueryOperation::Unknown,
+         true,
+         kPhase7ContractVersion,
+         "phase7_analyzer_run_local"},
+        {ToolId::FindingsList,
+         "tapescript_findings_list",
+         "List findings from a stored Phase 7 analyzer artifact.",
+         phase7AnalysisRefInputSchema(),
+         phase7FindingsListResultSchema(),
+         "phase7.findings-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_findings_list_local"},
+        {ToolId::PlaybookApply,
+         "tapescript_playbook_apply",
+         "Build a guarded dry-run playbook from a stored Phase 7 analyzer artifact.",
+         phase7PlaybookInputSchema(),
+         phase7PlaybookResultSchema(),
+         "phase7.playbook-plan.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_playbook_apply_guarded_local"}
     };
 }
 
@@ -1539,6 +1853,22 @@ bool hasUnexpectedKeys(const json& payload, std::initializer_list<const char*> a
     return false;
 }
 
+std::optional<std::vector<std::string>> asNonEmptyStringArray(const json& value) {
+    if (!value.is_array()) {
+        return std::nullopt;
+    }
+    std::vector<std::string> values;
+    values.reserve(value.size());
+    for (const auto& item : value) {
+        const auto text = asNonEmptyString(item);
+        if (!text.has_value()) {
+            return std::nullopt;
+        }
+        values.push_back(*text);
+    }
+    return values;
+}
+
 json revisionUnavailable() {
     return json{
         {"served_revision_id", nullptr},
@@ -1580,6 +1910,85 @@ json revisionFromStatus(const tape_payloads::StatusSnapshot& snapshot) {
         {"includes_mutable_tail", false},
         {"source", "status_snapshot"}
     };
+}
+
+json revisionFromPhase7ReplayContext(const json& replayContext) {
+    if (!replayContext.is_object()) {
+        return revisionUnavailable();
+    }
+    const json revision = replayContext.value("revision_context", json::object());
+    if (!revision.is_object()) {
+        return revisionUnavailable();
+    }
+    return json{
+        {"served_revision_id", revision.contains("served_revision_id") ? revision.at("served_revision_id") : json(nullptr)},
+        {"latest_session_seq", revision.contains("latest_session_seq") ? revision.at("latest_session_seq") : json(nullptr)},
+        {"first_session_seq", revision.contains("first_session_seq") ? revision.at("first_session_seq") : json(nullptr)},
+        {"last_session_seq", revision.contains("last_session_seq") ? revision.at("last_session_seq") : json(nullptr)},
+        {"manifest_hash", revision.contains("manifest_hash") ? revision.at("manifest_hash") : json(nullptr)},
+        {"includes_mutable_tail", revision.value("includes_mutable_tail", false)},
+        {"source", revision.value("source", std::string("artifact_manifest"))}
+    };
+}
+
+json phase7AnalyzerResultPayload(const tape_phase7::AnalysisArtifact& artifact) {
+    json findings = json::array();
+    for (const auto& finding : artifact.findings) {
+        findings.push_back(tape_phase7::findingToJson(finding));
+    }
+    return {
+        {"source_artifact", tape_phase7::artifactRefToJson(artifact.sourceArtifact)},
+        {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+        {"generated_artifacts", json::array({tape_phase7::artifactRefToJson(artifact.analysisArtifact)})},
+        {"analysis_profile", artifact.analysisProfile},
+        {"finding_count", findings.size()},
+        {"replay_context", artifact.replayContext},
+        {"findings", std::move(findings)}
+    };
+}
+
+json phase7FindingsListPayload(const tape_phase7::AnalysisArtifact& artifact) {
+    json findings = json::array();
+    for (const auto& finding : artifact.findings) {
+        findings.push_back(tape_phase7::findingToJson(finding));
+    }
+    return {
+        {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+        {"analysis_profile", artifact.analysisProfile},
+        {"finding_count", findings.size()},
+        {"replay_context", artifact.replayContext},
+        {"findings", std::move(findings)}
+    };
+}
+
+json phase7PlaybookPayload(const tape_phase7::PlaybookArtifact& playbook) {
+    json filteredFindingIds = json::array();
+    for (const auto& findingId : playbook.filteredFindingIds) {
+        filteredFindingIds.push_back(findingId);
+    }
+    json plannedActions = json::array();
+    for (const auto& action : playbook.plannedActions) {
+        plannedActions.push_back(tape_phase7::playbookActionToJson(action));
+    }
+    return {
+        {"analysis_artifact", tape_phase7::artifactRefToJson(playbook.analysisArtifact)},
+        {"playbook_artifact", tape_phase7::artifactRefToJson(playbook.playbookArtifact)},
+        {"mode", playbook.mode},
+        {"filtered_finding_ids", std::move(filteredFindingIds)},
+        {"planned_actions", std::move(plannedActions)},
+        {"replay_context", playbook.replayContext}
+    };
+}
+
+std::string toolContractVersion(const ToolSpec& tool) {
+    return tool.contractVersion.empty() ? std::string(kContractVersion) : tool.contractVersion;
+}
+
+std::string toolEngineCommand(const ToolSpec& tool) {
+    if (!tool.engineCommand.empty()) {
+        return tool.engineCommand;
+    }
+    return std::string(tape_engine::queryOperationName(tool.engineOperation));
 }
 
 json eventRowToJson(const tape_payloads::EventRow& row) {
@@ -2501,6 +2910,22 @@ json Adapter::listResourcesResult() const {
             {"meta", resourceErrorMeta(caseReports.error.code, caseReports.error.message)}
         };
     }
+    std::vector<tape_phase7::AnalysisArtifact> analysisArtifacts;
+    std::string phase7Code;
+    std::string phase7Message;
+    if (!tape_phase7::listAnalysisArtifacts(25, &analysisArtifacts, &phase7Code, &phase7Message)) {
+        return json{
+            {"resources", json::array()},
+            {"meta", resourceErrorMeta(phase7Code, phase7Message)}
+        };
+    }
+    std::vector<tape_phase7::PlaybookArtifact> playbookArtifacts;
+    if (!tape_phase7::listPlaybookArtifacts(25, &playbookArtifacts, &phase7Code, &phase7Message)) {
+        return json{
+            {"resources", json::array()},
+            {"meta", resourceErrorMeta(phase7Code, phase7Message)}
+        };
+    }
 
     json resources = json::array();
     for (const auto& report : sessionReports.value.sessionReports) {
@@ -2549,6 +2974,38 @@ json Adapter::listResourcesResult() const {
             {"mimeType", "application/json"}
         });
     }
+    for (const auto& artifact : analysisArtifacts) {
+        resources.push_back({
+            {"uri", phase7AnalysisUri(artifact.analysisArtifact.artifactId)},
+            {"name", artifact.analysisArtifact.artifactId},
+            {"title", "Phase 7 analysis: " + artifact.analysisArtifact.artifactId},
+            {"description", "Persisted Phase 7 analyzer output JSON view."},
+            {"mimeType", "application/json"}
+        });
+        resources.push_back({
+            {"uri", phase7AnalysisMarkdownUri(artifact.analysisArtifact.artifactId)},
+            {"name", artifact.analysisArtifact.artifactId + ":markdown"},
+            {"title", "Phase 7 analysis markdown: " + artifact.analysisArtifact.artifactId},
+            {"description", "Persisted Phase 7 analyzer markdown summary."},
+            {"mimeType", "text/markdown"}
+        });
+    }
+    for (const auto& artifact : playbookArtifacts) {
+        resources.push_back({
+            {"uri", phase7PlaybookUri(artifact.playbookArtifact.artifactId)},
+            {"name", artifact.playbookArtifact.artifactId},
+            {"title", "Phase 7 playbook: " + artifact.playbookArtifact.artifactId},
+            {"description", "Persisted Phase 7 guarded playbook JSON view."},
+            {"mimeType", "application/json"}
+        });
+        resources.push_back({
+            {"uri", phase7PlaybookMarkdownUri(artifact.playbookArtifact.artifactId)},
+            {"name", artifact.playbookArtifact.artifactId + ":markdown"},
+            {"title", "Phase 7 playbook markdown: " + artifact.playbookArtifact.artifactId},
+            {"description", "Persisted Phase 7 guarded playbook markdown summary."},
+            {"mimeType", "text/markdown"}
+        });
+    }
 
     std::sort(resources.begin(), resources.end(), [](const json& left, const json& right) {
         return left.value("uri", std::string()) < right.value("uri", std::string());
@@ -2561,7 +3018,21 @@ json Adapter::listResourcesResult() const {
 
 json Adapter::readResourceResult(const std::string& resourceUri) const {
     const ParsedResourceUri parsed = parseResourceUri(resourceUri);
-    if (parsed.kind == ResourceKind::Unknown || parsed.reportId == 0) {
+    const bool missingReportId =
+        (parsed.kind == ResourceKind::SessionReportJson ||
+         parsed.kind == ResourceKind::CaseReportJson ||
+         parsed.kind == ResourceKind::SessionArtifactMarkdown ||
+         parsed.kind == ResourceKind::SessionArtifactJsonBundle ||
+         parsed.kind == ResourceKind::CaseArtifactMarkdown ||
+         parsed.kind == ResourceKind::CaseArtifactJsonBundle) &&
+        parsed.reportId == 0;
+    const bool missingArtifactId =
+        (parsed.kind == ResourceKind::Phase7AnalysisJson ||
+         parsed.kind == ResourceKind::Phase7AnalysisMarkdown ||
+         parsed.kind == ResourceKind::Phase7PlaybookJson ||
+         parsed.kind == ResourceKind::Phase7PlaybookMarkdown) &&
+        parsed.artifactId.empty();
+    if (parsed.kind == ResourceKind::Unknown || missingReportId || missingArtifactId) {
         return json{
             {"contents", json::array()},
             {"meta", resourceErrorMeta("unsupported_resource", "Unsupported resource URI.")}
@@ -2636,6 +3107,32 @@ json Adapter::readResourceResult(const std::string& resourceUri) const {
                 return textContents(resourceUri, result.value.markdown, "text/markdown");
             }
             return jsonContents(resourceUri, result.value.bundle);
+        }
+        case ResourceKind::Phase7AnalysisJson:
+        case ResourceKind::Phase7AnalysisMarkdown: {
+            tape_phase7::AnalysisArtifact artifact;
+            std::string code;
+            std::string message;
+            if (!tape_phase7::loadAnalysisArtifact({}, parsed.artifactId, &artifact, &code, &message)) {
+                return json{{"contents", json::array()}, {"meta", resourceErrorMeta(code, message)}};
+            }
+            if (parsed.kind == ResourceKind::Phase7AnalysisMarkdown) {
+                return textContents(resourceUri, tape_phase7::analysisArtifactMarkdown(artifact), "text/markdown");
+            }
+            return jsonContents(resourceUri, phase7AnalyzerResultPayload(artifact));
+        }
+        case ResourceKind::Phase7PlaybookJson:
+        case ResourceKind::Phase7PlaybookMarkdown: {
+            tape_phase7::PlaybookArtifact artifact;
+            std::string code;
+            std::string message;
+            if (!tape_phase7::loadPlaybookArtifact({}, parsed.artifactId, &artifact, &code, &message)) {
+                return json{{"contents", json::array()}, {"meta", resourceErrorMeta(code, message)}};
+            }
+            if (parsed.kind == ResourceKind::Phase7PlaybookMarkdown) {
+                return textContents(resourceUri, tape_phase7::playbookArtifactMarkdown(artifact), "text/markdown");
+            }
+            return jsonContents(resourceUri, phase7PlaybookPayload(artifact));
         }
         case ResourceKind::Unknown:
             break;
@@ -2741,6 +3238,12 @@ json Adapter::invokeTool(const ToolSpec& tool, const json& args) const {
             return invokeListImportedCasesTool(tool, args);
         case ToolId::ReadSessionQuality:
             return invokeReadSessionQualityTool(tool, args);
+        case ToolId::AnalyzerRun:
+            return invokeAnalyzerRunTool(tool, args);
+        case ToolId::FindingsList:
+            return invokeFindingsListTool(tool, args);
+        case ToolId::PlaybookApply:
+            return invokePlaybookApplyTool(tool, args);
     }
     return makeToolResult(makeErrorEnvelope(
         tool.name,
@@ -3793,6 +4296,221 @@ json Adapter::invokeReadSessionQualityTool(const ToolSpec& tool, const json& arg
                                               revisionFromSummary(result.value.summary)));
 }
 
+json Adapter::invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) const {
+    if (hasUnexpectedKeys(args, {"case_bundle_path", "report_bundle_path", "case_manifest_path", "report_manifest_path", "analysis_profile"})) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "exactly one bundle path and an optional analysis_profile are supported",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<std::string> bundlePaths;
+    for (const char* key : {"case_bundle_path", "report_bundle_path", "case_manifest_path", "report_manifest_path"}) {
+        if (args.contains(key)) {
+            const auto value = asNonEmptyString(args.at(key));
+            if (!value.has_value()) {
+                return makeToolResult(makeErrorEnvelope(tool.name,
+                                                        toolEngineCommand(tool),
+                                                        tool.outputSchemaId,
+                                                        true,
+                                                        false,
+                                                        "invalid_arguments",
+                                                        "bundle path inputs must be non-empty strings",
+                                                        false,
+                                                        revisionUnavailable(),
+                                                        toolContractVersion(tool)));
+            }
+            bundlePaths.push_back(*value);
+        }
+    }
+    if (bundlePaths.size() != 1) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "exactly one of case_bundle_path, report_bundle_path, case_manifest_path, or report_manifest_path is required",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    const std::string analysisProfile =
+        args.contains("analysis_profile")
+            ? asNonEmptyString(args.at("analysis_profile")).value_or(std::string(tape_phase7::kDefaultAnalyzerProfile))
+            : std::string(tape_phase7::kDefaultAnalyzerProfile);
+
+    tape_phase7::AnalysisArtifact artifact;
+    std::string code;
+    std::string message;
+    if (!tape_phase7::runAnalyzerFromBundlePath(bundlePaths.front(), analysisProfile, &artifact, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7AnalyzerResultPayload(artifact),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeFindingsListTool(const ToolSpec& tool, const json& args) const {
+    if (hasUnexpectedKeys(args, {"analysis_manifest_path", "analysis_artifact_id"})) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "exactly one of analysis_manifest_path or analysis_artifact_id is required",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    const std::string manifestPath =
+        args.contains("analysis_manifest_path")
+            ? asNonEmptyString(args.at("analysis_manifest_path")).value_or(std::string())
+            : std::string();
+    const std::string artifactId =
+        args.contains("analysis_artifact_id")
+            ? asNonEmptyString(args.at("analysis_artifact_id")).value_or(std::string())
+            : std::string();
+
+    tape_phase7::AnalysisArtifact artifact;
+    std::string code;
+    std::string message;
+    if (!tape_phase7::loadAnalysisArtifact(manifestPath, artifactId, &artifact, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7FindingsListPayload(artifact),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokePlaybookApplyTool(const ToolSpec& tool, const json& args) const {
+    if (hasUnexpectedKeys(args, {"analysis_manifest_path", "analysis_artifact_id", "finding_ids", "mode"})) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "playbook arguments must include one analysis reference plus optional finding_ids and mode",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    const std::string manifestPath =
+        args.contains("analysis_manifest_path")
+            ? asNonEmptyString(args.at("analysis_manifest_path")).value_or(std::string())
+            : std::string();
+    const std::string artifactId =
+        args.contains("analysis_artifact_id")
+            ? asNonEmptyString(args.at("analysis_artifact_id")).value_or(std::string())
+            : std::string();
+    std::vector<std::string> findingIds;
+    if (args.contains("finding_ids")) {
+        const auto parsed = asNonEmptyStringArray(args.at("finding_ids"));
+        if (!parsed.has_value()) {
+            return makeToolResult(makeErrorEnvelope(tool.name,
+                                                    toolEngineCommand(tool),
+                                                    tool.outputSchemaId,
+                                                    true,
+                                                    false,
+                                                    "invalid_arguments",
+                                                    "finding_ids must be an array of non-empty strings",
+                                                    false,
+                                                    revisionUnavailable(),
+                                                    toolContractVersion(tool)));
+        }
+        findingIds = *parsed;
+    }
+    const std::string mode =
+        args.contains("mode")
+            ? asNonEmptyString(args.at("mode")).value_or(std::string(tape_phase7::kDefaultPlaybookMode))
+            : std::string(tape_phase7::kDefaultPlaybookMode);
+
+    if (mode == tape_phase7::kApplyPlaybookMode) {
+        tape_phase7::AnalysisArtifact analysis;
+        std::string code;
+        std::string message;
+        if (!tape_phase7::loadAnalysisArtifact(manifestPath, artifactId, &analysis, &code, &message)) {
+            return makeToolResult(makeErrorEnvelope(tool.name,
+                                                    toolEngineCommand(tool),
+                                                    tool.outputSchemaId,
+                                                    true,
+                                                    false,
+                                                    code,
+                                                    message,
+                                                    false,
+                                                    revisionUnavailable(),
+                                                    toolContractVersion(tool)));
+        }
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                true,
+                                                "deferred_behavior",
+                                                "mode=apply is intentionally deferred in the guarded Phase 7 slice; rerun with mode=dry_run.",
+                                                false,
+                                                revisionFromPhase7ReplayContext(analysis.replayContext),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::PlaybookArtifact playbook;
+    std::string code;
+    std::string message;
+    if (!tape_phase7::buildGuardedPlaybook(manifestPath,
+                                           artifactId,
+                                           findingIds,
+                                           mode,
+                                           &playbook,
+                                           &code,
+                                           &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7PlaybookPayload(playbook),
+                                              revisionFromPhase7ReplayContext(playbook.replayContext)));
+}
+
 json Adapter::makeToolResult(const json& envelope) const {
     return json{
         {"isError", !envelope.value("ok", false)},
@@ -3807,12 +4525,14 @@ json Adapter::makeToolResult(const json& envelope) const {
 }
 
 json Adapter::makeSuccessEnvelope(const ToolSpec& tool, json result, json revision) const {
+    const std::string engineCommand = toolEngineCommand(tool);
     return json{
         {"ok", true},
         {"meta", {
-            {"contract_version", kContractVersion},
+            {"contract_version", toolContractVersion(tool)},
             {"tool", tool.name},
-            {"engine_operation", tape_engine::queryOperationName(tool.engineOperation)},
+            {"engine_operation", engineCommand},
+            {"engine_command", engineCommand},
             {"engine_socket_path", engineRpc_.config().socketPath},
             {"result_schema", tool.outputSchemaId},
             {"envelope_schema", kToolEnvelopeSchema},
@@ -3834,13 +4554,15 @@ json Adapter::makeErrorEnvelope(const std::string& toolName,
                                 const std::string& errorCode,
                                 const std::string& errorMessage,
                                 bool retryable,
-                                json revision) const {
+                                json revision,
+                                std::string contractVersion) const {
     return json{
         {"ok", false},
         {"meta", {
-            {"contract_version", kContractVersion},
+            {"contract_version", contractVersion.empty() ? json(kContractVersion) : json(contractVersion)},
             {"tool", toolName},
             {"engine_operation", std::string(engineOperation)},
+            {"engine_command", std::string(engineOperation)},
             {"engine_socket_path", engineRpc_.config().socketPath},
             {"result_schema", std::string(outputSchemaId)},
             {"envelope_schema", kToolEnvelopeSchema},

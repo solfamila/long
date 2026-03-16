@@ -147,7 +147,9 @@ set(TAPE_MCP_SOURCES
     tape_mcp_main.cpp
     tape_mcp_adapter.cpp
     tape_mcp_engine_rpc.cpp
+    tape_phase7_artifacts.cpp
     tape_query_payloads.cpp
+    tape_bundle_inspection.cpp
     tape_engine_client.cpp
     tape_engine_protocol.cpp
     runtime_qos.cpp
@@ -560,6 +562,7 @@ if(BUILD_TESTING)
         tests/tape_mcp_contract_tests.cpp
         tape_mcp_adapter.cpp
         tape_mcp_engine_rpc.cpp
+        tape_phase7_artifacts.cpp
         tape_query_payloads.cpp
         tape_bundle_inspection.cpp
         tape_engine.cpp

@@ -75,6 +75,16 @@ const fs::path& testDataDir() {
     return path;
 }
 
+fs::path configurePhase7DataDir(const std::string& name) {
+    const fs::path path = testDataDir() / name;
+    std::error_code ec;
+    fs::create_directories(path, ec);
+    expect(!ec, "failed to create phase7 data dir at " + path.string());
+    expect(::setenv("TWS_GUI_DATA_DIR", path.string().c_str(), 1) == 0,
+           "failed to set TWS_GUI_DATA_DIR for phase7 tests");
+    return path;
+}
+
 fs::path fixturePath(const std::string& relativePath) {
     return fs::path(TWS_GUI_SOURCE_DIR) / "tests" / "fixtures" / relativePath;
 }
@@ -133,6 +143,15 @@ std::string normalizeArtifactId(std::string artifactId) {
     replaceSuffix("window:", "<id>");
     replaceSuffix("finding:", "<id>");
     replaceSuffix("anchor:", "<id>");
+    replaceSuffix("session-bundle:report:", "<id>");
+    replaceSuffix("case-bundle:report:", "<id>");
+    replaceSuffix("imported-case:", "<id>");
+    if (artifactId.rfind("phase7-analysis-", 0) == 0) {
+        return "phase7-analysis:<id>";
+    }
+    if (artifactId.rfind("phase7-playbook-", 0) == 0) {
+        return "phase7-playbook:<id>";
+    }
     if (artifactId.rfind("session-overview:", 0) == 0) {
         return "session-overview:<revision>:<from>:<to>";
     }
@@ -181,6 +200,22 @@ std::string normalizeResourceUri(std::string uri) {
         }
         return uri;
     }
+    const std::string phase7AnalysisPrefix = "tape://phase7/analysis/";
+    if (uri.rfind(phase7AnalysisPrefix, 0) == 0) {
+        const std::size_t formatPos = uri.find('/', phase7AnalysisPrefix.size());
+        if (formatPos == std::string::npos) {
+            return phase7AnalysisPrefix + "<id>";
+        }
+        return phase7AnalysisPrefix + "<id>" + uri.substr(formatPos);
+    }
+    const std::string phase7PlaybookPrefix = "tape://phase7/playbook/";
+    if (uri.rfind(phase7PlaybookPrefix, 0) == 0) {
+        const std::size_t formatPos = uri.find('/', phase7PlaybookPrefix.size());
+        if (formatPos == std::string::npos) {
+            return phase7PlaybookPrefix + "<id>";
+        }
+        return phase7PlaybookPrefix + "<id>" + uri.substr(formatPos);
+    }
     return uri;
 }
 
@@ -218,6 +253,22 @@ json projectArtifactSummary(const json& artifact) {
         {"schema_version", artifact.value("schema_version", 0U)}
     };
 }
+
+json projectPhase7ArtifactRef(const json& artifact) {
+    if (!artifact.is_object()) {
+        return json::object();
+    }
+    return {
+        {"artifact_id", normalizeArtifactId(artifact.value("artifact_id", std::string()))},
+        {"artifact_type", artifact.value("artifact_type", std::string())},
+        {"contract_version", artifact.value("contract_version", std::string())},
+        {"manifest_path", normalizeTestPath(artifact.value("manifest_path", json(nullptr)))}
+    };
+}
+
+json projectPhase7ReplayContext(const json& replayContext);
+json projectPhase7FindingRows(const json& findings);
+json projectPhase7PlaybookActions(const json& actions);
 
 json projectEntitySummary(const json& entity) {
     if (!entity.is_object()) {
@@ -359,6 +410,25 @@ json projectResourceList(const json& listResult) {
     return projection;
 }
 
+json projectPhase7ResourceList(const json& listResult) {
+    json projection = json::array();
+    json resources = listResult.value("resources", json::array());
+    for (const auto& resource : resources) {
+        const std::string uri = normalizeResourceUri(resource.value("uri", std::string()));
+        if (uri.rfind("tape://phase7/", 0) != 0) {
+            continue;
+        }
+        projection.push_back({
+            {"uri", uri},
+            {"mime_type", resource.value("mimeType", std::string())}
+        });
+    }
+    std::sort(projection.begin(), projection.end(), [](const json& left, const json& right) {
+        return left.value("uri", std::string()) < right.value("uri", std::string());
+    });
+    return projection;
+}
+
 json projectResourceRead(const json& readResult) {
     json projection{
         {"ok", readResult.value("meta", json::object()).value("ok", false)}
@@ -382,7 +452,25 @@ json projectResourceRead(const json& readResult) {
     const std::string text = content.value("text", std::string());
     if (mimeType == "application/json") {
         const json parsed = json::parse(text);
-        if (parsed.contains("artifact")) {
+        if (parsed.contains("source_artifact") && parsed.contains("analysis_artifact")) {
+            projection["payload"] = {
+                {"analysis_artifact", projectPhase7ArtifactRef(parsed.value("analysis_artifact", json::object()))},
+                {"source_artifact", projectPhase7ArtifactRef(parsed.value("source_artifact", json::object()))},
+                {"analysis_profile", parsed.value("analysis_profile", std::string())},
+                {"finding_count", parsed.value("finding_count", 0ULL)},
+                {"replay_context", projectPhase7ReplayContext(parsed.value("replay_context", json::object()))},
+                {"findings", projectPhase7FindingRows(parsed.value("findings", json::array()))}
+            };
+        } else if (parsed.contains("playbook_artifact") && parsed.contains("analysis_artifact")) {
+            projection["payload"] = {
+                {"analysis_artifact", projectPhase7ArtifactRef(parsed.value("analysis_artifact", json::object()))},
+                {"playbook_artifact", projectPhase7ArtifactRef(parsed.value("playbook_artifact", json::object()))},
+                {"mode", parsed.value("mode", std::string())},
+                {"filtered_finding_ids", parsed.value("filtered_finding_ids", json::array())},
+                {"planned_actions", projectPhase7PlaybookActions(parsed.value("planned_actions", json::array()))},
+                {"replay_context", projectPhase7ReplayContext(parsed.value("replay_context", json::object()))}
+            };
+        } else if (parsed.contains("artifact")) {
             projection["payload"] = projectInvestigationResult(parsed);
         } else if (parsed.contains("summary")) {
             projection["payload"] = {
@@ -397,6 +485,8 @@ json projectResourceRead(const json& readResult) {
         projection["has_text"] = !text.empty();
         projection["contains_order_case"] = text.find("Order case for order 7401") != std::string::npos;
         projection["contains_session_overview"] = text.find("Session overview") != std::string::npos;
+        projection["contains_phase7_analysis"] = text.find("# Phase 7 Analysis") != std::string::npos;
+        projection["contains_phase7_playbook"] = text.find("# Phase 7 Playbook") != std::string::npos;
     }
     return projection;
 }
@@ -424,6 +514,59 @@ json projectReplayRangeSummary(const json& replayRange) {
         projection["target_session_seq"] = replayRange.at("target_session_seq");
     }
     return projection;
+}
+
+json projectPhase7ReplayContext(const json& replayContext) {
+    if (!replayContext.is_object()) {
+        return json::object();
+    }
+    const json traceAnchor = replayContext.value("trace_anchor", json::object());
+    const bool hasTraceAnchor =
+        traceAnchor.contains("trace_id") || traceAnchor.contains("order_id") ||
+        traceAnchor.contains("perm_id") || traceAnchor.contains("exec_id");
+    return {
+        {"source_bundle_type", replayContext.value("source_bundle_type", std::string())},
+        {"has_trace_anchor", hasTraceAnchor},
+        {"requested_window", projectReplayRangeSummary(replayContext.value("requested_window", json(nullptr)))}
+    };
+}
+
+json projectPhase7FindingRows(const json& findings) {
+    json rows = json::array();
+    for (const auto& finding : findings) {
+        rows.push_back({
+            {"finding_id", finding.value("finding_id", std::string())},
+            {"severity", finding.value("severity", std::string())},
+            {"category", finding.value("category", std::string())},
+            {"summary", finding.value("summary", std::string())}
+        });
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+        if (left.value("category", std::string()) != right.value("category", std::string())) {
+            return left.value("category", std::string()) < right.value("category", std::string());
+        }
+        return left.value("finding_id", std::string()) < right.value("finding_id", std::string());
+    });
+    return rows;
+}
+
+json projectPhase7PlaybookActions(const json& actions) {
+    json rows = json::array();
+    for (const auto& action : actions) {
+        rows.push_back({
+            {"action_id", normalizeArtifactId(action.value("action_id", std::string()))},
+            {"action_type", action.value("action_type", std::string())},
+            {"finding_id", action.value("finding_id", std::string())},
+            {"title", action.value("title", std::string())}
+        });
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+        if (left.value("action_type", std::string()) != right.value("action_type", std::string())) {
+            return left.value("action_type", std::string()) < right.value("action_type", std::string());
+        }
+        return left.value("finding_id", std::string()) < right.value("finding_id", std::string());
+    });
+    return rows;
 }
 
 json projectInvestigationResult(const json& result) {
@@ -737,6 +880,39 @@ json projectEnvelope(const json& envelope) {
         projection["result"] = projectSeekResult(result);
     } else if (toolName == "tapescript_export_artifact") {
         projection["result"] = projectExportResult(result);
+    } else if (toolName == "tapescript_analyzer_run") {
+        projection["result"] = {
+            {"source_artifact", projectPhase7ArtifactRef(result.value("source_artifact", json::object()))},
+            {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
+            {"generated_artifacts", [&]() {
+                json projected = json::array();
+                for (const auto& artifact : result.value("generated_artifacts", json::array())) {
+                    projected.push_back(projectPhase7ArtifactRef(artifact));
+                }
+                return projected;
+            }()},
+            {"analysis_profile", result.value("analysis_profile", std::string())},
+            {"finding_count", result.value("finding_count", 0ULL)},
+            {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))},
+            {"findings", projectPhase7FindingRows(result.value("findings", json::array()))}
+        };
+    } else if (toolName == "tapescript_findings_list") {
+        projection["result"] = {
+            {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
+            {"analysis_profile", result.value("analysis_profile", std::string())},
+            {"finding_count", result.value("finding_count", 0ULL)},
+            {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))},
+            {"findings", projectPhase7FindingRows(result.value("findings", json::array()))}
+        };
+    } else if (toolName == "tapescript_playbook_apply") {
+        projection["result"] = {
+            {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
+            {"playbook_artifact", projectPhase7ArtifactRef(result.value("playbook_artifact", json::object()))},
+            {"mode", result.value("mode", std::string())},
+            {"filtered_finding_ids", result.value("filtered_finding_ids", json::array())},
+            {"planned_actions", projectPhase7PlaybookActions(result.value("planned_actions", json::array()))},
+            {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))}
+        };
     } else {
         projection["result"] = projectInvestigationResult(result);
     }
@@ -1015,6 +1191,8 @@ std::uint64_t parseTrailingNumericId(const std::string& artifactId, const std::s
 }
 
 void testTapeMcpPhase5Contracts() {
+    configurePhase7DataDir("tape-mcp-phase5-appdata");
+
     const fs::path rootDir = testDataDir() / "tape-mcp-phase5-engine";
     const fs::path socketPath = testDataDir() / "tape-mcp-phase5-engine.sock";
     auto server = startPhase5Engine(rootDir, socketPath);
@@ -1493,7 +1671,141 @@ void testTapeMcpPhase6BundleTools() {
     server->stop();
 }
 
+void testTapeMcpPhase7Contracts() {
+    configurePhase7DataDir("tape-mcp-phase7-appdata");
+
+    const fs::path rootDir = testDataDir() / "tape-mcp-phase7-engine";
+    const fs::path socketPath = testDataDir() / "tape-mcp-phase7-engine.sock";
+    auto server = startPhase5Engine(rootDir, socketPath);
+    seedPhase5Engine(socketPath);
+
+    waitUntil([&]() {
+        const auto snapshot = server->snapshot();
+        return snapshot.segments.size() >= 2 && snapshot.latestFrozenRevisionId >= 2;
+    }, "phase7 MCP setup should freeze fixture batches");
+
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{socketPath.string()});
+
+    const json scanCaseEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_scan_order_case_report", json{
+        {"order_id", 7401},
+        {"limit", 10}
+    }));
+    expect(scanCaseEnvelope.value("ok", false), "phase7 scan-order-case-report should return ok=true");
+    const std::uint64_t caseReportId =
+        parseTrailingNumericId(scanCaseEnvelope.value("result", json::object()).value("artifact_id", std::string()),
+                               "case-report:");
+    expect(caseReportId > 0, "phase7 scan-order-case-report should expose a case report id");
+
+    const json exportCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_export_case_bundle", json{
+        {"report_id", caseReportId}
+    }));
+    expect(exportCaseBundleEnvelope.value("ok", false), "phase7 export-case-bundle should return ok=true");
+    const std::string caseBundlePath =
+        exportCaseBundleEnvelope.value("result", json::object()).value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
+           "phase7 export-case-bundle should write a portable case bundle");
+
+    const json analyzerEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_analyzer_run", json{
+        {"case_bundle_path", caseBundlePath}
+    }));
+    const json analyzerEnvelope = projectEnvelope(analyzerEnvelopeRaw);
+    expect(analyzerEnvelope.value("ok", false), "phase7 analyzer_run should return ok=true");
+    const std::string analysisArtifactId =
+        analyzerEnvelopeRaw.value("result", json::object()).value("analysis_artifact", json::object()).value("artifact_id", std::string());
+    expect(!analysisArtifactId.empty(), "phase7 analyzer_run should produce an analysis artifact id");
+
+    const json findingsEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_findings_list", json{
+        {"analysis_artifact_id", analysisArtifactId}
+    })));
+    expect(findingsEnvelope.value("ok", false), "phase7 findings_list should return ok=true");
+
+    const json playbookEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json{
+        {"analysis_artifact_id", analysisArtifactId}
+    })));
+    expect(playbookEnvelope.value("ok", false), "phase7 playbook_apply dry_run should return ok=true");
+    const std::string playbookArtifactId =
+        envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json{
+            {"analysis_artifact_id", analysisArtifactId}
+        })).value("result", json::object()).value("playbook_artifact", json::object()).value("artifact_id", std::string());
+    expect(!playbookArtifactId.empty(), "phase7 playbook_apply dry_run should produce a playbook artifact id");
+
+    const json deferredPlaybookEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json{
+        {"analysis_artifact_id", analysisArtifactId},
+        {"mode", "apply"}
+    })));
+    expect(!deferredPlaybookEnvelope.value("ok", true), "phase7 playbook_apply apply mode should return ok=false");
+    expect(deferredPlaybookEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_behavior",
+           "phase7 playbook_apply apply mode should return deferred_behavior");
+
+    const json invalidAnalyzerEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_analyzer_run", json::object())));
+    expect(!invalidAnalyzerEnvelope.value("ok", true), "phase7 analyzer_run without args should return ok=false");
+    expect(invalidAnalyzerEnvelope.value("error", json::object()).value("code", std::string()) == "invalid_arguments",
+           "phase7 analyzer_run without args should return invalid_arguments");
+
+    const json missingFindingsEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_findings_list", json{
+        {"analysis_artifact_id", "phase7-analysis-missing"}
+    })));
+    expect(!missingFindingsEnvelope.value("ok", true), "phase7 findings_list for a missing artifact should return ok=false");
+    expect(missingFindingsEnvelope.value("error", json::object()).value("code", std::string()) == "artifact_not_found",
+           "phase7 findings_list for a missing artifact should return artifact_not_found");
+
+    const json phase7PromptList = projectPromptList(adapter.listPromptsResult());
+    const json analyzeBundlePrompt = projectPromptGet(
+        adapter.getPromptResult("analyze_bundle_with_phase7", json{
+            {"case_bundle_path", "/tmp/example-case-bundle.msgpack"}
+        }));
+    const json reviewFindingsPrompt = projectPromptGet(
+        adapter.getPromptResult("review_phase7_findings", json{
+            {"analysis_artifact_id", "phase7-analysis-1234abcd"}
+        }));
+    const json reviewPlaybookPrompt = projectPromptGet(
+        adapter.getPromptResult("review_phase7_playbook", json{
+            {"playbook_artifact_id", "phase7-playbook-1234abcd"}
+        }));
+
+    const json resourceListResult = adapter.listResourcesResult();
+    const json phase7ResourceList = projectPhase7ResourceList(resourceListResult);
+    const json analysisResource = projectResourceRead(adapter.readResourceResult("tape://phase7/analysis/" + analysisArtifactId));
+    const json analysisMarkdownResource = projectResourceRead(
+        adapter.readResourceResult("tape://phase7/analysis/" + analysisArtifactId + "/markdown"));
+    const json playbookResource = projectResourceRead(adapter.readResourceResult("tape://phase7/playbook/" + playbookArtifactId));
+    const json playbookMarkdownResource = projectResourceRead(
+        adapter.readResourceResult("tape://phase7/playbook/" + playbookArtifactId + "/markdown"));
+
+    const json fixture = readJsonFixture("phase7_mcp_contracts.json");
+    expect(analyzerEnvelope == fixture.value("tapescript_analyzer_run", json::object()),
+           "phase7 analyzer_run envelope should match golden fixture\nactual:\n" + analyzerEnvelope.dump(2));
+    expect(findingsEnvelope == fixture.value("tapescript_findings_list", json::object()),
+           "phase7 findings_list envelope should match golden fixture\nactual:\n" + findingsEnvelope.dump(2));
+    expect(playbookEnvelope == fixture.value("tapescript_playbook_apply_dry_run", json::object()),
+           "phase7 playbook_apply dry_run envelope should match golden fixture\nactual:\n" + playbookEnvelope.dump(2));
+    expect(deferredPlaybookEnvelope == fixture.value("tapescript_playbook_apply_deferred", json::object()),
+           "phase7 playbook_apply deferred envelope should match golden fixture\nactual:\n" + deferredPlaybookEnvelope.dump(2));
+    expect(phase7PromptList == fixture.value("prompts_list_phase7", json::array()),
+           "phase7 prompts/list projection should match golden fixture\nactual:\n" + phase7PromptList.dump(2));
+    expect(analyzeBundlePrompt == fixture.value("prompt_analyze_bundle_with_phase7", json::object()),
+           "phase7 analyze-bundle prompt should match golden fixture\nactual:\n" + analyzeBundlePrompt.dump(2));
+    expect(reviewFindingsPrompt == fixture.value("prompt_review_phase7_findings", json::object()),
+           "phase7 review-findings prompt should match golden fixture\nactual:\n" + reviewFindingsPrompt.dump(2));
+    expect(reviewPlaybookPrompt == fixture.value("prompt_review_phase7_playbook", json::object()),
+           "phase7 review-playbook prompt should match golden fixture\nactual:\n" + reviewPlaybookPrompt.dump(2));
+    expect(phase7ResourceList == fixture.value("resources_list_phase7", json::array()),
+           "phase7 resources/list projection should match golden fixture\nactual:\n" + phase7ResourceList.dump(2));
+    expect(analysisResource == fixture.value("resource_read_phase7_analysis", json::object()),
+           "phase7 analysis resource should match golden fixture\nactual:\n" + analysisResource.dump(2));
+    expect(analysisMarkdownResource == fixture.value("resource_read_phase7_analysis_markdown", json::object()),
+           "phase7 analysis markdown resource should match golden fixture\nactual:\n" + analysisMarkdownResource.dump(2));
+    expect(playbookResource == fixture.value("resource_read_phase7_playbook", json::object()),
+           "phase7 playbook resource should match golden fixture\nactual:\n" + playbookResource.dump(2));
+    expect(playbookMarkdownResource == fixture.value("resource_read_phase7_playbook_markdown", json::object()),
+           "phase7 playbook markdown resource should match golden fixture\nactual:\n" + playbookMarkdownResource.dump(2));
+
+    server->stop();
+}
+
 void testTapeMcpStdioHarness() {
+    configurePhase7DataDir("tape-mcp-phase7-stdio-appdata");
+
     const fs::path rootDir = testDataDir() / "tape-mcp-phase5-stdio-engine";
     const fs::path socketPath = testDataDir() / "tape-mcp-phase5-stdio-engine.sock";
     auto server = startPhase5Engine(rootDir, socketPath);
@@ -1551,7 +1863,7 @@ void testTapeMcpStdioHarness() {
     });
     const json listResponse = readJsonRpcMessage(child.readFd);
     const json tools = listResponse.value("result", json::object()).value("tools", json::array());
-    expect(tools.is_array() && tools.size() == 31, "tools/list should expose the expanded phase 6 tool slice");
+    expect(tools.is_array() && tools.size() == 34, "tools/list should expose the expanded phase 7 tool slice");
     json overviewTool = json::object();
     for (const auto& tool : tools) {
         if (tool.value("name", std::string()) == "tapescript_read_session_overview") {
@@ -1587,6 +1899,16 @@ void testTapeMcpStdioHarness() {
     expect(verifyBundleTool.is_object(), "tools/list should include tapescript_verify_bundle");
     expect(verifyBundleTool.value("progressHint", false),
            "tools/list should advertise progressHint for bundle verification");
+    json analyzerRunTool = json::object();
+    for (const auto& tool : tools) {
+        if (tool.value("name", std::string()) == "tapescript_analyzer_run") {
+            analyzerRunTool = tool;
+            break;
+        }
+    }
+    expect(analyzerRunTool.is_object(), "tools/list should include tapescript_analyzer_run");
+    expect(analyzerRunTool.value("progressHint", false),
+           "tools/list should advertise progressHint for analyzer runs");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
@@ -1596,7 +1918,7 @@ void testTapeMcpStdioHarness() {
     });
     const json promptListResponse = readJsonRpcMessage(child.readFd);
     const json prompts = promptListResponse.value("result", json::object()).value("prompts", json::array());
-    expect(prompts.is_array() && prompts.size() == 8, "prompts/list should expose the expanded phase5 prompt set");
+    expect(prompts.is_array() && prompts.size() == 11, "prompts/list should expose the expanded phase7 prompt set");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
@@ -1636,6 +1958,23 @@ void testTapeMcpStdioHarness() {
                .value("meta", json::object())
                .value("prompt", std::string()) == "investigate_bad_fill",
            "prompts/get should resolve investigate_bad_fill");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 231},
+        {"method", "prompts/get"},
+        {"params", {
+            {"name", "analyze_bundle_with_phase7"},
+            {"arguments", json{
+                {"case_bundle_path", "/tmp/example-bundle.msgpack"}
+            }}
+        }}
+    });
+    const json phase7PromptResponse = readJsonRpcMessage(child.readFd);
+    expect(phase7PromptResponse.value("result", json::object())
+               .value("meta", json::object())
+               .value("prompt", std::string()) == "analyze_bundle_with_phase7",
+           "prompts/get should resolve analyze_bundle_with_phase7");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
@@ -1777,6 +2116,93 @@ void testTapeMcpStdioHarness() {
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
+        {"id", 64},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_export_case_bundle"},
+            {"arguments", json{{"report_id", caseReportId}}}
+        }}
+    });
+    const json exportCaseBundleResponse = readJsonRpcMessage(child.readFd);
+    const json exportCaseBundleEnvelope =
+        exportCaseBundleResponse.value("result", json::object()).value("structuredContent", json::object());
+    expect(exportCaseBundleEnvelope.value("ok", false), "stdio export-case-bundle should return ok=true");
+    const std::string exportedCaseBundlePath =
+        exportCaseBundleEnvelope.value("result", json::object())
+            .value("bundle", json::object())
+            .value("bundle_path", std::string());
+    expect(!exportedCaseBundlePath.empty(), "stdio export-case-bundle should return a bundle path");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 65},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_analyzer_run"},
+            {"arguments", json{{"case_bundle_path", exportedCaseBundlePath}}}
+        }}
+    });
+    const json analyzerRunResponse = readJsonRpcMessage(child.readFd);
+    const json analyzerRunEnvelope =
+        analyzerRunResponse.value("result", json::object()).value("structuredContent", json::object());
+    expect(analyzerRunEnvelope.value("ok", false), "stdio analyzer_run should return ok=true");
+    const std::string analysisArtifactId =
+        analyzerRunEnvelope.value("result", json::object())
+            .value("analysis_artifact", json::object())
+            .value("artifact_id", std::string());
+    expect(!analysisArtifactId.empty(), "stdio analyzer_run should return an analysis artifact id");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 66},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_findings_list"},
+            {"arguments", json{{"analysis_artifact_id", analysisArtifactId}}}
+        }}
+    });
+    const json findingsListResponse = readJsonRpcMessage(child.readFd);
+    const json findingsListEnvelope =
+        findingsListResponse.value("result", json::object()).value("structuredContent", json::object());
+    expect(findingsListEnvelope.value("ok", false), "stdio findings_list should return ok=true");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 67},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_playbook_apply"},
+            {"arguments", json{{"analysis_artifact_id", analysisArtifactId}}}
+        }}
+    });
+    const json playbookResponse = readJsonRpcMessage(child.readFd);
+    const json playbookEnvelope =
+        playbookResponse.value("result", json::object()).value("structuredContent", json::object());
+    expect(playbookEnvelope.value("ok", false), "stdio playbook_apply dry_run should return ok=true");
+    const std::string playbookArtifactId =
+        playbookEnvelope.value("result", json::object())
+            .value("playbook_artifact", json::object())
+            .value("artifact_id", std::string());
+    expect(!playbookArtifactId.empty(), "stdio playbook_apply should return a playbook artifact id");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 68},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_playbook_apply"},
+            {"arguments", json{{"analysis_artifact_id", analysisArtifactId}, {"mode", "apply"}}}
+        }}
+    });
+    const json deferredPlaybookResponse = readJsonRpcMessage(child.readFd);
+    const json deferredPlaybookEnvelope =
+        deferredPlaybookResponse.value("result", json::object()).value("structuredContent", json::object());
+    expect(!deferredPlaybookEnvelope.value("ok", true), "stdio playbook_apply apply mode should return ok=false");
+    expect(deferredPlaybookEnvelope.value("error", json::object()).value("code", std::string()) == "deferred_behavior",
+           "stdio playbook_apply apply mode should return deferred_behavior");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
         {"id", 61},
         {"method", "resources/list"},
         {"params", json::object()}
@@ -1784,6 +2210,14 @@ void testTapeMcpStdioHarness() {
     const json resourcesListResponse = readJsonRpcMessage(child.readFd);
     const json resources = resourcesListResponse.value("result", json::object()).value("resources", json::array());
     expect(resources.is_array() && !resources.empty(), "resources/list should return durable report resources");
+    bool sawPhase7AnalysisResource = false;
+    for (const auto& resource : resources) {
+        if (resource.value("uri", std::string()) == "tape://phase7/analysis/" + analysisArtifactId) {
+            sawPhase7AnalysisResource = true;
+            break;
+        }
+    }
+    expect(sawPhase7AnalysisResource, "resources/list should expose the stored phase7 analysis resource");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
@@ -1815,6 +2249,34 @@ void testTapeMcpStdioHarness() {
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
+        {"id", 631},
+        {"method", "resources/read"},
+        {"params", {
+            {"uri", "tape://phase7/analysis/" + analysisArtifactId}
+        }}
+    });
+    const json phase7AnalysisResourceResponse = readJsonRpcMessage(child.readFd);
+    expect(phase7AnalysisResourceResponse.value("result", json::object()).value("meta", json::object()).value("ok", false),
+           "resources/read should return ok=true for a durable phase7 analysis resource");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 632},
+        {"method", "resources/read"},
+        {"params", {
+            {"uri", "tape://phase7/playbook/" + playbookArtifactId + "/markdown"}
+        }}
+    });
+    const json phase7PlaybookResourceResponse = readJsonRpcMessage(child.readFd);
+    const json phase7PlaybookContents = phase7PlaybookResourceResponse.value("result", json::object()).value("contents", json::array());
+    expect(phase7PlaybookResourceResponse.value("result", json::object()).value("meta", json::object()).value("ok", false),
+           "resources/read should return ok=true for a durable phase7 playbook markdown resource");
+    expect(phase7PlaybookContents.is_array() && !phase7PlaybookContents.empty() &&
+               phase7PlaybookContents.front().value("mimeType", std::string()) == "text/markdown",
+           "resources/read should expose markdown phase7 playbook exports");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
         {"id", 7},
         {"method", "tools/call"},
         {"params", {
@@ -1841,6 +2303,7 @@ int main() {
     try {
         testTapeMcpPhase5Contracts();
         testTapeMcpPhase6BundleTools();
+        testTapeMcpPhase7Contracts();
         testTapeMcpStdioHarness();
     } catch (const std::exception& error) {
         std::cerr << "tape_mcp_contract_tests failed: " << error.what() << '\n';
