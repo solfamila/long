@@ -333,6 +333,9 @@ void StylePanel(NSView* view) {
 - (PendingUiSyncUpdate)consumeCurrentPendingUiSyncUpdate;
 - (TradingPanelState)currentPanelState;
 - (void)appendAppMessage:(const std::string&)message;
+- (void)copyMessages:(id)sender;
+- (void)copyTrace:(id)sender;
+- (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item;
 - (std::vector<OrderId>)selectedOrderIds;
 
 @end
@@ -963,6 +966,40 @@ void StylePanel(NSView* view) {
     }
 }
 
+- (void)copyMessages:(id)sender {
+    (void)sender;
+    NSString* messages = _messagesText.empty() ? _messagesTextView.string : ToNSString(_messagesText);
+    if (messages.length == 0) {
+        return;
+    }
+
+    NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    [pasteboard setString:messages forType:NSPasteboardTypeString];
+}
+
+- (void)copyTrace:(id)sender {
+    (void)sender;
+    NSString* traceText = _traceTextView.string;
+    if (traceText.length == 0) {
+        return;
+    }
+
+    NSPasteboard* pasteboard = [NSPasteboard generalPasteboard];
+    [pasteboard clearContents];
+    [pasteboard setString:traceText forType:NSPasteboardTypeString];
+}
+
+- (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item {
+    if ([item action] == @selector(copyMessages:)) {
+        return !_messagesText.empty() || _messagesTextView.string.length > 0;
+    }
+    if ([item action] == @selector(copyTrace:)) {
+        return _traceTextView.string.length > 0;
+    }
+    return YES;
+}
+
 - (void)updateInputFieldsFromState {
     if (![self isEditingField:_quantityField]) {
         _quantityField.stringValue = [NSString stringWithFormat:@"%d", _quantityInput];
@@ -1314,7 +1351,10 @@ void StylePanel(NSView* view) {
     [self refreshMarketSection:model.panel];
     [self refreshOrders];
     [self refreshTracePopup];
-    _traceTextView.string = ToNSString(model.traceDetailsText);
+    NSString* nextTraceDetails = ToNSString(model.traceDetailsText);
+    if (![_traceTextView.string isEqualToString:nextTraceDetails]) {
+        _traceTextView.string = nextTraceDetails;
+    }
     _exportTraceButton.enabled = model.canExportSelectedTrace;
     _exportAllButton.enabled = model.canExportAllTraces;
     [self refreshMessages];
@@ -1541,7 +1581,10 @@ void StylePanel(NSView* view) {
 }
 
 - (void)refreshMessages {
-    _messagesTextView.string = ToNSString(_messagesText);
+    NSString* nextMessages = ToNSString(_messagesText);
+    if (![_messagesTextView.string isEqualToString:nextMessages]) {
+        _messagesTextView.string = nextMessages;
+    }
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView*)tableView {
@@ -1675,9 +1718,38 @@ void StylePanel(NSView* view) {
                                                keyEquivalent:@"q"];
     [appMenu addItem:quitItem];
     [appMenuItem setSubmenu:appMenu];
-    NSApp.mainMenu = mainMenu;
 
     self.windowController = [[TradingWindowController alloc] init];
+
+        NSMenuItem* editMenuItem = [[NSMenuItem alloc] initWithTitle:@"Edit" action:nil keyEquivalent:@""];
+        [mainMenu addItem:editMenuItem];
+
+        NSMenu* editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+        [editMenu addItem:[[NSMenuItem alloc] initWithTitle:@"Copy"
+                                action:@selector(copy:)
+                            keyEquivalent:@"c"]];
+        [editMenu addItem:[[NSMenuItem alloc] initWithTitle:@"Select All"
+                                action:@selector(selectAll:)
+                            keyEquivalent:@"a"]];
+        [editMenu addItem:[NSMenuItem separatorItem]];
+
+        NSMenuItem* copyMessagesItem = [[NSMenuItem alloc] initWithTitle:@"Copy Messages"
+                                          action:@selector(copyMessages:)
+                                      keyEquivalent:@"C"];
+        copyMessagesItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+        copyMessagesItem.target = self.windowController;
+        [editMenu addItem:copyMessagesItem];
+
+        NSMenuItem* copyTraceItem = [[NSMenuItem alloc] initWithTitle:@"Copy Trace"
+                                       action:@selector(copyTrace:)
+                                   keyEquivalent:@"T"];
+        copyTraceItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+        copyTraceItem.target = self.windowController;
+        [editMenu addItem:copyTraceItem];
+
+        [editMenuItem setSubmenu:editMenu];
+        NSApp.mainMenu = mainMenu;
+
     [self.windowController showWindowAndStart];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(processThermalStateDidChange:)
