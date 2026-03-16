@@ -855,6 +855,20 @@ json readJsonRpcMessage(int fd) {
     return json::parse(std::string(bodyBytes.begin(), bodyBytes.end()));
 }
 
+std::pair<std::vector<json>, json> readProgressNotificationsAndResponse(int fd, int expectedId) {
+    std::vector<json> notifications;
+    while (true) {
+        const json message = readJsonRpcMessage(fd);
+        if (message.value("method", std::string()) == "notifications/progress") {
+            notifications.push_back(message);
+            continue;
+        }
+        expect(message.value("id", -1) == expectedId,
+               "unexpected JSON-RPC response id while waiting for " + std::to_string(expectedId));
+        return {std::move(notifications), message};
+    }
+}
+
 struct ChildProcess {
     pid_t pid = -1;
     int writeFd = -1;
@@ -1453,6 +1467,16 @@ void testTapeMcpStdioHarness() {
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
+        {"id", 0},
+        {"method", "tools/list"},
+        {"params", json::object()}
+    });
+    const json preInitializeResponse = readJsonRpcMessage(child.readFd);
+    expect(preInitializeResponse.value("error", json::object()).value("code", 0) == -32002,
+           "tools/list before initialize should return server not initialized");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
         {"id", 1},
         {"method", "initialize"},
         {"params", json::object()}
@@ -1471,6 +1495,12 @@ void testTapeMcpStdioHarness() {
                .value("resources", json::object())
                .value("listChanged", true) == false,
            "initialize response should advertise MCP resources support");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/initialized"},
+        {"params", json::object()}
+    });
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
@@ -1625,17 +1655,20 @@ void testTapeMcpStdioHarness() {
             }}
         }}
     });
-    const json scanProgressStart = readJsonRpcMessage(child.readFd);
-    expect(scanProgressStart.value("method", std::string()) == "notifications/progress",
-           "progress-capable scan should emit a start notification");
-    expect(scanProgressStart.value("params", json::object()).value("progress", 0) == 0,
-           "scan progress start should report 0%");
-    const json scanProgressFinish = readJsonRpcMessage(child.readFd);
-    expect(scanProgressFinish.value("method", std::string()) == "notifications/progress",
-           "progress-capable scan should emit a finish notification");
-    expect(scanProgressFinish.value("params", json::object()).value("progress", 0) == 100,
-           "scan progress finish should report 100%");
-    const json scanReportResponse = readJsonRpcMessage(child.readFd);
+    const auto [scanProgressNotifications, scanReportResponse] =
+        readProgressNotificationsAndResponse(child.readFd, 41);
+    expect(scanProgressNotifications.size() == 5,
+           "progress-capable scan should emit queued, dispatching, running, finalizing, and finished notifications");
+    expect(scanProgressNotifications.front().value("params", json::object()).value("progress", 0) == 5,
+           "scan progress should start with the queued stage");
+    expect(scanProgressNotifications[1].value("params", json::object()).value("progress", 0) == 35,
+           "scan progress should emit a dispatching stage");
+    expect(scanProgressNotifications[2].value("params", json::object()).value("progress", 0) == 70,
+           "scan progress should emit a running stage");
+    expect(scanProgressNotifications[3].value("params", json::object()).value("progress", 0) == 90,
+           "scan progress should emit a finalizing stage");
+    expect(scanProgressNotifications.back().value("params", json::object()).value("progress", 0) == 100,
+           "scan progress should finish at 100%");
     const json scanReportEnvelope = scanReportResponse.value("result", json::object()).value("structuredContent", json::object());
     expect(scanReportEnvelope.value("ok", false), "stdio scan-session-report call should return ok=true");
     const std::string sessionReportArtifactId = scanReportEnvelope.value("result", json::object()).value("artifact_id", std::string());

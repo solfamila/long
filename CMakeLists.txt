@@ -130,7 +130,7 @@ set(TAPESCOPE_SOURCES
     tapescope_order_queries.mm
     tapescope_artifact_queries.mm
     tapescope_client.cpp
-    tapescope_client_payloads.cpp
+    tape_query_payloads.cpp
     tapescope_investigation_pane.mm
     tapescope_support_ui.mm
     tapescope_support_describe.mm
@@ -143,10 +143,9 @@ set(TAPE_MCP_SOURCES
     tape_mcp_main.cpp
     tape_mcp_adapter.cpp
     tape_mcp_engine_rpc.cpp
+    tape_query_payloads.cpp
     tape_engine_client.cpp
     tape_engine_protocol.cpp
-    tapescope_client.cpp
-    tapescope_client_payloads.cpp
     runtime_qos.cpp
 )
 
@@ -508,7 +507,7 @@ if(BUILD_TESTING)
         tape_engine_client.cpp
         tape_engine_protocol.cpp
         tapescope_client.cpp
-        tapescope_client_payloads.cpp
+        tape_query_payloads.cpp
         trace_exporter.cpp
         trading_ui_format.cpp
         mac_observability.mm
@@ -554,11 +553,10 @@ if(BUILD_TESTING)
         tests/tape_mcp_contract_tests.cpp
         tape_mcp_adapter.cpp
         tape_mcp_engine_rpc.cpp
+        tape_query_payloads.cpp
         tape_engine.cpp
         tape_engine_client.cpp
         tape_engine_protocol.cpp
-        tapescope_client.cpp
-        tapescope_client_payloads.cpp
         phase3_analyzers.cpp
         bridge_batch_codec.cpp
         bridge_batch_transport.cpp

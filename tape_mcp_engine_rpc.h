@@ -1,7 +1,7 @@
 #pragma once
 
 #include "tape_engine_client.h"
-#include "tapescope_client.h"
+#include "tape_query_payloads.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -112,13 +112,13 @@ public:
 
     [[nodiscard]] const EngineRpcClientConfig& config() const;
 
-    [[nodiscard]] EngineRpcResult<tapescope::StatusSnapshot> status() const;
-    [[nodiscard]] EngineRpcResult<tapescope::EventListPayload> readLiveTail(std::size_t limit) const;
-    [[nodiscard]] EngineRpcResult<tapescope::EventListPayload> readRange(
+    [[nodiscard]] EngineRpcResult<tape_payloads::StatusSnapshot> status() const;
+    [[nodiscard]] EngineRpcResult<tape_payloads::EventListPayload> readLiveTail(std::size_t limit) const;
+    [[nodiscard]] EngineRpcResult<tape_payloads::EventListPayload> readRange(
         const SessionWindowQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::EventListPayload> findOrderAnchor(
+    [[nodiscard]] EngineRpcResult<tape_payloads::EventListPayload> findOrderAnchor(
         const OrderCaseQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::IncidentListPayload> listIncidents(
+    [[nodiscard]] EngineRpcResult<tape_payloads::IncidentListPayload> listIncidents(
         const ListQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listOrderAnchors(
         const ListQuery& query) const;
@@ -126,39 +126,39 @@ public:
         const ListQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listFindings(
         const ListQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> readSessionOverview(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readSessionOverview(
         const SessionWindowQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> scanSessionReport(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> scanSessionReport(
         const SessionWindowQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> readSessionReport(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readSessionReport(
         const NumericIdQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::ReportInventoryPayload> listSessionReports(
+    [[nodiscard]] EngineRpcResult<tape_payloads::ReportInventoryPayload> listSessionReports(
         const ListQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> scanIncidentReport(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> scanIncidentReport(
         const IncidentQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> scanOrderCaseReport(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> scanOrderCaseReport(
         const OrderCaseQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> readCaseReport(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readCaseReport(
         const NumericIdQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::ReportInventoryPayload> listCaseReports(
+    [[nodiscard]] EngineRpcResult<tape_payloads::ReportInventoryPayload> listCaseReports(
         const ListQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::SeekOrderPayload> seekOrderAnchor(
+    [[nodiscard]] EngineRpcResult<tape_payloads::SeekOrderPayload> seekOrderAnchor(
         const OrderCaseQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> readFinding(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readFinding(
         const NumericIdQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> readOrderCase(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readOrderCase(
         const OrderCaseQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> readIncident(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readIncident(
         const IncidentQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> readOrderAnchor(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readOrderAnchor(
         const NumericIdQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> readProtectedWindow(
         const NumericIdQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> replaySnapshot(
         const ReplaySnapshotQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::InvestigationPayload> readArtifact(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readArtifact(
         const ArtifactQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::ArtifactExportPayload> exportArtifact(
+    [[nodiscard]] EngineRpcResult<tape_payloads::ArtifactExportPayload> exportArtifact(
         const ArtifactExportQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> exportSessionBundle(
         const BundleExportQuery& query) const;
@@ -168,11 +168,11 @@ public:
         const BundleImportQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listImportedCases(
         const ListQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tapescope::SessionQualityPayload> readSessionQuality(
+    [[nodiscard]] EngineRpcResult<tape_payloads::SessionQualityPayload> readSessionQuality(
         const SessionWindowQuery& query) const;
 
 private:
-    [[nodiscard]] tapescope::QueryResult<tape_engine::QueryResponse> performRawQuery(
+    [[nodiscard]] tape_payloads::QueryResult<tape_engine::QueryResponse> performRawQuery(
         const tape_engine::QueryRequest& request) const;
     [[nodiscard]] static EngineRpcError classifyFailure(const std::string& errorMessage);
 

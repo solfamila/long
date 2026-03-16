@@ -1,5 +1,5 @@
 #include "tape_mcp_adapter.h"
-#include "tapescope_client_internal.h"
+#include "tape_query_payloads.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1520,7 +1520,7 @@ json revisionFromSummary(const json& summary) {
     };
 }
 
-json revisionFromStatus(const tapescope::StatusSnapshot& snapshot) {
+json revisionFromStatus(const tape_payloads::StatusSnapshot& snapshot) {
     return json{
         {"served_revision_id", nullptr},
         {"latest_session_seq", snapshot.latestSessionSeq},
@@ -1532,7 +1532,7 @@ json revisionFromStatus(const tapescope::StatusSnapshot& snapshot) {
     };
 }
 
-json eventRowToJson(const tapescope::EventRow& row) {
+json eventRowToJson(const tape_payloads::EventRow& row) {
     return json{
         {"session_seq", row.sessionSeq},
         {"source_seq", row.sourceSeq},
@@ -1544,7 +1544,7 @@ json eventRowToJson(const tapescope::EventRow& row) {
     };
 }
 
-json incidentRowToJson(const tapescope::IncidentListRow& row) {
+json incidentRowToJson(const tape_payloads::IncidentListRow& row) {
     return json{
         {"logical_incident_id", row.logicalIncidentId},
         {"kind", row.kind},
@@ -1553,7 +1553,7 @@ json incidentRowToJson(const tapescope::IncidentListRow& row) {
     };
 }
 
-json citationToJson(const tapescope::EvidenceCitation& citation) {
+json citationToJson(const tape_payloads::EvidenceCitation& citation) {
     return json{
         {"kind", citation.kind},
         {"artifact_id", citation.artifactId},
@@ -1561,7 +1561,7 @@ json citationToJson(const tapescope::EvidenceCitation& citation) {
     };
 }
 
-json replayRangeToJson(const std::optional<tapescope::RangeQuery>& replayRange) {
+json replayRangeToJson(const std::optional<tape_payloads::RangeQuery>& replayRange) {
     if (!replayRange.has_value()) {
         return nullptr;
     }
@@ -1571,10 +1571,10 @@ json replayRangeToJson(const std::optional<tapescope::RangeQuery>& replayRange) 
     };
 }
 
-json investigationResultFromPayload(const tapescope::InvestigationPayload& payload) {
+json investigationResultFromPayload(const tape_payloads::InvestigationPayload& payload) {
     json events = json::array();
     for (const auto& rawEvent : payload.events) {
-        events.push_back(eventRowToJson(tapescope::client_internal::parseEventRow(rawEvent)));
+        events.push_back(eventRowToJson(tape_payloads::parseEventRow(rawEvent)));
     }
 
     json incidentRows = json::array();
@@ -1608,7 +1608,7 @@ json investigationResultFromPayload(const tapescope::InvestigationPayload& paylo
     };
 }
 
-json qualityResultFromPayload(const tapescope::SessionQualityPayload& payload) {
+json qualityResultFromPayload(const tape_payloads::SessionQualityPayload& payload) {
     return json{
         {"served_revision_id", payload.summary.contains("served_revision_id")
                                    ? payload.summary.at("served_revision_id")
@@ -1624,7 +1624,7 @@ json qualityResultFromPayload(const tapescope::SessionQualityPayload& payload) {
     };
 }
 
-json exportResultFromPayload(const tapescope::ArtifactExportPayload& payload) {
+json exportResultFromPayload(const tape_payloads::ArtifactExportPayload& payload) {
     return json{
         {"artifact_id", payload.artifactId},
         {"format", payload.format},
@@ -1634,7 +1634,7 @@ json exportResultFromPayload(const tapescope::ArtifactExportPayload& payload) {
     };
 }
 
-json eventListResultFromPayload(const tapescope::EventListPayload& payload) {
+json eventListResultFromPayload(const tape_payloads::EventListPayload& payload) {
     json events = json::array();
     for (const auto& row : payload.events) {
         events.push_back(eventRowToJson(row));
@@ -1645,7 +1645,7 @@ json eventListResultFromPayload(const tapescope::EventListPayload& payload) {
     };
 }
 
-json incidentListResultFromPayload(const tapescope::IncidentListPayload& payload) {
+json incidentListResultFromPayload(const tape_payloads::IncidentListPayload& payload) {
     json incidents = json::array();
     for (const auto& row : payload.incidents) {
         incidents.push_back(incidentRowToJson(row));
@@ -1734,7 +1734,7 @@ json replaySnapshotResultFromResponse(const tape_engine::QueryResponse& response
     };
 }
 
-json reportInventoryRowToJson(const tapescope::ReportInventoryRow& row) {
+json reportInventoryRowToJson(const tape_payloads::ReportInventoryRow& row) {
     return json{
         {"report_id", row.reportId},
         {"revision_id", row.revisionId},
@@ -1744,7 +1744,7 @@ json reportInventoryRowToJson(const tapescope::ReportInventoryRow& row) {
     };
 }
 
-json reportInventoryResultFromPayload(const tapescope::ReportInventoryPayload& payload, bool sessionReports) {
+json reportInventoryResultFromPayload(const tape_payloads::ReportInventoryPayload& payload, bool sessionReports) {
     json rows = json::array();
     const auto& source = sessionReports ? payload.sessionReports : payload.caseReports;
     for (const auto& row : source) {
@@ -1797,7 +1797,7 @@ json bundleImportResultFromResponse(const tape_engine::QueryResponse& response) 
     };
 }
 
-json seekOrderResultFromPayload(const tapescope::SeekOrderPayload& payload) {
+json seekOrderResultFromPayload(const tape_payloads::SeekOrderPayload& payload) {
     return json{
         {"served_revision_id", payload.summary.contains("served_revision_id")
                                    ? payload.summary.at("served_revision_id")
@@ -3362,8 +3362,8 @@ json Adapter::invokeReadProtectedWindowTool(const ToolSpec& tool, const json& ar
                                                 result.error.retryable,
                                                 revisionUnavailable()));
     }
-    const auto packed = tapescope::client_internal::packInvestigationPayload(
-        tapescope::client_internal::makeSuccess(result.value));
+    const auto packed = tape_payloads::packInvestigationPayload(
+        tape_payloads::makeSuccess(result.value));
     if (!packed.ok()) {
         return makeToolResult(makeErrorEnvelope(tool.name,
                                                 tape_engine::queryOperationName(tool.engineOperation),

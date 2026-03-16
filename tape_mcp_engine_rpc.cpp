@@ -1,15 +1,14 @@
 #include "tape_mcp_engine_rpc.h"
 
-#include "tapescope_client_internal.h"
-
+#include <cstdlib>
 #include <utility>
 
 namespace tape_mcp {
 
 namespace {
 
-using tapescope::client_internal::makeError;
-using tapescope::client_internal::makeSuccess;
+using tape_payloads::makeError;
+using tape_payloads::makeSuccess;
 
 tape_engine::QueryRequest makeRequest(tape_engine::QueryOperation operation, const char* requestId) {
     return tape_engine::makeQueryRequest(operation, requestId == nullptr ? std::string() : std::string(requestId));
@@ -119,28 +118,28 @@ EngineRpcResult<T> makeRpcFailure(const EngineRpcError& error) {
 }
 
 template <typename T>
-EngineRpcResult<T> convertPackedResult(const tapescope::QueryResult<T>& result) {
+EngineRpcResult<T> convertPackedResult(const tape_payloads::QueryResult<T>& result) {
     if (result.ok()) {
         return makeRpcSuccess(result.value);
     }
     return makeRpcFailure<T>(makeRpcError(
-        result.error.kind == tapescope::QueryErrorKind::Transport
+        result.error.kind == tape_payloads::QueryErrorKind::Transport
             ? EngineRpcErrorKind::Transport
-            : result.error.kind == tapescope::QueryErrorKind::Remote
+            : result.error.kind == tape_payloads::QueryErrorKind::Remote
                 ? EngineRpcErrorKind::Remote
                 : EngineRpcErrorKind::MalformedResponse,
         result.error.message));
 }
 
 EngineRpcResult<tape_engine::QueryResponse> convertRawResult(
-    const tapescope::QueryResult<tape_engine::QueryResponse>& result) {
+    const tape_payloads::QueryResult<tape_engine::QueryResponse>& result) {
     if (result.ok()) {
         return makeRpcSuccess(result.value);
     }
     return makeRpcFailure<tape_engine::QueryResponse>(makeRpcError(
-        result.error.kind == tapescope::QueryErrorKind::Transport
+        result.error.kind == tape_payloads::QueryErrorKind::Transport
             ? EngineRpcErrorKind::Transport
-            : result.error.kind == tapescope::QueryErrorKind::Remote
+            : result.error.kind == tape_payloads::QueryErrorKind::Remote
                 ? EngineRpcErrorKind::Remote
                 : EngineRpcErrorKind::MalformedResponse,
         result.error.message));
@@ -152,7 +151,10 @@ EngineRpcClient::EngineRpcClient(EngineRpcClientConfig config)
     : config_(std::move(config)),
       client_([&]() {
           if (config_.socketPath.empty()) {
-              config_.socketPath = tapescope::defaultSocketPath();
+              const char* value = std::getenv("LONG_TAPE_ENGINE_SOCKET");
+              config_.socketPath = (value != nullptr && value[0] != '\0')
+                  ? std::string(value)
+                  : std::string("/tmp/tape-engine.sock");
           }
           return config_.socketPath;
       }()) {}
@@ -161,10 +163,10 @@ const EngineRpcClientConfig& EngineRpcClient::config() const {
     return config_;
 }
 
-tapescope::QueryResult<tape_engine::QueryResponse> EngineRpcClient::performRawQuery(
+tape_payloads::QueryResult<tape_engine::QueryResponse> EngineRpcClient::performRawQuery(
     const tape_engine::QueryRequest& request) const {
     if (config_.socketPath.empty()) {
-        return makeError<tape_engine::QueryResponse>(tapescope::QueryErrorKind::Transport,
+        return makeError<tape_engine::QueryResponse>(tape_payloads::QueryErrorKind::Transport,
                                                      "engine socket path is empty");
     }
 
@@ -173,10 +175,10 @@ tapescope::QueryResult<tape_engine::QueryResponse> EngineRpcClient::performRawQu
     if (!client_.query(request, &response, &errorMessage)) {
         const EngineRpcError error = classifyFailure(errorMessage);
         const auto kind = error.kind == EngineRpcErrorKind::Transport
-            ? tapescope::QueryErrorKind::Transport
+            ? tape_payloads::QueryErrorKind::Transport
             : error.kind == EngineRpcErrorKind::MalformedResponse
-                ? tapescope::QueryErrorKind::MalformedResponse
-                : tapescope::QueryErrorKind::Remote;
+                ? tape_payloads::QueryErrorKind::MalformedResponse
+                : tape_payloads::QueryErrorKind::Remote;
         return makeError<tape_engine::QueryResponse>(kind, error.message);
     }
     return makeSuccess(std::move(response));
@@ -193,20 +195,20 @@ EngineRpcError EngineRpcClient::classifyFailure(const std::string& errorMessage)
     return makeRpcError(EngineRpcErrorKind::Remote, errorMessage);
 }
 
-EngineRpcResult<tapescope::StatusSnapshot> EngineRpcClient::status() const {
+EngineRpcResult<tape_payloads::StatusSnapshot> EngineRpcClient::status() const {
     const auto response = performRawQuery(makeRequest(tape_engine::QueryOperation::Status, "tape-mcp-status"));
     if (!response.ok()) {
-        return convertPackedResult<tapescope::StatusSnapshot>(
-            makeError<tapescope::StatusSnapshot>(response.error.kind, response.error.message));
+        return convertPackedResult<tape_payloads::StatusSnapshot>(
+            makeError<tape_payloads::StatusSnapshot>(response.error.kind, response.error.message));
     }
 
     const auto& summary = response.value.summary;
     if (!summary.is_object()) {
-        return makeRpcFailure<tapescope::StatusSnapshot>(
+        return makeRpcFailure<tape_payloads::StatusSnapshot>(
             makeRpcError(EngineRpcErrorKind::MalformedResponse, "status summary must be an object"));
     }
 
-    tapescope::StatusSnapshot snapshot;
+    tape_payloads::StatusSnapshot snapshot;
     snapshot.socketPath = summary.value("socket_path", config_.socketPath);
     snapshot.dataDir = summary.value("data_dir", std::string());
     snapshot.instrumentId = summary.value("instrument_id", std::string());
@@ -217,31 +219,31 @@ EngineRpcResult<tapescope::StatusSnapshot> EngineRpcClient::status() const {
     return makeRpcSuccess(std::move(snapshot));
 }
 
-EngineRpcResult<tapescope::EventListPayload> EngineRpcClient::readLiveTail(std::size_t limit) const {
+EngineRpcResult<tape_payloads::EventListPayload> EngineRpcClient::readLiveTail(std::size_t limit) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadLiveTail, "tape-mcp-read-live-tail");
     request.limit = limit;
-    return convertPackedResult(tapescope::client_internal::packEventListPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packEventListPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::EventListPayload> EngineRpcClient::readRange(
+EngineRpcResult<tape_payloads::EventListPayload> EngineRpcClient::readRange(
     const SessionWindowQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadRange, "tape-mcp-read-range");
     applySessionWindow(&request, query);
-    return convertPackedResult(tapescope::client_internal::packEventListPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packEventListPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::EventListPayload> EngineRpcClient::findOrderAnchor(
+EngineRpcResult<tape_payloads::EventListPayload> EngineRpcClient::findOrderAnchor(
     const OrderCaseQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::FindOrderAnchor, "tape-mcp-find-order-anchor");
     applyOrderAnchor(&request, query);
-    return convertPackedResult(tapescope::client_internal::packEventListPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packEventListPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::IncidentListPayload> EngineRpcClient::listIncidents(
+EngineRpcResult<tape_payloads::IncidentListPayload> EngineRpcClient::listIncidents(
     const ListQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ListIncidents, "tape-mcp-list-incidents");
     applyListQuery(&request, query);
-    return convertPackedResult(tapescope::client_internal::packIncidentListPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packIncidentListPayload(performRawQuery(request)));
 }
 
 EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listOrderAnchors(
@@ -251,9 +253,9 @@ EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listOrderAnchors(
     const auto response = performRawQuery(request);
     if (!response.ok()) {
         return makeRpcFailure<tape_engine::QueryResponse>(makeRpcError(
-            response.error.kind == tapescope::QueryErrorKind::Transport
+            response.error.kind == tape_payloads::QueryErrorKind::Transport
                 ? EngineRpcErrorKind::Transport
-                : response.error.kind == tapescope::QueryErrorKind::Remote
+                : response.error.kind == tape_payloads::QueryErrorKind::Remote
                     ? EngineRpcErrorKind::Remote
                     : EngineRpcErrorKind::MalformedResponse,
             response.error.message));
@@ -268,9 +270,9 @@ EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listProtectedWindow
     const auto response = performRawQuery(request);
     if (!response.ok()) {
         return makeRpcFailure<tape_engine::QueryResponse>(makeRpcError(
-            response.error.kind == tapescope::QueryErrorKind::Transport
+            response.error.kind == tape_payloads::QueryErrorKind::Transport
                 ? EngineRpcErrorKind::Transport
-                : response.error.kind == tapescope::QueryErrorKind::Remote
+                : response.error.kind == tape_payloads::QueryErrorKind::Remote
                     ? EngineRpcErrorKind::Remote
                     : EngineRpcErrorKind::MalformedResponse,
             response.error.message));
@@ -285,9 +287,9 @@ EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listFindings(
     const auto response = performRawQuery(request);
     if (!response.ok()) {
         return makeRpcFailure<tape_engine::QueryResponse>(makeRpcError(
-            response.error.kind == tapescope::QueryErrorKind::Transport
+            response.error.kind == tape_payloads::QueryErrorKind::Transport
                 ? EngineRpcErrorKind::Transport
-                : response.error.kind == tapescope::QueryErrorKind::Remote
+                : response.error.kind == tape_payloads::QueryErrorKind::Remote
                     ? EngineRpcErrorKind::Remote
                     : EngineRpcErrorKind::MalformedResponse,
             response.error.message));
@@ -295,109 +297,109 @@ EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listFindings(
     return makeRpcSuccess(response.value);
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::readSessionOverview(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readSessionOverview(
     const SessionWindowQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadSessionOverview, "tape-mcp-read-session-overview");
     applySessionWindow(&request, query);
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::scanSessionReport(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::scanSessionReport(
     const SessionWindowQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ScanSessionReport, "tape-mcp-scan-session-report");
     applySessionWindow(&request, query);
     request.includeLiveTail = false;
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::readSessionReport(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readSessionReport(
     const NumericIdQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadSessionReport, "tape-mcp-read-session-report");
     applyNumericIdQuery(&request, query);
     request.reportId = query.id;
     request.includeLiveTail = false;
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::ReportInventoryPayload> EngineRpcClient::listSessionReports(
+EngineRpcResult<tape_payloads::ReportInventoryPayload> EngineRpcClient::listSessionReports(
     const ListQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ListSessionReports, "tape-mcp-list-session-reports");
     applyListQuery(&request, query);
-    return convertPackedResult(tapescope::client_internal::packReportInventoryPayload(performRawQuery(request), true));
+    return convertPackedResult(tape_payloads::packReportInventoryPayload(performRawQuery(request), true));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::scanIncidentReport(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::scanIncidentReport(
     const IncidentQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ScanIncidentReport, "tape-mcp-scan-incident-report");
     request.logicalIncidentId = query.logicalIncidentId;
     request.revisionId = query.revisionId;
     request.limit = query.limit;
     request.includeLiveTail = false;
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::scanOrderCaseReport(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::scanOrderCaseReport(
     const OrderCaseQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ScanOrderCaseReport, "tape-mcp-scan-order-case-report");
     applyOrderAnchor(&request, query);
     request.includeLiveTail = false;
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::readCaseReport(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readCaseReport(
     const NumericIdQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadCaseReport, "tape-mcp-read-case-report");
     applyNumericIdQuery(&request, query);
     request.reportId = query.id;
     request.includeLiveTail = false;
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::ReportInventoryPayload> EngineRpcClient::listCaseReports(
+EngineRpcResult<tape_payloads::ReportInventoryPayload> EngineRpcClient::listCaseReports(
     const ListQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ListCaseReports, "tape-mcp-list-case-reports");
     applyListQuery(&request, query);
-    return convertPackedResult(tapescope::client_internal::packReportInventoryPayload(performRawQuery(request), false));
+    return convertPackedResult(tape_payloads::packReportInventoryPayload(performRawQuery(request), false));
 }
 
-EngineRpcResult<tapescope::SeekOrderPayload> EngineRpcClient::seekOrderAnchor(
+EngineRpcResult<tape_payloads::SeekOrderPayload> EngineRpcClient::seekOrderAnchor(
     const OrderCaseQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::SeekOrderAnchor, "tape-mcp-seek-order-anchor");
     applyOrderAnchor(&request, query);
-    return convertPackedResult(tapescope::client_internal::packSeekOrderPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packSeekOrderPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::readFinding(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readFinding(
     const NumericIdQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadFinding, "tape-mcp-read-finding");
     applyNumericIdQuery(&request, query);
     request.findingId = query.id;
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::readOrderCase(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readOrderCase(
     const OrderCaseQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadOrderCase, "tape-mcp-read-order-case");
     applyOrderAnchor(&request, query);
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::readIncident(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readIncident(
     const IncidentQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadIncident, "tape-mcp-read-incident");
     request.logicalIncidentId = query.logicalIncidentId;
     request.revisionId = query.revisionId;
     request.limit = query.limit;
     request.includeLiveTail = query.includeLiveTail;
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::readOrderAnchor(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readOrderAnchor(
     const NumericIdQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadOrderAnchor, "tape-mcp-read-order-anchor");
     applyNumericIdQuery(&request, query);
     request.anchorId = query.id;
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
 EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::readProtectedWindow(
@@ -415,18 +417,18 @@ EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::replaySnapshot(
     return convertRawResult(performRawQuery(request));
 }
 
-EngineRpcResult<tapescope::InvestigationPayload> EngineRpcClient::readArtifact(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readArtifact(
     const ArtifactQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadArtifact, "tape-mcp-read-artifact");
     applyArtifactQuery(&request, query);
-    return convertPackedResult(tapescope::client_internal::packInvestigationPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tapescope::ArtifactExportPayload> EngineRpcClient::exportArtifact(
+EngineRpcResult<tape_payloads::ArtifactExportPayload> EngineRpcClient::exportArtifact(
     const ArtifactExportQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ExportArtifact, "tape-mcp-export-artifact");
     applyExportQuery(&request, query);
-    return convertPackedResult(tapescope::client_internal::packArtifactExportPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packArtifactExportPayload(performRawQuery(request)));
 }
 
 EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::exportSessionBundle(
@@ -457,11 +459,11 @@ EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listImportedCases(
     return convertRawResult(performRawQuery(request));
 }
 
-EngineRpcResult<tapescope::SessionQualityPayload> EngineRpcClient::readSessionQuality(
+EngineRpcResult<tape_payloads::SessionQualityPayload> EngineRpcClient::readSessionQuality(
     const SessionWindowQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadSessionQuality, "tape-mcp-read-session-quality");
     applySessionWindow(&request, query);
-    return convertPackedResult(tapescope::client_internal::packSessionQualityPayload(performRawQuery(request)));
+    return convertPackedResult(tape_payloads::packSessionQualityPayload(performRawQuery(request)));
 }
 
 std::string errorCodeForKind(const EngineRpcErrorKind kind) {
