@@ -86,6 +86,7 @@ endif()
 set(APP_SOURCES
     main.mm
     app_shared.cpp
+    controller_claim.cpp
     mac_observability.mm
     trading_export_panels.mm
     trading_refresh_scheduler.mm
@@ -375,6 +376,7 @@ if(BUILD_TESTING)
     add_executable(tws_gui_tests
         tests/trade_trace_tests.cpp
         app_shared.cpp
+        controller_claim.cpp
         trace_exporter.cpp
         trading_ui_format.cpp
         mac_observability.mm

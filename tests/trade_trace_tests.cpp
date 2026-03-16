@@ -1,4 +1,5 @@
 #include "app_shared.h"
+#include "controller_claim.h"
 #include "trace_exporter.h"
 #include "trading_ui_format.h"
 #include "trading_wrapper.h"
@@ -41,12 +42,31 @@ const fs::path& testDataDir() {
     return path;
 }
 
+const fs::path& testControllerClaimDir() {
+    static const fs::path path = [] {
+        char pattern[] = "/tmp/tws_controller_claim_tests.XXXXXX";
+        char* created = mkdtemp(pattern);
+        if (created == nullptr) {
+            throw std::runtime_error("mkdtemp failed for controller claim dir");
+        }
+        setenv("TWS_CONTROLLER_CLAIM_DIR", created, 1);
+        return fs::path(created);
+    }();
+    return path;
+}
+
 void clearTestFiles() {
     resetSharedDataForTesting();
     std::error_code ec;
     fs::create_directories(testDataDir(), ec);
     fs::remove(tradeTraceLogPath(), ec);
     fs::remove(runtimeJournalLogPath(), ec);
+}
+
+void clearControllerClaimFiles() {
+    std::error_code ec;
+    fs::remove_all(testControllerClaimDir(), ec);
+    fs::create_directories(testControllerClaimDir(), ec);
 }
 
 json makeTraceLine(std::uint64_t traceId,
@@ -250,6 +270,39 @@ void testWebSocketRuntimeGuards() {
     }
     expect(!consumeWebSocketOrderRateLimit(&error), "rate limit should reject excessive order burst");
     expectContains(error, "Too many WebSocket order requests", "rate limit error should be descriptive");
+}
+
+void testControllerClaimLeaseBlocksReclaimUntilRelease() {
+    clearControllerClaimFiles();
+
+    ControllerClaimLease first;
+    ControllerClaimLease second;
+    ControllerClaimLease different;
+    std::string error;
+
+    expect(tryAcquireControllerClaim("DUALSENSE_slot_0", first, &error),
+           "first controller claim should succeed: " + error);
+    expect(hasControllerClaim(first), "first controller claim should hold a lease");
+
+    expect(!tryAcquireControllerClaim("DUALSENSE_slot_0", second, &error),
+           "second claim for the same key should fail while leased");
+    expectContains(error, "already claimed by another app process",
+                   "same-key lease failure should describe the active claim");
+
+    error.clear();
+    expect(tryAcquireControllerClaim("DUALSENSE_slot_1", different, &error),
+           "different controller key should claim independently: " + error);
+    expect(hasControllerClaim(different), "different controller claim should hold a lease");
+
+    releaseControllerClaim(first);
+    expect(!hasControllerClaim(first), "released claim should clear the original lease");
+
+    error.clear();
+    expect(tryAcquireControllerClaim("DUALSENSE_slot_0", second, &error),
+           "same key should be reclaimable after release: " + error);
+
+    releaseControllerClaim(second);
+    releaseControllerClaim(different);
 }
 
 void testRecoverySnapshotReportsAbnormalShutdown() {
@@ -1336,6 +1389,7 @@ int main() {
         testTraceIdFloorRecoversFromLog();
         testReplayHandlesPartialFillsAndCommission();
         testWebSocketRuntimeGuards();
+        testControllerClaimLeaseBlocksReclaimUntilRelease();
         testRecoverySnapshotReportsAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();
