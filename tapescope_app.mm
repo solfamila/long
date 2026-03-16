@@ -870,7 +870,7 @@ using namespace tapescope_support;
                                    [NSColor labelColor]);
     [headerStack addArrangedSubview:title];
 
-    NSTextField* subtitle = MakeLabel(@"Phase 4/6: native status, live-tail, overview, incident, replay-target, range, quality, finding, anchor, order case, report inventory, artifact/export, and portable bundle workflows backed by the engine query seam.",
+    NSTextField* subtitle = MakeLabel(@"Phase 4/6/7: native status, live-tail, overview, incident, replay-target, range, quality, finding, anchor, order case, report inventory, artifact/export, portable bundle workflows, and local Phase 7 artifact reopen flows backed by the engine and durable artifact seams.",
                                       [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium],
                                       TapeInkMutedColor());
     subtitle.lineBreakMode = NSLineBreakByWordWrapping;
@@ -949,6 +949,7 @@ using namespace tapescope_support;
     [_tabView addTabViewItem:[self orderTabItem]];
     [_tabView addTabViewItem:[self orderCaseTabItem]];
     [_tabView addTabViewItem:[self reportInventoryTabItem]];
+    [_tabView addTabViewItem:[self phase7ArtifactsTabItem]];
     [_tabView addTabViewItem:[self artifactTabItem]];
     [_tabView.heightAnchor constraintGreaterThanOrEqualToConstant:520.0].active = YES;
 

@@ -9,6 +9,7 @@
 #include "tape_engine_client.h"
 #include "tape_engine.h"
 #include "tape_engine_protocol.h"
+#include "tape_phase7_artifacts.h"
 #include "trace_exporter.h"
 #include "trading_ui_format.h"
 #include "trading_wrapper.h"

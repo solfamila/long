@@ -248,6 +248,209 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                typedImportedCaseBundleVerify.value.importedCase.artifactId == typedCaseBundleImport.value.artifactId,
            "TapeScope typed imported case-bundle verify should surface the matching imported artifact");
 
+    const auto typedPhase7Profiles = client.listAnalysisProfilesPayload();
+    expect(typedPhase7Profiles.ok(), "TapeScope typed phase7 profile list should succeed: " +
+                                         tapescope::QueryClient::describeError(typedPhase7Profiles.error));
+    expect(!typedPhase7Profiles.value.empty() &&
+               typedPhase7Profiles.value.front().analysisProfile == tape_phase7::kDefaultAnalyzerProfile,
+           "TapeScope typed phase7 profile list should expose the default analysis profile");
+
+    const auto typedPhase7Profile = client.readAnalysisProfilePayload(tape_phase7::kDefaultAnalyzerProfile);
+    expect(typedPhase7Profile.ok(), "TapeScope typed phase7 profile read should succeed: " +
+                                        tapescope::QueryClient::describeError(typedPhase7Profile.error));
+    expect(typedPhase7Profile.value.defaultProfile,
+           "TapeScope typed phase7 profile read should preserve the default profile flag");
+
+    const auto phase7AnalysisRun = client.runAnalysisPayload(movedCaseBundlePath.string(),
+                                                             tape_phase7::kDefaultAnalyzerProfile);
+    expect(phase7AnalysisRun.ok(), "TapeScope typed phase7 analysis run should succeed: " +
+                                       tapescope::QueryClient::describeError(phase7AnalysisRun.error));
+    expect(phase7AnalysisRun.value.created,
+           "TapeScope typed phase7 analysis run should create the artifact on first run");
+    const auto reusedPhase7AnalysisRun = client.runAnalysisPayload(movedCaseBundlePath.string(),
+                                                                   tape_phase7::kDefaultAnalyzerProfile);
+    expect(reusedPhase7AnalysisRun.ok(), "TapeScope typed phase7 analysis rerun should succeed: " +
+                                             tapescope::QueryClient::describeError(reusedPhase7AnalysisRun.error));
+    expect(!reusedPhase7AnalysisRun.value.created,
+           "TapeScope typed phase7 analysis rerun should reuse the deterministic artifact");
+    const auto& phase7AnalysisArtifact = phase7AnalysisRun.value.artifact;
+    const auto phase7SessionAnalysisRun = client.runAnalysisPayload(typedSessionBundleExport.value.bundlePath,
+                                                                    tape_phase7::kDefaultAnalyzerProfile);
+    expect(phase7SessionAnalysisRun.ok(), "TapeScope typed phase7 session analysis run should succeed: " +
+                                              tapescope::QueryClient::describeError(phase7SessionAnalysisRun.error));
+    const auto& phase7SessionAnalysisArtifact = phase7SessionAnalysisRun.value.artifact;
+    expect(!phase7AnalysisArtifact.findings.empty(),
+           "TapeScope typed phase7 analysis should emit at least one finding for dry-run planning");
+    const std::vector<std::string> selectedFindingIds = {phase7AnalysisArtifact.findings.front().findingId};
+
+    const auto typedPhase7AnalysisList = client.listAnalysisArtifactsPayload(10);
+    expect(typedPhase7AnalysisList.ok(), "TapeScope typed phase7 analysis inventory should succeed: " +
+                                             tapescope::QueryClient::describeError(typedPhase7AnalysisList.error));
+    expect(!typedPhase7AnalysisList.value.empty(),
+           "TapeScope typed phase7 analysis inventory should parse durable analysis artifacts");
+
+    const auto typedPhase7Analysis = client.readAnalysisArtifactPayload(
+        phase7AnalysisArtifact.analysisArtifact.artifactId);
+    expect(typedPhase7Analysis.ok(), "TapeScope typed phase7 analysis read should succeed: " +
+                                         tapescope::QueryClient::describeError(typedPhase7Analysis.error));
+    expect(typedPhase7Analysis.value.analysisArtifact.artifactId ==
+               phase7AnalysisArtifact.analysisArtifact.artifactId,
+           "TapeScope typed phase7 analysis read should preserve the requested artifact id");
+    expect(typedPhase7Analysis.value.sourceArtifact.artifactId ==
+               phase7AnalysisArtifact.sourceArtifact.artifactId,
+           "TapeScope typed phase7 analysis read should preserve the linked source artifact id");
+
+    tapescope::Phase7AnalysisInventorySelection filteredAnalysisSelection;
+    filteredAnalysisSelection.sourceArtifactId = phase7AnalysisArtifact.sourceArtifact.artifactId;
+    filteredAnalysisSelection.analysisProfile = tape_phase7::kDefaultAnalyzerProfile;
+    filteredAnalysisSelection.limit = 10;
+    const auto filteredPhase7Analyses = client.listAnalysisArtifactsPayload(filteredAnalysisSelection);
+    expect(filteredPhase7Analyses.ok(), "TapeScope filtered phase7 analysis inventory should succeed: " +
+                                            tapescope::QueryClient::describeError(filteredPhase7Analyses.error));
+    expect(filteredPhase7Analyses.value.matchedCount >= 1 && !filteredPhase7Analyses.value.artifacts.empty(),
+           "TapeScope filtered phase7 analysis inventory should return the matching durable analysis");
+    expect(filteredPhase7Analyses.value.appliedFilters.value("source_artifact_id", std::string()) ==
+                   phase7AnalysisArtifact.sourceArtifact.artifactId &&
+               filteredPhase7Analyses.value.appliedFilters.value("analysis_profile", std::string()) ==
+                   tape_phase7::kDefaultAnalyzerProfile,
+           "TapeScope filtered phase7 analysis inventory should preserve the requested lineage filters");
+
+    tapescope::Phase7AnalysisInventorySelection sortedAnalysisSelection;
+    sortedAnalysisSelection.sortBy = "source_artifact_asc";
+    sortedAnalysisSelection.limit = 10;
+    const auto sortedPhase7Analyses = client.listAnalysisArtifactsPayload(sortedAnalysisSelection);
+    expect(sortedPhase7Analyses.ok(), "TapeScope sorted phase7 analysis inventory should succeed: " +
+                                          tapescope::QueryClient::describeError(sortedPhase7Analyses.error));
+    expect(sortedPhase7Analyses.value.artifacts.size() >= 2,
+           "TapeScope sorted phase7 analysis inventory should expose both session and case analyses");
+    expect(sortedPhase7Analyses.value.appliedFilters.value("sort_by", std::string()) == "source_artifact_asc",
+           "TapeScope sorted phase7 analysis inventory should preserve the requested sort mode");
+    expect(sortedPhase7Analyses.value.artifacts.front().sourceArtifact.artifactId <=
+               sortedPhase7Analyses.value.artifacts.back().sourceArtifact.artifactId,
+           "TapeScope sorted phase7 analysis inventory should sort by source artifact id");
+
+    const auto phase7PlaybookBuild =
+        client.buildPlaybookPayload(phase7AnalysisArtifact.analysisArtifact.artifactId, selectedFindingIds);
+    expect(phase7PlaybookBuild.ok(), "TapeScope typed phase7 playbook build should succeed: " +
+                                         tapescope::QueryClient::describeError(phase7PlaybookBuild.error));
+    expect(phase7PlaybookBuild.value.created,
+           "TapeScope typed phase7 playbook build should create the dry-run playbook on first run");
+    expect(phase7PlaybookBuild.value.artifact.filteredFindingIds == selectedFindingIds,
+           "TapeScope typed phase7 playbook build should preserve the selected finding scope");
+    const auto reusedPhase7PlaybookBuild =
+        client.buildPlaybookPayload(phase7AnalysisArtifact.analysisArtifact.artifactId, selectedFindingIds);
+    expect(reusedPhase7PlaybookBuild.ok(), "TapeScope typed phase7 playbook rerun should succeed: " +
+                                               tapescope::QueryClient::describeError(reusedPhase7PlaybookBuild.error));
+    expect(!reusedPhase7PlaybookBuild.value.created,
+           "TapeScope typed phase7 playbook rerun should reuse the deterministic dry-run playbook");
+    const auto& phase7PlaybookArtifact = phase7PlaybookBuild.value.artifact;
+    const auto phase7FullPlaybookBuild =
+        client.buildPlaybookPayload(phase7AnalysisArtifact.analysisArtifact.artifactId, {});
+    expect(phase7FullPlaybookBuild.ok(), "TapeScope typed full-scope phase7 playbook build should succeed: " +
+                                             tapescope::QueryClient::describeError(phase7FullPlaybookBuild.error));
+    const auto& phase7FullPlaybookArtifact = phase7FullPlaybookBuild.value.artifact;
+
+    const auto typedPhase7PlaybookList = client.listPlaybookArtifactsPayload(10);
+    expect(typedPhase7PlaybookList.ok(), "TapeScope typed phase7 playbook inventory should succeed: " +
+                                             tapescope::QueryClient::describeError(typedPhase7PlaybookList.error));
+    expect(!typedPhase7PlaybookList.value.empty(),
+           "TapeScope typed phase7 playbook inventory should parse durable dry-run playbooks");
+
+    const auto typedPhase7Playbook = client.readPlaybookArtifactPayload(
+        phase7PlaybookArtifact.playbookArtifact.artifactId);
+    expect(typedPhase7Playbook.ok(), "TapeScope typed phase7 playbook read should succeed: " +
+                                         tapescope::QueryClient::describeError(typedPhase7Playbook.error));
+    expect(typedPhase7Playbook.value.playbookArtifact.artifactId ==
+               phase7PlaybookArtifact.playbookArtifact.artifactId,
+           "TapeScope typed phase7 playbook read should preserve the requested artifact id");
+    expect(typedPhase7Playbook.value.mode == tape_phase7::kDefaultPlaybookMode,
+           "TapeScope typed phase7 playbook read should keep apply deferred as dry_run");
+    expect(typedPhase7Playbook.value.analysisArtifact.artifactId ==
+               phase7AnalysisArtifact.analysisArtifact.artifactId,
+           "TapeScope typed phase7 playbook read should preserve the linked analysis artifact id");
+    expect(typedPhase7Playbook.value.filteredFindingIds == selectedFindingIds,
+           "TapeScope typed phase7 playbook read should preserve the selected finding scope");
+
+    const auto phase7ExecutionLedgerBuild =
+        client.buildExecutionLedgerPayload(phase7PlaybookArtifact.playbookArtifact.artifactId);
+    expect(phase7ExecutionLedgerBuild.ok(), "TapeScope typed phase7 execution ledger build should succeed: " +
+                                                tapescope::QueryClient::describeError(phase7ExecutionLedgerBuild.error));
+    expect(phase7ExecutionLedgerBuild.value.created,
+           "TapeScope typed phase7 execution ledger build should create the ledger on first run");
+    expect(phase7ExecutionLedgerBuild.value.artifact.ledgerStatus == tape_phase7::kDefaultLedgerStatus,
+           "TapeScope typed phase7 execution ledger should keep apply deferred behind the default review status");
+    expect(phase7ExecutionLedgerBuild.value.artifact.entries.size() ==
+               phase7PlaybookArtifact.plannedActions.size(),
+           "TapeScope typed phase7 execution ledger should preserve one review entry per planned action");
+    const auto reusedPhase7ExecutionLedgerBuild =
+        client.buildExecutionLedgerPayload(phase7PlaybookArtifact.playbookArtifact.artifactId);
+    expect(reusedPhase7ExecutionLedgerBuild.ok(), "TapeScope typed phase7 execution ledger rerun should succeed: " +
+                                                      tapescope::QueryClient::describeError(reusedPhase7ExecutionLedgerBuild.error));
+    expect(!reusedPhase7ExecutionLedgerBuild.value.created,
+           "TapeScope typed phase7 execution ledger rerun should reuse the deterministic ledger");
+
+    const auto typedPhase7ExecutionLedger = client.readExecutionLedgerArtifactPayload(
+        phase7ExecutionLedgerBuild.value.artifact.ledgerArtifact.artifactId);
+    expect(typedPhase7ExecutionLedger.ok(), "TapeScope typed phase7 execution ledger read should succeed: " +
+                                                tapescope::QueryClient::describeError(typedPhase7ExecutionLedger.error));
+    expect(typedPhase7ExecutionLedger.value.playbookArtifact.artifactId ==
+               phase7PlaybookArtifact.playbookArtifact.artifactId,
+           "TapeScope typed phase7 execution ledger read should preserve the linked playbook artifact id");
+    expect(typedPhase7ExecutionLedger.value.sourceArtifact.artifactId ==
+               phase7AnalysisArtifact.sourceArtifact.artifactId,
+           "TapeScope typed phase7 execution ledger read should preserve the linked source artifact id");
+
+    tapescope::Phase7ExecutionLedgerInventorySelection filteredLedgerSelection;
+    filteredLedgerSelection.playbookArtifactId = phase7PlaybookArtifact.playbookArtifact.artifactId;
+    filteredLedgerSelection.sourceArtifactId = phase7AnalysisArtifact.sourceArtifact.artifactId;
+    filteredLedgerSelection.limit = 10;
+    const auto filteredPhase7ExecutionLedgers = client.listExecutionLedgerArtifactsPayload(filteredLedgerSelection);
+    expect(filteredPhase7ExecutionLedgers.ok(), "TapeScope filtered phase7 execution ledger inventory should succeed: " +
+                                                    tapescope::QueryClient::describeError(filteredPhase7ExecutionLedgers.error));
+    expect(filteredPhase7ExecutionLedgers.value.matchedCount >= 1 &&
+               !filteredPhase7ExecutionLedgers.value.artifacts.empty(),
+           "TapeScope filtered phase7 execution ledger inventory should return the matching review ledger");
+    expect(filteredPhase7ExecutionLedgers.value.appliedFilters.value("playbook_artifact_id", std::string()) ==
+                   phase7PlaybookArtifact.playbookArtifact.artifactId &&
+               filteredPhase7ExecutionLedgers.value.appliedFilters.value("source_artifact_id", std::string()) ==
+                   phase7AnalysisArtifact.sourceArtifact.artifactId,
+           "TapeScope filtered phase7 execution ledger inventory should preserve the requested lineage filters");
+
+    tapescope::Phase7PlaybookInventorySelection filteredPlaybookSelection;
+    filteredPlaybookSelection.analysisArtifactId = phase7AnalysisArtifact.analysisArtifact.artifactId;
+    filteredPlaybookSelection.sourceArtifactId = phase7AnalysisArtifact.sourceArtifact.artifactId;
+    filteredPlaybookSelection.mode = tape_phase7::kDefaultPlaybookMode;
+    filteredPlaybookSelection.limit = 10;
+    const auto filteredPhase7Playbooks = client.listPlaybookArtifactsPayload(filteredPlaybookSelection);
+    expect(filteredPhase7Playbooks.ok(), "TapeScope filtered phase7 playbook inventory should succeed: " +
+                                             tapescope::QueryClient::describeError(filteredPhase7Playbooks.error));
+    expect(filteredPhase7Playbooks.value.matchedCount >= 1 && !filteredPhase7Playbooks.value.artifacts.empty(),
+           "TapeScope filtered phase7 playbook inventory should return the matching dry-run playbook");
+    expect(filteredPhase7Playbooks.value.appliedFilters.value("analysis_artifact_id", std::string()) ==
+                   phase7AnalysisArtifact.analysisArtifact.artifactId &&
+               filteredPhase7Playbooks.value.appliedFilters.value("source_artifact_id", std::string()) ==
+                   phase7AnalysisArtifact.sourceArtifact.artifactId &&
+               filteredPhase7Playbooks.value.appliedFilters.value("mode", std::string()) ==
+                   tape_phase7::kDefaultPlaybookMode,
+           "TapeScope filtered phase7 playbook inventory should preserve the requested lineage and mode filters");
+
+    tapescope::Phase7PlaybookInventorySelection sortedPlaybookSelection;
+    sortedPlaybookSelection.analysisArtifactId = phase7AnalysisArtifact.analysisArtifact.artifactId;
+    sortedPlaybookSelection.sortBy = "filtered_finding_count_desc";
+    sortedPlaybookSelection.limit = 10;
+    const auto sortedPhase7Playbooks = client.listPlaybookArtifactsPayload(sortedPlaybookSelection);
+    expect(sortedPhase7Playbooks.ok(), "TapeScope sorted phase7 playbook inventory should succeed: " +
+                                           tapescope::QueryClient::describeError(sortedPhase7Playbooks.error));
+    expect(sortedPhase7Playbooks.value.artifacts.size() >= 2,
+           "TapeScope sorted phase7 playbook inventory should expose both filtered and full-scope dry-run plans");
+    expect(sortedPhase7Playbooks.value.appliedFilters.value("sort_by", std::string()) == "filtered_finding_count_desc",
+           "TapeScope sorted phase7 playbook inventory should preserve the requested sort mode");
+    expect(sortedPhase7Playbooks.value.artifacts.front().filteredFindingIds.size() >=
+               sortedPhase7Playbooks.value.artifacts.back().filteredFindingIds.size(),
+           "TapeScope sorted phase7 playbook inventory should sort by filtered finding count");
+    expect(phase7FullPlaybookArtifact.filteredFindingIds.size() >= phase7PlaybookArtifact.filteredFindingIds.size(),
+           "TapeScope full-scope dry-run playbook should include at least as many findings as the selected subset plan");
+
     const auto typedIncidents = client.listIncidentsPayload(10);
     expect(typedIncidents.ok(), "TapeScope typed incident list should succeed: " +
                                     tapescope::QueryClient::describeError(typedIncidents.error));

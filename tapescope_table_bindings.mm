@@ -125,6 +125,18 @@ using namespace tapescope_support;
     if (tableView == _importedCaseTableView) {
         return static_cast<NSInteger>(_latestImportedCases.size());
     }
+    if (tableView == _phase7AnalysisTableView) {
+        return static_cast<NSInteger>(_latestPhase7AnalysisArtifacts.size());
+    }
+    if (tableView == _phase7PlaybookTableView) {
+        return static_cast<NSInteger>(_latestPhase7PlaybookArtifacts.size());
+    }
+    if (tableView == _phase7FindingTableView) {
+        return static_cast<NSInteger>(_phase7VisibleFindings.size());
+    }
+    if (tableView == _phase7ActionTableView) {
+        return static_cast<NSInteger>(_phase7VisibleActions.size());
+    }
     return 0;
 }
 
@@ -140,6 +152,10 @@ using namespace tapescope_support;
     const tapescope::IncidentListRow* incidentItem = nullptr;
     const tapescope::ReportInventoryRow* reportItem = nullptr;
     const tapescope::ImportedCaseRow* importedCaseItem = nullptr;
+    const tapescope::Phase7AnalysisArtifact* analysisArtifactItem = nullptr;
+    const tapescope::Phase7PlaybookArtifact* playbookArtifactItem = nullptr;
+    const tapescope::Phase7FindingRecord* phase7FindingItem = nullptr;
+    const tapescope::Phase7PlaybookAction* phase7ActionItem = nullptr;
     if (tableView == _liveTableView) {
         if (static_cast<std::size_t>(row) >= _liveEvents.size()) {
             return nil;
@@ -220,6 +236,26 @@ using namespace tapescope_support;
             return nil;
         }
         importedCaseItem = &_latestImportedCases.at(static_cast<std::size_t>(row));
+    } else if (tableView == _phase7AnalysisTableView) {
+        if (static_cast<std::size_t>(row) >= _latestPhase7AnalysisArtifacts.size()) {
+            return nil;
+        }
+        analysisArtifactItem = &_latestPhase7AnalysisArtifacts.at(static_cast<std::size_t>(row));
+    } else if (tableView == _phase7PlaybookTableView) {
+        if (static_cast<std::size_t>(row) >= _latestPhase7PlaybookArtifacts.size()) {
+            return nil;
+        }
+        playbookArtifactItem = &_latestPhase7PlaybookArtifacts.at(static_cast<std::size_t>(row));
+    } else if (tableView == _phase7FindingTableView) {
+        if (static_cast<std::size_t>(row) >= _phase7VisibleFindings.size()) {
+            return nil;
+        }
+        phase7FindingItem = &_phase7VisibleFindings.at(static_cast<std::size_t>(row));
+    } else if (tableView == _phase7ActionTableView) {
+        if (static_cast<std::size_t>(row) >= _phase7VisibleActions.size()) {
+            return nil;
+        }
+        phase7ActionItem = &_phase7VisibleActions.at(static_cast<std::size_t>(row));
     } else {
         return nil;
     }
@@ -353,6 +389,46 @@ using namespace tapescope_support;
         } else {
             value = importedCaseItem->headline;
         }
+    } else if (tableView == _phase7AnalysisTableView) {
+        if ([columnId isEqualToString:@"artifact_id"]) {
+            value = analysisArtifactItem->analysisArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"analysis_profile"]) {
+            value = analysisArtifactItem->analysisProfile;
+        } else if ([columnId isEqualToString:@"source_artifact_id"]) {
+            value = analysisArtifactItem->sourceArtifact.artifactId;
+        } else {
+            value = std::to_string(analysisArtifactItem->findings.size());
+        }
+    } else if (tableView == _phase7PlaybookTableView) {
+        if ([columnId isEqualToString:@"artifact_id"]) {
+            value = playbookArtifactItem->playbookArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"analysis_artifact_id"]) {
+            value = playbookArtifactItem->analysisArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"mode"]) {
+            value = playbookArtifactItem->mode;
+        } else {
+            value = std::to_string(playbookArtifactItem->plannedActions.size());
+        }
+    } else if (tableView == _phase7FindingTableView) {
+        if ([columnId isEqualToString:@"finding_id"]) {
+            value = phase7FindingItem->findingId;
+        } else if ([columnId isEqualToString:@"severity"]) {
+            value = phase7FindingItem->severity;
+        } else if ([columnId isEqualToString:@"category"]) {
+            value = phase7FindingItem->category;
+        } else {
+            value = phase7FindingItem->summary;
+        }
+    } else if (tableView == _phase7ActionTableView) {
+        if ([columnId isEqualToString:@"action_id"]) {
+            value = phase7ActionItem->actionId;
+        } else if ([columnId isEqualToString:@"action_type"]) {
+            value = phase7ActionItem->actionType;
+        } else if ([columnId isEqualToString:@"finding_id"]) {
+            value = phase7ActionItem->findingId;
+        } else {
+            value = phase7ActionItem->title;
+        }
     }
 
     cell.textField.stringValue = ToNSString(value);
@@ -483,6 +559,31 @@ using namespace tapescope_support;
         _reportInventoryLoadImportedRangeButton.enabled = (selected >= 0);
         _reportInventoryOpenImportedSourceButton.enabled = (selected >= 0);
         [self refreshReportInventoryDetailText];
+        return;
+    }
+
+    if (tableView == _phase7AnalysisTableView) {
+        const NSInteger selected = _phase7AnalysisTableView.selectedRow;
+        _phase7SelectionIsPlaybook = NO;
+        if (selected >= 0) {
+            [_phase7PlaybookTableView deselectAll:nil];
+        }
+        [self refreshPhase7DetailText];
+        return;
+    }
+
+    if (tableView == _phase7PlaybookTableView) {
+        const NSInteger selected = _phase7PlaybookTableView.selectedRow;
+        _phase7SelectionIsPlaybook = (selected >= 0);
+        if (selected >= 0) {
+            [_phase7AnalysisTableView deselectAll:nil];
+        }
+        [self refreshPhase7DetailText];
+        return;
+    }
+
+    if (tableView == _phase7FindingTableView || tableView == _phase7ActionTableView) {
+        [self refreshPhase7DetailText];
     }
 }
 

@@ -1,4 +1,79 @@
 {
+  "tapescript_list_analysis_profiles": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_analysis_profiles_local",
+      "result_schema": "phase7.analysis-profile-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_analysis_profiles"
+    },
+    "ok": true,
+    "result": {
+      "analysis_profiles": [
+        {
+          "analysis_profile": "phase7.trace_fill_integrity.v1",
+          "default_profile": true,
+          "finding_categories": [
+            "trace_integrity",
+            "identity_integrity",
+            "evidence_confidence"
+          ],
+          "summary": "Inspect a portable Phase 6 session/case bundle for integrity gaps, resets, identity drift, and data-quality degradation around the exported evidence window.",
+          "supported_source_bundle_types": [
+            "case_bundle",
+            "session_bundle"
+          ],
+          "title": "Trace Fill Integrity"
+        }
+      ],
+      "returned_count": 1
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_read_analysis_profile": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_read_analysis_profile_local",
+      "result_schema": "phase7.analysis-profile-read.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_analysis_profile"
+    },
+    "ok": true,
+    "result": {
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "default_profile": true,
+      "finding_categories": [
+        "trace_integrity",
+        "identity_integrity",
+        "evidence_confidence"
+      ],
+      "summary": "Inspect a portable Phase 6 session/case bundle for integrity gaps, resets, identity drift, and data-quality degradation around the exported evidence window.",
+      "supported_source_bundle_types": [
+        "case_bundle",
+        "session_bundle"
+      ],
+      "title": "Trace Fill Integrity"
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
   "tapescript_analyzer_run": {
     "meta": {
       "deferred": false,
@@ -14,7 +89,271 @@
         "artifact_id": "phase7-analysis:<id>",
         "artifact_type": "phase7.analysis_output.v1",
         "contract_version": "phase7-analyzer-playbook-v1",
-        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "artifact_status": "created",
+      "finding_count": 2,
+      "findings": [
+        {
+          "category": "evidence_confidence",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "severity": "warning",
+          "summary": "Evidence confidence is degraded (score 73.0): missing receive timestamps=3, exchange timestamps=0, vendor sequence numbers=0."
+        },
+        {
+          "category": "trace_integrity",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "severity": "warning",
+          "summary": "Trace integrity degraded: 1 gap marker(s) and 0 reset marker(s) were preserved in the exported evidence window."
+        }
+      ],
+      "generated_artifacts": [
+        {
+          "artifact_id": "phase7-analysis:<id>",
+          "artifact_type": "phase7.analysis_output.v1",
+          "contract_version": "phase7-analyzer-playbook-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+        }
+      ],
+      "has_generated_at_utc": true,
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_analyzer_run_reused": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_analyzer_run_local",
+      "result_schema": "phase7.analysis-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_analyzer_run"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "artifact_status": "reused",
+      "finding_count": 2,
+      "findings": [
+        {
+          "category": "evidence_confidence",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "severity": "warning",
+          "summary": "Evidence confidence is degraded (score 73.0): missing receive timestamps=3, exchange timestamps=0, vendor sequence numbers=0."
+        },
+        {
+          "category": "trace_integrity",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "severity": "warning",
+          "summary": "Trace integrity degraded: 1 gap marker(s) and 0 reset marker(s) were preserved in the exported evidence window."
+        }
+      ],
+      "generated_artifacts": [
+        {
+          "artifact_id": "phase7-analysis:<id>",
+          "artifact_type": "phase7.analysis_output.v1",
+          "contract_version": "phase7-analyzer-playbook-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+        }
+      ],
+      "has_generated_at_utc": true,
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_list_analysis_artifacts": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_analysis_artifacts_local",
+      "result_schema": "phase7.analysis-artifact-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_analysis_artifacts"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "analysis_profile": null,
+        "limit": 10,
+        "matched_count": 1,
+        "source_artifact_id": null
+      },
+      "analysis_artifacts": [
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "analysis_profile": "phase7.trace_fill_integrity.v1",
+          "finding_count": 2,
+          "has_generated_at_utc": true,
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          }
+        }
+      ],
+      "returned_count": 1
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_analysis_artifacts_filtered": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_analysis_artifacts_local",
+      "result_schema": "phase7.analysis-artifact-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_analysis_artifacts"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "analysis_profile": null,
+        "limit": 25,
+        "matched_count": 1,
+        "source_artifact_id": "case-bundle:report:<id>"
+      },
+      "analysis_artifacts": [
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "analysis_profile": "phase7.trace_fill_integrity.v1",
+          "finding_count": 2,
+          "has_generated_at_utc": true,
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          }
+        }
+      ],
+      "returned_count": 1
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_read_analysis_artifact": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_read_analysis_artifact_local",
+      "result_schema": "phase7.analysis-artifact-read.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_analysis_artifact"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
       },
       "analysis_profile": "phase7.trace_fill_integrity.v1",
       "finding_count": 2,
@@ -37,9 +376,10 @@
           "artifact_id": "phase7-analysis:<id>",
           "artifact_type": "phase7.analysis_output.v1",
           "contract_version": "phase7-analyzer-playbook-v1",
-          "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+          "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
         }
       ],
+      "has_generated_at_utc": true,
       "replay_context": {
         "has_trace_anchor": true,
         "requested_window": {
@@ -84,10 +424,22 @@
         "artifact_id": "phase7-analysis:<id>",
         "artifact_type": "phase7.analysis_output.v1",
         "contract_version": "phase7-analyzer-playbook-v1",
-        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
       },
       "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "applied_filters": {
+        "category": null,
+        "limit": null,
+        "minimum_severity": null,
+        "requested_finding_ids": [],
+        "selected_count": 2
+      },
       "finding_count": 2,
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "has_generated_at_utc": true,
       "findings": [
         {
           "category": "evidence_confidence",
@@ -95,6 +447,67 @@
           "severity": "warning",
           "summary": "Evidence confidence is degraded (score 73.0): missing receive timestamps=3, exchange timestamps=0, vendor sequence numbers=0."
         },
+        {
+          "category": "trace_integrity",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "severity": "warning",
+          "summary": "Trace integrity degraded: 1 gap marker(s) and 0 reset marker(s) were preserved in the exported evidence window."
+        }
+      ],
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_findings_list_filtered": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_findings_list_local",
+      "result_schema": "phase7.findings-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_findings_list"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "applied_filters": {
+        "category": "trace_integrity",
+        "limit": null,
+        "minimum_severity": null,
+        "requested_finding_ids": [],
+        "selected_count": 1
+      },
+      "finding_count": 1,
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a"
+      ],
+      "has_generated_at_utc": true,
+      "findings": [
         {
           "category": "trace_integrity",
           "finding_id": "phase7-finding-d6542712c68be48a",
@@ -140,12 +553,21 @@
         "artifact_id": "phase7-analysis:<id>",
         "artifact_type": "phase7.analysis_output.v1",
         "contract_version": "phase7-analyzer-playbook-v1",
-        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "applied_filters": {
+        "category": null,
+        "limit": null,
+        "minimum_severity": null,
+        "requested_finding_ids": [],
+        "selected_count": 2
       },
       "filtered_finding_ids": [
         "phase7-finding-d6542712c68be48a",
         "phase7-finding-b4cf4b31084b1acd"
       ],
+      "artifact_status": "created",
+      "has_generated_at_utc": true,
       "mode": "dry_run",
       "planned_actions": [
         {
@@ -165,7 +587,408 @@
         "artifact_id": "phase7-playbook:<id>",
         "artifact_type": "phase7.playbook_plan.v1",
         "contract_version": "phase7-analyzer-playbook-v1",
-        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook-ea20366cdc4601a4/manifest.json"
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+      },
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_playbook_apply_reused": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_playbook_apply_guarded_local",
+      "result_schema": "phase7.playbook-plan.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_playbook_apply"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "applied_filters": {
+        "category": null,
+        "limit": null,
+        "minimum_severity": null,
+        "requested_finding_ids": [],
+        "selected_count": 2
+      },
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "artifact_status": "reused",
+      "has_generated_at_utc": true,
+      "mode": "dry_run",
+      "planned_actions": [
+        {
+          "action_id": "phase7-action-af994b9431765ae0",
+          "action_type": "phase7.review_evidence_confidence.v1",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "title": "Review evidence confidence limits"
+        },
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+      },
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_playbook_apply_filtered": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_playbook_apply_guarded_local",
+      "result_schema": "phase7.playbook-plan.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_playbook_apply"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "applied_filters": {
+        "category": "trace_integrity",
+        "limit": null,
+        "minimum_severity": null,
+        "requested_finding_ids": [],
+        "selected_count": 1
+      },
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a"
+      ],
+      "artifact_status": "created",
+      "has_generated_at_utc": true,
+      "mode": "dry_run",
+      "planned_actions": [
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+      },
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_list_playbook_artifacts": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_playbook_artifacts_local",
+      "result_schema": "phase7.playbook-artifact-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_playbook_artifacts"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "analysis_artifact_id": null,
+        "limit": 10,
+        "matched_count": 2,
+        "mode": null,
+        "source_artifact_id": null
+      },
+      "playbook_artifacts": [
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "filtered_finding_count": 1,
+          "has_generated_at_utc": true,
+          "mode": "dry_run",
+          "planned_action_count": 1,
+          "playbook_artifact": {
+            "artifact_id": "phase7-playbook:<id>",
+            "artifact_type": "phase7.playbook_plan.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+          },
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          }
+        },
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "filtered_finding_count": 2,
+          "has_generated_at_utc": true,
+          "mode": "dry_run",
+          "planned_action_count": 2,
+          "playbook_artifact": {
+            "artifact_id": "phase7-playbook:<id>",
+            "artifact_type": "phase7.playbook_plan.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+          },
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          }
+        }
+      ],
+      "returned_count": 2
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_playbook_artifacts_filtered": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_playbook_artifacts_local",
+      "result_schema": "phase7.playbook-artifact-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_playbook_artifacts"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "analysis_artifact_id": "phase7-analysis:<id>",
+        "limit": 25,
+        "matched_count": 2,
+        "mode": null,
+        "source_artifact_id": null
+      },
+      "playbook_artifacts": [
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "filtered_finding_count": 1,
+          "has_generated_at_utc": true,
+          "mode": "dry_run",
+          "planned_action_count": 1,
+          "playbook_artifact": {
+            "artifact_id": "phase7-playbook:<id>",
+            "artifact_type": "phase7.playbook_plan.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+          },
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          }
+        },
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "filtered_finding_count": 2,
+          "has_generated_at_utc": true,
+          "mode": "dry_run",
+          "planned_action_count": 2,
+          "playbook_artifact": {
+            "artifact_id": "phase7-playbook:<id>",
+            "artifact_type": "phase7.playbook_plan.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+          },
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          }
+        }
+      ],
+      "returned_count": 2
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_read_playbook_artifact": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_read_playbook_artifact_local",
+      "result_schema": "phase7.playbook-artifact-read.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_playbook_artifact"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "applied_filters": {
+        "category": null,
+        "limit": null,
+        "minimum_severity": null,
+        "requested_finding_ids": [
+          "phase7-finding-b4cf4b31084b1acd",
+          "phase7-finding-d6542712c68be48a"
+        ],
+        "selected_count": 2
+      },
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "has_generated_at_utc": true,
+      "mode": "dry_run",
+      "planned_actions": [
+        {
+          "action_id": "phase7-action-af994b9431765ae0",
+          "action_type": "phase7.review_evidence_confidence.v1",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "title": "Review evidence confidence limits"
+        },
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
       },
       "replay_context": {
         "has_trace_anchor": true,
@@ -267,6 +1090,13 @@
       "title": "Replay Key Moment"
     },
     {
+      "name": "review_phase7_execution_ledger",
+      "required_args": [
+        "execution_ledger_artifact_id"
+      ],
+      "title": "Review Phase 7 Execution Ledger"
+    },
+    {
       "name": "review_phase7_findings",
       "required_args": [
         "analysis_artifact_id"
@@ -309,20 +1139,28 @@
   },
   "resources_list_phase7": [
     {
-      "uri": "tape://phase7/analysis/<id>",
-      "mime_type": "application/json"
+      "mime_type": "application/json",
+      "uri": "tape://phase7/analysis/<id>"
     },
     {
-      "uri": "tape://phase7/analysis/<id>/markdown",
-      "mime_type": "text/markdown"
+      "mime_type": "text/markdown",
+      "uri": "tape://phase7/analysis/<id>/markdown"
     },
     {
-      "uri": "tape://phase7/playbook/<id>",
-      "mime_type": "application/json"
+      "mime_type": "application/json",
+      "uri": "tape://phase7/ledger/<id>"
     },
     {
-      "uri": "tape://phase7/playbook/<id>/markdown",
-      "mime_type": "text/markdown"
+      "mime_type": "text/markdown",
+      "uri": "tape://phase7/ledger/<id>/markdown"
+    },
+    {
+      "mime_type": "application/json",
+      "uri": "tape://phase7/playbook/<id>"
+    },
+    {
+      "mime_type": "text/markdown",
+      "uri": "tape://phase7/playbook/<id>/markdown"
     }
   ],
   "resource_read_phase7_analysis": {
@@ -335,7 +1173,7 @@
         "artifact_id": "phase7-analysis:<id>",
         "artifact_type": "phase7.analysis_output.v1",
         "contract_version": "phase7-analyzer-playbook-v1",
-        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
       },
       "source_artifact": {
         "artifact_id": "case-bundle:report:<id>",
@@ -382,7 +1220,8 @@
     "contains_order_case": false,
     "contains_session_overview": false,
     "contains_phase7_analysis": true,
-    "contains_phase7_playbook": false
+    "contains_phase7_playbook": false,
+    "contains_phase7_execution_ledger": false
   },
   "resource_read_phase7_playbook": {
     "ok": true,
@@ -394,13 +1233,13 @@
         "artifact_id": "phase7-analysis:<id>",
         "artifact_type": "phase7.analysis_output.v1",
         "contract_version": "phase7-analyzer-playbook-v1",
-        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis-3cc25bef720b82e1/manifest.json"
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
       },
       "playbook_artifact": {
         "artifact_id": "phase7-playbook:<id>",
         "artifact_type": "phase7.playbook_plan.v1",
         "contract_version": "phase7-analyzer-playbook-v1",
-        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook-ea20366cdc4601a4/manifest.json"
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
       },
       "mode": "dry_run",
       "filtered_finding_ids": [
@@ -444,6 +1283,564 @@
     "contains_order_case": false,
     "contains_session_overview": false,
     "contains_phase7_analysis": false,
-    "contains_phase7_playbook": true
+    "contains_phase7_playbook": true,
+    "contains_phase7_execution_ledger": false
+  },
+  "tapescript_prepare_execution_ledger": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_prepare_execution_ledger_local",
+      "result_schema": "phase7.execution-ledger.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_prepare_execution_ledger"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "artifact_status": "created",
+      "audit_trail": [
+        {
+          "event_type": "ledger_created",
+          "has_generated_at_utc": true,
+          "message": "Execution remains deferred; this ledger is a review/audit record only.",
+          "status": "review_pending"
+        }
+      ],
+      "entries": [
+        {
+          "action_id": "phase7-action-af994b9431765ae0",
+          "action_type": "phase7.review_evidence_confidence.v1",
+          "entry_id": "phase7-ledger-entry-caa27ce26d13012b",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "requires_manual_confirmation": true,
+          "review_status": "pending_review",
+          "title": "Review evidence confidence limits"
+        },
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "entry_id": "phase7-ledger-entry-b50f3673960c3258",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "requires_manual_confirmation": true,
+          "review_status": "pending_review",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "entry_count": 2,
+      "execution_ledger": {
+        "artifact_id": "phase7-ledger:<id>",
+        "artifact_type": "phase7.execution_ledger.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json"
+      },
+      "execution_policy": {
+        "apply_supported": false,
+        "deferred_reason": "live apply remains deferred until Phase 7 has a full execution/audit model",
+        "manual_confirmation_required": true,
+        "recommended_next_step": "review_only"
+      },
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "has_generated_at_utc": true,
+      "ledger_status": "review_pending",
+      "mode": "dry_run",
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+      },
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_prepare_execution_ledger_reused": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_prepare_execution_ledger_local",
+      "result_schema": "phase7.execution-ledger.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_prepare_execution_ledger"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "artifact_status": "reused",
+      "audit_trail": [
+        {
+          "event_type": "ledger_created",
+          "has_generated_at_utc": true,
+          "message": "Execution remains deferred; this ledger is a review/audit record only.",
+          "status": "review_pending"
+        }
+      ],
+      "entries": [
+        {
+          "action_id": "phase7-action-af994b9431765ae0",
+          "action_type": "phase7.review_evidence_confidence.v1",
+          "entry_id": "phase7-ledger-entry-caa27ce26d13012b",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "requires_manual_confirmation": true,
+          "review_status": "pending_review",
+          "title": "Review evidence confidence limits"
+        },
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "entry_id": "phase7-ledger-entry-b50f3673960c3258",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "requires_manual_confirmation": true,
+          "review_status": "pending_review",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "entry_count": 2,
+      "execution_ledger": {
+        "artifact_id": "phase7-ledger:<id>",
+        "artifact_type": "phase7.execution_ledger.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json"
+      },
+      "execution_policy": {
+        "apply_supported": false,
+        "deferred_reason": "live apply remains deferred until Phase 7 has a full execution/audit model",
+        "manual_confirmation_required": true,
+        "recommended_next_step": "review_only"
+      },
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "has_generated_at_utc": true,
+      "ledger_status": "review_pending",
+      "mode": "dry_run",
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+      },
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "tapescript_list_execution_ledgers": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_execution_ledgers_local",
+      "result_schema": "phase7.execution-ledger-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_execution_ledgers"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "analysis_artifact_id": null,
+        "ledger_status": null,
+        "limit": 10,
+        "matched_count": 1,
+        "playbook_artifact_id": null,
+        "source_artifact_id": null
+      },
+      "execution_ledgers": [
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "entry_count": 2,
+          "execution_ledger": {
+            "artifact_id": "phase7-ledger:<id>",
+            "artifact_type": "phase7.execution_ledger.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json"
+          },
+          "has_generated_at_utc": true,
+          "ledger_status": "review_pending",
+          "mode": "dry_run",
+          "playbook_artifact": {
+            "artifact_id": "phase7-playbook:<id>",
+            "artifact_type": "phase7.playbook_plan.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+          },
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          }
+        }
+      ],
+      "returned_count": 1
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_execution_ledgers_filtered": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_execution_ledgers_local",
+      "result_schema": "phase7.execution-ledger-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_execution_ledgers"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "analysis_artifact_id": null,
+        "ledger_status": null,
+        "limit": 25,
+        "matched_count": 1,
+        "playbook_artifact_id": "phase7-playbook:<id>",
+        "source_artifact_id": null
+      },
+      "execution_ledgers": [
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "entry_count": 2,
+          "execution_ledger": {
+            "artifact_id": "phase7-ledger:<id>",
+            "artifact_type": "phase7.execution_ledger.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json"
+          },
+          "has_generated_at_utc": true,
+          "ledger_status": "review_pending",
+          "mode": "dry_run",
+          "playbook_artifact": {
+            "artifact_id": "phase7-playbook:<id>",
+            "artifact_type": "phase7.playbook_plan.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+          },
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          }
+        }
+      ],
+      "returned_count": 1
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_read_execution_ledger": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_read_execution_ledger_local",
+      "result_schema": "phase7.execution-ledger-read.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_execution_ledger"
+    },
+    "ok": true,
+    "result": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "audit_trail": [
+        {
+          "event_type": "ledger_created",
+          "has_generated_at_utc": true,
+          "message": "Execution remains deferred; this ledger is a review/audit record only.",
+          "status": "review_pending"
+        }
+      ],
+      "entries": [
+        {
+          "action_id": "phase7-action-af994b9431765ae0",
+          "action_type": "phase7.review_evidence_confidence.v1",
+          "entry_id": "phase7-ledger-entry-caa27ce26d13012b",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "requires_manual_confirmation": true,
+          "review_status": "pending_review",
+          "title": "Review evidence confidence limits"
+        },
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "entry_id": "phase7-ledger-entry-b50f3673960c3258",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "requires_manual_confirmation": true,
+          "review_status": "pending_review",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "entry_count": 2,
+      "execution_ledger": {
+        "artifact_id": "phase7-ledger:<id>",
+        "artifact_type": "phase7.execution_ledger.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json"
+      },
+      "execution_policy": {
+        "apply_supported": false,
+        "deferred_reason": "live apply remains deferred until Phase 7 has a full execution/audit model",
+        "manual_confirmation_required": true,
+        "recommended_next_step": "review_only"
+      },
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "has_generated_at_utc": true,
+      "ledger_status": "review_pending",
+      "mode": "dry_run",
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+      },
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      }
+    },
+    "revision": {
+      "first_session_seq": 1,
+      "includes_mutable_tail": false,
+      "last_session_seq": 4,
+      "latest_session_seq": 4,
+      "manifest_hash": null,
+      "served_revision_id": 7,
+      "source": "artifact_manifest"
+    }
+  },
+  "prompt_review_phase7_execution_ledger": {
+    "description": "Guide an agent through reopening a stored Phase 7 execution/audit ledger while live apply remains deferred.",
+    "first_role": "user",
+    "message_count": 1,
+    "prompt": "review_phase7_execution_ledger",
+    "text": "Review stored Phase 7 execution ledger `phase7-ledger-1234abcd`. Reopen it with `resources/read` on `tape://phase7/ledger/phase7-ledger-1234abcd` and `tape://phase7/ledger/phase7-ledger-1234abcd/markdown`, then follow the linked playbook and analysis artifacts with `tapescript_read_playbook_artifact` and `tapescript_findings_list`. Keep apply deferred and treat the ledger as an audit/review surface only. Return: review status, blocked actions, required confirmations, and the next safe investigation steps."
+  },
+  "resource_read_phase7_execution_ledger": {
+    "content_count": 1,
+    "mime_type": "application/json",
+    "ok": true,
+    "payload": {
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "audit_trail": [
+        {
+          "event_type": "ledger_created",
+          "has_generated_at_utc": true,
+          "message": "Execution remains deferred; this ledger is a review/audit record only.",
+          "status": "review_pending"
+        }
+      ],
+      "entries": [
+        {
+          "action_id": "phase7-action-af994b9431765ae0",
+          "action_type": "phase7.review_evidence_confidence.v1",
+          "entry_id": "phase7-ledger-entry-caa27ce26d13012b",
+          "finding_id": "phase7-finding-b4cf4b31084b1acd",
+          "requires_manual_confirmation": true,
+          "review_status": "pending_review",
+          "title": "Review evidence confidence limits"
+        },
+        {
+          "action_id": "phase7-action-6c7dfae7af78628d",
+          "action_type": "phase7.review_trace_integrity.v1",
+          "entry_id": "phase7-ledger-entry-b50f3673960c3258",
+          "finding_id": "phase7-finding-d6542712c68be48a",
+          "requires_manual_confirmation": true,
+          "review_status": "pending_review",
+          "title": "Review trace integrity evidence"
+        }
+      ],
+      "entry_count": 2,
+      "execution_ledger": {
+        "artifact_id": "phase7-ledger:<id>",
+        "artifact_type": "phase7.execution_ledger.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json"
+      },
+      "execution_policy": {
+        "apply_supported": false,
+        "deferred_reason": "live apply remains deferred until Phase 7 has a full execution/audit model",
+        "manual_confirmation_required": true,
+        "recommended_next_step": "review_only"
+      },
+      "filtered_finding_ids": [
+        "phase7-finding-d6542712c68be48a",
+        "phase7-finding-b4cf4b31084b1acd"
+      ],
+      "has_generated_at_utc": true,
+      "ledger_status": "review_pending",
+      "mode": "dry_run",
+      "playbook_artifact": {
+        "artifact_id": "phase7-playbook:<id>",
+        "artifact_type": "phase7.playbook_plan.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+      },
+      "replay_context": {
+        "has_trace_anchor": true,
+        "requested_window": {
+          "first_session_seq": 1,
+          "has_last_session_seq": true,
+          "keys": [
+            "first_session_seq",
+            "last_session_seq"
+          ]
+        },
+        "source_bundle_type": "case_bundle"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      }
+    },
+    "uri": "tape://phase7/ledger/<id>"
+  },
+  "resource_read_phase7_execution_ledger_markdown": {
+    "contains_order_case": false,
+    "contains_phase7_analysis": false,
+    "contains_phase7_execution_ledger": true,
+    "contains_phase7_playbook": false,
+    "contains_session_overview": false,
+    "content_count": 1,
+    "has_text": true,
+    "mime_type": "text/markdown",
+    "ok": true,
+    "uri": "tape://phase7/ledger/<id>/markdown"
   }
 }

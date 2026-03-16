@@ -506,6 +506,7 @@ QueryResult<InvestigationPayload> packInvestigationPayload(const QueryResult<tap
 
     const json citationRows = typedResult.value("citation_rows", json::array());
     if (citationRows.is_array()) {
+        bool missingKinds = false;
         for (const auto& item : citationRows) {
             EvidenceCitation citation;
             citation.raw = item;
@@ -513,8 +514,14 @@ QueryResult<InvestigationPayload> packInvestigationPayload(const QueryResult<tap
                 citation.kind = item.value("kind", std::string());
                 citation.artifactId = item.value("artifact_id", std::string());
                 citation.label = item.value("label", std::string());
+                if (!citation.artifactId.empty() && citation.kind.empty()) {
+                    missingKinds = true;
+                }
             }
             payload.evidence.push_back(std::move(citation));
+        }
+        if (missingKinds) {
+            payload.evidence = parseEvidenceCitations(payload.summary);
         }
     } else {
         payload.evidence = parseEvidenceCitations(payload.summary);

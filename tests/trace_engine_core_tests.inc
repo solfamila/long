@@ -1178,6 +1178,229 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
     }
 }
 
+void testTapeEnginePhase7ArtifactsReuseDeterministically() {
+    const fs::path rootDir = testDataDir() / "tape-engine-phase7-reuse";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase7-reuse.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for phase 7 reuse test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase7-reuse";
+    options.runtimeSessionId = "runtime-engine-phase7-reuse";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(9501, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      4101, 9101, 5101, "", "phase 7 order intent", "2026-03-14T10:12:00.100");
+    orderIntent.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+
+    BridgeOutboxRecord orderStatus = makeBridgeRecord(9502, "order_status", "BrokerOrderStatus", "INTC", "BUY",
+                                                      4101, 9101, 5101, "", "phase 7 submitted", "2026-03-14T10:12:00.200");
+    orderStatus.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+
+    BridgeOutboxRecord fillExecution = makeBridgeRecord(9503, "fill_execution", "BrokerExecution", "INTC", "BUY",
+                                                        4101, 9101, 5101, "E-PHASE7-1", "phase 7 fill", "2026-03-14T10:12:00.300");
+    fillExecution.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+
+    options.batchSeq = 501;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "phase 7 reuse fixture should accept the order intent batch: " + error);
+    options.batchSeq = 502;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderStatus}, options)), &error),
+           "phase 7 reuse fixture should accept the order status batch: " + error);
+    options.batchSeq = 503;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({fillExecution}, options)), &error),
+           "phase 7 reuse fixture should accept the fill batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() >= 3;
+    }, "phase 7 reuse fixture should freeze the seeded batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest caseReportRequest;
+    caseReportRequest.requestId = "phase7-case-report";
+    caseReportRequest.operation = "scan_order_case_report";
+    caseReportRequest.orderId = 9101;
+    expect(client.query(caseReportRequest, &response, &error), "phase 7 case report scan should succeed: " + error);
+    const std::uint64_t caseReportId =
+        response.summary.value("case_report_artifact", json::object()).value("report_id", 0ULL);
+    expect(caseReportId > 0, "phase 7 case report scan should persist a durable case report");
+
+    tape_engine::QueryRequest exportCaseBundleRequest;
+    exportCaseBundleRequest.requestId = "phase7-export-case-bundle";
+    exportCaseBundleRequest.operation = "export_case_bundle";
+    exportCaseBundleRequest.reportId = caseReportId;
+    expect(client.query(exportCaseBundleRequest, &response, &error), "phase 7 case bundle export should succeed: " + error);
+    const std::string caseBundlePath =
+        response.summary.value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
+           "phase 7 case bundle export should write a portable case bundle");
+
+    tape_phase7::AnalysisArtifact firstAnalysis;
+    bool analysisCreated = false;
+    std::string phase7Code;
+    std::string phase7Message;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  {},
+                                                  &firstAnalysis,
+                                                  &analysisCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 analyzer first run should succeed: " + phase7Code + " " + phase7Message);
+    expect(analysisCreated, "phase 7 analyzer first run should create a new analysis artifact");
+
+    tape_phase7::AnalysisArtifact secondAnalysis;
+    analysisCreated = true;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  {},
+                                                  &secondAnalysis,
+                                                  &analysisCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 analyzer rerun should succeed: " + phase7Code + " " + phase7Message);
+    expect(!analysisCreated, "phase 7 analyzer rerun should reuse the persisted analysis artifact");
+    expect(firstAnalysis.analysisArtifact.artifactId == secondAnalysis.analysisArtifact.artifactId,
+           "phase 7 analyzer rerun should preserve the deterministic analysis artifact id");
+    expect(firstAnalysis.analysisArtifact.manifestPath == secondAnalysis.analysisArtifact.manifestPath,
+           "phase 7 analyzer rerun should preserve the deterministic analysis manifest path");
+    expect(firstAnalysis.generatedAtUtc == secondAnalysis.generatedAtUtc,
+           "phase 7 analyzer rerun should preserve the generated_at_utc stamp");
+    expect(readTextFile(firstAnalysis.analysisArtifact.manifestPath) ==
+               readTextFile(secondAnalysis.analysisArtifact.manifestPath),
+           "phase 7 analyzer rerun should leave the persisted manifest unchanged");
+
+    std::vector<std::string> findingIds;
+    for (const auto& finding : firstAnalysis.findings) {
+        findingIds.push_back(finding.findingId);
+    }
+    expect(!findingIds.empty(), "phase 7 analyzer should emit findings for the reusable playbook test");
+
+    tape_phase7::PlaybookArtifact firstPlaybook;
+    bool playbookCreated = false;
+    expect(tape_phase7::buildGuardedPlaybook({},
+                                             firstAnalysis.analysisArtifact.artifactId,
+                                             findingIds,
+                                             tape_phase7::kDefaultPlaybookMode,
+                                             &firstPlaybook,
+                                             &playbookCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 playbook first run should succeed: " + phase7Code + " " + phase7Message);
+    expect(playbookCreated, "phase 7 playbook first run should create a new playbook artifact");
+
+    tape_phase7::PlaybookArtifact secondPlaybook;
+    playbookCreated = true;
+    expect(tape_phase7::buildGuardedPlaybook({},
+                                             firstAnalysis.analysisArtifact.artifactId,
+                                             findingIds,
+                                             tape_phase7::kDefaultPlaybookMode,
+                                             &secondPlaybook,
+                                             &playbookCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 playbook rerun should succeed: " + phase7Code + " " + phase7Message);
+    expect(!playbookCreated, "phase 7 playbook rerun should reuse the persisted playbook artifact");
+    expect(firstPlaybook.playbookArtifact.artifactId == secondPlaybook.playbookArtifact.artifactId,
+           "phase 7 playbook rerun should preserve the deterministic playbook artifact id");
+    expect(firstPlaybook.playbookArtifact.manifestPath == secondPlaybook.playbookArtifact.manifestPath,
+           "phase 7 playbook rerun should preserve the deterministic playbook manifest path");
+    expect(firstPlaybook.generatedAtUtc == secondPlaybook.generatedAtUtc,
+           "phase 7 playbook rerun should preserve the generated_at_utc stamp");
+    expect(readTextFile(firstPlaybook.playbookArtifact.manifestPath) ==
+               readTextFile(secondPlaybook.playbookArtifact.manifestPath),
+           "phase 7 playbook rerun should leave the persisted manifest unchanged");
+
+    tape_phase7::ExecutionLedgerArtifact firstLedger;
+    bool ledgerCreated = false;
+    expect(tape_phase7::buildExecutionLedger({},
+                                             firstPlaybook.playbookArtifact.artifactId,
+                                             &firstLedger,
+                                             &ledgerCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 execution ledger first run should succeed: " + phase7Code + " " + phase7Message);
+    expect(ledgerCreated, "phase 7 execution ledger first run should create a new ledger artifact");
+    expect(firstLedger.entries.size() == firstPlaybook.plannedActions.size(),
+           "phase 7 execution ledger should preserve one review entry per planned playbook action");
+    expect(firstLedger.ledgerStatus == tape_phase7::kDefaultLedgerStatus,
+           "phase 7 execution ledger should start in the default deferred review status");
+
+    tape_phase7::ExecutionLedgerArtifact secondLedger;
+    ledgerCreated = true;
+    expect(tape_phase7::buildExecutionLedger({},
+                                             firstPlaybook.playbookArtifact.artifactId,
+                                             &secondLedger,
+                                             &ledgerCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 execution ledger rerun should succeed: " + phase7Code + " " + phase7Message);
+    expect(!ledgerCreated, "phase 7 execution ledger rerun should reuse the persisted ledger artifact");
+    expect(firstLedger.ledgerArtifact.artifactId == secondLedger.ledgerArtifact.artifactId,
+           "phase 7 execution ledger rerun should preserve the deterministic ledger artifact id");
+    expect(firstLedger.generatedAtUtc == secondLedger.generatedAtUtc,
+           "phase 7 execution ledger rerun should preserve the generated_at_utc stamp");
+    expect(readTextFile(firstLedger.ledgerArtifact.manifestPath) ==
+               readTextFile(secondLedger.ledgerArtifact.manifestPath),
+           "phase 7 execution ledger rerun should leave the persisted manifest unchanged");
+
+    tape_phase7::ExecutionLedgerArtifact readLedger;
+    expect(tape_phase7::loadExecutionLedgerArtifact({},
+                                                    firstLedger.ledgerArtifact.artifactId,
+                                                    &readLedger,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 execution ledger read should succeed: " + phase7Code + " " + phase7Message);
+    expect(readLedger.playbookArtifact.artifactId == firstPlaybook.playbookArtifact.artifactId,
+           "phase 7 execution ledger read should preserve the linked playbook artifact id");
+    expect(readLedger.sourceArtifact.artifactId == firstAnalysis.sourceArtifact.artifactId,
+           "phase 7 execution ledger read should preserve the linked source artifact id");
+
+    std::vector<tape_phase7::AnalysisArtifact> analysisArtifacts;
+    expect(tape_phase7::listAnalysisArtifacts(0, &analysisArtifacts, &phase7Code, &phase7Message),
+           "phase 7 analysis inventory should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(analysisArtifacts.begin(), analysisArtifacts.end(),
+                       [&](const tape_phase7::AnalysisArtifact& artifact) {
+                           return artifact.analysisArtifact.artifactId == firstAnalysis.analysisArtifact.artifactId;
+                       }),
+           "phase 7 analysis inventory should include the deterministic reused analysis artifact");
+
+    std::vector<tape_phase7::PlaybookArtifact> playbookArtifacts;
+    expect(tape_phase7::listPlaybookArtifacts(0, &playbookArtifacts, &phase7Code, &phase7Message),
+           "phase 7 playbook inventory should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(playbookArtifacts.begin(), playbookArtifacts.end(),
+                       [&](const tape_phase7::PlaybookArtifact& artifact) {
+                           return artifact.playbookArtifact.artifactId == firstPlaybook.playbookArtifact.artifactId;
+                       }),
+           "phase 7 playbook inventory should include the deterministic reused playbook artifact");
+
+    std::vector<tape_phase7::ExecutionLedgerArtifact> executionLedgers;
+    expect(tape_phase7::listExecutionLedgers(0, &executionLedgers, &phase7Code, &phase7Message),
+           "phase 7 execution ledger inventory should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(executionLedgers.begin(), executionLedgers.end(),
+                       [&](const tape_phase7::ExecutionLedgerArtifact& artifact) {
+                           return artifact.ledgerArtifact.artifactId == firstLedger.ledgerArtifact.artifactId;
+                       }),
+           "phase 7 execution ledger inventory should include the deterministic reused ledger artifact");
+
+    server.stop();
+}
+
 void testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures() {
     const fs::path rootDir = testDataDir() / "tape-engine-phase3-contract-fixtures";
     const fs::path socketPath = testDataDir() / "tape-engine-phase3-contract-fixtures.sock";

@@ -131,8 +131,10 @@ set(TAPESCOPE_SOURCES
     tapescope_session_queries.mm
     tapescope_order_queries.mm
     tapescope_artifact_queries.mm
+    tapescope_phase7_queries.mm
     tapescope_bundle_preview.cpp
     tapescope_client.cpp
+    tape_phase7_artifacts.cpp
     tape_bundle_inspection.cpp
     tape_query_payloads.cpp
     tapescope_investigation_pane.mm
@@ -510,6 +512,7 @@ if(BUILD_TESTING)
         bridge_batch_transport.cpp
         phase3_analyzers.cpp
         runtime_qos.cpp
+        tape_phase7_artifacts.cpp
         tape_bundle_inspection.cpp
         tape_engine.cpp
         tape_engine_client.cpp
@@ -618,6 +621,7 @@ set_source_files_properties(
     tapescope_session_queries.mm
     tapescope_order_queries.mm
     tapescope_artifact_queries.mm
+    tapescope_phase7_queries.mm
     tapescope_investigation_pane.mm
     tapescope_support_ui.mm
     tapescope_support_describe.mm

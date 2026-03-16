@@ -55,9 +55,18 @@ enum class ToolId {
     ImportCaseBundle,
     ListImportedCases,
     ReadSessionQuality,
+    ListAnalysisProfiles,
+    ReadAnalysisProfile,
     AnalyzerRun,
     FindingsList,
-    PlaybookApply
+    ListAnalysisArtifacts,
+    ReadAnalysisArtifact,
+    PlaybookApply,
+    ListPlaybookArtifacts,
+    ReadPlaybookArtifact,
+    PrepareExecutionLedger,
+    ListExecutionLedgers,
+    ReadExecutionLedger
 };
 
 struct ToolSpec {
@@ -124,9 +133,18 @@ private:
     [[nodiscard]] json invokeImportCaseBundleTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeListImportedCasesTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadSessionQualityTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListAnalysisProfilesTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadAnalysisProfileTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeFindingsListTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListAnalysisArtifactsTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadAnalysisArtifactTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokePlaybookApplyTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListPlaybookArtifactsTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadPlaybookArtifactTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokePrepareExecutionLedgerTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListExecutionLedgersTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadExecutionLedgerTool(const ToolSpec& tool, const json& args) const;
 
     [[nodiscard]] json makeToolResult(const json& envelope) const;
     [[nodiscard]] json makeSuccessEnvelope(const ToolSpec& tool, json result, json revision) const;

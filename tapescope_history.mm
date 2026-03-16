@@ -179,6 +179,17 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     state["artifact"] = tapescope::json{{"artifact_id", ToStdString(_artifactIdField.stringValue)},
                                         {"export_format", ToStdString(_artifactExportFormatPopup.titleOfSelectedItem)}};
     state["report_inventory"] = tapescope::json{{"bundle_path", ToStdString(_bundleImportPathField.stringValue)}};
+    state["phase7"] = tapescope::json{
+        {"bundle_path", ToStdString(_phase7BundlePathField.stringValue)},
+        {"analysis_profile", ToStdString(_phase7ProfilePopup.titleOfSelectedItem)},
+        {"analysis_source_filter", ToStdString(_phase7AnalysisSourceFilterField.stringValue)},
+        {"analysis_profile_filter", ToStdString(_phase7AnalysisProfileFilterPopup.titleOfSelectedItem)},
+        {"analysis_sort", ToStdString(_phase7AnalysisSortPopup.titleOfSelectedItem)},
+        {"playbook_analysis_filter", ToStdString(_phase7PlaybookAnalysisFilterField.stringValue)},
+        {"playbook_source_filter", ToStdString(_phase7PlaybookSourceFilterField.stringValue)},
+        {"playbook_mode_filter", ToStdString(_phase7PlaybookModeFilterPopup.titleOfSelectedItem)},
+        {"playbook_sort", ToStdString(_phase7PlaybookSortPopup.titleOfSelectedItem)}
+    };
     return state;
 }
 
@@ -254,6 +265,32 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
 
     const tapescope::json reportInventory = state.value("report_inventory", tapescope::json::object());
     _bundleImportPathField.stringValue = ToNSString(reportInventory.value("bundle_path", std::string()));
+
+    const tapescope::json phase7 = state.value("phase7", tapescope::json::object());
+    _phase7BundlePathField.stringValue = ToNSString(phase7.value("bundle_path", std::string()));
+    const std::string phase7Profile = phase7.value("analysis_profile", std::string());
+    if (!phase7Profile.empty()) {
+        [_phase7ProfilePopup selectItemWithTitle:ToNSString(phase7Profile)];
+    }
+    _phase7AnalysisSourceFilterField.stringValue = ToNSString(phase7.value("analysis_source_filter", std::string()));
+    const std::string phase7AnalysisProfileFilter = phase7.value("analysis_profile_filter", std::string());
+    if (!phase7AnalysisProfileFilter.empty()) {
+        [_phase7AnalysisProfileFilterPopup selectItemWithTitle:ToNSString(phase7AnalysisProfileFilter)];
+    }
+    const std::string phase7AnalysisSort = phase7.value("analysis_sort", std::string());
+    if (!phase7AnalysisSort.empty()) {
+        [_phase7AnalysisSortPopup selectItemWithTitle:ToNSString(phase7AnalysisSort)];
+    }
+    _phase7PlaybookAnalysisFilterField.stringValue = ToNSString(phase7.value("playbook_analysis_filter", std::string()));
+    _phase7PlaybookSourceFilterField.stringValue = ToNSString(phase7.value("playbook_source_filter", std::string()));
+    const std::string phase7PlaybookModeFilter = phase7.value("playbook_mode_filter", std::string());
+    if (!phase7PlaybookModeFilter.empty()) {
+        [_phase7PlaybookModeFilterPopup selectItemWithTitle:ToNSString(phase7PlaybookModeFilter)];
+    }
+    const std::string phase7PlaybookSort = phase7.value("playbook_sort", std::string());
+    if (!phase7PlaybookSort.empty()) {
+        [_phase7PlaybookSortPopup selectItemWithTitle:ToNSString(phase7PlaybookSort)];
+    }
 
     _recentHistoryItems.clear();
     const tapescope::json recentHistory = state.value("recent_history", tapescope::json::array());
@@ -472,6 +509,30 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
             _artifactIdField.stringValue = ToNSString(artifactId);
             [_tabView selectTabViewItemWithIdentifier:@"ArtifactPane"];
             [self fetchArtifact:nil];
+        }
+        return;
+    }
+    if (kind == "phase7_analysis") {
+        const std::string artifactId = entry.value("artifact_id", entry.value("target_id", std::string()));
+        if (!artifactId.empty()) {
+            [_tabView selectTabViewItemWithIdentifier:@"Phase7Pane"];
+            [self openPhase7AnalysisArtifactId:artifactId];
+        }
+        return;
+    }
+    if (kind == "phase7_playbook") {
+        const std::string artifactId = entry.value("artifact_id", entry.value("target_id", std::string()));
+        if (!artifactId.empty()) {
+            [_tabView selectTabViewItemWithIdentifier:@"Phase7Pane"];
+            [self openPhase7PlaybookArtifactId:artifactId];
+        }
+        return;
+    }
+    if (kind == "phase7_execution_ledger") {
+        const std::string artifactId = entry.value("artifact_id", entry.value("target_id", std::string()));
+        if (!artifactId.empty()) {
+            [_tabView selectTabViewItemWithIdentifier:@"Phase7Pane"];
+            [self openPhase7ExecutionLedgerArtifactId:artifactId];
         }
         return;
     }

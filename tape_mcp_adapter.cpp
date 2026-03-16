@@ -75,6 +75,10 @@ json stringSchema() {
     return json{{"type", "string"}};
 }
 
+json nullableStringSchema() {
+    return json{{"oneOf", json::array({stringSchema(), json{{"type", "null"}}})}};
+}
+
 json stringEnumSchema(std::initializer_list<const char*> values) {
     json schema = stringSchema();
     schema["enum"] = json::array();
@@ -511,6 +515,90 @@ json phase7FindingSchema() {
     };
 }
 
+json phase7AppliedFiltersSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"requested_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"minimum_severity", nullableStringSchema()},
+            {"category", nullableStringSchema()},
+            {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"selected_count", nonNegativeIntegerSchema()}
+        }},
+        {"required", json::array({
+            "requested_finding_ids",
+            "minimum_severity",
+            "category",
+            "limit",
+            "selected_count"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalysisInventoryFiltersSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"source_artifact_id", nullableStringSchema()},
+            {"analysis_profile", nullableStringSchema()},
+            {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"matched_count", nonNegativeIntegerSchema()}
+        }},
+        {"required", json::array({
+            "source_artifact_id",
+            "analysis_profile",
+            "limit",
+            "matched_count"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7PlaybookInventoryFiltersSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_artifact_id", nullableStringSchema()},
+            {"source_artifact_id", nullableStringSchema()},
+            {"mode", nullableStringSchema()},
+            {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"matched_count", nonNegativeIntegerSchema()}
+        }},
+        {"required", json::array({
+            "analysis_artifact_id",
+            "source_artifact_id",
+            "mode",
+            "limit",
+            "matched_count"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerFiltersSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"playbook_artifact_id", nullableStringSchema()},
+            {"analysis_artifact_id", nullableStringSchema()},
+            {"source_artifact_id", nullableStringSchema()},
+            {"ledger_status", nullableStringSchema()},
+            {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"matched_count", nonNegativeIntegerSchema()}
+        }},
+        {"required", json::array({
+            "playbook_artifact_id",
+            "analysis_artifact_id",
+            "source_artifact_id",
+            "ledger_status",
+            "limit",
+            "matched_count"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
 json phase7PlaybookActionSchema() {
     return json{
         {"type", "object"},
@@ -527,6 +615,35 @@ json phase7PlaybookActionSchema() {
     };
 }
 
+json phase7ExecutionLedgerEntrySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"entry_id", stringSchema()},
+            {"action_id", stringSchema()},
+            {"action_type", stringSchema()},
+            {"finding_id", stringSchema()},
+            {"review_status", stringSchema()},
+            {"requires_manual_confirmation", booleanSchema()},
+            {"title", stringSchema()},
+            {"summary", stringSchema()},
+            {"suggested_tools", json{{"type", "array"}, {"items", stringSchema()}}}
+        }},
+        {"required", json::array({
+            "entry_id",
+            "action_id",
+            "action_type",
+            "finding_id",
+            "review_status",
+            "requires_manual_confirmation",
+            "title",
+            "summary",
+            "suggested_tools"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
 json phase7AnalyzerResultSchema() {
     return json{
         {"type", "object"},
@@ -535,6 +652,7 @@ json phase7AnalyzerResultSchema() {
             {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
             {"generated_artifacts", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
             {"analysis_profile", stringSchema()},
+            {"generated_at_utc", stringSchema()},
             {"finding_count", nonNegativeIntegerSchema()},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}},
             {"findings", json{{"type", "array"}, {"items", phase7FindingSchema()}}}
@@ -544,6 +662,7 @@ json phase7AnalyzerResultSchema() {
             "analysis_artifact",
             "generated_artifacts",
             "analysis_profile",
+            "generated_at_utc",
             "finding_count",
             "replay_context",
             "findings"
@@ -552,23 +671,72 @@ json phase7AnalyzerResultSchema() {
     };
 }
 
+json phase7AnalyzerRunResultSchema() {
+    json schema = phase7AnalyzerResultSchema();
+    schema["properties"]["artifact_status"] = stringEnumSchema({"created", "reused"});
+    schema["required"].push_back("artifact_status");
+    return schema;
+}
+
 json phase7FindingsListResultSchema() {
     return json{
         {"type", "object"},
         {"properties", {
             {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
             {"analysis_profile", stringSchema()},
+            {"generated_at_utc", stringSchema()},
             {"finding_count", nonNegativeIntegerSchema()},
+            {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"applied_filters", phase7AppliedFiltersSchema()},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}},
             {"findings", json{{"type", "array"}, {"items", phase7FindingSchema()}}}
         }},
         {"required", json::array({
             "analysis_artifact",
             "analysis_profile",
+            "generated_at_utc",
             "finding_count",
+            "filtered_finding_ids",
+            "applied_filters",
             "replay_context",
             "findings"
         })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalysisArtifactRowSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_profile", stringSchema()},
+            {"generated_at_utc", stringSchema()},
+            {"finding_count", nonNegativeIntegerSchema()},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "analysis_artifact",
+            "source_artifact",
+            "analysis_profile",
+            "generated_at_utc",
+            "finding_count",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalysisArtifactListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"applied_filters", phase7AnalysisInventoryFiltersSchema()},
+            {"analysis_artifacts", json{{"type", "array"}, {"items", phase7AnalysisArtifactRowSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "applied_filters", "analysis_artifacts"})},
         {"additionalProperties", false}
     };
 }
@@ -580,7 +748,9 @@ json phase7PlaybookResultSchema() {
             {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
             {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
             {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"generated_at_utc", stringSchema()},
             {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"applied_filters", phase7AppliedFiltersSchema()},
             {"planned_actions", json{{"type", "array"}, {"items", phase7PlaybookActionSchema()}}},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
         }},
@@ -588,10 +758,143 @@ json phase7PlaybookResultSchema() {
             "analysis_artifact",
             "playbook_artifact",
             "mode",
+            "generated_at_utc",
             "filtered_finding_ids",
+            "applied_filters",
             "planned_actions",
             "replay_context"
         })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7PlaybookApplyResultSchema() {
+    json schema = phase7PlaybookResultSchema();
+    schema["properties"]["artifact_status"] = stringEnumSchema({"created", "reused"});
+    schema["required"].push_back("artifact_status");
+    return schema;
+}
+
+json phase7PlaybookArtifactRowSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"generated_at_utc", stringSchema()},
+            {"filtered_finding_count", nonNegativeIntegerSchema()},
+            {"planned_action_count", nonNegativeIntegerSchema()},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "playbook_artifact",
+            "analysis_artifact",
+            "mode",
+            "generated_at_utc",
+            "filtered_finding_count",
+            "planned_action_count",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7PlaybookArtifactListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"applied_filters", phase7PlaybookInventoryFiltersSchema()},
+            {"playbook_artifacts", json{{"type", "array"}, {"items", phase7PlaybookArtifactRowSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "applied_filters", "playbook_artifacts"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_ledger", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"generated_at_utc", stringSchema()},
+            {"ledger_status", stringSchema()},
+            {"execution_policy", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"entry_count", nonNegativeIntegerSchema()},
+            {"entries", json{{"type", "array"}, {"items", phase7ExecutionLedgerEntrySchema()}}},
+            {"audit_trail", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "source_artifact",
+            "analysis_artifact",
+            "playbook_artifact",
+            "execution_ledger",
+            "mode",
+            "generated_at_utc",
+            "ledger_status",
+            "execution_policy",
+            "filtered_finding_ids",
+            "entry_count",
+            "entries",
+            "audit_trail",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerBuildResultSchema() {
+    json schema = phase7ExecutionLedgerResultSchema();
+    schema["properties"]["artifact_status"] = stringEnumSchema({"created", "reused"});
+    schema["required"].push_back("artifact_status");
+    return schema;
+}
+
+json phase7ExecutionLedgerRowSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_ledger", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"generated_at_utc", stringSchema()},
+            {"ledger_status", stringSchema()},
+            {"entry_count", nonNegativeIntegerSchema()},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "execution_ledger",
+            "playbook_artifact",
+            "analysis_artifact",
+            "source_artifact",
+            "mode",
+            "generated_at_utc",
+            "ledger_status",
+            "entry_count",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"applied_filters", phase7ExecutionLedgerFiltersSchema()},
+            {"execution_ledgers", json{{"type", "array"}, {"items", phase7ExecutionLedgerRowSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "applied_filters", "execution_ledgers"})},
         {"additionalProperties", false}
     };
 }
@@ -734,12 +1037,30 @@ std::string toolTitle(const ToolSpec& tool) {
             return "List Imported Cases";
         case ToolId::ReadSessionQuality:
             return "Read Session Quality";
+        case ToolId::ListAnalysisProfiles:
+            return "List Analysis Profiles";
+        case ToolId::ReadAnalysisProfile:
+            return "Read Analysis Profile";
         case ToolId::AnalyzerRun:
             return "Run Analyzer";
         case ToolId::FindingsList:
             return "List Analyzer Findings";
+        case ToolId::ListAnalysisArtifacts:
+            return "List Analysis Artifacts";
+        case ToolId::ReadAnalysisArtifact:
+            return "Read Analysis Artifact";
         case ToolId::PlaybookApply:
             return "Apply Guarded Playbook";
+        case ToolId::ListPlaybookArtifacts:
+            return "List Playbook Artifacts";
+        case ToolId::ReadPlaybookArtifact:
+            return "Read Playbook Artifact";
+        case ToolId::PrepareExecutionLedger:
+            return "Prepare Execution Ledger";
+        case ToolId::ListExecutionLedgers:
+            return "List Execution Ledgers";
+        case ToolId::ReadExecutionLedger:
+            return "Read Execution Ledger";
     }
     return tool.name;
 }
@@ -755,6 +1076,7 @@ json toolAnnotationsForSpec(const ToolSpec& tool) {
         case ToolId::ImportCaseBundle:
         case ToolId::AnalyzerRun:
         case ToolId::PlaybookApply:
+        case ToolId::PrepareExecutionLedger:
             return toolAnnotations(false, true, false);
         default:
             return toolAnnotations(true, true, false);
@@ -813,15 +1135,46 @@ json toolInputSchemaForList(const ToolSpec& tool) {
             return withSchemaExamples(std::move(schema), {json{{"limit", 20}}});
         case ToolId::ReadSessionQuality:
             return withSchemaExamples(std::move(schema), {json{{"first_session_seq", 1}, {"last_session_seq", 200}}});
+        case ToolId::ListAnalysisProfiles:
+            return withSchemaExamples(std::move(schema), {json::object()});
+        case ToolId::ReadAnalysisProfile:
+            return withSchemaExamples(std::move(schema), {json{{"analysis_profile", "phase7.trace_fill_integrity.v1"}}});
         case ToolId::AnalyzerRun:
             return withSchemaExamples(std::move(schema), {json{{"case_bundle_path", "/tmp/case-bundle-report-000001.msgpack"}}});
         case ToolId::FindingsList:
+            return withSchemaExamples(std::move(schema), {
+                json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}},
+                json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}, {"category", "trace_integrity"}}
+            });
+        case ToolId::ListAnalysisArtifacts:
+            return withSchemaExamples(std::move(schema), {
+                json{{"limit", 10}},
+                json{{"source_artifact_id", "case-bundle:report:1"}}
+            });
+        case ToolId::ReadAnalysisArtifact:
             return withSchemaExamples(std::move(schema), {json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}}});
         case ToolId::PlaybookApply:
             return withSchemaExamples(std::move(schema), {
                 json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}},
+                json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}, {"category", "trace_integrity"}},
                 json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}, {"mode", "apply"}}
             });
+        case ToolId::ListPlaybookArtifacts:
+            return withSchemaExamples(std::move(schema), {
+                json{{"limit", 10}},
+                json{{"analysis_artifact_id", "phase7-analysis-1234abcd"}}
+            });
+        case ToolId::ReadPlaybookArtifact:
+            return withSchemaExamples(std::move(schema), {json{{"playbook_artifact_id", "phase7-playbook-1234abcd"}}});
+        case ToolId::PrepareExecutionLedger:
+            return withSchemaExamples(std::move(schema), {json{{"playbook_artifact_id", "phase7-playbook-1234abcd"}}});
+        case ToolId::ListExecutionLedgers:
+            return withSchemaExamples(std::move(schema), {
+                json{{"limit", 10}},
+                json{{"playbook_artifact_id", "phase7-playbook-1234abcd"}}
+            });
+        case ToolId::ReadExecutionLedger:
+            return withSchemaExamples(std::move(schema), {json{{"execution_ledger_artifact_id", "phase7-ledger-1234abcd"}}});
         case ToolId::Status:
         default:
             return schema;
@@ -937,6 +1290,14 @@ std::vector<PromptSpec> buildPromptSpecs() {
             "Guide an agent through reopening a stored Phase 7 playbook artifact and converting it into an investigation plan.",
             {
                 {"playbook_artifact_id", "Stored Phase 7 playbook artifact id.", true}
+            }
+        },
+        {
+            "review_phase7_execution_ledger",
+            "Review Phase 7 Execution Ledger",
+            "Guide an agent through reopening a stored Phase 7 execution/audit ledger while live apply remains deferred.",
+            {
+                {"execution_ledger_artifact_id", "Stored Phase 7 execution ledger artifact id.", true}
             }
         }
     };
@@ -1146,6 +1507,18 @@ std::string promptMessageForPrompt(const PromptSpec& prompt, const json& args) {
             << "/markdown`, then follow the referenced analysis artifact back through `tapescript_findings_list`. Return: action order, affected findings, suggested tools, and whether any step still needs manual confirmation.";
         return out.str();
     }
+    if (prompt.name == "review_phase7_execution_ledger") {
+        const std::string ledgerArtifactId = promptStringArg(args, "execution_ledger_artifact_id");
+        std::ostringstream out;
+        out << "Review stored Phase 7 execution ledger `"
+            << (ledgerArtifactId.empty() ? "<execution_ledger_artifact_id>" : ledgerArtifactId)
+            << "`. Reopen it with `resources/read` on `tape://phase7/ledger/"
+            << (ledgerArtifactId.empty() ? "<execution_ledger_artifact_id>" : ledgerArtifactId)
+            << "` and `tape://phase7/ledger/"
+            << (ledgerArtifactId.empty() ? "<execution_ledger_artifact_id>" : ledgerArtifactId)
+            << "/markdown`, then follow the linked playbook and analysis artifacts with `tapescript_read_playbook_artifact` and `tapescript_findings_list`. Keep apply deferred and treat the ledger as an audit/review surface only. Return: review status, blocked actions, required confirmations, and the next safe investigation steps.";
+        return out.str();
+    }
     return prompt.description;
 }
 
@@ -1160,7 +1533,9 @@ enum class ResourceKind {
     Phase7AnalysisJson,
     Phase7AnalysisMarkdown,
     Phase7PlaybookJson,
-    Phase7PlaybookMarkdown
+    Phase7PlaybookMarkdown,
+    Phase7ExecutionLedgerJson,
+    Phase7ExecutionLedgerMarkdown
 };
 
 struct ParsedResourceUri {
@@ -1201,6 +1576,14 @@ std::string phase7PlaybookMarkdownUri(std::string_view artifactId) {
     return "tape://phase7/playbook/" + std::string(artifactId) + "/markdown";
 }
 
+std::string phase7ExecutionLedgerUri(std::string_view artifactId) {
+    return "tape://phase7/ledger/" + std::string(artifactId);
+}
+
+std::string phase7ExecutionLedgerMarkdownUri(std::string_view artifactId) {
+    return "tape://phase7/ledger/" + std::string(artifactId) + "/markdown";
+}
+
 ParsedResourceUri parseResourceUri(std::string_view uri) {
     ParsedResourceUri parsed;
     const std::string text(uri);
@@ -1225,6 +1608,7 @@ ParsedResourceUri parseResourceUri(std::string_view uri) {
     constexpr std::string_view kCaseArtifactPrefix = "tape://artifact/case-report/";
     constexpr std::string_view kPhase7AnalysisPrefix = "tape://phase7/analysis/";
     constexpr std::string_view kPhase7PlaybookPrefix = "tape://phase7/playbook/";
+    constexpr std::string_view kPhase7ExecutionLedgerPrefix = "tape://phase7/ledger/";
 
     if (text.rfind(std::string(kSessionReportPrefix), 0) == 0) {
         parsed.kind = ResourceKind::SessionReportJson;
@@ -1283,6 +1667,18 @@ ParsedResourceUri parseResourceUri(std::string_view uri) {
             parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7PlaybookJson;
         } else if (text.substr(formatPos + 1) == "markdown") {
             parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7PlaybookMarkdown;
+        }
+        return parsed;
+    }
+    if (text.rfind(std::string(kPhase7ExecutionLedgerPrefix), 0) == 0) {
+        const std::size_t formatPos = text.find('/', kPhase7ExecutionLedgerPrefix.size());
+        parsed.artifactId = text.substr(
+            kPhase7ExecutionLedgerPrefix.size(),
+            (formatPos == std::string::npos ? text.size() : formatPos) - kPhase7ExecutionLedgerPrefix.size());
+        if (formatPos == std::string::npos) {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionLedgerJson;
+        } else if (text.substr(formatPos + 1) == "markdown") {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionLedgerMarkdown;
         }
         return parsed;
     }
@@ -1427,6 +1823,155 @@ json phase7AnalysisRefInputSchema() {
     };
 }
 
+json phase7FindingSelectionInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_manifest_path", stringSchema()},
+            {"analysis_artifact_id", stringSchema()},
+            {"finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"minimum_severity", stringEnumSchema({"info", "warning", "error", "critical"})},
+            {"category", stringSchema()},
+            {"limit", positiveIntegerSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"analysis_manifest_path"})}},
+            json{{"required", json::array({"analysis_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7PlaybookRefInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"playbook_manifest_path", stringSchema()},
+            {"playbook_artifact_id", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"playbook_manifest_path"})}},
+            json{{"required", json::array({"playbook_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalysisInventoryInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"limit", positiveIntegerSchema()},
+            {"source_artifact_id", stringSchema()},
+            {"analysis_profile", stringSchema()}
+        }},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ProfileRefInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_profile", stringSchema()}
+        }},
+        {"required", json::array({"analysis_profile"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7PlaybookInventoryInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"limit", positiveIntegerSchema()},
+            {"analysis_artifact_id", stringSchema()},
+            {"source_artifact_id", stringSchema()},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})}
+        }},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerRefInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_ledger_manifest_path", stringSchema()},
+            {"execution_ledger_artifact_id", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_ledger_manifest_path"})}},
+            json{{"required", json::array({"execution_ledger_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"playbook_manifest_path", stringSchema()},
+            {"playbook_artifact_id", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"playbook_manifest_path"})}},
+            json{{"required", json::array({"playbook_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerInventoryInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"limit", positiveIntegerSchema()},
+            {"playbook_artifact_id", stringSchema()},
+            {"analysis_artifact_id", stringSchema()},
+            {"source_artifact_id", stringSchema()},
+            {"ledger_status", stringSchema()}
+        }},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalysisProfileSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"analysis_profile", stringSchema()},
+            {"title", stringSchema()},
+            {"summary", stringSchema()},
+            {"default_profile", booleanSchema()},
+            {"supported_source_bundle_types", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"finding_categories", json{{"type", "array"}, {"items", stringSchema()}}}
+        }},
+        {"required", json::array({
+            "analysis_profile",
+            "title",
+            "summary",
+            "default_profile",
+            "supported_source_bundle_types",
+            "finding_categories"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7AnalysisProfileListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"analysis_profiles", json{{"type", "array"}, {"items", phase7AnalysisProfileSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "analysis_profiles"})},
+        {"additionalProperties", false}
+    };
+}
+
 json phase7PlaybookInputSchema() {
     return json{
         {"type", "object"},
@@ -1434,6 +1979,9 @@ json phase7PlaybookInputSchema() {
             {"analysis_manifest_path", stringSchema()},
             {"analysis_artifact_id", stringSchema()},
             {"finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"minimum_severity", stringEnumSchema({"info", "warning", "error", "critical"})},
+            {"category", stringSchema()},
+            {"limit", positiveIntegerSchema()},
             {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})}
         }},
         {"oneOf", json::array({
@@ -1729,11 +2277,35 @@ std::vector<ToolSpec> buildToolSpecs() {
          qualityResultSchema(),
          "phase5.session-quality.v1",
          tape_engine::QueryOperation::ReadSessionQuality},
+        {ToolId::ListAnalysisProfiles,
+         "tapescript_list_analysis_profiles",
+         "List supported local Phase 7 analyzer profiles.",
+         json{
+             {"type", "object"},
+             {"properties", json::object()},
+             {"additionalProperties", false}
+         },
+         phase7AnalysisProfileListResultSchema(),
+         "phase7.analysis-profile-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_list_analysis_profiles_local"},
+        {ToolId::ReadAnalysisProfile,
+         "tapescript_read_analysis_profile",
+         "Read one supported local Phase 7 analyzer profile by id.",
+         phase7ProfileRefInputSchema(),
+         phase7AnalysisProfileSchema(),
+         "phase7.analysis-profile-read.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_read_analysis_profile_local"},
         {ToolId::AnalyzerRun,
          "tapescript_analyzer_run",
          "Run a local Phase 7 analyzer pass against a portable session or case bundle.",
          phase7AnalyzerInputSchema(),
-         phase7AnalyzerResultSchema(),
+         phase7AnalyzerRunResultSchema(),
          "phase7.analysis-run.v1",
          tape_engine::QueryOperation::Unknown,
          true,
@@ -1742,23 +2314,93 @@ std::vector<ToolSpec> buildToolSpecs() {
         {ToolId::FindingsList,
          "tapescript_findings_list",
          "List findings from a stored Phase 7 analyzer artifact.",
-         phase7AnalysisRefInputSchema(),
+         phase7FindingSelectionInputSchema(),
          phase7FindingsListResultSchema(),
          "phase7.findings-list.v1",
          tape_engine::QueryOperation::Unknown,
          false,
          kPhase7ContractVersion,
          "phase7_findings_list_local"},
+        {ToolId::ListAnalysisArtifacts,
+         "tapescript_list_analysis_artifacts",
+         "List persisted local Phase 7 analyzer artifacts.",
+         phase7AnalysisInventoryInputSchema(),
+         phase7AnalysisArtifactListResultSchema(),
+         "phase7.analysis-artifact-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_list_analysis_artifacts_local"},
+        {ToolId::ReadAnalysisArtifact,
+         "tapescript_read_analysis_artifact",
+         "Read a stored local Phase 7 analyzer artifact by id or manifest path.",
+         phase7AnalysisRefInputSchema(),
+         phase7AnalyzerResultSchema(),
+         "phase7.analysis-artifact-read.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_read_analysis_artifact_local"},
         {ToolId::PlaybookApply,
          "tapescript_playbook_apply",
          "Build a guarded dry-run playbook from a stored Phase 7 analyzer artifact.",
          phase7PlaybookInputSchema(),
-         phase7PlaybookResultSchema(),
+         phase7PlaybookApplyResultSchema(),
          "phase7.playbook-plan.v1",
          tape_engine::QueryOperation::Unknown,
          false,
          kPhase7ContractVersion,
-         "phase7_playbook_apply_guarded_local"}
+         "phase7_playbook_apply_guarded_local"},
+        {ToolId::ListPlaybookArtifacts,
+         "tapescript_list_playbook_artifacts",
+         "List persisted local Phase 7 guarded playbook artifacts.",
+         phase7PlaybookInventoryInputSchema(),
+         phase7PlaybookArtifactListResultSchema(),
+         "phase7.playbook-artifact-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_list_playbook_artifacts_local"},
+        {ToolId::ReadPlaybookArtifact,
+         "tapescript_read_playbook_artifact",
+         "Read a stored local Phase 7 guarded playbook artifact by id or manifest path.",
+         phase7PlaybookRefInputSchema(),
+         phase7PlaybookResultSchema(),
+         "phase7.playbook-artifact-read.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_read_playbook_artifact_local"},
+        {ToolId::PrepareExecutionLedger,
+         "tapescript_prepare_execution_ledger",
+         "Create or reopen a durable local Phase 7 execution/audit ledger from a stored guarded playbook artifact.",
+         phase7ExecutionLedgerInputSchema(),
+         phase7ExecutionLedgerBuildResultSchema(),
+         "phase7.execution-ledger.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_prepare_execution_ledger_local"},
+        {ToolId::ListExecutionLedgers,
+         "tapescript_list_execution_ledgers",
+         "List persisted local Phase 7 execution/audit ledger artifacts.",
+         phase7ExecutionLedgerInventoryInputSchema(),
+         phase7ExecutionLedgerListResultSchema(),
+         "phase7.execution-ledger-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_list_execution_ledgers_local"},
+        {ToolId::ReadExecutionLedger,
+         "tapescript_read_execution_ledger",
+         "Read a stored local Phase 7 execution/audit ledger artifact by id or manifest path.",
+         phase7ExecutionLedgerRefInputSchema(),
+         phase7ExecutionLedgerResultSchema(),
+         "phase7.execution-ledger-read.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_read_execution_ledger_local"}
     };
 }
 
@@ -1931,37 +2573,615 @@ json revisionFromPhase7ReplayContext(const json& replayContext) {
     };
 }
 
-json phase7AnalyzerResultPayload(const tape_phase7::AnalysisArtifact& artifact) {
+struct Phase7FindingSelection {
+    std::string manifestPath;
+    std::string artifactId;
+    std::vector<std::string> findingIds;
+    std::string minimumSeverity;
+    std::string category;
+    std::size_t limit = 0;
+};
+
+struct Phase7SelectedFindings {
+    std::vector<tape_phase7::FindingRecord> findings;
+    std::vector<std::string> findingIds;
+    json appliedFilters = json::object();
+};
+
+struct Phase7AnalysisInventorySelection {
+    std::size_t limit = 25;
+    std::string sourceArtifactId;
+    std::string analysisProfile;
+};
+
+struct Phase7PlaybookInventorySelection {
+    std::size_t limit = 25;
+    std::string analysisArtifactId;
+    std::string sourceArtifactId;
+    std::string mode;
+};
+
+struct Phase7ExecutionLedgerInventorySelection {
+    std::size_t limit = 25;
+    std::string playbookArtifactId;
+    std::string analysisArtifactId;
+    std::string sourceArtifactId;
+    std::string ledgerStatus;
+};
+
+std::optional<int> phase7SeverityRank(std::string_view severity) {
+    if (severity == "info") {
+        return 0;
+    }
+    if (severity == "warning") {
+        return 1;
+    }
+    if (severity == "error") {
+        return 2;
+    }
+    if (severity == "critical") {
+        return 3;
+    }
+    return std::nullopt;
+}
+
+bool parsePhase7SelectionArgs(const json& args,
+                              Phase7FindingSelection* outSelection,
+                              std::string* outCode,
+                              std::string* outMessage,
+                              bool allowMode) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+
+    if (allowMode) {
+        if (hasUnexpectedKeys(args, {"analysis_manifest_path", "analysis_artifact_id", "finding_ids", "minimum_severity", "category", "limit", "mode"})) {
+            return fail("invalid_arguments",
+                        "playbook arguments must include one analysis reference plus optional finding filters and mode");
+        }
+    } else if (hasUnexpectedKeys(args, {"analysis_manifest_path", "analysis_artifact_id", "finding_ids", "minimum_severity", "category", "limit"})) {
+        return fail("invalid_arguments",
+                    "findings arguments must include one analysis reference plus optional finding filters");
+    }
+
+    Phase7FindingSelection selection;
+    const bool hasManifest = args.contains("analysis_manifest_path");
+    const bool hasArtifactId = args.contains("analysis_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of analysis_manifest_path or analysis_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("analysis_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "analysis_manifest_path must be a non-empty string");
+        }
+        selection.manifestPath = *manifestPath;
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("analysis_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "analysis_artifact_id must be a non-empty string");
+        }
+        selection.artifactId = *artifactId;
+    }
+    if (args.contains("finding_ids")) {
+        const auto parsed = asNonEmptyStringArray(args.at("finding_ids"));
+        if (!parsed.has_value()) {
+            return fail("invalid_arguments", "finding_ids must be an array of non-empty strings");
+        }
+        selection.findingIds = *parsed;
+    }
+    if (args.contains("minimum_severity")) {
+        const auto severity = asNonEmptyString(args.at("minimum_severity"));
+        if (!severity.has_value() || !phase7SeverityRank(*severity).has_value()) {
+            return fail("invalid_arguments",
+                        "minimum_severity must be one of info, warning, error, or critical");
+        }
+        selection.minimumSeverity = *severity;
+    }
+    if (args.contains("category")) {
+        const auto category = asNonEmptyString(args.at("category"));
+        if (!category.has_value()) {
+            return fail("invalid_arguments", "category must be a non-empty string");
+        }
+        selection.category = *category;
+    }
+    if (args.contains("limit")) {
+        const auto limit = asPositiveUInt64(args.at("limit"));
+        if (!limit.has_value()) {
+            return fail("invalid_arguments", "limit must be a positive integer");
+        }
+        selection.limit = static_cast<std::size_t>(*limit);
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase7PlaybookRefArgs(const json& args,
+                                std::string* outManifestPath,
+                                std::string* outArtifactId,
+                                std::string* outCode,
+                                std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"playbook_manifest_path", "playbook_artifact_id"})) {
+        return fail("invalid_arguments",
+                    "exactly one of playbook_manifest_path or playbook_artifact_id is required");
+    }
+
+    const bool hasManifest = args.contains("playbook_manifest_path");
+    const bool hasArtifactId = args.contains("playbook_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of playbook_manifest_path or playbook_artifact_id is required");
+    }
+
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("playbook_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "playbook_manifest_path must be a non-empty string");
+        }
+        if (outManifestPath != nullptr) {
+            *outManifestPath = *manifestPath;
+        }
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("playbook_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "playbook_artifact_id must be a non-empty string");
+        }
+        if (outArtifactId != nullptr) {
+            *outArtifactId = *artifactId;
+        }
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionLedgerRefArgs(const json& args,
+                                       std::string* outManifestPath,
+                                       std::string* outArtifactId,
+                                       std::string* outCode,
+                                       std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"execution_ledger_manifest_path", "execution_ledger_artifact_id"})) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_ledger_manifest_path or execution_ledger_artifact_id is required");
+    }
+
+    const bool hasManifest = args.contains("execution_ledger_manifest_path");
+    const bool hasArtifactId = args.contains("execution_ledger_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_ledger_manifest_path or execution_ledger_artifact_id is required");
+    }
+
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("execution_ledger_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "execution_ledger_manifest_path must be a non-empty string");
+        }
+        if (outManifestPath != nullptr) {
+            *outManifestPath = *manifestPath;
+        }
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("execution_ledger_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "execution_ledger_artifact_id must be a non-empty string");
+        }
+        if (outArtifactId != nullptr) {
+            *outArtifactId = *artifactId;
+        }
+    }
+    return true;
+}
+
+bool parsePhase7AnalysisInventoryArgs(const json& args,
+                                      Phase7AnalysisInventorySelection* outSelection,
+                                      std::string* outCode,
+                                      std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"limit", "source_artifact_id", "analysis_profile"})) {
+        return fail("invalid_arguments",
+                    "analysis inventory arguments support only limit, source_artifact_id, and analysis_profile");
+    }
+
+    Phase7AnalysisInventorySelection selection;
+    if (args.contains("limit")) {
+        const auto limit = asPositiveUInt64(args.at("limit"));
+        if (!limit.has_value()) {
+            return fail("invalid_arguments", "limit must be a positive integer");
+        }
+        selection.limit = static_cast<std::size_t>(*limit);
+    }
+    if (args.contains("source_artifact_id")) {
+        const auto sourceArtifactId = asNonEmptyString(args.at("source_artifact_id"));
+        if (!sourceArtifactId.has_value()) {
+            return fail("invalid_arguments", "source_artifact_id must be a non-empty string");
+        }
+        selection.sourceArtifactId = *sourceArtifactId;
+    }
+    if (args.contains("analysis_profile")) {
+        const auto analysisProfile = asNonEmptyString(args.at("analysis_profile"));
+        if (!analysisProfile.has_value()) {
+            return fail("invalid_arguments", "analysis_profile must be a non-empty string");
+        }
+        selection.analysisProfile = *analysisProfile;
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase7PlaybookInventoryArgs(const json& args,
+                                      Phase7PlaybookInventorySelection* outSelection,
+                                      std::string* outCode,
+                                      std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"limit", "analysis_artifact_id", "source_artifact_id", "mode"})) {
+        return fail("invalid_arguments",
+                    "playbook inventory arguments support only limit, analysis_artifact_id, source_artifact_id, and mode");
+    }
+
+    Phase7PlaybookInventorySelection selection;
+    if (args.contains("limit")) {
+        const auto limit = asPositiveUInt64(args.at("limit"));
+        if (!limit.has_value()) {
+            return fail("invalid_arguments", "limit must be a positive integer");
+        }
+        selection.limit = static_cast<std::size_t>(*limit);
+    }
+    if (args.contains("analysis_artifact_id")) {
+        const auto analysisArtifactId = asNonEmptyString(args.at("analysis_artifact_id"));
+        if (!analysisArtifactId.has_value()) {
+            return fail("invalid_arguments", "analysis_artifact_id must be a non-empty string");
+        }
+        selection.analysisArtifactId = *analysisArtifactId;
+    }
+    if (args.contains("source_artifact_id")) {
+        const auto sourceArtifactId = asNonEmptyString(args.at("source_artifact_id"));
+        if (!sourceArtifactId.has_value()) {
+            return fail("invalid_arguments", "source_artifact_id must be a non-empty string");
+        }
+        selection.sourceArtifactId = *sourceArtifactId;
+    }
+    if (args.contains("mode")) {
+        const auto mode = asNonEmptyString(args.at("mode"));
+        if (!mode.has_value() || (*mode != tape_phase7::kDefaultPlaybookMode && *mode != tape_phase7::kApplyPlaybookMode)) {
+            return fail("invalid_arguments", "mode must be dry_run or apply");
+        }
+        selection.mode = *mode;
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionLedgerInventoryArgs(const json& args,
+                                             Phase7ExecutionLedgerInventorySelection* outSelection,
+                                             std::string* outCode,
+                                             std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"limit", "playbook_artifact_id", "analysis_artifact_id", "source_artifact_id", "ledger_status"})) {
+        return fail("invalid_arguments",
+                    "execution ledger inventory arguments support only limit, playbook_artifact_id, analysis_artifact_id, source_artifact_id, and ledger_status");
+    }
+
+    Phase7ExecutionLedgerInventorySelection selection;
+    if (args.contains("limit")) {
+        const auto limit = asPositiveUInt64(args.at("limit"));
+        if (!limit.has_value()) {
+            return fail("invalid_arguments", "limit must be a positive integer");
+        }
+        selection.limit = static_cast<std::size_t>(*limit);
+    }
+    if (args.contains("playbook_artifact_id")) {
+        const auto playbookArtifactId = asNonEmptyString(args.at("playbook_artifact_id"));
+        if (!playbookArtifactId.has_value()) {
+            return fail("invalid_arguments", "playbook_artifact_id must be a non-empty string");
+        }
+        selection.playbookArtifactId = *playbookArtifactId;
+    }
+    if (args.contains("analysis_artifact_id")) {
+        const auto analysisArtifactId = asNonEmptyString(args.at("analysis_artifact_id"));
+        if (!analysisArtifactId.has_value()) {
+            return fail("invalid_arguments", "analysis_artifact_id must be a non-empty string");
+        }
+        selection.analysisArtifactId = *analysisArtifactId;
+    }
+    if (args.contains("source_artifact_id")) {
+        const auto sourceArtifactId = asNonEmptyString(args.at("source_artifact_id"));
+        if (!sourceArtifactId.has_value()) {
+            return fail("invalid_arguments", "source_artifact_id must be a non-empty string");
+        }
+        selection.sourceArtifactId = *sourceArtifactId;
+    }
+    if (args.contains("ledger_status")) {
+        const auto ledgerStatus = asNonEmptyString(args.at("ledger_status"));
+        if (!ledgerStatus.has_value()) {
+            return fail("invalid_arguments", "ledger_status must be a non-empty string");
+        }
+        selection.ledgerStatus = *ledgerStatus;
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool selectPhase7Findings(const tape_phase7::AnalysisArtifact& artifact,
+                          const Phase7FindingSelection& selection,
+                          Phase7SelectedFindings* outSelection,
+                          std::string* outCode,
+                          std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    std::vector<tape_phase7::FindingRecord> findings;
+    if (selection.findingIds.empty()) {
+        findings = artifact.findings;
+    } else {
+        for (const auto& requestedId : selection.findingIds) {
+            const auto it = std::find_if(
+                artifact.findings.begin(),
+                artifact.findings.end(),
+                [&](const tape_phase7::FindingRecord& finding) { return finding.findingId == requestedId; });
+            if (it == artifact.findings.end()) {
+                return fail("finding_not_found",
+                            "finding filters reference a finding that is not present in the analysis artifact");
+            }
+            if (std::find_if(findings.begin(),
+                             findings.end(),
+                             [&](const tape_phase7::FindingRecord& finding) {
+                                 return finding.findingId == requestedId;
+                             }) == findings.end()) {
+                findings.push_back(*it);
+            }
+        }
+    }
+
+    if (!selection.minimumSeverity.empty()) {
+        const int minimumRank = *phase7SeverityRank(selection.minimumSeverity);
+        findings.erase(std::remove_if(findings.begin(),
+                                      findings.end(),
+                                      [&](const tape_phase7::FindingRecord& finding) {
+                                          const auto rank = phase7SeverityRank(finding.severity);
+                                          return !rank.has_value() || *rank < minimumRank;
+                                      }),
+                       findings.end());
+    }
+    if (!selection.category.empty()) {
+        findings.erase(std::remove_if(findings.begin(),
+                                      findings.end(),
+                                      [&](const tape_phase7::FindingRecord& finding) {
+                                          return finding.category != selection.category;
+                                      }),
+                       findings.end());
+    }
+    if (selection.limit > 0 && findings.size() > selection.limit) {
+        findings.resize(selection.limit);
+    }
+
+    Phase7SelectedFindings selected;
+    selected.findings = std::move(findings);
+    for (const auto& finding : selected.findings) {
+        selected.findingIds.push_back(finding.findingId);
+    }
+    selected.appliedFilters = {
+        {"requested_finding_ids", selection.findingIds},
+        {"minimum_severity", selection.minimumSeverity.empty() ? json(nullptr) : json(selection.minimumSeverity)},
+        {"category", selection.category.empty() ? json(nullptr) : json(selection.category)},
+        {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+        {"selected_count", selected.findings.size()}
+    };
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selected);
+    }
+    return true;
+}
+
+json phase7AnalyzerResultPayload(const tape_phase7::AnalysisArtifact& artifact,
+                                 std::string_view artifactStatus = {}) {
     json findings = json::array();
     for (const auto& finding : artifact.findings) {
         findings.push_back(tape_phase7::findingToJson(finding));
     }
-    return {
+    json payload = {
         {"source_artifact", tape_phase7::artifactRefToJson(artifact.sourceArtifact)},
         {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
         {"generated_artifacts", json::array({tape_phase7::artifactRefToJson(artifact.analysisArtifact)})},
         {"analysis_profile", artifact.analysisProfile},
+        {"generated_at_utc", artifact.generatedAtUtc},
         {"finding_count", findings.size()},
         {"replay_context", artifact.replayContext},
         {"findings", std::move(findings)}
     };
+    if (!artifactStatus.empty()) {
+        payload["artifact_status"] = std::string(artifactStatus);
+    }
+    return payload;
 }
 
-json phase7FindingsListPayload(const tape_phase7::AnalysisArtifact& artifact) {
+json phase7FindingsListPayload(const tape_phase7::AnalysisArtifact& artifact,
+                               const Phase7SelectedFindings& selectedFindings) {
     json findings = json::array();
-    for (const auto& finding : artifact.findings) {
+    for (const auto& finding : selectedFindings.findings) {
         findings.push_back(tape_phase7::findingToJson(finding));
     }
     return {
         {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
         {"analysis_profile", artifact.analysisProfile},
+        {"generated_at_utc", artifact.generatedAtUtc},
         {"finding_count", findings.size()},
+        {"filtered_finding_ids", selectedFindings.findingIds},
+        {"applied_filters", selectedFindings.appliedFilters},
         {"replay_context", artifact.replayContext},
         {"findings", std::move(findings)}
     };
 }
 
-json phase7PlaybookPayload(const tape_phase7::PlaybookArtifact& playbook) {
+json phase7AnalysisProfilePayload(const tape_phase7::AnalyzerProfileSpec& profile) {
+    return {
+        {"analysis_profile", profile.analysisProfile},
+        {"title", profile.title},
+        {"summary", profile.summary},
+        {"default_profile", profile.defaultProfile},
+        {"supported_source_bundle_types", profile.supportedSourceBundleTypes},
+        {"finding_categories", profile.findingCategories}
+    };
+}
+
+json phase7AnalysisProfileListPayload(const std::vector<tape_phase7::AnalyzerProfileSpec>& profiles) {
+    json rows = json::array();
+    for (const auto& profile : profiles) {
+        rows.push_back(phase7AnalysisProfilePayload(profile));
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"analysis_profiles", std::move(rows)}
+    };
+}
+
+json phase7AnalysisInventoryPayload(const std::vector<tape_phase7::AnalysisArtifact>& artifacts) {
+    json appliedFilters = {
+        {"source_artifact_id", nullptr},
+        {"analysis_profile", nullptr},
+        {"limit", nullptr},
+        {"matched_count", artifacts.size()}
+    };
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        rows.push_back({
+            {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+            {"source_artifact", tape_phase7::artifactRefToJson(artifact.sourceArtifact)},
+            {"analysis_profile", artifact.analysisProfile},
+            {"generated_at_utc", artifact.generatedAtUtc},
+            {"finding_count", artifact.findings.size()},
+            {"replay_context", artifact.replayContext}
+        });
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"applied_filters", std::move(appliedFilters)},
+        {"analysis_artifacts", std::move(rows)}
+    };
+}
+
+json phase7AnalysisInventoryPayload(const std::vector<tape_phase7::AnalysisArtifact>& artifacts,
+                                    const Phase7AnalysisInventorySelection& selection,
+                                    std::size_t matchedCount) {
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        rows.push_back({
+            {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+            {"source_artifact", tape_phase7::artifactRefToJson(artifact.sourceArtifact)},
+            {"analysis_profile", artifact.analysisProfile},
+            {"generated_at_utc", artifact.generatedAtUtc},
+            {"finding_count", artifact.findings.size()},
+            {"replay_context", artifact.replayContext}
+        });
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"applied_filters", {
+            {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+            {"analysis_profile", selection.analysisProfile.empty() ? json(nullptr) : json(selection.analysisProfile)},
+            {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+            {"matched_count", matchedCount}
+        }},
+        {"analysis_artifacts", std::move(rows)}
+    };
+}
+
+json phase7PlaybookPayload(const tape_phase7::PlaybookArtifact& playbook,
+                           const json& appliedFilters = json::object(),
+                           std::string_view artifactStatus = {}) {
     json filteredFindingIds = json::array();
     for (const auto& findingId : playbook.filteredFindingIds) {
         filteredFindingIds.push_back(findingId);
@@ -1970,13 +3190,138 @@ json phase7PlaybookPayload(const tape_phase7::PlaybookArtifact& playbook) {
     for (const auto& action : playbook.plannedActions) {
         plannedActions.push_back(tape_phase7::playbookActionToJson(action));
     }
-    return {
+    json payload = {
         {"analysis_artifact", tape_phase7::artifactRefToJson(playbook.analysisArtifact)},
         {"playbook_artifact", tape_phase7::artifactRefToJson(playbook.playbookArtifact)},
         {"mode", playbook.mode},
+        {"generated_at_utc", playbook.generatedAtUtc},
         {"filtered_finding_ids", std::move(filteredFindingIds)},
+        {"applied_filters", (appliedFilters.is_object() && !appliedFilters.empty()) ? appliedFilters : json{
+            {"requested_finding_ids", playbook.filteredFindingIds},
+            {"minimum_severity", nullptr},
+            {"category", nullptr},
+            {"limit", nullptr},
+            {"selected_count", playbook.filteredFindingIds.size()}
+        }},
         {"planned_actions", std::move(plannedActions)},
         {"replay_context", playbook.replayContext}
+    };
+    if (!artifactStatus.empty()) {
+        payload["artifact_status"] = std::string(artifactStatus);
+    }
+    return payload;
+}
+
+json phase7PlaybookInventoryPayload(const std::vector<tape_phase7::PlaybookArtifact>& artifacts) {
+    json appliedFilters = {
+        {"analysis_artifact_id", nullptr},
+        {"source_artifact_id", nullptr},
+        {"mode", nullptr},
+        {"limit", nullptr},
+        {"matched_count", artifacts.size()}
+    };
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        rows.push_back({
+            {"playbook_artifact", tape_phase7::artifactRefToJson(artifact.playbookArtifact)},
+            {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+            {"mode", artifact.mode},
+            {"generated_at_utc", artifact.generatedAtUtc},
+            {"filtered_finding_count", artifact.filteredFindingIds.size()},
+            {"planned_action_count", artifact.plannedActions.size()},
+            {"replay_context", artifact.replayContext}
+        });
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"applied_filters", std::move(appliedFilters)},
+        {"playbook_artifacts", std::move(rows)}
+    };
+}
+
+json phase7PlaybookInventoryPayload(const std::vector<tape_phase7::PlaybookArtifact>& artifacts,
+                                    const Phase7PlaybookInventorySelection& selection,
+                                    std::size_t matchedCount) {
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        rows.push_back({
+            {"playbook_artifact", tape_phase7::artifactRefToJson(artifact.playbookArtifact)},
+            {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+            {"mode", artifact.mode},
+            {"generated_at_utc", artifact.generatedAtUtc},
+            {"filtered_finding_count", artifact.filteredFindingIds.size()},
+            {"planned_action_count", artifact.plannedActions.size()},
+            {"replay_context", artifact.replayContext}
+        });
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"applied_filters", {
+            {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
+            {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+            {"mode", selection.mode.empty() ? json(nullptr) : json(selection.mode)},
+            {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+            {"matched_count", matchedCount}
+        }},
+        {"playbook_artifacts", std::move(rows)}
+    };
+}
+
+json phase7ExecutionLedgerPayload(const tape_phase7::ExecutionLedgerArtifact& ledger,
+                                  std::string_view artifactStatus = {}) {
+    json entries = json::array();
+    for (const auto& entry : ledger.entries) {
+        entries.push_back(tape_phase7::executionLedgerEntryToJson(entry));
+    }
+    json payload = {
+        {"source_artifact", tape_phase7::artifactRefToJson(ledger.sourceArtifact)},
+        {"analysis_artifact", tape_phase7::artifactRefToJson(ledger.analysisArtifact)},
+        {"playbook_artifact", tape_phase7::artifactRefToJson(ledger.playbookArtifact)},
+        {"execution_ledger", tape_phase7::artifactRefToJson(ledger.ledgerArtifact)},
+        {"mode", ledger.mode},
+        {"generated_at_utc", ledger.generatedAtUtc},
+        {"ledger_status", ledger.ledgerStatus},
+        {"execution_policy", ledger.executionPolicy},
+        {"filtered_finding_ids", ledger.filteredFindingIds},
+        {"entry_count", ledger.entries.size()},
+        {"entries", std::move(entries)},
+        {"audit_trail", ledger.auditTrail},
+        {"replay_context", ledger.replayContext}
+    };
+    if (!artifactStatus.empty()) {
+        payload["artifact_status"] = std::string(artifactStatus);
+    }
+    return payload;
+}
+
+json phase7ExecutionLedgerInventoryPayload(const std::vector<tape_phase7::ExecutionLedgerArtifact>& artifacts,
+                                           const Phase7ExecutionLedgerInventorySelection& selection,
+                                           std::size_t matchedCount) {
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        rows.push_back({
+            {"execution_ledger", tape_phase7::artifactRefToJson(artifact.ledgerArtifact)},
+            {"playbook_artifact", tape_phase7::artifactRefToJson(artifact.playbookArtifact)},
+            {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+            {"source_artifact", tape_phase7::artifactRefToJson(artifact.sourceArtifact)},
+            {"mode", artifact.mode},
+            {"generated_at_utc", artifact.generatedAtUtc},
+            {"ledger_status", artifact.ledgerStatus},
+            {"entry_count", artifact.entries.size()},
+            {"replay_context", artifact.replayContext}
+        });
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"applied_filters", {
+            {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
+            {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
+            {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+            {"ledger_status", selection.ledgerStatus.empty() ? json(nullptr) : json(selection.ledgerStatus)},
+            {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+            {"matched_count", matchedCount}
+        }},
+        {"execution_ledgers", std::move(rows)}
     };
 }
 
@@ -2933,6 +4278,13 @@ json Adapter::listResourcesResult() const {
             {"meta", resourceErrorMeta(phase7Code, phase7Message)}
         };
     }
+    std::vector<tape_phase7::ExecutionLedgerArtifact> executionLedgers;
+    if (!tape_phase7::listExecutionLedgers(25, &executionLedgers, &phase7Code, &phase7Message)) {
+        return json{
+            {"resources", json::array()},
+            {"meta", resourceErrorMeta(phase7Code, phase7Message)}
+        };
+    }
 
     json resources = json::array();
     for (const auto& report : sessionReports.value.sessionReports) {
@@ -3013,6 +4365,22 @@ json Adapter::listResourcesResult() const {
             {"mimeType", "text/markdown"}
         });
     }
+    for (const auto& artifact : executionLedgers) {
+        resources.push_back({
+            {"uri", phase7ExecutionLedgerUri(artifact.ledgerArtifact.artifactId)},
+            {"name", artifact.ledgerArtifact.artifactId},
+            {"title", "Phase 7 execution ledger: " + artifact.ledgerArtifact.artifactId},
+            {"description", "Persisted Phase 7 execution/audit ledger JSON view."},
+            {"mimeType", "application/json"}
+        });
+        resources.push_back({
+            {"uri", phase7ExecutionLedgerMarkdownUri(artifact.ledgerArtifact.artifactId)},
+            {"name", artifact.ledgerArtifact.artifactId + ":markdown"},
+            {"title", "Phase 7 execution ledger markdown: " + artifact.ledgerArtifact.artifactId},
+            {"description", "Persisted Phase 7 execution/audit ledger markdown summary."},
+            {"mimeType", "text/markdown"}
+        });
+    }
 
     std::sort(resources.begin(), resources.end(), [](const json& left, const json& right) {
         return left.value("uri", std::string()) < right.value("uri", std::string());
@@ -3037,7 +4405,9 @@ json Adapter::readResourceResult(const std::string& resourceUri) const {
         (parsed.kind == ResourceKind::Phase7AnalysisJson ||
          parsed.kind == ResourceKind::Phase7AnalysisMarkdown ||
          parsed.kind == ResourceKind::Phase7PlaybookJson ||
-         parsed.kind == ResourceKind::Phase7PlaybookMarkdown) &&
+         parsed.kind == ResourceKind::Phase7PlaybookMarkdown ||
+         parsed.kind == ResourceKind::Phase7ExecutionLedgerJson ||
+         parsed.kind == ResourceKind::Phase7ExecutionLedgerMarkdown) &&
         parsed.artifactId.empty();
     if (parsed.kind == ResourceKind::Unknown || missingReportId || missingArtifactId) {
         return json{
@@ -3140,6 +4510,19 @@ json Adapter::readResourceResult(const std::string& resourceUri) const {
                 return textContents(resourceUri, tape_phase7::playbookArtifactMarkdown(artifact), "text/markdown");
             }
             return jsonContents(resourceUri, phase7PlaybookPayload(artifact));
+        }
+        case ResourceKind::Phase7ExecutionLedgerJson:
+        case ResourceKind::Phase7ExecutionLedgerMarkdown: {
+            tape_phase7::ExecutionLedgerArtifact artifact;
+            std::string code;
+            std::string message;
+            if (!tape_phase7::loadExecutionLedgerArtifact({}, parsed.artifactId, &artifact, &code, &message)) {
+                return json{{"contents", json::array()}, {"meta", resourceErrorMeta(code, message)}};
+            }
+            if (parsed.kind == ResourceKind::Phase7ExecutionLedgerMarkdown) {
+                return textContents(resourceUri, tape_phase7::executionLedgerArtifactMarkdown(artifact), "text/markdown");
+            }
+            return jsonContents(resourceUri, phase7ExecutionLedgerPayload(artifact));
         }
         case ResourceKind::Unknown:
             break;
@@ -3245,12 +4628,30 @@ json Adapter::invokeTool(const ToolSpec& tool, const json& args) const {
             return invokeListImportedCasesTool(tool, args);
         case ToolId::ReadSessionQuality:
             return invokeReadSessionQualityTool(tool, args);
+        case ToolId::ListAnalysisProfiles:
+            return invokeListAnalysisProfilesTool(tool, args);
+        case ToolId::ReadAnalysisProfile:
+            return invokeReadAnalysisProfileTool(tool, args);
         case ToolId::AnalyzerRun:
             return invokeAnalyzerRunTool(tool, args);
         case ToolId::FindingsList:
             return invokeFindingsListTool(tool, args);
+        case ToolId::ListAnalysisArtifacts:
+            return invokeListAnalysisArtifactsTool(tool, args);
+        case ToolId::ReadAnalysisArtifact:
+            return invokeReadAnalysisArtifactTool(tool, args);
         case ToolId::PlaybookApply:
             return invokePlaybookApplyTool(tool, args);
+        case ToolId::ListPlaybookArtifacts:
+            return invokeListPlaybookArtifactsTool(tool, args);
+        case ToolId::ReadPlaybookArtifact:
+            return invokeReadPlaybookArtifactTool(tool, args);
+        case ToolId::PrepareExecutionLedger:
+            return invokePrepareExecutionLedgerTool(tool, args);
+        case ToolId::ListExecutionLedgers:
+            return invokeListExecutionLedgersTool(tool, args);
+        case ToolId::ReadExecutionLedger:
+            return invokeReadExecutionLedgerTool(tool, args);
     }
     return makeToolResult(makeErrorEnvelope(
         tool.name,
@@ -4288,6 +5689,89 @@ json Adapter::invokeReadSessionQualityTool(const ToolSpec& tool, const json& arg
                                               revisionFromSummary(result.value.summary)));
 }
 
+json Adapter::invokeListAnalysisProfilesTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object() || !args.empty()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tool.engineCommand,
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "analysis profile inventory does not accept arguments.",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase7::AnalyzerProfileSpec> profiles;
+    std::string code;
+    std::string message;
+    if (!tape_phase7::listAnalyzerProfiles(&profiles, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tool.engineCommand,
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7AnalysisProfileListPayload(profiles),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeReadAnalysisProfileTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object() || hasUnexpectedKeys(args, {"analysis_profile"})) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tool.engineCommand,
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "analysis_profile is required.",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+    const auto analysisProfile = asNonEmptyString(args.value("analysis_profile", json()));
+    if (!analysisProfile.has_value()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tool.engineCommand,
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "analysis_profile must be a non-empty string.",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::AnalyzerProfileSpec profile;
+    std::string code;
+    std::string message;
+    if (!tape_phase7::loadAnalyzerProfile(*analysisProfile, &profile, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tool.engineCommand,
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7AnalysisProfilePayload(profile),
+                                              revisionUnavailable()));
+}
+
 json Adapter::invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) const {
     if (hasUnexpectedKeys(args, {"case_bundle_path", "report_bundle_path", "case_manifest_path", "report_manifest_path", "analysis_profile"})) {
         return makeToolResult(makeErrorEnvelope(tool.name,
@@ -4340,9 +5824,15 @@ json Adapter::invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) cons
             : std::string(tape_phase7::kDefaultAnalyzerProfile);
 
     tape_phase7::AnalysisArtifact artifact;
+    bool created = false;
     std::string code;
     std::string message;
-    if (!tape_phase7::runAnalyzerFromBundlePath(bundlePaths.front(), analysisProfile, &artifact, &code, &message)) {
+    if (!tape_phase7::runAnalyzerFromBundlePath(bundlePaths.front(),
+                                                analysisProfile,
+                                                &artifact,
+                                                &created,
+                                                &code,
+                                                &message)) {
         return makeToolResult(makeErrorEnvelope(tool.name,
                                                 toolEngineCommand(tool),
                                                 tool.outputSchemaId,
@@ -4356,11 +5846,120 @@ json Adapter::invokeAnalyzerRunTool(const ToolSpec& tool, const json& args) cons
     }
 
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              phase7AnalyzerResultPayload(artifact),
+                                              phase7AnalyzerResultPayload(artifact, created ? "created" : "reused"),
                                               revisionFromPhase7ReplayContext(artifact.replayContext)));
 }
 
 json Adapter::invokeFindingsListTool(const ToolSpec& tool, const json& args) const {
+    Phase7FindingSelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7SelectionArgs(args, &selection, &code, &message, false)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::AnalysisArtifact artifact;
+    if (!tape_phase7::loadAnalysisArtifact(selection.manifestPath,
+                                           selection.artifactId,
+                                           &artifact,
+                                           &code,
+                                           &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    Phase7SelectedFindings selectedFindings;
+    if (!selectPhase7Findings(artifact, selection, &selectedFindings, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionFromPhase7ReplayContext(artifact.replayContext),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7FindingsListPayload(artifact, selectedFindings),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeListAnalysisArtifactsTool(const ToolSpec& tool, const json& args) const {
+    Phase7AnalysisInventorySelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7AnalysisInventoryArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase7::AnalysisArtifact> artifacts;
+    if (!tape_phase7::listAnalysisArtifacts(0, &artifacts, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    artifacts.erase(std::remove_if(artifacts.begin(),
+                                   artifacts.end(),
+                                   [&](const tape_phase7::AnalysisArtifact& artifact) {
+                                       if (!selection.sourceArtifactId.empty() &&
+                                           artifact.sourceArtifact.artifactId != selection.sourceArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.analysisProfile.empty() &&
+                                           artifact.analysisProfile != selection.analysisProfile) {
+                                           return true;
+                                       }
+                                       return false;
+                                   }),
+                    artifacts.end());
+    const std::size_t matchedCount = artifacts.size();
+    if (selection.limit > 0 && artifacts.size() > selection.limit) {
+        artifacts.resize(selection.limit);
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7AnalysisInventoryPayload(artifacts, selection, matchedCount),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeReadAnalysisArtifactTool(const ToolSpec& tool, const json& args) const {
     if (hasUnexpectedKeys(args, {"analysis_manifest_path", "analysis_artifact_id"})) {
         return makeToolResult(makeErrorEnvelope(tool.name,
                                                 toolEngineCommand(tool),
@@ -4374,14 +5973,38 @@ json Adapter::invokeFindingsListTool(const ToolSpec& tool, const json& args) con
                                                 toolContractVersion(tool)));
     }
 
+    const bool hasManifest = args.contains("analysis_manifest_path");
+    const bool hasArtifactId = args.contains("analysis_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "exactly one of analysis_manifest_path or analysis_artifact_id is required",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
     const std::string manifestPath =
-        args.contains("analysis_manifest_path")
-            ? asNonEmptyString(args.at("analysis_manifest_path")).value_or(std::string())
-            : std::string();
+        hasManifest ? asNonEmptyString(args.at("analysis_manifest_path")).value_or(std::string()) : std::string();
     const std::string artifactId =
-        args.contains("analysis_artifact_id")
-            ? asNonEmptyString(args.at("analysis_artifact_id")).value_or(std::string())
-            : std::string();
+        hasArtifactId ? asNonEmptyString(args.at("analysis_artifact_id")).value_or(std::string()) : std::string();
+    if ((hasManifest && manifestPath.empty()) || (hasArtifactId && artifactId.empty())) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                hasManifest ? "analysis_manifest_path must be a non-empty string"
+                                                            : "analysis_artifact_id must be a non-empty string",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
 
     tape_phase7::AnalysisArtifact artifact;
     std::string code;
@@ -4400,70 +6023,65 @@ json Adapter::invokeFindingsListTool(const ToolSpec& tool, const json& args) con
     }
 
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              phase7FindingsListPayload(artifact),
+                                              phase7AnalyzerResultPayload(artifact),
                                               revisionFromPhase7ReplayContext(artifact.replayContext)));
 }
 
 json Adapter::invokePlaybookApplyTool(const ToolSpec& tool, const json& args) const {
-    if (hasUnexpectedKeys(args, {"analysis_manifest_path", "analysis_artifact_id", "finding_ids", "mode"})) {
+    Phase7FindingSelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7SelectionArgs(args, &selection, &code, &message, true)) {
         return makeToolResult(makeErrorEnvelope(tool.name,
                                                 toolEngineCommand(tool),
                                                 tool.outputSchemaId,
                                                 true,
                                                 false,
-                                                "invalid_arguments",
-                                                "playbook arguments must include one analysis reference plus optional finding_ids and mode",
+                                                code,
+                                                message,
                                                 false,
                                                 revisionUnavailable(),
                                                 toolContractVersion(tool)));
     }
 
-    const std::string manifestPath =
-        args.contains("analysis_manifest_path")
-            ? asNonEmptyString(args.at("analysis_manifest_path")).value_or(std::string())
-            : std::string();
-    const std::string artifactId =
-        args.contains("analysis_artifact_id")
-            ? asNonEmptyString(args.at("analysis_artifact_id")).value_or(std::string())
-            : std::string();
-    std::vector<std::string> findingIds;
-    if (args.contains("finding_ids")) {
-        const auto parsed = asNonEmptyStringArray(args.at("finding_ids"));
-        if (!parsed.has_value()) {
-            return makeToolResult(makeErrorEnvelope(tool.name,
-                                                    toolEngineCommand(tool),
-                                                    tool.outputSchemaId,
-                                                    true,
-                                                    false,
-                                                    "invalid_arguments",
-                                                    "finding_ids must be an array of non-empty strings",
-                                                    false,
-                                                    revisionUnavailable(),
-                                                    toolContractVersion(tool)));
-        }
-        findingIds = *parsed;
-    }
     const std::string mode =
         args.contains("mode")
             ? asNonEmptyString(args.at("mode")).value_or(std::string(tape_phase7::kDefaultPlaybookMode))
             : std::string(tape_phase7::kDefaultPlaybookMode);
 
+    tape_phase7::AnalysisArtifact analysis;
+    if (!tape_phase7::loadAnalysisArtifact(selection.manifestPath,
+                                           selection.artifactId,
+                                           &analysis,
+                                           &code,
+                                           &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    Phase7SelectedFindings selectedFindings;
+    if (!selectPhase7Findings(analysis, selection, &selectedFindings, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionFromPhase7ReplayContext(analysis.replayContext),
+                                                toolContractVersion(tool)));
+    }
+
     if (mode == tape_phase7::kApplyPlaybookMode) {
-        tape_phase7::AnalysisArtifact analysis;
-        std::string code;
-        std::string message;
-        if (!tape_phase7::loadAnalysisArtifact(manifestPath, artifactId, &analysis, &code, &message)) {
-            return makeToolResult(makeErrorEnvelope(tool.name,
-                                                    toolEngineCommand(tool),
-                                                    tool.outputSchemaId,
-                                                    true,
-                                                    false,
-                                                    code,
-                                                    message,
-                                                    false,
-                                                    revisionUnavailable(),
-                                                    toolContractVersion(tool)));
-        }
         return makeToolResult(makeErrorEnvelope(tool.name,
                                                 toolEngineCommand(tool),
                                                 tool.outputSchemaId,
@@ -4477,13 +6095,13 @@ json Adapter::invokePlaybookApplyTool(const ToolSpec& tool, const json& args) co
     }
 
     tape_phase7::PlaybookArtifact playbook;
-    std::string code;
-    std::string message;
-    if (!tape_phase7::buildGuardedPlaybook(manifestPath,
-                                           artifactId,
-                                           findingIds,
+    bool created = false;
+    if (!tape_phase7::buildGuardedPlaybook(selection.manifestPath,
+                                           selection.artifactId,
+                                           selectedFindings.findingIds,
                                            mode,
                                            &playbook,
+                                           &created,
                                            &code,
                                            &message)) {
         return makeToolResult(makeErrorEnvelope(tool.name,
@@ -4499,8 +6117,268 @@ json Adapter::invokePlaybookApplyTool(const ToolSpec& tool, const json& args) co
     }
 
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              phase7PlaybookPayload(playbook),
+                                              phase7PlaybookPayload(playbook,
+                                                                   selectedFindings.appliedFilters,
+                                                                   created ? "created" : "reused"),
                                               revisionFromPhase7ReplayContext(playbook.replayContext)));
+}
+
+json Adapter::invokeListPlaybookArtifactsTool(const ToolSpec& tool, const json& args) const {
+    Phase7PlaybookInventorySelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7PlaybookInventoryArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase7::PlaybookArtifact> artifacts;
+    if (!tape_phase7::listPlaybookArtifacts(0, &artifacts, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    artifacts.erase(std::remove_if(artifacts.begin(),
+                                   artifacts.end(),
+                                   [&](const tape_phase7::PlaybookArtifact& artifact) {
+                                       if (!selection.analysisArtifactId.empty() &&
+                                           artifact.analysisArtifact.artifactId != selection.analysisArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.mode.empty() && artifact.mode != selection.mode) {
+                                           return true;
+                                       }
+                                       if (!selection.sourceArtifactId.empty()) {
+                                           tape_phase7::AnalysisArtifact analysisArtifact;
+                                           std::string nestedCode;
+                                           std::string nestedMessage;
+                                           if (!tape_phase7::loadAnalysisArtifact({},
+                                                                                  artifact.analysisArtifact.artifactId,
+                                                                                  &analysisArtifact,
+                                                                                  &nestedCode,
+                                                                                  &nestedMessage)) {
+                                               return true;
+                                           }
+                                           if (analysisArtifact.sourceArtifact.artifactId != selection.sourceArtifactId) {
+                                               return true;
+                                           }
+                                       }
+                                       return false;
+                                   }),
+                    artifacts.end());
+    const std::size_t matchedCount = artifacts.size();
+    if (selection.limit > 0 && artifacts.size() > selection.limit) {
+        artifacts.resize(selection.limit);
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7PlaybookInventoryPayload(artifacts, selection, matchedCount),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeReadPlaybookArtifactTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    if (!parsePhase7PlaybookRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::PlaybookArtifact artifact;
+    if (!tape_phase7::loadPlaybookArtifact(manifestPath, artifactId, &artifact, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7PlaybookPayload(artifact),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokePrepareExecutionLedgerTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    if (!parsePhase7PlaybookRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionLedgerArtifact artifact;
+    bool created = false;
+    if (!tape_phase7::buildExecutionLedger(manifestPath,
+                                           artifactId,
+                                           &artifact,
+                                           &created,
+                                           &code,
+                                           &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionLedgerPayload(artifact, created ? "created" : "reused"),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeListExecutionLedgersTool(const ToolSpec& tool, const json& args) const {
+    Phase7ExecutionLedgerInventorySelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionLedgerInventoryArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase7::ExecutionLedgerArtifact> artifacts;
+    if (!tape_phase7::listExecutionLedgers(0, &artifacts, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    artifacts.erase(std::remove_if(artifacts.begin(),
+                                   artifacts.end(),
+                                   [&](const tape_phase7::ExecutionLedgerArtifact& artifact) {
+                                       if (!selection.playbookArtifactId.empty() &&
+                                           artifact.playbookArtifact.artifactId != selection.playbookArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.analysisArtifactId.empty() &&
+                                           artifact.analysisArtifact.artifactId != selection.analysisArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.sourceArtifactId.empty() &&
+                                           artifact.sourceArtifact.artifactId != selection.sourceArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.ledgerStatus.empty() &&
+                                           artifact.ledgerStatus != selection.ledgerStatus) {
+                                           return true;
+                                       }
+                                       return false;
+                                   }),
+                    artifacts.end());
+    std::sort(artifacts.begin(),
+              artifacts.end(),
+              [](const tape_phase7::ExecutionLedgerArtifact& lhs,
+                 const tape_phase7::ExecutionLedgerArtifact& rhs) {
+                  if (lhs.generatedAtUtc != rhs.generatedAtUtc) {
+                      return lhs.generatedAtUtc > rhs.generatedAtUtc;
+                  }
+                  return lhs.ledgerArtifact.artifactId < rhs.ledgerArtifact.artifactId;
+              });
+    const std::size_t matchedCount = artifacts.size();
+    if (selection.limit > 0 && artifacts.size() > selection.limit) {
+        artifacts.resize(selection.limit);
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionLedgerInventoryPayload(artifacts, selection, matchedCount),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeReadExecutionLedgerTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionLedgerRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionLedgerArtifact artifact;
+    if (!tape_phase7::loadExecutionLedgerArtifact(manifestPath, artifactId, &artifact, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionLedgerPayload(artifact),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
 }
 
 json Adapter::makeToolResult(const json& envelope) const {

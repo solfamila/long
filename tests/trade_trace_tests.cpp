@@ -40,6 +40,7 @@ int main() {
         testTapeEnginePhase3ScansSessionIntoDurableReportArtifact();
         testTapeEnginePhase3PersistsIncidentAndOrderCaseReports();
         testTapeEnginePhase6ExportsAndImportsPortableBundles();
+        testTapeEnginePhase7ArtifactsReuseDeterministically();
         testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures();
         testTapeEngineTypedTransportResultsMatchGoldenFixtures();
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();

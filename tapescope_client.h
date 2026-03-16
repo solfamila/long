@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tape_phase7_artifacts.h"
 #include "tape_engine_client.h"
 #include "tape_query_payloads.h"
 
@@ -39,6 +40,70 @@ using ImportedCaseRow = tape_payloads::ImportedCaseRow;
 using ImportedCaseListPayload = tape_payloads::ImportedCaseListPayload;
 using CaseBundleImportPayload = tape_payloads::CaseBundleImportPayload;
 using ArtifactExportPayload = tape_payloads::ArtifactExportPayload;
+using Phase7ArtifactRef = tape_phase7::ArtifactRef;
+using Phase7FindingRecord = tape_phase7::FindingRecord;
+using Phase7AnalyzerProfile = tape_phase7::AnalyzerProfileSpec;
+using Phase7AnalysisArtifact = tape_phase7::AnalysisArtifact;
+using Phase7PlaybookAction = tape_phase7::PlaybookAction;
+using Phase7PlaybookArtifact = tape_phase7::PlaybookArtifact;
+using Phase7ExecutionLedgerEntry = tape_phase7::ExecutionLedgerEntry;
+using Phase7ExecutionLedgerArtifact = tape_phase7::ExecutionLedgerArtifact;
+
+struct Phase7AnalysisRunPayload {
+    Phase7AnalysisArtifact artifact;
+    bool created = false;
+};
+
+struct Phase7PlaybookBuildPayload {
+    Phase7PlaybookArtifact artifact;
+    bool created = false;
+};
+
+struct Phase7ExecutionLedgerBuildPayload {
+    Phase7ExecutionLedgerArtifact artifact;
+    bool created = false;
+};
+
+struct Phase7AnalysisInventorySelection {
+    std::string sourceArtifactId;
+    std::string analysisProfile;
+    std::string sortBy = "generated_at_desc";
+    std::size_t limit = 20;
+};
+
+struct Phase7AnalysisInventoryPayload {
+    std::vector<Phase7AnalysisArtifact> artifacts;
+    json appliedFilters = json::object();
+    std::size_t matchedCount = 0;
+};
+
+struct Phase7PlaybookInventorySelection {
+    std::string analysisArtifactId;
+    std::string sourceArtifactId;
+    std::string mode;
+    std::string sortBy = "generated_at_desc";
+    std::size_t limit = 20;
+};
+
+struct Phase7PlaybookInventoryPayload {
+    std::vector<Phase7PlaybookArtifact> artifacts;
+    json appliedFilters = json::object();
+    std::size_t matchedCount = 0;
+};
+
+struct Phase7ExecutionLedgerInventorySelection {
+    std::string playbookArtifactId;
+    std::string analysisArtifactId;
+    std::string sourceArtifactId;
+    std::string ledgerStatus;
+    std::size_t limit = 20;
+};
+
+struct Phase7ExecutionLedgerInventoryPayload {
+    std::vector<Phase7ExecutionLedgerArtifact> artifacts;
+    json appliedFilters = json::object();
+    std::size_t matchedCount = 0;
+};
 
 struct ClientConfig {
     std::string socketPath;
@@ -118,6 +183,29 @@ public:
     [[nodiscard]] QueryResult<BundleVerifyPayload> verifyBundlePayload(const std::string& bundlePath) const;
     [[nodiscard]] QueryResult<CaseBundleImportPayload> importCaseBundlePayload(const std::string& bundlePath) const;
     [[nodiscard]] QueryResult<ImportedCaseListPayload> listImportedCasesPayload(std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<std::vector<Phase7AnalyzerProfile>> listAnalysisProfilesPayload() const;
+    [[nodiscard]] QueryResult<Phase7AnalyzerProfile> readAnalysisProfilePayload(const std::string& analysisProfile) const;
+    [[nodiscard]] QueryResult<Phase7AnalysisRunPayload> runAnalysisPayload(const std::string& bundlePath,
+                                                                           const std::string& analysisProfile) const;
+    [[nodiscard]] QueryResult<std::vector<Phase7AnalysisArtifact>> listAnalysisArtifactsPayload(std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase7AnalysisInventoryPayload> listAnalysisArtifactsPayload(
+        const Phase7AnalysisInventorySelection& selection) const;
+    [[nodiscard]] QueryResult<Phase7AnalysisArtifact> readAnalysisArtifactPayload(const std::string& artifactId) const;
+    [[nodiscard]] QueryResult<Phase7PlaybookBuildPayload> buildPlaybookPayload(
+        const std::string& analysisArtifactId,
+        const std::vector<std::string>& findingIds = {}) const;
+    [[nodiscard]] QueryResult<std::vector<Phase7PlaybookArtifact>> listPlaybookArtifactsPayload(std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase7PlaybookInventoryPayload> listPlaybookArtifactsPayload(
+        const Phase7PlaybookInventorySelection& selection) const;
+    [[nodiscard]] QueryResult<Phase7PlaybookArtifact> readPlaybookArtifactPayload(const std::string& artifactId) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionLedgerBuildPayload> buildExecutionLedgerPayload(
+        const std::string& playbookArtifactId) const;
+    [[nodiscard]] QueryResult<std::vector<Phase7ExecutionLedgerArtifact>> listExecutionLedgerArtifactsPayload(
+        std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionLedgerInventoryPayload> listExecutionLedgerArtifactsPayload(
+        const Phase7ExecutionLedgerInventorySelection& selection) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionLedgerArtifact> readExecutionLedgerArtifactPayload(
+        const std::string& artifactId) const;
 
     [[nodiscard]] static std::string describeError(const QueryError& error);
 

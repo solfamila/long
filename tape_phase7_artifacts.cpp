@@ -90,6 +90,30 @@ fs::path phase7RootDir() {
     return basePath / "phase7_artifacts";
 }
 
+const std::vector<AnalyzerProfileSpec>& analyzerProfiles() {
+    static const std::vector<AnalyzerProfileSpec> profiles = {
+        AnalyzerProfileSpec{
+            .analysisProfile = kDefaultAnalyzerProfile,
+            .title = "Trace Fill Integrity",
+            .summary = "Inspect a portable Phase 6 session/case bundle for integrity gaps, resets, identity drift, and data-quality degradation around the exported evidence window.",
+            .supportedSourceBundleTypes = {"case_bundle", "session_bundle"},
+            .findingCategories = {"trace_integrity", "identity_integrity", "evidence_confidence"},
+            .defaultProfile = true
+        }
+    };
+    return profiles;
+}
+
+const AnalyzerProfileSpec* findAnalyzerProfileSpec(std::string_view profile) {
+    const std::string requested = normalizeToken(profile.empty() ? kDefaultAnalyzerProfile : profile);
+    for (const auto& item : analyzerProfiles()) {
+        if (normalizeToken(item.analysisProfile) == requested) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
 bool ensureDirectoryExists(const fs::path& path, std::string* error) {
     std::error_code ec;
     if (fs::exists(path, ec)) {
@@ -217,10 +241,11 @@ json requestedWindowFromInspection(const tape_bundle::PortableBundleInspection& 
 }
 
 json replayContextFromInspection(const tape_bundle::PortableBundleInspection& inspection) {
+    const std::string generatedAtUtc = utcTimestampIso8601Now();
     return {
         {"trace_anchor", traceAnchorFromInspection(inspection)},
         {"revision_context", revisionContextFromInspection(inspection)},
-        {"generated_at_utc", utcTimestampIso8601Now()},
+        {"generated_at_utc", generatedAtUtc},
         {"requested_window", requestedWindowFromInspection(inspection)},
         {"source_bundle_type", inspection.bundleType},
         {"source_exported_ts_engine_ns", inspection.exportedTsEngineNs}
@@ -262,6 +287,19 @@ ArtifactRef playbookArtifactRefForAnalysis(const AnalysisArtifact& analysis,
     const fs::path rootDir = phase7RootDir() / "playbooks" / artifactId;
     ArtifactRef artifact;
     artifact.artifactType = kPlaybookArtifactType;
+    artifact.contractVersion = kContractVersion;
+    artifact.artifactId = artifactId;
+    artifact.manifestPath = (rootDir / "manifest.json").string();
+    artifact.artifactRootDir = rootDir.string();
+    return artifact;
+}
+
+ArtifactRef executionLedgerArtifactRefForPlaybook(const PlaybookArtifact& playbook) {
+    const std::string artifactId =
+        "phase7-ledger-" + fnv1aHex(playbook.playbookArtifact.artifactId + "|execution-ledger");
+    const fs::path rootDir = phase7RootDir() / "ledgers" / artifactId;
+    ArtifactRef artifact;
+    artifact.artifactType = kExecutionLedgerArtifactType;
     artifact.contractVersion = kContractVersion;
     artifact.artifactId = artifactId;
     artifact.manifestPath = (rootDir / "manifest.json").string();
@@ -393,7 +431,7 @@ json manifestForAnalysis(const AnalysisArtifact& analysis) {
         {"manifest_path", analysis.analysisArtifact.manifestPath},
         {"artifact_root_dir", analysis.analysisArtifact.artifactRootDir},
         {"analysis_profile", analysis.analysisProfile},
-        {"generated_at_utc", analysis.replayContext.value("generated_at_utc", std::string())},
+        {"generated_at_utc", analysis.generatedAtUtc},
         {"source_artifact", artifactRefToJson(analysis.sourceArtifact)},
         {"analysis_artifact", artifactRefToJson(analysis.analysisArtifact)},
         {"replay_context", analysis.replayContext},
@@ -443,6 +481,9 @@ bool loadAnalysisFromManifestJson(const json& manifest,
 
     AnalysisArtifact artifact;
     artifact.analysisProfile = manifest.value("analysis_profile", std::string(kDefaultAnalyzerProfile));
+    artifact.generatedAtUtc = manifest.value("generated_at_utc",
+                                             manifest.value("replay_context", json::object()).value("generated_at_utc",
+                                                                                                     std::string()));
     artifact.replayContext = manifest.value("replay_context", json::object());
     artifact.manifest = manifest;
 
@@ -549,6 +590,9 @@ bool loadPlaybookFromManifestJson(const json& manifest,
 
     PlaybookArtifact artifact;
     artifact.mode = manifest.value("mode", std::string(kDefaultPlaybookMode));
+    artifact.generatedAtUtc = manifest.value("generated_at_utc",
+                                             manifest.value("replay_context", json::object()).value("generated_at_utc",
+                                                                                                     std::string()));
     artifact.replayContext = manifest.value("replay_context", json::object());
     artifact.manifest = manifest;
 
@@ -723,6 +767,45 @@ PlaybookAction playbookActionForFinding(const AnalysisArtifact& analysis, const 
     return action;
 }
 
+json executionPolicyForLedger() {
+    return {
+        {"apply_supported", false},
+        {"deferred_reason", "live apply remains deferred until Phase 7 has a full execution/audit model"},
+        {"recommended_next_step", "review_only"},
+        {"manual_confirmation_required", true}
+    };
+}
+
+ExecutionLedgerEntry executionLedgerEntryForAction(const PlaybookArtifact& playbook, const PlaybookAction& action) {
+    ExecutionLedgerEntry entry;
+    entry.entryId = "phase7-ledger-entry-" +
+        fnv1aHex(playbook.playbookArtifact.artifactId + "|" + action.actionId + "|execution-ledger");
+    entry.actionId = action.actionId;
+    entry.actionType = action.actionType;
+    entry.findingId = action.findingId;
+    entry.reviewStatus = kDefaultLedgerEntryStatus;
+    entry.requiresManualConfirmation = true;
+    entry.title = action.title;
+    entry.summary = action.summary;
+    entry.suggestedTools = action.suggestedTools;
+    return entry;
+}
+
+json auditTrailForLedgerCreation(const PlaybookArtifact& playbook,
+                                 const std::string& generatedAtUtc,
+                                 std::string_view ledgerStatus) {
+    return json::array({
+        json{
+            {"event_id", "phase7-ledger-event-" +
+                             fnv1aHex(playbook.playbookArtifact.artifactId + "|ledger-created")},
+            {"event_type", "ledger_created"},
+            {"generated_at_utc", generatedAtUtc},
+            {"status", ledgerStatus},
+            {"message", "Execution remains deferred; this ledger is a review/audit record only."}
+        }
+    });
+}
+
 json manifestForPlaybook(const PlaybookArtifact& playbook) {
     json filteredFindingIds = json::array();
     for (const auto& findingId : playbook.filteredFindingIds) {
@@ -739,13 +822,169 @@ json manifestForPlaybook(const PlaybookArtifact& playbook) {
         {"manifest_path", playbook.playbookArtifact.manifestPath},
         {"artifact_root_dir", playbook.playbookArtifact.artifactRootDir},
         {"mode", playbook.mode},
-        {"generated_at_utc", utcTimestampIso8601Now()},
+        {"generated_at_utc", playbook.generatedAtUtc},
         {"analysis_artifact", artifactRefToJson(playbook.analysisArtifact)},
         {"playbook_artifact", artifactRefToJson(playbook.playbookArtifact)},
         {"replay_context", playbook.replayContext},
         {"filtered_finding_ids", std::move(filteredFindingIds)},
         {"planned_actions", std::move(plannedActions)}
     };
+}
+
+bool parseExecutionLedgerEntry(const json& payload, ExecutionLedgerEntry* out) {
+    if (out == nullptr || !payload.is_object()) {
+        return false;
+    }
+    out->entryId = payload.value("entry_id", std::string());
+    out->actionId = payload.value("action_id", std::string());
+    out->actionType = payload.value("action_type", std::string());
+    out->findingId = payload.value("finding_id", std::string());
+    out->reviewStatus = payload.value("review_status", std::string(kDefaultLedgerEntryStatus));
+    out->requiresManualConfirmation = payload.value("requires_manual_confirmation", true);
+    out->title = payload.value("title", std::string());
+    out->summary = payload.value("summary", std::string());
+    out->suggestedTools = payload.value("suggested_tools", json::array());
+    return !out->entryId.empty() && !out->actionId.empty() && !out->actionType.empty();
+}
+
+json manifestForExecutionLedger(const ExecutionLedgerArtifact& ledger) {
+    json filteredFindingIds = json::array();
+    for (const auto& findingId : ledger.filteredFindingIds) {
+        filteredFindingIds.push_back(findingId);
+    }
+    json entries = json::array();
+    for (const auto& entry : ledger.entries) {
+        entries.push_back(executionLedgerEntryToJson(entry));
+    }
+    return {
+        {"artifact_type", ledger.ledgerArtifact.artifactType},
+        {"contract_version", ledger.ledgerArtifact.contractVersion},
+        {"artifact_id", ledger.ledgerArtifact.artifactId},
+        {"manifest_path", ledger.ledgerArtifact.manifestPath},
+        {"artifact_root_dir", ledger.ledgerArtifact.artifactRootDir},
+        {"mode", ledger.mode},
+        {"generated_at_utc", ledger.generatedAtUtc},
+        {"ledger_status", ledger.ledgerStatus},
+        {"source_artifact", artifactRefToJson(ledger.sourceArtifact)},
+        {"analysis_artifact", artifactRefToJson(ledger.analysisArtifact)},
+        {"playbook_artifact", artifactRefToJson(ledger.playbookArtifact)},
+        {"execution_ledger", artifactRefToJson(ledger.ledgerArtifact)},
+        {"execution_policy", ledger.executionPolicy},
+        {"replay_context", ledger.replayContext},
+        {"filtered_finding_ids", std::move(filteredFindingIds)},
+        {"entry_count", entries.size()},
+        {"entries", std::move(entries)},
+        {"audit_trail", ledger.auditTrail}
+    };
+}
+
+bool loadExecutionLedgerFromManifestJson(const json& manifest,
+                                         ExecutionLedgerArtifact* out,
+                                         std::string* errorCode,
+                                         std::string* errorMessage) {
+    if (!manifest.is_object()) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution ledger manifest must be a json object";
+        }
+        return false;
+    }
+    if (manifest.value("artifact_type", std::string()) != kExecutionLedgerArtifactType ||
+        manifest.value("contract_version", std::string()) != kContractVersion) {
+        if (errorCode != nullptr) {
+            *errorCode = "unsupported_source_contract";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution ledger manifest contract/version is not supported";
+        }
+        return false;
+    }
+    if (out == nullptr) {
+        return true;
+    }
+
+    ExecutionLedgerArtifact artifact;
+    artifact.mode = manifest.value("mode", std::string(kDefaultPlaybookMode));
+    artifact.generatedAtUtc = manifest.value("generated_at_utc",
+                                             manifest.value("replay_context", json::object())
+                                                 .value("generated_at_utc", std::string()));
+    artifact.ledgerStatus = manifest.value("ledger_status", std::string(kDefaultLedgerStatus));
+    artifact.executionPolicy = manifest.value("execution_policy", json::object());
+    artifact.replayContext = manifest.value("replay_context", json::object());
+    artifact.auditTrail = manifest.value("audit_trail", json::array());
+    artifact.manifest = manifest;
+
+    if (!parseArtifactRef(manifest.value("source_artifact", json::object()), &artifact.sourceArtifact) ||
+        !parseArtifactRef(manifest.value("analysis_artifact", json::object()), &artifact.analysisArtifact) ||
+        !parseArtifactRef(manifest.value("playbook_artifact", json::object()), &artifact.playbookArtifact) ||
+        !parseArtifactRef(manifest.value("execution_ledger", manifest), &artifact.ledgerArtifact)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution ledger manifest is missing artifact identity";
+        }
+        return false;
+    }
+
+    for (const auto& findingId : manifest.value("filtered_finding_ids", json::array())) {
+        if (!findingId.is_string() || findingId.get_ref<const std::string&>().empty()) {
+            if (errorCode != nullptr) {
+                *errorCode = "artifact_load_failed";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution ledger manifest contains an invalid filtered finding id";
+            }
+            return false;
+        }
+        artifact.filteredFindingIds.push_back(findingId.get<std::string>());
+    }
+
+    for (const auto& entry : manifest.value("entries", json::array())) {
+        ExecutionLedgerEntry parsed;
+        if (!parseExecutionLedgerEntry(entry, &parsed)) {
+            if (errorCode != nullptr) {
+                *errorCode = "artifact_load_failed";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution ledger manifest contains an incomplete entry";
+            }
+            return false;
+        }
+        artifact.entries.push_back(std::move(parsed));
+    }
+
+    *out = std::move(artifact);
+    return true;
+}
+
+bool loadExecutionLedgerFromPath(const fs::path& manifestPath,
+                                 ExecutionLedgerArtifact* out,
+                                 std::string* errorCode,
+                                 std::string* errorMessage) {
+    if (!fs::exists(manifestPath)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_not_found";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution ledger manifest was not found";
+        }
+        return false;
+    }
+    json manifest;
+    std::string readError;
+    if (!readJsonFile(manifestPath, &manifest, &readError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = readError;
+        }
+        return false;
+    }
+    return loadExecutionLedgerFromManifestJson(manifest, out, errorCode, errorMessage);
 }
 
 } // namespace
@@ -781,9 +1020,65 @@ json playbookActionToJson(const PlaybookAction& action) {
     };
 }
 
+json executionLedgerEntryToJson(const ExecutionLedgerEntry& entry) {
+    return {
+        {"entry_id", entry.entryId},
+        {"action_id", entry.actionId},
+        {"action_type", entry.actionType},
+        {"finding_id", entry.findingId},
+        {"review_status", entry.reviewStatus},
+        {"requires_manual_confirmation", entry.requiresManualConfirmation},
+        {"title", entry.title},
+        {"summary", entry.summary},
+        {"suggested_tools", entry.suggestedTools}
+    };
+}
+
+bool listAnalyzerProfiles(std::vector<AnalyzerProfileSpec>* out,
+                          std::string* errorCode,
+                          std::string* errorMessage) {
+    if (out != nullptr) {
+        *out = analyzerProfiles();
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+bool loadAnalyzerProfile(const std::string& analysisProfile,
+                         AnalyzerProfileSpec* out,
+                         std::string* errorCode,
+                         std::string* errorMessage) {
+    const AnalyzerProfileSpec* profile = findAnalyzerProfileSpec(analysisProfile);
+    if (profile == nullptr) {
+        if (errorCode != nullptr) {
+            *errorCode = "unsupported_profile";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "requested analysis_profile is not supported in this Phase 7 slice";
+        }
+        return false;
+    }
+    if (out != nullptr) {
+        *out = *profile;
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
 bool runAnalyzerFromBundlePath(const std::string& bundlePath,
                                const std::string& analysisProfile,
                                AnalysisArtifact* out,
+                               bool* created,
                                std::string* errorCode,
                                std::string* errorMessage) {
     tape_bundle::PortableBundleInspection inspection;
@@ -807,14 +1102,23 @@ bool runAnalyzerFromBundlePath(const std::string& bundlePath,
         return false;
     }
 
+    AnalyzerProfileSpec profile;
+    if (!loadAnalyzerProfile(analysisProfile, &profile, errorCode, errorMessage)) {
+        return false;
+    }
+
     AnalysisArtifact artifact;
-    artifact.analysisProfile = analysisProfile.empty() ? kDefaultAnalyzerProfile : analysisProfile;
+    artifact.analysisProfile = profile.analysisProfile;
     artifact.sourceArtifact = sourceArtifactRefFromInspection(inspection);
     artifact.analysisArtifact = analysisArtifactRefForBundle(inspection, artifact.analysisProfile);
     artifact.replayContext = replayContextFromInspection(inspection);
+    artifact.generatedAtUtc = artifact.replayContext.value("generated_at_utc", std::string());
 
     const fs::path manifestPath = artifact.analysisArtifact.manifestPath;
     if (fs::exists(manifestPath)) {
+        if (created != nullptr) {
+            *created = false;
+        }
         return loadAnalysisFromPath(manifestPath, out, errorCode, errorMessage);
     }
 
@@ -845,6 +1149,9 @@ bool runAnalyzerFromBundlePath(const std::string& bundlePath,
 
     if (out != nullptr) {
         *out = std::move(artifact);
+    }
+    if (created != nullptr) {
+        *created = true;
     }
     return true;
 }
@@ -892,6 +1199,7 @@ bool buildGuardedPlaybook(const std::string& manifestPath,
                           const std::vector<std::string>& findingIds,
                           const std::string& mode,
                           PlaybookArtifact* out,
+                          bool* created,
                           std::string* errorCode,
                           std::string* errorMessage) {
     AnalysisArtifact analysis;
@@ -948,6 +1256,15 @@ bool buildGuardedPlaybook(const std::string& manifestPath,
     }
 
     playbook.playbookArtifact = playbookArtifactRefForAnalysis(analysis, playbook.filteredFindingIds, playbook.mode);
+    const fs::path manifestFile = playbook.playbookArtifact.manifestPath;
+    if (fs::exists(manifestFile)) {
+        if (created != nullptr) {
+            *created = false;
+        }
+        return loadPlaybookFromPath(manifestFile, out, errorCode, errorMessage);
+    }
+
+    playbook.generatedAtUtc = utcTimestampIso8601Now();
     playbook.manifest = manifestForPlaybook(playbook);
 
     std::string directoryError;
@@ -974,6 +1291,9 @@ bool buildGuardedPlaybook(const std::string& manifestPath,
 
     if (out != nullptr) {
         *out = std::move(playbook);
+    }
+    if (created != nullptr) {
+        *created = true;
     }
     return true;
 }
@@ -1016,6 +1336,117 @@ bool listPlaybookArtifacts(std::size_t limit,
         });
 }
 
+bool buildExecutionLedger(const std::string& manifestPath,
+                          const std::string& artifactId,
+                          ExecutionLedgerArtifact* out,
+                          bool* created,
+                          std::string* errorCode,
+                          std::string* errorMessage) {
+    PlaybookArtifact playbook;
+    if (!loadPlaybookArtifact(manifestPath, artifactId, &playbook, errorCode, errorMessage)) {
+        return false;
+    }
+
+    AnalysisArtifact analysis;
+    if (!loadAnalysisArtifact({}, playbook.analysisArtifact.artifactId, &analysis, errorCode, errorMessage)) {
+        return false;
+    }
+
+    ExecutionLedgerArtifact ledger;
+    ledger.sourceArtifact = analysis.sourceArtifact;
+    ledger.analysisArtifact = analysis.analysisArtifact;
+    ledger.playbookArtifact = playbook.playbookArtifact;
+    ledger.ledgerArtifact = executionLedgerArtifactRefForPlaybook(playbook);
+    ledger.mode = playbook.mode;
+    ledger.ledgerStatus = kDefaultLedgerStatus;
+    ledger.executionPolicy = executionPolicyForLedger();
+    ledger.replayContext = playbook.replayContext;
+    ledger.filteredFindingIds = playbook.filteredFindingIds;
+    for (const auto& action : playbook.plannedActions) {
+        ledger.entries.push_back(executionLedgerEntryForAction(playbook, action));
+    }
+
+    const fs::path manifestFile = ledger.ledgerArtifact.manifestPath;
+    if (fs::exists(manifestFile)) {
+        if (created != nullptr) {
+            *created = false;
+        }
+        return loadExecutionLedgerFromPath(manifestFile, out, errorCode, errorMessage);
+    }
+
+    ledger.generatedAtUtc = utcTimestampIso8601Now();
+    ledger.auditTrail = auditTrailForLedgerCreation(playbook, ledger.generatedAtUtc, ledger.ledgerStatus);
+    ledger.manifest = manifestForExecutionLedger(ledger);
+
+    std::string directoryError;
+    if (!ensureDirectoryExists(ledger.ledgerArtifact.artifactRootDir, &directoryError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = directoryError;
+        }
+        return false;
+    }
+
+    std::string writeError;
+    if (!writeJsonTextFile(ledger.ledgerArtifact.manifestPath, ledger.manifest, &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+
+    if (out != nullptr) {
+        *out = std::move(ledger);
+    }
+    if (created != nullptr) {
+        *created = true;
+    }
+    return true;
+}
+
+bool loadExecutionLedgerArtifact(const std::string& manifestPath,
+                                 const std::string& artifactId,
+                                 ExecutionLedgerArtifact* out,
+                                 std::string* errorCode,
+                                 std::string* errorMessage) {
+    const bool hasManifest = !manifestPath.empty();
+    const bool hasArtifactId = !artifactId.empty();
+    if (hasManifest == hasArtifactId) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "exactly one of execution_ledger_manifest_path or execution_ledger_artifact_id is required";
+        }
+        return false;
+    }
+
+    const fs::path resolvedPath = hasManifest
+        ? fs::path(manifestPath)
+        : phase7RootDir() / "ledgers" / artifactId / "manifest.json";
+    return loadExecutionLedgerFromPath(resolvedPath, out, errorCode, errorMessage);
+}
+
+bool listExecutionLedgers(std::size_t limit,
+                          std::vector<ExecutionLedgerArtifact>* out,
+                          std::string* errorCode,
+                          std::string* errorMessage) {
+    return listArtifactsUnder<ExecutionLedgerArtifact>(
+        phase7RootDir() / "ledgers",
+        limit,
+        out,
+        errorCode,
+        errorMessage,
+        [](const fs::path& manifestPath, ExecutionLedgerArtifact* artifact, std::string* code, std::string* message) {
+            return loadExecutionLedgerFromPath(manifestPath, artifact, code, message);
+        });
+}
+
 std::string analysisArtifactMarkdown(const AnalysisArtifact& artifact) {
     std::ostringstream out;
     out << "# Phase 7 Analysis\n\n"
@@ -1049,6 +1480,36 @@ std::string playbookArtifactMarkdown(const PlaybookArtifact& artifact) {
     for (const auto& action : artifact.plannedActions) {
         out << "- `" << action.actionType << "` for `" << action.findingId << "`: "
             << action.title << "\n";
+    }
+    return out.str();
+}
+
+std::string executionLedgerArtifactMarkdown(const ExecutionLedgerArtifact& artifact) {
+    std::ostringstream out;
+    out << "# Phase 7 Execution Ledger\n\n"
+        << "- Artifact: `" << artifact.ledgerArtifact.artifactId << "`\n"
+        << "- Playbook artifact: `" << artifact.playbookArtifact.artifactId << "`\n"
+        << "- Analysis artifact: `" << artifact.analysisArtifact.artifactId << "`\n"
+        << "- Source artifact: `" << artifact.sourceArtifact.artifactId << "`\n"
+        << "- Mode: `" << artifact.mode << "`\n"
+        << "- Ledger status: `" << artifact.ledgerStatus << "`\n"
+        << "- Entries: " << artifact.entries.size() << "\n";
+    if (artifact.executionPolicy.is_object()) {
+        out << "- Apply supported: `" << (artifact.executionPolicy.value("apply_supported", false) ? "true" : "false")
+            << "`\n"
+            << "- Deferred reason: `" << artifact.executionPolicy.value("deferred_reason", std::string()) << "`\n";
+    }
+    out << "\n## Review Entries\n";
+    for (const auto& entry : artifact.entries) {
+        out << "- [" << entry.reviewStatus << "] `" << entry.actionType << "` for `"
+            << entry.findingId << "`: " << entry.title << "\n";
+    }
+    if (artifact.auditTrail.is_array() && !artifact.auditTrail.empty()) {
+        out << "\n## Audit Trail\n";
+        for (const auto& event : artifact.auditTrail) {
+            out << "- `" << event.value("event_type", std::string()) << "`: "
+                << event.value("message", std::string()) << "\n";
+        }
     }
     return out.str();
 }
