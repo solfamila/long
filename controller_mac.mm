@@ -161,14 +161,17 @@ std::string describeControllerIdentity(GCController* controller) {
         return "unknown controller";
     }
 
-    const std::string deviceName = nsStringToStd(controller.vendorName ?: @"Game Controller");
+    const std::string vendorName = nsStringToStd(controller.vendorName ?: @"Game Controller");
+    const std::string productCategory = nsStringToStd(controller.productCategory);
     const int playerIndex = static_cast<int>(controller.playerIndex);
     const std::string claimKey = controllerClaimKey(controller);
     const bool lightOn = controllerHasAnyLightColor(controller);
-    std::string description = deviceName +
-                              " [playerIndex=" + std::to_string(playerIndex) +
+    std::string description = vendorName +
+                              " [productCategory=" + (productCategory.empty() ? "unknown" : productCategory) +
+                              ", playerIndex=" + std::to_string(playerIndex) +
                               ", claimKey=" + (claimKey.empty() ? "none" : claimKey) +
-                              ", light=" + (lightOn ? "on" : "off") + "]";
+                              ", light=" + (lightOn ? "on" : "off") +
+                              ", attached=" + (controller.isAttachedToDevice ? "yes" : "no") + "]";
     return description;
 }
 
@@ -241,9 +244,7 @@ void postControllerMessage(const std::string& message) {
 @interface LongMacControllerManager ()
 
 - (void)setPressed:(BOOL)pressed forButtonIndex:(int)buttonIndex;
-- (BOOL)attachController:(GCController*)controller
-                announce:(BOOL)announce
-allowUnlitClaimRecovery:(BOOL)allowUnlitClaimRecovery;
+- (BOOL)attachController:(GCController*)controller announce:(BOOL)announce;
 - (BOOL)attachBestAvailableControllerAnnounce:(BOOL)announce;
 - (void)detachActiveControllerAnnounce:(BOOL)announce;
 - (void)handleControllerConnected:(GCController*)controller;
@@ -423,9 +424,7 @@ allowUnlitClaimRecovery:(BOOL)allowUnlitClaimRecovery;
                                       describeControllerIdentity(controller) +
                                       " (" + passName + ")");
             }
-            if ([self attachController:controller
-                              announce:announce
-              allowUnlitClaimRecovery:unlitOnly]) {
+            if ([self attachController:controller announce:announce]) {
                 return YES;
             }
         }
@@ -445,9 +444,7 @@ allowUnlitClaimRecovery:(BOOL)allowUnlitClaimRecovery;
     return tryAttachPass(false, "fallback-all");
 }
 
-- (BOOL)attachController:(GCController*)controller
-                announce:(BOOL)announce
-allowUnlitClaimRecovery:(BOOL)allowUnlitClaimRecovery {
+- (BOOL)attachController:(GCController*)controller announce:(BOOL)announce {
     if (controller == nil) {
         return NO;
     }
@@ -467,26 +464,29 @@ allowUnlitClaimRecovery:(BOOL)allowUnlitClaimRecovery {
     if (!alreadyLockedToController) {
         if (!preferredClaimKey.empty()) {
             std::string claimError;
-            if (allowUnlitClaimRecovery && !controllerLightOn && isStableControllerPlayerIndex(playerIndex)) {
-                if (!tryAcquireControllerClaimWithPlayerIndexFallback(playerIndex,
-                                                                      newClaim,
-                                                                      &claimKeyInUse,
-                                                                      &claimError)) {
-                    if (announce) {
-                        postControllerMessage("Controller: Skipping " + deviceName + " (" + claimError + ")");
-                    }
-                    return NO;
-                }
-                if (announce && claimKeyInUse != preferredClaimKey) {
-                    postControllerMessage("Controller: Recovered unlit claim-key mismatch for " + deviceName +
-                                          " (preferred " + preferredClaimKey + ", using " + claimKeyInUse + ")");
-                }
-            } else if (!tryAcquireControllerClaim(preferredClaimKey, newClaim, &claimError)) {
+            if (!tryAcquireControllerClaim(preferredClaimKey, newClaim, &claimError)) {
                 if (announce) {
+                    if (!controllerLightOn && isStableControllerPlayerIndex(playerIndex)) {
+                        std::string alternateKey;
+                        if (findFirstAvailableAlternateControllerClaimKey(playerIndex, &alternateKey, nullptr)) {
+                            postControllerMessage("Controller: Identity mismatch candidate " +
+                                                  describeControllerIdentity(controller) +
+                                                  " (authoritative key " + preferredClaimKey +
+                                                  " is claimed, alternate key " + alternateKey +
+                                                  " is free; refusing alternate claim)");
+                        }
+                    }
                     postControllerMessage("Controller: Skipping " + deviceName + " (" + claimError + ")");
                 }
                 return NO;
             }
+            claimKeyInUse = preferredClaimKey;
+        } else {
+            if (announce) {
+                postControllerMessage("Controller: Skipping " + deviceName +
+                                      " (missing authoritative player-index claim key)");
+            }
+            return NO;
         }
 
         if (shouldUseControllerLightOwnershipFallback(claimKeyInUse, newClaim) &&

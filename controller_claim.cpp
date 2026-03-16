@@ -157,14 +157,15 @@ std::vector<std::string> controllerClaimKeyFallbackOrderForPlayerIndex(int prefe
     return keys;
 }
 
-bool tryAcquireControllerClaimWithPlayerIndexFallback(int preferredPlayerIndex,
-                                                      ControllerClaimLease& lease,
-                                                      std::string* claimedKey,
-                                                      std::string* error) {
-    if (claimedKey != nullptr) {
-        claimedKey->clear();
+bool findFirstAvailableAlternateControllerClaimKey(int preferredPlayerIndex,
+                                                   std::string* alternateKey,
+                                                   std::string* error) {
+    if (alternateKey != nullptr) {
+        alternateKey->clear();
     }
-
+    if (error != nullptr) {
+        error->clear();
+    }
     const std::vector<std::string> keys = controllerClaimKeyFallbackOrderForPlayerIndex(preferredPlayerIndex);
     if (keys.empty()) {
         if (error != nullptr) {
@@ -173,25 +174,20 @@ bool tryAcquireControllerClaimWithPlayerIndexFallback(int preferredPlayerIndex,
         return false;
     }
 
-    std::string firstError;
-    std::string attemptError;
-    for (const std::string& key : keys) {
-        if (tryAcquireControllerClaim(key, lease, &attemptError)) {
-            if (claimedKey != nullptr) {
-                *claimedKey = key;
+    ControllerClaimLease probeLease;
+    std::string probeError;
+    for (std::size_t index = 1; index < keys.size(); ++index) {
+        const std::string& key = keys[index];
+        if (tryAcquireControllerClaim(key, probeLease, &probeError)) {
+            if (alternateKey != nullptr) {
+                *alternateKey = key;
             }
-            if (error != nullptr) {
-                error->clear();
-            }
+            releaseControllerClaim(probeLease);
             return true;
         }
-        if (firstError.empty()) {
-            firstError = attemptError;
-        }
     }
-
-    if (error != nullptr) {
-        *error = firstError.empty() ? "Controller claim failed: all fallback keys unavailable" : firstError;
+    if (error != nullptr && !probeError.empty()) {
+        *error = probeError;
     }
     return false;
 }

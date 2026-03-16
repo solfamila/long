@@ -350,26 +350,28 @@ void testControllerClaimKeyUsesStablePlayerIndexIdentity() {
            "out-of-range player index should not produce a stable cross-process claim key");
 }
 
-void testControllerClaimFallbackRecoversAlternateStableKey() {
+void testControllerClaimDetectsAlternateStableKeyWithoutClaimingIt() {
     clearControllerClaimFiles();
 
     ControllerClaimLease first;
-    ControllerClaimLease recovered;
+    ControllerClaimLease alternateClaim;
     std::string error;
     const std::string preferredKey = controllerClaimKeyForPlayerIndex(0);
     const std::string alternateKey = controllerClaimKeyForPlayerIndex(1);
-    std::string claimedKey;
+    std::string detectedAlternateKey;
 
     expect(tryAcquireControllerClaim(preferredKey, first, &error),
            "initial stable claim should succeed: " + error);
-    expect(tryAcquireControllerClaimWithPlayerIndexFallback(0, recovered, &claimedKey, &error),
-           "fallback stable claim should recover an alternate key: " + error);
-    expect(hasControllerClaim(recovered), "fallback stable claim should hold a lease");
-    expect(claimedKey == alternateKey,
-           "fallback stable claim should recover the alternate stable key for the mismatched controller");
+    expect(findFirstAvailableAlternateControllerClaimKey(0, &detectedAlternateKey, &error),
+           "alternate-key probe should report an available stable key: " + error);
+    expect(detectedAlternateKey == alternateKey,
+           "alternate-key probe should report the free stable key for diagnostics");
+    error.clear();
+    expect(tryAcquireControllerClaim(detectedAlternateKey, alternateClaim, &error),
+           "alternate-key probe should not consume the alternate claim lease: " + error);
 
     releaseControllerClaim(first);
-    releaseControllerClaim(recovered);
+    releaseControllerClaim(alternateClaim);
 }
 
 void testRecoverySnapshotReportsAbnormalShutdown() {
@@ -1459,7 +1461,7 @@ int main() {
         testControllerClaimLeaseBlocksReclaimUntilRelease();
         testControllerLightFallbackBypassesStaleLightWhenClaimHeld();
         testControllerClaimKeyUsesStablePlayerIndexIdentity();
-        testControllerClaimFallbackRecoversAlternateStableKey();
+        testControllerClaimDetectsAlternateStableKeyWithoutClaimingIt();
         testRecoverySnapshotReportsAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();
