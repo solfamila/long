@@ -305,6 +305,30 @@ void testControllerClaimLeaseBlocksReclaimUntilRelease() {
     releaseControllerClaim(different);
 }
 
+void testControllerClaimKeyUsesStablePlayerIndexIdentity() {
+    std::vector<int> firstOrder = {0, 1};
+    std::vector<int> secondOrder = {1, 0};
+    std::vector<std::string> firstKeys;
+    std::vector<std::string> secondKeys;
+
+    for (int playerIndex : firstOrder) {
+        firstKeys.push_back(controllerClaimKeyForPlayerIndex(playerIndex));
+    }
+    for (int playerIndex : secondOrder) {
+        secondKeys.push_back(controllerClaimKeyForPlayerIndex(playerIndex));
+    }
+
+    std::sort(firstKeys.begin(), firstKeys.end());
+    std::sort(secondKeys.begin(), secondKeys.end());
+
+    expect(firstKeys == secondKeys,
+           "player-index claim keys should stay stable even when controller enumeration order differs");
+    expect(controllerClaimKeyForPlayerIndex(-1).empty(),
+           "unset player index should not produce a stable cross-process claim key");
+    expect(controllerClaimKeyForPlayerIndex(4).empty(),
+           "out-of-range player index should not produce a stable cross-process claim key");
+}
+
 void testRecoverySnapshotReportsAbnormalShutdown() {
     clearTestFiles();
 
@@ -1390,6 +1414,7 @@ int main() {
         testReplayHandlesPartialFillsAndCommission();
         testWebSocketRuntimeGuards();
         testControllerClaimLeaseBlocksReclaimUntilRelease();
+        testControllerClaimKeyUsesStablePlayerIndexIdentity();
         testRecoverySnapshotReportsAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();

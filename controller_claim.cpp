@@ -12,6 +12,9 @@
 
 namespace {
 
+constexpr int kMinStableControllerPlayerIndex = 0;
+constexpr int kMaxStableControllerPlayerIndex = 3;
+
 std::string sanitizeClaimKey(std::string key) {
     for (char& ch : key) {
         const unsigned char value = static_cast<unsigned char>(ch);
@@ -113,4 +116,16 @@ void releaseControllerClaim(ControllerClaimLease& lease) {
 
 bool hasControllerClaim(const ControllerClaimLease& lease) {
     return lease.fd >= 0;
+}
+
+bool isStableControllerPlayerIndex(int playerIndex) {
+    return playerIndex >= kMinStableControllerPlayerIndex &&
+           playerIndex <= kMaxStableControllerPlayerIndex;
+}
+
+std::string controllerClaimKeyForPlayerIndex(int playerIndex) {
+    if (!isStableControllerPlayerIndex(playerIndex)) {
+        return {};
+    }
+    return "controller_player_index_" + std::to_string(playerIndex);
 }
