@@ -156,6 +156,22 @@ bool controllerHasAnyLightColor(GCController* controller) {
     return color.red > kLightEpsilon || color.green > kLightEpsilon || color.blue > kLightEpsilon;
 }
 
+std::string describeControllerIdentity(GCController* controller) {
+    if (controller == nil) {
+        return "unknown controller";
+    }
+
+    const std::string deviceName = nsStringToStd(controller.vendorName ?: @"Game Controller");
+    const int playerIndex = static_cast<int>(controller.playerIndex);
+    const std::string claimKey = controllerClaimKey(controller);
+    const bool lightOn = controllerHasAnyLightColor(controller);
+    std::string description = deviceName +
+                              " [playerIndex=" + std::to_string(playerIndex) +
+                              ", claimKey=" + (claimKey.empty() ? "none" : claimKey) +
+                              ", light=" + (lightOn ? "on" : "off") + "]";
+    return description;
+}
+
 int controllerScore(GCController* controller) {
     if (controller == nil) {
         return -1;
@@ -381,21 +397,47 @@ void postControllerMessage(const std::string& message) {
     for (GCController* controller in controllers) {
         candidates.push_back(controller);
     }
+    const bool hasUnlitCandidate = std::any_of(candidates.begin(), candidates.end(), [](GCController* controller) {
+        return !controllerHasAnyLightColor(controller);
+    });
     std::stable_sort(candidates.begin(), candidates.end(), [](GCController* lhs, GCController* rhs) {
         return controllerScore(lhs) > controllerScore(rhs);
     });
 
-    for (GCController* controller : candidates) {
-        std::string ignoredMessage;
-        if (![self shouldAcceptController:controller ignoredMessage:&ignoredMessage]) {
-            continue;
+    auto tryAttachPass = [&](bool unlitOnly, const char* passName) {
+        for (GCController* controller : candidates) {
+            if (unlitOnly && controllerHasAnyLightColor(controller)) {
+                continue;
+            }
+            std::string ignoredMessage;
+            if (![self shouldAcceptController:controller ignoredMessage:&ignoredMessage]) {
+                if (announce && !ignoredMessage.empty()) {
+                    postControllerMessage(ignoredMessage);
+                }
+                continue;
+            }
+            if (announce) {
+                postControllerMessage(std::string("Controller: Evaluating ") +
+                                      describeControllerIdentity(controller) +
+                                      " (" + passName + ")");
+            }
+            if ([self attachController:controller announce:announce]) {
+                return YES;
+            }
         }
-        if ([self attachController:controller announce:announce]) {
+        return NO;
+    };
+
+    if (hasUnlitCandidate) {
+        if (tryAttachPass(true, "prefer-unlit")) {
             return YES;
+        }
+        if (announce) {
+            postControllerMessage("Controller: No unlit candidate could be claimed; retrying all controllers");
         }
     }
 
-    return NO;
+    return tryAttachPass(false, "fallback-all");
 }
 
 - (BOOL)attachController:(GCController*)controller announce:(BOOL)announce {
@@ -567,8 +609,8 @@ void postControllerMessage(const std::string& message) {
     }
 
     if (needsAttach) {
-        if (![self attachController:controller announce:YES]) {
-            [self attachBestAvailableControllerAnnounce:YES];
+        if (![self attachBestAvailableControllerAnnounce:YES]) {
+            [self attachController:controller announce:YES];
         }
     }
 }
