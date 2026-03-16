@@ -305,6 +305,27 @@ void testControllerClaimLeaseBlocksReclaimUntilRelease() {
     releaseControllerClaim(different);
 }
 
+void testControllerLightFallbackBypassesStaleLightWhenClaimHeld() {
+    clearControllerClaimFiles();
+
+    const std::string claimKey = controllerClaimKeyForPlayerIndex(0);
+    expect(!claimKey.empty(), "stable player index should produce a claim key");
+
+    ControllerClaimLease lease;
+    expect(shouldUseControllerLightOwnershipFallback(claimKey, lease),
+           "without a claim lease, light fallback should still apply");
+
+    std::string error;
+    expect(tryAcquireControllerClaim(claimKey, lease, &error),
+           "controller claim should succeed: " + error);
+    expect(!shouldUseControllerLightOwnershipFallback(claimKey, lease),
+           "held claim should bypass light fallback to avoid stale-light false positives");
+    expect(shouldUseControllerLightOwnershipFallback("", lease),
+           "missing claim key should keep light fallback enabled");
+
+    releaseControllerClaim(lease);
+}
+
 void testControllerClaimKeyUsesStablePlayerIndexIdentity() {
     std::vector<int> firstOrder = {0, 1};
     std::vector<int> secondOrder = {1, 0};
@@ -1414,6 +1435,7 @@ int main() {
         testReplayHandlesPartialFillsAndCommission();
         testWebSocketRuntimeGuards();
         testControllerClaimLeaseBlocksReclaimUntilRelease();
+        testControllerLightFallbackBypassesStaleLightWhenClaimHeld();
         testControllerClaimKeyUsesStablePlayerIndexIdentity();
         testRecoverySnapshotReportsAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();

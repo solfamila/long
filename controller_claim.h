@@ -13,5 +13,7 @@ bool tryAcquireControllerClaim(const std::string& claimKey,
                                std::string* error = nullptr);
 void releaseControllerClaim(ControllerClaimLease& lease);
 bool hasControllerClaim(const ControllerClaimLease& lease);
+bool shouldUseControllerLightOwnershipFallback(const std::string& claimKey,
+                                               const ControllerClaimLease& lease);
 bool isStableControllerPlayerIndex(int playerIndex);
 std::string controllerClaimKeyForPlayerIndex(int playerIndex);

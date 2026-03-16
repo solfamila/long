@@ -423,7 +423,8 @@ void postControllerMessage(const std::string& message) {
             }
         }
 
-        if ([self isControllerClaimedByOtherAppViaLight:controller]) {
+        if (shouldUseControllerLightOwnershipFallback(claimKey, newClaim) &&
+            [self isControllerClaimedByOtherAppViaLight:controller]) {
             releaseControllerClaim(newClaim);
             if (announce) {
                 postControllerMessage("Controller: Skipping " + deviceName + " (lock light already owned by another app)");

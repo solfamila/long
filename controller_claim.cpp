@@ -118,6 +118,14 @@ bool hasControllerClaim(const ControllerClaimLease& lease) {
     return lease.fd >= 0;
 }
 
+bool shouldUseControllerLightOwnershipFallback(const std::string& claimKey,
+                                               const ControllerClaimLease& lease) {
+    if (claimKey.empty()) {
+        return true;
+    }
+    return !hasControllerClaim(lease);
+}
+
 bool isStableControllerPlayerIndex(int playerIndex) {
     return playerIndex >= kMinStableControllerPlayerIndex &&
            playerIndex <= kMaxStableControllerPlayerIndex;
