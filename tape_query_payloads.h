@@ -171,6 +171,30 @@ struct ImportedCaseListPayload {
     std::vector<ImportedCaseRow> importedCases;
 };
 
+struct BundleVerifyPayload {
+    json raw;
+    json summary;
+    json artifact;
+    json bundle;
+    json sourceArtifact;
+    json sourceReport;
+    json reportSummary;
+    ImportedCaseRow importedCase;
+    bool hasImportedCase = false;
+    bool importSupported = false;
+    bool alreadyImported = false;
+    bool canImport = false;
+    std::string verifyStatus;
+    std::string importReason;
+    std::string artifactId;
+    std::string bundleId;
+    std::string bundleType;
+    std::string bundlePath;
+    std::string payloadSha256;
+    std::uint64_t servedRevisionId = 0;
+    std::string reportMarkdown;
+};
+
 struct CaseBundleImportPayload {
     json raw;
     json summary;
@@ -232,6 +256,7 @@ QueryResult<IncidentListPayload> packIncidentListPayload(const QueryResult<tape_
 QueryResult<ReportInventoryPayload> packReportInventoryPayload(const QueryResult<tape_engine::QueryResponse>& response,
                                                                bool sessionReports);
 QueryResult<BundleExportPayload> packBundleExportPayload(const QueryResult<tape_engine::QueryResponse>& response);
+QueryResult<BundleVerifyPayload> packBundleVerifyPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<ImportedCaseListPayload> packImportedCaseListPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<CaseBundleImportPayload> packCaseBundleImportPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<ArtifactExportPayload> packArtifactExportPayload(const QueryResult<tape_engine::QueryResponse>& response);

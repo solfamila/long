@@ -54,6 +54,7 @@ enum class QueryOperation {
     ExportArtifact,
     ExportSessionBundle,
     ExportCaseBundle,
+    VerifyBundle,
     ImportCaseBundle,
     ListImportedCases,
 };

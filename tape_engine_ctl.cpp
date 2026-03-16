@@ -30,6 +30,7 @@ void printUsage() {
               << "  tape_engine_ctl scan-order-case-report [--trace-id N] [--order-id N] [--perm-id N] [--exec-id ID] [--revision N] [--limit N]\n"
               << "  tape_engine_ctl read-case-report <report_id>\n"
               << "  tape_engine_ctl export-case-bundle <report_id>\n"
+              << "  tape_engine_ctl verify-bundle <bundle_path>\n"
               << "  tape_engine_ctl list-case-reports [--revision N] [--limit N]\n"
               << "  tape_engine_ctl import-case-bundle <bundle_path>\n"
               << "  tape_engine_ctl list-imported-cases [--limit N]\n"
@@ -203,6 +204,13 @@ int main(int argc, char** argv) {
             return 1;
         }
         request.reportId = std::stoull(argv[2]);
+    } else if (command == "verify_bundle") {
+        setOperation(tape_engine::QueryOperation::VerifyBundle);
+        if (argc < 3) {
+            printUsage();
+            return 1;
+        }
+        request.bundlePath = argv[2];
     } else if (command == "list_case_reports") {
         setOperation(tape_engine::QueryOperation::ListCaseReports);
         for (int i = 2; i < argc; ++i) {

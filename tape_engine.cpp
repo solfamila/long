@@ -1,4 +1,5 @@
 #include "tape_engine.h"
+#include "tape_bundle_inspection.h"
 #include "phase3_analyzers.h"
 #include "runtime_qos.h"
 
@@ -28,8 +29,6 @@ namespace tape_engine {
 
 namespace {
 
-constexpr const char* kPhase6BundleSchema = "com.foxy.tape-engine.report-bundle";
-constexpr std::uint32_t kPhase6BundleVersion = 1;
 constexpr const char* kImportedCaseManifestSchema = "com.foxy.tape-engine.imported-case-bundle";
 constexpr std::uint32_t kImportedCaseManifestVersion = 1;
 
@@ -6270,8 +6269,8 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         }
 
         json bundle{
-            {"schema", kPhase6BundleSchema},
-            {"version", kPhase6BundleVersion},
+            {"schema", kReportBundleSchema},
+            {"version", kReportBundleVersion},
             {"bundle_id", bundleId},
             {"bundle_type", bundleType},
             {"exported_ts_engine_ns", nowEngineNs()},
@@ -6318,8 +6317,8 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                 {"bundle_path", bundlePath.string()},
                 {"file_name", fileName.str()},
                 {"payload_sha256", sha256Hex(payload)},
-                {"schema", kPhase6BundleSchema},
-                {"version", kPhase6BundleVersion}
+                {"schema", kReportBundleSchema},
+                {"version", kReportBundleVersion}
             }},
             {"source_artifact", sourceArtifact},
             {"source_report", sourceReport},
@@ -6330,46 +6329,83 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         return response;
     }
 
+    if (operation == QueryOperation::VerifyBundle) {
+        if (request.bundlePath.empty()) {
+            return rejectResponse(request, "bundle_path is required");
+        }
+
+        tape_bundle::PortableBundleInspection inspection;
+        std::string inspectError;
+        if (!tape_bundle::inspectPortableBundle(request.bundlePath, &inspection, &inspectError)) {
+            return rejectResponse(request, inspectError);
+        }
+
+        const bool importSupported = (inspection.bundleType == "case_bundle");
+        const auto existing = findImportedCaseByPayloadSha(snapshot, inspection.payloadSha256);
+        const bool alreadyImported = existing.has_value();
+
+        std::string verifyStatus = "valid";
+        std::string importReason = importSupported
+            ? (alreadyImported ? "payload_already_imported" : "case_bundle_can_be_imported")
+            : "bundle_type_not_importable";
+        if (inspection.bundleType != "session_bundle" && inspection.bundleType != "case_bundle") {
+            verifyStatus = "unknown_bundle_type";
+        }
+
+        response.summary = {
+            {"artifact", {
+                {"artifact_id", inspection.bundleId},
+                {"artifact_type", inspection.bundleType},
+                {"artifact_scope", "portable"},
+                {"first_session_seq", inspection.firstSessionSeq},
+                {"last_session_seq", inspection.lastSessionSeq},
+                {"revision_id", inspection.sourceRevisionId}
+            }},
+            {"bundle", {
+                {"bundle_id", inspection.bundleId},
+                {"bundle_type", inspection.bundleType},
+                {"bundle_path", inspection.bundlePath.string()},
+                {"file_name", inspection.fileName},
+                {"payload_sha256", inspection.payloadSha256},
+                {"schema", inspection.bundle.value("schema", std::string())},
+                {"version", inspection.bundle.value("version", 0U)}
+            }},
+            {"source_artifact", inspection.sourceArtifact},
+            {"source_report", inspection.sourceReport},
+            {"report_summary", inspection.reportSummary},
+            {"report_markdown", inspection.reportMarkdown},
+            {"verify_status", verifyStatus},
+            {"import_supported", importSupported},
+            {"already_imported", alreadyImported},
+            {"can_import", importSupported && !alreadyImported},
+            {"import_reason", importReason},
+            {"served_revision_id", inspection.sourceRevisionId}
+        };
+        if (alreadyImported) {
+            response.summary["imported_case"] = importedCaseToJson(*existing);
+        }
+        response.events = json::array();
+        return response;
+    }
+
     if (operation == QueryOperation::ImportCaseBundle) {
         if (request.bundlePath.empty()) {
             return rejectResponse(request, "bundle_path is required");
         }
 
-        std::filesystem::path sourcePath = request.bundlePath;
-        std::error_code pathError;
-        const std::filesystem::path absoluteSourcePath = std::filesystem::absolute(sourcePath, pathError);
-        if (!pathError) {
-            sourcePath = absoluteSourcePath;
+        tape_bundle::PortableBundleInspection inspection;
+        std::string inspectError;
+        if (!tape_bundle::inspectPortableBundle(request.bundlePath, &inspection, &inspectError)) {
+            return rejectResponse(request, inspectError);
         }
-        if (!std::filesystem::exists(sourcePath)) {
-            return rejectResponse(request, "bundle_path does not exist");
-        }
-
-        std::ifstream in(sourcePath, std::ios::binary);
-        if (!in.is_open()) {
-            return rejectResponse(request, "failed to open case bundle for import");
-        }
-        const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
-                                              std::istreambuf_iterator<char>());
-        if (bytes.empty()) {
-            return rejectResponse(request, "case bundle is empty");
-        }
-
-        const json bundle = json::from_msgpack(bytes, true, false);
-        if (bundle.is_discarded() ||
-            bundle.value("schema", std::string()) != kPhase6BundleSchema ||
-            bundle.value("version", 0U) != kPhase6BundleVersion) {
-            return rejectResponse(request, "case bundle schema/version is not supported");
-        }
-        if (bundle.value("bundle_type", std::string()) != "case_bundle") {
+        if (inspection.bundleType != "case_bundle") {
             return rejectResponse(request, "import_case_bundle only supports case_bundle payloads");
         }
-        if (!bundle.value("report_bundle", json::object()).is_object()) {
+        if (!inspection.reportBundle.is_object()) {
             return rejectResponse(request, "case bundle is missing report_bundle payload");
         }
 
-        const std::string payloadSha256 = sha256Hex(bytes);
-        if (const auto existing = findImportedCaseByPayloadSha(snapshot, payloadSha256); existing.has_value()) {
+        if (const auto existing = findImportedCaseByPayloadSha(snapshot, inspection.payloadSha256); existing.has_value()) {
             response.summary = {
                 {"artifact", {
                     {"artifact_id", importedCaseArtifactId(existing->importedCaseId)},
@@ -6389,7 +6425,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
 
         ImportedCaseRecord record;
         try {
-            record = persistImportedCaseRecord(snapshot, bundle, sourcePath, bytes);
+            record = persistImportedCaseRecord(snapshot, inspection.bundle, inspection.bundlePath, inspection.bytes);
         } catch (const std::exception& error) {
             return rejectResponse(request, error.what());
         }
@@ -6487,22 +6523,13 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                 }
 
                 const std::filesystem::path bundlePath = snapshot.dataDir / "imports" / found->second.fileName;
-                std::ifstream in(bundlePath, std::ios::binary);
-                if (!in.is_open()) {
-                    return rejectResponse(request, "failed to open imported case bundle");
-                }
-                const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
-                                                      std::istreambuf_iterator<char>());
-                if (bytes.empty()) {
-                    return rejectResponse(request, "imported case bundle is empty");
-                }
-                const json bundle = json::from_msgpack(bytes, true, false);
-                if (bundle.is_discarded() ||
-                    bundle.value("schema", std::string()) != kPhase6BundleSchema ||
-                    bundle.value("bundle_type", std::string()) != "case_bundle") {
+                tape_bundle::PortableBundleInspection inspection;
+                std::string inspectError;
+                if (!tape_bundle::inspectPortableBundle(bundlePath, &inspection, &inspectError) ||
+                    inspection.bundleType != "case_bundle") {
                     return rejectResponse(request, "imported case bundle is malformed");
                 }
-                QueryResponse importedResponse = queryResponseFromJson(bundle.value("report_bundle", json::object()));
+                QueryResponse importedResponse = queryResponseFromJson(inspection.reportBundle);
                 importedResponse.summary["source_artifact"] = importedResponse.summary.value("artifact", json::object());
                 importedResponse.summary["artifact"] = {
                     {"artifact_id", importedCaseArtifactId(found->second.importedCaseId)},

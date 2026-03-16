@@ -224,12 +224,16 @@ struct ProbeSnapshot {
     BOOL _reportInventoryInFlight;
     BOOL _bundleWorkflowInFlight;
     std::string _lastBundleWorkflowSummary;
+    std::string _previewedBundlePath;
     std::string _previewedBundleId;
     std::string _previewedBundleType;
     std::string _previewedBundleSourceArtifactId;
     std::string _previewedImportedArtifactId;
     std::uint64_t _previewedBundleFirstSessionSeq;
     std::uint64_t _previewedBundleLastSessionSeq;
+    BOOL _previewedBundleImportAllowed;
+    std::string _previewedBundleImportStatus;
+    std::string _previewedBundleImportDetail;
     std::vector<tapescope::ReportInventoryRow> _latestSessionReports;
     std::vector<tapescope::ReportInventoryRow> _latestCaseReports;
     std::vector<tapescope::ImportedCaseRow> _latestImportedCases;

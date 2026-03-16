@@ -449,6 +449,13 @@ QueryResult<BundleExportPayload> QueryClient::exportCaseBundlePayload(std::uint6
     return packBundleExportPayload(performQuery(request));
 }
 
+QueryResult<BundleVerifyPayload> QueryClient::verifyBundlePayload(const std::string& bundlePath) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::VerifyBundle,
+                                                    "tapescope-verify-bundle");
+    request.bundlePath = bundlePath;
+    return packBundleVerifyPayload(performQuery(request));
+}
+
 QueryResult<CaseBundleImportPayload> QueryClient::importCaseBundlePayload(const std::string& bundlePath) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ImportCaseBundle,
                                                     "tapescope-import-case-bundle");

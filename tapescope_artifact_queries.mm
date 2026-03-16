@@ -1,10 +1,9 @@
 #import "tapescope_window_internal.h"
 
+#include "tape_bundle_inspection.h"
+#include "tapescope_bundle_preview.h"
 #include "tapescope_support.h"
 
-#include <CommonCrypto/CommonDigest.h>
-
-#include <fstream>
 #include <optional>
 #include <sstream>
 
@@ -21,18 +20,10 @@ struct BundlePreviewDetails {
     std::uint64_t lastSessionSeq = 0;
 };
 
-std::string sha256Hex(const std::vector<std::uint8_t>& input) {
-    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(input.data(), static_cast<CC_LONG>(input.size()), digest);
-
-    static constexpr char kHex[] = "0123456789abcdef";
-    std::string output;
-    output.reserve(CC_SHA256_DIGEST_LENGTH * 2);
-    for (unsigned char byte : digest) {
-        output.push_back(kHex[(byte >> 4) & 0x0fU]);
-        output.push_back(kHex[byte & 0x0fU]);
-    }
-    return output;
+bool ShouldFallbackToLocalBundlePreview(const tapescope::QueryError& error) {
+    return error.kind == tapescope::QueryErrorKind::Transport ||
+           (error.kind == tapescope::QueryErrorKind::Remote &&
+            error.message.find("unsupported") != std::string::npos);
 }
 
 std::string DescribeBundleExportPayload(const std::string& label,
@@ -101,82 +92,155 @@ std::string DescribeCaseBundleImportPayload(const std::string& bundlePath,
     return out.str();
 }
 
-std::string DescribeBundlePreview(const std::string& bundlePath,
-                                  BundlePreviewDetails* detailsOut) {
-    if (detailsOut != nullptr) {
-        *detailsOut = BundlePreviewDetails{};
-    }
+BundlePreviewDetails BundlePreviewDetailsFromInspection(const tape_bundle::PortableBundleInspection& inspection) {
+    BundlePreviewDetails details;
+    details.bundleId = inspection.bundleId;
+    details.bundleType = inspection.bundleType;
+    details.sourceArtifactId = inspection.sourceArtifactId;
+    details.payloadSha256 = inspection.payloadSha256;
+    details.firstSessionSeq = inspection.firstSessionSeq;
+    details.lastSessionSeq = inspection.lastSessionSeq;
+    return details;
+}
 
-    std::ifstream in(bundlePath, std::ios::binary);
-    if (!in.is_open()) {
-        return "Failed to open bundle for preview.";
-    }
-    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)),
-                                          std::istreambuf_iterator<char>());
-    if (bytes.empty()) {
-        return "Bundle file is empty.";
-    }
-    const tapescope::json bundle = tapescope::json::from_msgpack(bytes, true, false);
-    if (bundle.is_discarded()) {
-        return "Bundle preview failed: file is not valid MessagePack JSON.";
-    }
-    if (bundle.value("schema", std::string()) != "com.foxy.tape-engine.report-bundle") {
-        return "Bundle preview failed: schema is not com.foxy.tape-engine.report-bundle.";
-    }
-
-    const std::string bundleType = bundle.value("bundle_type", std::string());
-    const std::uint64_t firstSessionSeq = bundle.value("first_session_seq", 0ULL);
-    const std::uint64_t lastSessionSeq = bundle.value("last_session_seq", 0ULL);
-    const std::string payloadSha256 = sha256Hex(bytes);
-    const tapescope::json sourceArtifact = bundle.value("source_artifact", tapescope::json::object());
-    const std::string sourceArtifactId =
-        bundle.value("source_artifact_id", sourceArtifact.value("artifact_id", std::string()));
-    if (detailsOut != nullptr) {
-        detailsOut->bundleId = bundle.value("bundle_id", std::string());
-        detailsOut->bundleType = bundleType;
-        detailsOut->sourceArtifactId = sourceArtifactId;
-        detailsOut->payloadSha256 = payloadSha256;
-        detailsOut->firstSessionSeq = firstSessionSeq;
-        detailsOut->lastSessionSeq = lastSessionSeq;
-    }
-
-    const tapescope::json sourceReport = bundle.value("source_report", tapescope::json::object());
-    const tapescope::json reportBundle = bundle.value("report_bundle", tapescope::json::object());
-    const tapescope::json reportSummary = reportBundle.value("summary", tapescope::json::object());
-    const std::string markdown = bundle.value("report_markdown", std::string());
-
+std::string DescribeBundlePreview(const tape_bundle::PortableBundleInspection& inspection) {
     std::ostringstream out;
-    out << "bundle_path: " << bundlePath << "\n"
-        << "bundle_id: " << bundle.value("bundle_id", std::string()) << "\n"
-        << "bundle_type: " << bundleType << "\n"
-        << "headline: " << bundle.value("headline", std::string()) << "\n"
-        << "instrument_id: " << bundle.value("instrument_id", std::string()) << "\n"
-        << "source_artifact_id: " << sourceArtifactId << "\n"
-        << "source_report_id: " << bundle.value("source_report_id", 0ULL) << "\n"
-        << "source_revision_id: " << bundle.value("source_revision_id", 0ULL) << "\n"
-        << "session_seq: [" << firstSessionSeq << ", " << lastSessionSeq << "]\n"
-        << "payload_sha256: " << payloadSha256 << "\n"
-        << "exported_ts_engine_ns: " << bundle.value("exported_ts_engine_ns", 0ULL) << "\n";
-    if (sourceArtifact.is_object()) {
-        out << "\nsource_artifact:\n" << sourceArtifact.dump(2) << "\n";
+    out << "bundle_path: " << inspection.bundlePath.string() << "\n"
+        << "bundle_id: " << inspection.bundleId << "\n"
+        << "bundle_type: " << inspection.bundleType << "\n"
+        << "headline: " << inspection.headline << "\n"
+        << "instrument_id: " << inspection.instrumentId << "\n"
+        << "source_artifact_id: " << inspection.sourceArtifactId << "\n"
+        << "source_report_id: " << inspection.sourceReportId << "\n"
+        << "source_revision_id: " << inspection.sourceRevisionId << "\n"
+        << "session_seq: [" << inspection.firstSessionSeq << ", " << inspection.lastSessionSeq << "]\n"
+        << "payload_sha256: " << inspection.payloadSha256 << "\n"
+        << "exported_ts_engine_ns: " << inspection.exportedTsEngineNs << "\n";
+    if (inspection.sourceArtifact.is_object()) {
+        out << "\nsource_artifact:\n" << inspection.sourceArtifact.dump(2) << "\n";
     }
-    if (sourceReport.is_object()) {
-        out << "\nsource_report:\n" << sourceReport.dump(2) << "\n";
+    if (inspection.sourceReport.is_object()) {
+        out << "\nsource_report:\n" << inspection.sourceReport.dump(2) << "\n";
     }
-    if (reportSummary.is_object()) {
-        out << "\nreport_summary:\n" << reportSummary.dump(2) << "\n";
+    if (inspection.reportSummary.is_object()) {
+        out << "\nreport_summary:\n" << inspection.reportSummary.dump(2) << "\n";
     }
-    if (!markdown.empty()) {
+    if (!inspection.reportMarkdown.empty()) {
         out << "\nreport_markdown_preview:\n";
         constexpr std::size_t kMarkdownPreviewLimit = 900;
-        if (markdown.size() > kMarkdownPreviewLimit) {
-            out << markdown.substr(0, kMarkdownPreviewLimit) << "\n…";
+        if (inspection.reportMarkdown.size() > kMarkdownPreviewLimit) {
+            out << inspection.reportMarkdown.substr(0, kMarkdownPreviewLimit) << "\n…";
         } else {
-            out << markdown;
+            out << inspection.reportMarkdown;
         }
         out << "\n";
     }
     return out.str();
+}
+
+BundlePreviewDetails BundlePreviewDetailsFromVerifyPayload(const tapescope::BundleVerifyPayload& payload) {
+    BundlePreviewDetails details;
+    details.bundleId = payload.bundleId;
+    details.bundleType = payload.bundleType;
+    details.sourceArtifactId = payload.sourceArtifact.value("artifact_id", std::string());
+    details.payloadSha256 = payload.payloadSha256;
+    details.firstSessionSeq = payload.artifact.value("first_session_seq", 0ULL);
+    details.lastSessionSeq = payload.artifact.value("last_session_seq", 0ULL);
+    return details;
+}
+
+std::string DescribeBundleVerifyPayload(const std::string& bundlePath,
+                                        const tapescope::BundleVerifyPayload& payload) {
+    std::ostringstream out;
+    out << "bundle_path: " << (payload.bundlePath.empty() ? bundlePath : payload.bundlePath) << "\n"
+        << "bundle_id: " << payload.bundleId << "\n"
+        << "bundle_type: " << payload.bundleType << "\n"
+        << "source_artifact_id: " << payload.sourceArtifact.value("artifact_id", std::string()) << "\n"
+        << "source_report_id: " << payload.sourceReport.value("report_id", 0ULL) << "\n"
+        << "session_seq: [" << payload.artifact.value("first_session_seq", 0ULL)
+        << ", " << payload.artifact.value("last_session_seq", 0ULL) << "]\n"
+        << "payload_sha256: " << payload.payloadSha256 << "\n"
+        << "verify_status: " << payload.verifyStatus << "\n"
+        << "import_supported: " << (payload.importSupported ? "true" : "false") << "\n"
+        << "already_imported: " << (payload.alreadyImported ? "true" : "false") << "\n"
+        << "can_import: " << (payload.canImport ? "true" : "false") << "\n"
+        << "import_reason: " << payload.importReason << "\n"
+        << "served_revision_id: " << payload.servedRevisionId << "\n";
+    if (payload.hasImportedCase) {
+        out << "\nimported_case:\n" << payload.importedCase.raw.dump(2) << "\n";
+    }
+    if (payload.sourceArtifact.is_object()) {
+        out << "\nsource_artifact:\n" << payload.sourceArtifact.dump(2) << "\n";
+    }
+    if (payload.sourceReport.is_object()) {
+        out << "\nsource_report:\n" << payload.sourceReport.dump(2) << "\n";
+    }
+    if (payload.reportSummary.is_object()) {
+        out << "\nreport_summary:\n" << payload.reportSummary.dump(2) << "\n";
+    }
+    if (!payload.reportMarkdown.empty()) {
+        out << "\nreport_markdown_preview:\n";
+        constexpr std::size_t kMarkdownPreviewLimit = 900;
+        if (payload.reportMarkdown.size() > kMarkdownPreviewLimit) {
+            out << payload.reportMarkdown.substr(0, kMarkdownPreviewLimit) << "\n…";
+        } else {
+            out << payload.reportMarkdown;
+        }
+        out << "\n";
+    }
+    return out.str();
+}
+
+struct ImportedCasePreviewMatch {
+    std::size_t index = 0;
+    std::string reason;
+};
+
+std::optional<ImportedCasePreviewMatch> FindImportedCasePreviewMatch(
+    const std::string& bundlePath,
+    const BundlePreviewDetails& details,
+    const std::vector<tapescope::ImportedCaseRow>& importedCases) {
+    if (!bundlePath.empty()) {
+        for (std::size_t index = 0; index < importedCases.size(); ++index) {
+            if (importedCases[index].sourceBundlePath == bundlePath) {
+                return ImportedCasePreviewMatch{index, "source_bundle_path"};
+            }
+        }
+    }
+    if (!details.payloadSha256.empty()) {
+        for (std::size_t index = 0; index < importedCases.size(); ++index) {
+            if (importedCases[index].payloadSha256 == details.payloadSha256) {
+                return ImportedCasePreviewMatch{index, "payload_sha256"};
+            }
+        }
+    }
+    if (!details.bundleId.empty()) {
+        for (std::size_t index = 0; index < importedCases.size(); ++index) {
+            if (importedCases[index].bundleId == details.bundleId) {
+                return ImportedCasePreviewMatch{index, "bundle_id"};
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+NSColor* PreviewDecisionColor(const tapescope::BundlePreviewDecision& decision) {
+    if (decision.importAllowed) {
+        return [NSColor systemGreenColor];
+    }
+    if (decision.alreadyImported || !decision.importSupported) {
+        return [NSColor systemOrangeColor];
+    }
+    return [NSColor systemRedColor];
+}
+
+NSString* PreviewDecisionStateText(const tapescope::BundlePreviewDecision& decision,
+                                   bool localFallback) {
+    std::string state = localFallback ? "Bundle preview ready (local fallback)." : "Bundle preview ready.";
+    if (!decision.importAllowed) {
+        state += " Import blocked.";
+    }
+    return ToNSString(state);
 }
 
 std::uint64_t ExtractArtifactReportId(const tapescope::InvestigationPayload& payload) {
@@ -211,30 +275,38 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
 @interface TapeScopeWindowController (ArtifactPreviewState)
 
 - (void)clearBundlePreviewState;
-- (void)applyBundlePreviewStateForPath:(const std::string&)bundlePath
-                               preview:(const std::string&)preview
-                               details:(const BundlePreviewDetails&)details;
+- (tapescope::BundlePreviewDecision)applyBundlePreviewStateForPath:(const std::string&)bundlePath
+                                                           preview:(const std::string&)preview
+                                                           details:(const BundlePreviewDetails&)details
+                                                          decision:(tapescope::BundlePreviewDecision)decision;
 
 @end
 
 @implementation TapeScopeWindowController (ArtifactQueries)
 
 - (void)clearBundlePreviewState {
+    _previewedBundlePath.clear();
     _previewedBundleId.clear();
     _previewedBundleType.clear();
     _previewedBundleSourceArtifactId.clear();
     _previewedImportedArtifactId.clear();
     _previewedBundleFirstSessionSeq = 0;
     _previewedBundleLastSessionSeq = 0;
+    _previewedBundleImportAllowed = NO;
+    _previewedBundleImportStatus.clear();
+    _previewedBundleImportDetail.clear();
     _bundlePreviewLoadRangeButton.enabled = NO;
     _bundlePreviewOpenSourceButton.enabled = NO;
     _bundlePreviewOpenImportedButton.enabled = NO;
+    _bundleImportButton.enabled = NO;
 }
 
-- (void)applyBundlePreviewStateForPath:(const std::string&)bundlePath
-                               preview:(const std::string&)preview
-                               details:(const BundlePreviewDetails&)details {
+- (tapescope::BundlePreviewDecision)applyBundlePreviewStateForPath:(const std::string&)bundlePath
+                                                           preview:(const std::string&)preview
+                                                           details:(const BundlePreviewDetails&)details
+                                                          decision:(tapescope::BundlePreviewDecision)decision {
     std::string renderedPreview = preview;
+    _previewedBundlePath = bundlePath;
     _previewedBundleId = details.bundleId;
     _previewedBundleType = details.bundleType;
     _previewedBundleSourceArtifactId = details.sourceArtifactId;
@@ -245,60 +317,34 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
     _bundlePreviewOpenSourceButton.enabled = !details.sourceArtifactId.empty();
     _previewedImportedArtifactId.clear();
 
-    std::optional<std::size_t> matchIndex;
-    if (!bundlePath.empty() || !details.bundleId.empty()) {
-        for (std::size_t index = 0; index < _latestImportedCases.size(); ++index) {
-            const auto& row = _latestImportedCases[index];
-            if (!bundlePath.empty() && row.sourceBundlePath == bundlePath) {
-                matchIndex = index;
-                break;
-            }
-        }
-        if (!matchIndex.has_value() && !details.payloadSha256.empty()) {
-            for (std::size_t index = 0; index < _latestImportedCases.size(); ++index) {
-                const auto& row = _latestImportedCases[index];
-                if (row.payloadSha256 == details.payloadSha256) {
-                    matchIndex = index;
-                    break;
-                }
-            }
-        }
-        if (!matchIndex.has_value() && !details.bundleId.empty()) {
-            for (std::size_t index = 0; index < _latestImportedCases.size(); ++index) {
-                const auto& row = _latestImportedCases[index];
-                if (row.bundleId == details.bundleId) {
-                    matchIndex = index;
-                    break;
-                }
-            }
-        }
-    }
+    const auto match = FindImportedCasePreviewMatch(bundlePath, details, _latestImportedCases);
 
-    if (matchIndex.has_value()) {
-        const auto& row = _latestImportedCases.at(*matchIndex);
+    if (match.has_value()) {
+        const auto& row = _latestImportedCases.at(match->index);
+        decision = tapescope::markBundlePreviewDecisionImported(decision, row, match->reason);
         _previewedImportedArtifactId = row.artifactId;
         _bundlePreviewOpenImportedButton.enabled = !row.artifactId.empty();
         renderedPreview += "\nimport_inventory_match:\n";
         renderedPreview += "  imported_case_id: " + std::to_string(row.importedCaseId) + "\n";
         renderedPreview += "  artifact_id: " + row.artifactId + "\n";
-        renderedPreview += "  match_reason: ";
-        if (!bundlePath.empty() && row.sourceBundlePath == bundlePath) {
-            renderedPreview += "source_bundle_path\n";
-        } else if (!details.payloadSha256.empty() && row.payloadSha256 == details.payloadSha256) {
-            renderedPreview += "payload_sha256\n";
-        } else {
-            renderedPreview += "bundle_id\n";
-        }
+        renderedPreview += "  match_reason: " + match->reason + "\n";
         const NSInteger selected = _importedCaseTableView.selectedRow;
-        if (selected != static_cast<NSInteger>(*matchIndex)) {
-            [_importedCaseTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:*matchIndex]
+        if (selected != static_cast<NSInteger>(match->index)) {
+            [_importedCaseTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:match->index]
                                 byExtendingSelection:NO];
         }
     } else {
         _bundlePreviewOpenImportedButton.enabled = NO;
         renderedPreview += "\nimport_inventory_match: none\n";
     }
+    renderedPreview += "\nimport_preview:\n";
+    renderedPreview += tapescope::describeBundlePreviewDecision(decision);
+    _previewedBundleImportAllowed = decision.importAllowed;
+    _previewedBundleImportStatus = decision.status;
+    _previewedBundleImportDetail = decision.detail;
+    _bundleImportButton.enabled = decision.importAllowed;
     _bundlePreviewTextView.string = ToNSString(renderedPreview);
+    return decision;
 }
 
 - (void)fetchIncident:(id)sender {
@@ -639,11 +685,6 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
                 innerSelf->_artifactStateLabel.stringValue = @"Portable bundle exported.";
                 innerSelf->_artifactStateLabel.textColor = [NSColor systemGreenColor];
                 innerSelf->_bundleImportPathField.stringValue = ToNSString(result.value.bundlePath);
-                BundlePreviewDetails details;
-                const std::string preview = DescribeBundlePreview(result.value.bundlePath, &details);
-                [innerSelf applyBundlePreviewStateForPath:result.value.bundlePath
-                                                  preview:preview
-                                                  details:details];
                 [innerSelf recordBundleHistoryEntry:tapescope::json{
                     {"kind", isSessionReport ? "session_bundle" : "case_bundle"},
                     {"target_id", result.value.bundleId},
@@ -667,6 +708,7 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
                     {"bundle_id", result.value.bundleId},
                     {"bundle_path", result.value.bundlePath}
                 }];
+                [innerSelf previewBundlePath:nil];
             } else {
                 innerSelf->_artifactRevealBundleButton.enabled = !innerSelf->_loadedArtifactBundlePath.empty();
                 innerSelf->_artifactStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
@@ -840,11 +882,18 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
         _importedCaseTextView.string = ToNSString(DescribeImportedCaseRow(row));
         if (!row.sourceBundlePath.empty()) {
             _bundleImportPathField.stringValue = ToNSString(row.sourceBundlePath);
-            BundlePreviewDetails details;
-            const std::string preview = DescribeBundlePreview(row.sourceBundlePath, &details);
-            [self applyBundlePreviewStateForPath:row.sourceBundlePath
-                                         preview:preview
-                                         details:details];
+            tape_bundle::PortableBundleInspection inspection;
+            std::string inspectError;
+            if (tape_bundle::inspectPortableBundle(row.sourceBundlePath, &inspection, &inspectError)) {
+                const BundlePreviewDetails details = BundlePreviewDetailsFromInspection(inspection);
+                [self applyBundlePreviewStateForPath:row.sourceBundlePath
+                                             preview:DescribeBundlePreview(inspection)
+                                             details:details
+                                            decision:tapescope::bundlePreviewDecisionFromInspection(inspection)];
+            } else {
+                [self clearBundlePreviewState];
+                _bundlePreviewTextView.string = ToNSString(tapescope::describeBundlePreviewFailure(inspectError));
+            }
         }
     } else {
         _importedCaseTextView.string = @"Select an imported case row to inspect import diagnostics, source artifact linkage, and replay boundaries.";
@@ -904,11 +953,6 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
                 innerSelf->_bundleImportPathField.stringValue = ToNSString(result.value.bundlePath);
                 innerSelf->_lastBundleWorkflowSummary =
                     DescribeBundleExportPayload("Session bundle", row.reportId, result);
-                BundlePreviewDetails details;
-                const std::string preview = DescribeBundlePreview(result.value.bundlePath, &details);
-                [innerSelf applyBundlePreviewStateForPath:result.value.bundlePath
-                                                  preview:preview
-                                                  details:details];
                 [innerSelf recordRecentHistoryEntry:tapescope::json{
                     {"kind", "bundle"},
                     {"target_id", result.value.bundleId},
@@ -932,6 +976,7 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
                     {"last_session_seq", result.value.artifact.value("last_session_seq", 0ULL)},
                     {"served_revision_id", result.value.servedRevisionId}
                 }];
+                [innerSelf previewBundlePath:nil];
             } else {
                 innerSelf->_reportInventoryStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
                 innerSelf->_reportInventoryStateLabel.textColor = ErrorColorForKind(result.error.kind);
@@ -996,11 +1041,6 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
                 innerSelf->_bundleImportPathField.stringValue = ToNSString(result.value.bundlePath);
                 innerSelf->_lastBundleWorkflowSummary =
                     DescribeBundleExportPayload("Case bundle", row.reportId, result);
-                BundlePreviewDetails details;
-                const std::string preview = DescribeBundlePreview(result.value.bundlePath, &details);
-                [innerSelf applyBundlePreviewStateForPath:result.value.bundlePath
-                                                  preview:preview
-                                                  details:details];
                 [innerSelf recordRecentHistoryEntry:tapescope::json{
                     {"kind", "bundle"},
                     {"target_id", result.value.bundleId},
@@ -1024,6 +1064,7 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
                     {"last_session_seq", result.value.artifact.value("last_session_seq", 0ULL)},
                     {"served_revision_id", result.value.servedRevisionId}
                 }];
+                [innerSelf previewBundlePath:nil];
             } else {
                 innerSelf->_reportInventoryStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
                 innerSelf->_reportInventoryStateLabel.textColor = ErrorColorForKind(result.error.kind);
@@ -1095,11 +1136,6 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
                 innerSelf->_reportInventoryStateLabel.stringValue = @"Case bundle imported.";
                 innerSelf->_reportInventoryStateLabel.textColor = [NSColor systemGreenColor];
                 innerSelf->_lastBundleWorkflowSummary = DescribeCaseBundleImportPayload(bundlePath, result);
-                BundlePreviewDetails details;
-                const std::string preview = DescribeBundlePreview(bundlePath, &details);
-                [innerSelf applyBundlePreviewStateForPath:bundlePath
-                                                  preview:preview
-                                                  details:details];
                 [innerSelf recordRecentHistoryEntry:tapescope::json{
                     {"kind", "artifact"},
                     {"target_id", result.value.artifactId},
@@ -1123,6 +1159,7 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
                     {"last_session_seq", result.value.importedCase.lastSessionSeq},
                     {"served_revision_id", result.value.importedCase.sourceRevisionId}
                 }];
+                [innerSelf previewBundlePath:nil];
             } else {
                 innerSelf->_reportInventoryStateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
                 innerSelf->_reportInventoryStateLabel.textColor = ErrorColorForKind(result.error.kind);
@@ -1174,8 +1211,50 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        std::string preview;
         BundlePreviewDetails details;
-        const std::string preview = DescribeBundlePreview(bundlePath, &details);
+        tapescope::BundlePreviewDecision decision;
+        bool previewReady = false;
+        bool localFallback = false;
+
+        if (strongSelf != nil && strongSelf->_client) {
+            const auto verifyResult = strongSelf->_client->verifyBundlePayload(bundlePath);
+            if (verifyResult.ok()) {
+                details = BundlePreviewDetailsFromVerifyPayload(verifyResult.value);
+                preview = DescribeBundleVerifyPayload(bundlePath, verifyResult.value);
+                decision = tapescope::bundlePreviewDecisionFromVerifyPayload(verifyResult.value);
+                previewReady = true;
+            } else if (ShouldFallbackToLocalBundlePreview(verifyResult.error)) {
+                localFallback = true;
+                preview = "bundle_preview_source: local_fallback\nfallback_reason: " +
+                          tapescope::QueryClient::describeError(verifyResult.error) + "\n\n";
+                tape_bundle::PortableBundleInspection inspection;
+                std::string inspectError;
+                if (tape_bundle::inspectPortableBundle(bundlePath, &inspection, &inspectError)) {
+                    details = BundlePreviewDetailsFromInspection(inspection);
+                    preview += DescribeBundlePreview(inspection);
+                    decision = tapescope::bundlePreviewDecisionFromInspection(inspection);
+                    previewReady = true;
+                } else {
+                    preview += tapescope::describeBundlePreviewFailure(inspectError);
+                }
+            } else {
+                preview = "Bundle verification failed for " + bundlePath + "\n" +
+                          tapescope::QueryClient::describeError(verifyResult.error);
+            }
+        } else {
+            tape_bundle::PortableBundleInspection inspection;
+            std::string inspectError;
+            if (tape_bundle::inspectPortableBundle(bundlePath, &inspection, &inspectError)) {
+                details = BundlePreviewDetailsFromInspection(inspection);
+                preview = DescribeBundlePreview(inspection);
+                decision = tapescope::bundlePreviewDecisionFromInspection(inspection);
+                previewReady = true;
+            } else {
+                preview = tapescope::describeBundlePreviewFailure(inspectError);
+            }
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             TapeScopeWindowController* innerSelf = weakSelf;
             if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_bundleWorkflowRequestToken]) {
@@ -1183,20 +1262,19 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
             }
             innerSelf->_bundleWorkflowInFlight = NO;
             innerSelf->_bundlePreviewButton.enabled = YES;
-            innerSelf->_bundleImportButton.enabled = YES;
             innerSelf->_bundleChooseImportButton.enabled = YES;
-            if (preview.rfind("Bundle preview failed:", 0) == 0 || preview == "Failed to open bundle for preview." ||
-                preview == "Bundle file is empty.") {
+            if (!previewReady) {
                 [innerSelf clearBundlePreviewState];
                 innerSelf->_bundlePreviewTextView.string = ToNSString(preview);
                 innerSelf->_reportInventoryStateLabel.stringValue = @"Bundle preview failed.";
                 innerSelf->_reportInventoryStateLabel.textColor = [NSColor systemRedColor];
             } else {
-                [innerSelf applyBundlePreviewStateForPath:bundlePath
-                                                  preview:preview
-                                                  details:details];
-                innerSelf->_reportInventoryStateLabel.stringValue = @"Bundle preview ready.";
-                innerSelf->_reportInventoryStateLabel.textColor = [NSColor systemGreenColor];
+                const auto appliedDecision = [innerSelf applyBundlePreviewStateForPath:bundlePath
+                                                                               preview:preview
+                                                                               details:details
+                                                                              decision:decision];
+                innerSelf->_reportInventoryStateLabel.stringValue = PreviewDecisionStateText(appliedDecision, localFallback);
+                innerSelf->_reportInventoryStateLabel.textColor = PreviewDecisionColor(appliedDecision);
             }
         });
     });

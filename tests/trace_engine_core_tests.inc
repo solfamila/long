@@ -920,6 +920,21 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
         expect(sessionBundle.value("bundle_type", std::string()) == "session_bundle",
                "phase 6 session bundle should record the session bundle type");
 
+        tape_engine::QueryRequest verifySessionBundleRequest;
+        verifySessionBundleRequest.requestId = "phase6-verify-session-bundle";
+        verifySessionBundleRequest.operation = "verify_bundle";
+        verifySessionBundleRequest.bundlePath = sessionBundlePath;
+        expect(client.query(verifySessionBundleRequest, &response, &error),
+               "phase 6 session bundle verify should succeed: " + error);
+        expect(response.summary.value("verify_status", std::string()) == "valid",
+               "phase 6 session bundle verify should mark the bundle valid");
+        expect(!response.summary.value("import_supported", true),
+               "phase 6 session bundle verify should mark the bundle non-importable");
+        expect(!response.summary.value("already_imported", true),
+               "phase 6 session bundle verify should not mark the session bundle imported");
+        expect(!response.summary.value("can_import", true),
+               "phase 6 session bundle verify should not allow importing a session bundle");
+
         tape_engine::QueryRequest exportCaseBundleRequest;
         exportCaseBundleRequest.requestId = "phase6-export-case-bundle";
         exportCaseBundleRequest.operation = "export_case_bundle";
@@ -933,6 +948,35 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
                "phase 6 case bundle should record the case bundle type");
         expect(caseBundle.value("source_report_id", 0ULL) == caseReportId,
                "phase 6 case bundle should carry the source case report id");
+        const fs::path renamedCaseBundlePath = rootDir / "renamed-case-bundle.msgpack";
+        fs::rename(caseBundlePath, renamedCaseBundlePath, ec);
+        expect(!ec && fs::exists(renamedCaseBundlePath),
+               "phase 6 should allow renaming the exported case bundle before import");
+        caseBundlePath = renamedCaseBundlePath.string();
+        tape_bundle::PortableBundleInspection renamedBundleInspection;
+        std::string renamedInspectError;
+        expect(tape_bundle::inspectPortableBundle(caseBundlePath, &renamedBundleInspection, &renamedInspectError),
+               "phase 6 should inspect the renamed case bundle: " + renamedInspectError);
+
+        tape_engine::QueryRequest verifyCaseBundleRequest;
+        verifyCaseBundleRequest.requestId = "phase6-verify-case-bundle";
+        verifyCaseBundleRequest.operation = "verify_bundle";
+        verifyCaseBundleRequest.bundlePath = caseBundlePath;
+        expect(client.query(verifyCaseBundleRequest, &response, &error),
+               "phase 6 case bundle verify should succeed: " + error);
+        expect(response.summary.value("verify_status", std::string()) == "valid",
+               "phase 6 case bundle verify should mark the bundle valid");
+        expect(response.summary.value("import_supported", false),
+               "phase 6 case bundle verify should mark the case bundle importable");
+        expect(!response.summary.value("already_imported", true),
+               "phase 6 case bundle verify should not mark the fresh bundle imported");
+        expect(response.summary.value("can_import", false),
+               "phase 6 case bundle verify should allow importing the fresh case bundle");
+        expect(!response.summary.value("bundle", json::object()).value("payload_sha256", std::string()).empty(),
+               "phase 6 case bundle verify should expose the payload hash");
+        expect(response.summary.value("bundle", json::object()).value("payload_sha256", std::string()) ==
+                   renamedBundleInspection.payloadSha256,
+               "phase 6 case bundle verify should preserve payload hash after rename");
 
         tape_engine::QueryRequest importRequest;
         importRequest.requestId = "phase6-import-case-bundle";
@@ -954,6 +998,10 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
                "phase 6 imported-case listing should return the imported bundle inventory");
         expect(response.events.at(0).value("imported_case_id", 0ULL) == importedCaseId,
                "phase 6 imported-case listing should surface the imported bundle record");
+        expect(response.events.at(0).value("payload_sha256", std::string()) == renamedBundleInspection.payloadSha256,
+               "phase 6 imported-case listing should preserve renamed-bundle recognition by payload hash");
+        expect(response.events.at(0).value("source_bundle_path", std::string()) == caseBundlePath,
+               "phase 6 imported-case listing should preserve the renamed bundle path");
 
         tape_engine::QueryRequest readImportedArtifactRequest;
         readImportedArtifactRequest.requestId = "phase6-read-imported-artifact";
@@ -976,6 +1024,17 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
                "phase 6 duplicate case bundle import should be marked duplicate");
         expect(response.summary.value("imported_case", json::object()).value("imported_case_id", 0ULL) == importedCaseId,
                "phase 6 duplicate case bundle import should reuse the existing imported case record");
+
+        tape_engine::QueryRequest verifyImportedCaseBundleRequest = verifyCaseBundleRequest;
+        verifyImportedCaseBundleRequest.requestId = "phase6-verify-case-bundle-imported";
+        expect(client.query(verifyImportedCaseBundleRequest, &response, &error),
+               "phase 6 imported case bundle verify should succeed: " + error);
+        expect(response.summary.value("already_imported", false),
+               "phase 6 imported case bundle verify should mark the bundle already imported");
+        expect(!response.summary.value("can_import", true),
+               "phase 6 imported case bundle verify should stop offering import after import");
+        expect(response.summary.value("imported_case", json::object()).value("imported_case_id", 0ULL) == importedCaseId,
+               "phase 6 imported case bundle verify should surface the existing imported case id");
 
         {
             const json lookup = readMsgpackFile(rootDir / "artifact-lookup.msgpack");

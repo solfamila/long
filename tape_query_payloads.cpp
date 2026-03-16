@@ -442,6 +442,59 @@ QueryResult<BundleExportPayload> packBundleExportPayload(const QueryResult<tape_
     return makeSuccess(std::move(payload));
 }
 
+QueryResult<BundleVerifyPayload> packBundleVerifyPayload(const QueryResult<tape_engine::QueryResponse>& response) {
+    if (!response.ok()) {
+        return propagateError<BundleVerifyPayload>(response.error);
+    }
+    if (!response.value.summary.is_object()) {
+        return makeError<BundleVerifyPayload>(QueryErrorKind::MalformedResponse,
+                                              "bundle verify summary must be an object");
+    }
+
+    BundleVerifyPayload payload;
+    payload.summary = response.value.summary;
+    payload.raw = json::object();
+    payload.raw["summary"] = response.value.summary;
+    payload.raw["events"] = response.value.events;
+    payload.artifact = payload.summary.value("artifact", json::object());
+    payload.bundle = payload.summary.value("bundle", json::object());
+    payload.sourceArtifact = payload.summary.value("source_artifact", json::object());
+    payload.sourceReport = payload.summary.value("source_report", json::object());
+    payload.reportSummary = payload.summary.value("report_summary", json::object());
+    payload.importSupported = payload.summary.value("import_supported", false);
+    payload.alreadyImported = payload.summary.value("already_imported", false);
+    payload.canImport = payload.summary.value("can_import", false);
+    payload.verifyStatus = payload.summary.value("verify_status", std::string());
+    payload.importReason = payload.summary.value("import_reason", std::string());
+    payload.artifactId = payload.artifact.value("artifact_id", std::string());
+    payload.bundleId = payload.bundle.value("bundle_id", std::string());
+    payload.bundleType = payload.bundle.value("bundle_type", std::string());
+    payload.bundlePath = payload.bundle.value("bundle_path", std::string());
+    payload.payloadSha256 = payload.bundle.value("payload_sha256", std::string());
+    payload.servedRevisionId = payload.summary.value("served_revision_id", 0ULL);
+    payload.reportMarkdown = payload.summary.value("report_markdown", std::string());
+
+    const json importedCase = payload.summary.value("imported_case", json::object());
+    payload.hasImportedCase = importedCase.is_object() && !importedCase.empty();
+    if (payload.hasImportedCase) {
+        payload.importedCase = parseImportedCaseRow(importedCase);
+    }
+
+    if (!payload.artifact.is_object() || payload.artifactId.empty()) {
+        return makeError<BundleVerifyPayload>(QueryErrorKind::MalformedResponse,
+                                              "bundle verify is missing artifact metadata");
+    }
+    if (!payload.bundle.is_object() || payload.bundlePath.empty() || payload.bundleId.empty()) {
+        return makeError<BundleVerifyPayload>(QueryErrorKind::MalformedResponse,
+                                              "bundle verify is missing bundle metadata");
+    }
+    if (payload.verifyStatus.empty()) {
+        return makeError<BundleVerifyPayload>(QueryErrorKind::MalformedResponse,
+                                              "bundle verify is missing verify_status");
+    }
+    return makeSuccess(std::move(payload));
+}
+
 QueryResult<ImportedCaseListPayload> packImportedCaseListPayload(const QueryResult<tape_engine::QueryResponse>& response) {
     if (!response.ok()) {
         return propagateError<ImportedCaseListPayload>(response.error);

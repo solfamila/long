@@ -2988,6 +2988,27 @@
         "segment_count",
         "manifest_hash"
       ]
+    },
+    {
+      "input_required": [
+        "bundle_path"
+      ],
+      "name": "tapescript_verify_bundle",
+      "output_required": [
+        "artifact",
+        "bundle",
+        "source_artifact",
+        "source_report",
+        "report_summary",
+        "report_markdown",
+        "verify_status",
+        "import_supported",
+        "already_imported",
+        "can_import",
+        "import_reason",
+        "imported_case",
+        "served_revision_id"
+      ]
     }
   ]
 }

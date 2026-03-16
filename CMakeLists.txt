@@ -115,6 +115,7 @@ set(APP_SOURCES
 set(TAPE_ENGINE_SOURCES
     tape_engine_main.cpp
     tape_engine.cpp
+    tape_bundle_inspection.cpp
     tape_engine_client.cpp
     tape_engine_protocol.cpp
     phase3_analyzers.cpp
@@ -129,7 +130,9 @@ set(TAPESCOPE_SOURCES
     tapescope_session_queries.mm
     tapescope_order_queries.mm
     tapescope_artifact_queries.mm
+    tapescope_bundle_preview.cpp
     tapescope_client.cpp
+    tape_bundle_inspection.cpp
     tape_query_payloads.cpp
     tapescope_investigation_pane.mm
     tapescope_support_ui.mm
@@ -503,9 +506,11 @@ if(BUILD_TESTING)
         bridge_batch_transport.cpp
         phase3_analyzers.cpp
         runtime_qos.cpp
+        tape_bundle_inspection.cpp
         tape_engine.cpp
         tape_engine_client.cpp
         tape_engine_protocol.cpp
+        tapescope_bundle_preview.cpp
         tapescope_client.cpp
         tape_query_payloads.cpp
         trace_exporter.cpp
@@ -554,6 +559,7 @@ if(BUILD_TESTING)
         tape_mcp_adapter.cpp
         tape_mcp_engine_rpc.cpp
         tape_query_payloads.cpp
+        tape_bundle_inspection.cpp
         tape_engine.cpp
         tape_engine_client.cpp
         tape_engine_protocol.cpp

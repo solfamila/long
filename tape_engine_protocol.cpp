@@ -87,6 +87,8 @@ const char* queryOperationName(QueryOperation operation) {
             return "export_session_bundle";
         case QueryOperation::ExportCaseBundle:
             return "export_case_bundle";
+        case QueryOperation::VerifyBundle:
+            return "verify_bundle";
         case QueryOperation::ImportCaseBundle:
             return "import_case_bundle";
         case QueryOperation::ListImportedCases:
@@ -186,6 +188,9 @@ QueryOperation queryOperationFromString(std::string_view operationName) {
     }
     if (normalized == "export_case_bundle") {
         return QueryOperation::ExportCaseBundle;
+    }
+    if (normalized == "verify_bundle") {
+        return QueryOperation::VerifyBundle;
     }
     if (normalized == "import_case_bundle") {
         return QueryOperation::ImportCaseBundle;

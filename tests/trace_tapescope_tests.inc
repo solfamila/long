@@ -170,6 +170,13 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(!typedSessionBundleExport.value.bundlePath.empty() &&
                fs::exists(typedSessionBundleExport.value.bundlePath),
            "TapeScope typed session-bundle export should surface a written bundle path");
+    const auto typedSessionBundleVerify = client.verifyBundlePayload(typedSessionBundleExport.value.bundlePath);
+    expect(typedSessionBundleVerify.ok(), "TapeScope typed session-bundle verify should succeed: " +
+                                              tapescope::QueryClient::describeError(typedSessionBundleVerify.error));
+    expect(typedSessionBundleVerify.value.verifyStatus == "valid" &&
+               !typedSessionBundleVerify.value.importSupported &&
+               !typedSessionBundleVerify.value.canImport,
+           "TapeScope typed session-bundle verify should mark the bundle valid but non-importable");
 
     const std::uint64_t caseReportId = typedCaseReportList.value.caseReports.front().reportId;
     expect(caseReportId > 0, "TapeScope case-report inventory should expose a durable report id");
@@ -179,8 +186,27 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(!typedCaseBundleExport.value.bundlePath.empty() &&
                fs::exists(typedCaseBundleExport.value.bundlePath),
            "TapeScope typed case-bundle export should surface a written bundle path");
+    const fs::path movedCaseBundlePath = rootDir / "renamed-case-bundle.msgpack";
+    fs::rename(typedCaseBundleExport.value.bundlePath, movedCaseBundlePath, ec);
+    expect(!ec && fs::exists(movedCaseBundlePath),
+           "TapeScope phase6 seam should be able to rename the exported case bundle");
+    tape_bundle::PortableBundleInspection movedBundleInspection;
+    std::string movedInspectError;
+    expect(tape_bundle::inspectPortableBundle(movedCaseBundlePath, &movedBundleInspection, &movedInspectError),
+           "TapeScope phase6 seam should inspect the renamed bundle: " + movedInspectError);
+    const auto typedCaseBundleVerify = client.verifyBundlePayload(movedCaseBundlePath.string());
+    expect(typedCaseBundleVerify.ok(), "TapeScope typed case-bundle verify should succeed: " +
+                                           tapescope::QueryClient::describeError(typedCaseBundleVerify.error));
+    expect(typedCaseBundleVerify.value.verifyStatus == "valid" &&
+               typedCaseBundleVerify.value.importSupported &&
+               typedCaseBundleVerify.value.canImport &&
+               !typedCaseBundleVerify.value.alreadyImported &&
+               !typedCaseBundleVerify.value.payloadSha256.empty(),
+           "TapeScope typed case-bundle verify should mark the fresh case bundle importable and expose its hash");
+    expect(typedCaseBundleVerify.value.payloadSha256 == movedBundleInspection.payloadSha256,
+           "TapeScope typed case-bundle verify should preserve payload-hash recognition after rename");
 
-    const auto typedCaseBundleImport = client.importCaseBundlePayload(typedCaseBundleExport.value.bundlePath);
+    const auto typedCaseBundleImport = client.importCaseBundlePayload(movedCaseBundlePath.string());
     expect(typedCaseBundleImport.ok(), "TapeScope typed case-bundle import should succeed: " +
                                            tapescope::QueryClient::describeError(typedCaseBundleImport.error));
     expect(!typedCaseBundleImport.value.artifactId.empty() &&
@@ -192,6 +218,19 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                                            tapescope::QueryClient::describeError(typedImportedCaseList.error));
     expect(!typedImportedCaseList.value.importedCases.empty(),
            "TapeScope typed imported-case list should parse imported-case rows for the UI");
+    bool matchedRenamedBundleByPayloadHash = false;
+    for (const auto& row : typedImportedCaseList.value.importedCases) {
+        if (row.payloadSha256 == movedBundleInspection.payloadSha256) {
+            matchedRenamedBundleByPayloadHash = true;
+            expect(row.sourceBundlePath == movedCaseBundlePath.string(),
+                   "TapeScope typed imported-case list should preserve the renamed source bundle path");
+            expect(row.artifactId == typedCaseBundleImport.value.artifactId,
+                   "TapeScope typed imported-case list should map the renamed bundle hash to the imported artifact");
+            break;
+        }
+    }
+    expect(matchedRenamedBundleByPayloadHash,
+           "TapeScope typed imported-case list should recognize a renamed bundle by payload hash");
 
     const auto typedImportedArtifact = client.readArtifactPayload(typedCaseBundleImport.value.artifactId);
     expect(typedImportedArtifact.ok(), "TapeScope typed imported-case artifact read should succeed: " +
@@ -200,6 +239,14 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
            "TapeScope typed imported-case artifact read should preserve the imported artifact id");
     expect(typedImportedArtifact.value.artifactKind == "imported_case_bundle",
            "TapeScope typed imported-case artifact read should surface the imported bundle artifact kind");
+    const auto typedImportedCaseBundleVerify = client.verifyBundlePayload(movedCaseBundlePath.string());
+    expect(typedImportedCaseBundleVerify.ok(), "TapeScope typed imported case-bundle verify should succeed: " +
+                                                   tapescope::QueryClient::describeError(typedImportedCaseBundleVerify.error));
+    expect(typedImportedCaseBundleVerify.value.alreadyImported &&
+               !typedImportedCaseBundleVerify.value.canImport &&
+               typedImportedCaseBundleVerify.value.hasImportedCase &&
+               typedImportedCaseBundleVerify.value.importedCase.artifactId == typedCaseBundleImport.value.artifactId,
+           "TapeScope typed imported case-bundle verify should surface the matching imported artifact");
 
     const auto typedIncidents = client.listIncidentsPayload(10);
     expect(typedIncidents.ok(), "TapeScope typed incident list should succeed: " +
@@ -244,4 +291,53 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
            "TapeScope typed order-anchor read should expose the linked artifact id");
 
     server.stop();
+}
+
+void testTapeScopeBundlePreviewDecisionHelpers() {
+    tape_bundle::PortableBundleInspection sessionInspection;
+    sessionInspection.bundleType = "session_bundle";
+    sessionInspection.bundleId = "session-bundle:1";
+    const auto sessionDecision = tapescope::bundlePreviewDecisionFromInspection(sessionInspection);
+    expect(!sessionDecision.importSupported && !sessionDecision.importAllowed,
+           "TapeScope bundle preview helper should keep session bundles preview-only");
+    expect(sessionDecision.detail.find("not imported") != std::string::npos ||
+               sessionDecision.detail.find("previewed") != std::string::npos,
+           "TapeScope bundle preview helper should explain why session bundles are blocked from import");
+
+    tape_bundle::PortableBundleInspection caseInspection;
+    caseInspection.bundleType = "case_bundle";
+    caseInspection.bundleId = "case-bundle:1";
+    const auto caseDecision = tapescope::bundlePreviewDecisionFromInspection(caseInspection);
+    expect(caseDecision.importSupported && caseDecision.importAllowed,
+           "TapeScope bundle preview helper should allow fresh case bundles");
+
+    tapescope::BundleVerifyPayload verifyPayload;
+    verifyPayload.verifyStatus = "valid";
+    verifyPayload.importSupported = true;
+    verifyPayload.alreadyImported = true;
+    verifyPayload.canImport = false;
+    verifyPayload.importReason = "payload_already_imported";
+    verifyPayload.hasImportedCase = true;
+    verifyPayload.importedCase.importedCaseId = 77;
+    verifyPayload.importedCase.artifactId = "imported-case:77";
+    const auto verifyDecision = tapescope::bundlePreviewDecisionFromVerifyPayload(verifyPayload);
+    expect(verifyDecision.alreadyImported && !verifyDecision.importAllowed,
+           "TapeScope bundle preview helper should block already-imported bundles");
+    expect(verifyDecision.detail.find("imported-case:77") != std::string::npos,
+           "TapeScope bundle preview helper should surface the matching imported artifact id");
+
+    tapescope::ImportedCaseRow importedCase;
+    importedCase.importedCaseId = 88;
+    importedCase.artifactId = "imported-case:88";
+    const auto matchedDecision =
+        tapescope::markBundlePreviewDecisionImported(caseDecision, importedCase, "payload_sha256");
+    expect(matchedDecision.alreadyImported && !matchedDecision.importAllowed,
+           "TapeScope bundle preview helper should let the UI block duplicate imports after a local hash match");
+    expect(matchedDecision.detail.find("payload_sha256") != std::string::npos,
+           "TapeScope bundle preview helper should explain why a local imported-case match blocked import");
+
+    const std::string corrupted =
+        tapescope::describeBundlePreviewFailure("bundle is not valid MessagePack JSON");
+    expect(corrupted.find("valid portable bundle MessagePack payload") != std::string::npos,
+           "TapeScope bundle preview helper should give the UI a stable corrupted-bundle diagnostic");
 }

@@ -1397,6 +1397,17 @@ void testTapeMcpPhase6BundleTools() {
         exportSessionBundleEnvelope.value("result", json::object()).value("bundle", json::object()).value("bundle_path", std::string());
     expect(!sessionBundlePath.empty() && fs::exists(sessionBundlePath),
            "phase6 export-session-bundle should write a portable session bundle");
+    const json verifySessionBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_verify_bundle", json{
+        {"bundle_path", sessionBundlePath}
+    }));
+    expect(verifySessionBundleEnvelope.value("ok", false),
+           "phase6 verify-bundle for a session bundle should return ok=true");
+    expect(verifySessionBundleEnvelope.value("result", json::object()).value("verify_status", std::string()) == "valid",
+           "phase6 verify-bundle for a session bundle should mark the bundle valid");
+    expect(!verifySessionBundleEnvelope.value("result", json::object()).value("import_supported", true),
+           "phase6 verify-bundle for a session bundle should mark it non-importable");
+    expect(!verifySessionBundleEnvelope.value("result", json::object()).value("can_import", true),
+           "phase6 verify-bundle for a session bundle should not offer import");
 
     const json exportCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_export_case_bundle", json{
         {"report_id", caseReportId}
@@ -1407,6 +1418,23 @@ void testTapeMcpPhase6BundleTools() {
         exportCaseBundleEnvelope.value("result", json::object()).value("bundle", json::object()).value("bundle_path", std::string());
     expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
            "phase6 export-case-bundle should write a portable case bundle");
+    const json verifyCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_verify_bundle", json{
+        {"bundle_path", caseBundlePath}
+    }));
+    expect(verifyCaseBundleEnvelope.value("ok", false),
+           "phase6 verify-bundle for a case bundle should return ok=true");
+    expect(verifyCaseBundleEnvelope.value("result", json::object()).value("verify_status", std::string()) == "valid",
+           "phase6 verify-bundle for a case bundle should mark the bundle valid");
+    expect(verifyCaseBundleEnvelope.value("result", json::object()).value("import_supported", false),
+           "phase6 verify-bundle for a fresh case bundle should mark it importable");
+    expect(!verifyCaseBundleEnvelope.value("result", json::object()).value("already_imported", true),
+           "phase6 verify-bundle for a fresh case bundle should not mark it imported");
+    expect(verifyCaseBundleEnvelope.value("result", json::object()).value("can_import", false),
+           "phase6 verify-bundle for a fresh case bundle should allow import");
+    expect(!verifyCaseBundleEnvelope.value("result", json::object())
+                .value("bundle", json::object())
+                .value("payload_sha256", std::string()).empty(),
+           "phase6 verify-bundle for a fresh case bundle should expose its payload hash");
 
     const json importCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_import_case_bundle", json{
         {"bundle_path", caseBundlePath}
@@ -1448,6 +1476,19 @@ void testTapeMcpPhase6BundleTools() {
            "phase6 duplicate import-case-bundle should still return ok=true");
     expect(duplicateImportEnvelope.value("result", json::object()).value("duplicate_import", false),
            "phase6 duplicate import-case-bundle should be marked duplicate");
+    const json verifyImportedCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_verify_bundle", json{
+        {"bundle_path", caseBundlePath}
+    }));
+    expect(verifyImportedCaseBundleEnvelope.value("ok", false),
+           "phase6 verify-bundle after import should return ok=true");
+    expect(verifyImportedCaseBundleEnvelope.value("result", json::object()).value("already_imported", false),
+           "phase6 verify-bundle after import should mark the bundle imported");
+    expect(!verifyImportedCaseBundleEnvelope.value("result", json::object()).value("can_import", true),
+           "phase6 verify-bundle after import should stop offering import");
+    expect(verifyImportedCaseBundleEnvelope.value("result", json::object())
+               .value("imported_case", json::object())
+               .value("artifact_id", std::string()) == importedArtifactId,
+           "phase6 verify-bundle after import should surface the imported artifact id");
 
     server->stop();
 }
@@ -1510,7 +1551,7 @@ void testTapeMcpStdioHarness() {
     });
     const json listResponse = readJsonRpcMessage(child.readFd);
     const json tools = listResponse.value("result", json::object()).value("tools", json::array());
-    expect(tools.is_array() && tools.size() == 30, "tools/list should expose the expanded phase 6 tool slice");
+    expect(tools.is_array() && tools.size() == 31, "tools/list should expose the expanded phase 6 tool slice");
     json overviewTool = json::object();
     for (const auto& tool : tools) {
         if (tool.value("name", std::string()) == "tapescript_read_session_overview") {
@@ -1536,6 +1577,16 @@ void testTapeMcpStdioHarness() {
     expect(scanReportTool.is_object(), "tools/list should include tapescript_scan_session_report");
     expect(scanReportTool.value("progressHint", false),
            "tools/list should advertise progressHint for heavy scan/export tools");
+    json verifyBundleTool = json::object();
+    for (const auto& tool : tools) {
+        if (tool.value("name", std::string()) == "tapescript_verify_bundle") {
+            verifyBundleTool = tool;
+            break;
+        }
+    }
+    expect(verifyBundleTool.is_object(), "tools/list should include tapescript_verify_bundle");
+    expect(verifyBundleTool.value("progressHint", false),
+           "tools/list should advertise progressHint for bundle verification");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},

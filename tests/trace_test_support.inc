@@ -2,6 +2,8 @@
 #include "bridge_batch_codec.h"
 #include "bridge_batch_transport.h"
 #include "runtime_registry.h"
+#include "tape_bundle_inspection.h"
+#include "tapescope_bundle_preview.h"
 #include "tapescope_client.h"
 #include "tape_engine_client.h"
 #include "tape_engine.h"
@@ -407,4 +409,3 @@ void writeAllToFd(int fd, const std::vector<std::uint8_t>& bytes) {
         offset += static_cast<std::size_t>(wrote);
     }
 }
-

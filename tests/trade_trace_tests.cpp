@@ -29,6 +29,7 @@ int main() {
         testTapeEngineQueryStatusAndReads();
         testTapeEngineQueryOperationRegistryCanonicalizesAliases();
         testTapeScopeClientReadsPhase4EngineSeam();
+        testTapeScopeBundlePreviewDecisionHelpers();
         testTapeEngineRevisionPinnedReadsCanOverlayMutableTail();
         testTapeEnginePhase3FindingsIncidentsAndProtectedWindows();
         testTapeEnginePhase3ArtifactsPersistAcrossRestartAndReadProtectedWindow();

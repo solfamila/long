@@ -164,6 +164,8 @@ public:
         const BundleExportQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> exportCaseBundle(
         const BundleExportQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> verifyBundle(
+        const BundleImportQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> importCaseBundle(
         const BundleImportQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listImportedCases(

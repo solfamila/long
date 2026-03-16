@@ -445,6 +445,13 @@ EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::exportCaseBundle(
     return convertRawResult(performRawQuery(request));
 }
 
+EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::verifyBundle(
+    const BundleImportQuery& query) const {
+    auto request = makeRequest(tape_engine::QueryOperation::VerifyBundle, "tape-mcp-verify-bundle");
+    request.bundlePath = query.bundlePath;
+    return convertRawResult(performRawQuery(request));
+}
+
 EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::importCaseBundle(
     const BundleImportQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ImportCaseBundle, "tape-mcp-import-case-bundle");
