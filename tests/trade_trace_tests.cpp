@@ -350,6 +350,28 @@ void testControllerClaimKeyUsesStablePlayerIndexIdentity() {
            "out-of-range player index should not produce a stable cross-process claim key");
 }
 
+void testControllerClaimFallbackRecoversAlternateStableKey() {
+    clearControllerClaimFiles();
+
+    ControllerClaimLease first;
+    ControllerClaimLease recovered;
+    std::string error;
+    const std::string preferredKey = controllerClaimKeyForPlayerIndex(0);
+    const std::string alternateKey = controllerClaimKeyForPlayerIndex(1);
+    std::string claimedKey;
+
+    expect(tryAcquireControllerClaim(preferredKey, first, &error),
+           "initial stable claim should succeed: " + error);
+    expect(tryAcquireControllerClaimWithPlayerIndexFallback(0, recovered, &claimedKey, &error),
+           "fallback stable claim should recover an alternate key: " + error);
+    expect(hasControllerClaim(recovered), "fallback stable claim should hold a lease");
+    expect(claimedKey == alternateKey,
+           "fallback stable claim should recover the alternate stable key for the mismatched controller");
+
+    releaseControllerClaim(first);
+    releaseControllerClaim(recovered);
+}
+
 void testRecoverySnapshotReportsAbnormalShutdown() {
     clearTestFiles();
 
@@ -1437,6 +1459,7 @@ int main() {
         testControllerClaimLeaseBlocksReclaimUntilRelease();
         testControllerLightFallbackBypassesStaleLightWhenClaimHeld();
         testControllerClaimKeyUsesStablePlayerIndexIdentity();
+        testControllerClaimFallbackRecoversAlternateStableKey();
         testRecoverySnapshotReportsAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();

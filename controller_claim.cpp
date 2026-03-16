@@ -9,6 +9,7 @@
 #include <sstream>
 #include <sys/file.h>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -136,4 +137,61 @@ std::string controllerClaimKeyForPlayerIndex(int playerIndex) {
         return {};
     }
     return "controller_player_index_" + std::to_string(playerIndex);
+}
+
+std::vector<std::string> controllerClaimKeyFallbackOrderForPlayerIndex(int preferredPlayerIndex) {
+    if (!isStableControllerPlayerIndex(preferredPlayerIndex)) {
+        return {};
+    }
+
+    std::vector<std::string> keys;
+    keys.reserve(static_cast<std::size_t>(kMaxStableControllerPlayerIndex -
+                                          kMinStableControllerPlayerIndex + 1));
+    keys.push_back(controllerClaimKeyForPlayerIndex(preferredPlayerIndex));
+    for (int index = kMinStableControllerPlayerIndex; index <= kMaxStableControllerPlayerIndex; ++index) {
+        if (index == preferredPlayerIndex) {
+            continue;
+        }
+        keys.push_back(controllerClaimKeyForPlayerIndex(index));
+    }
+    return keys;
+}
+
+bool tryAcquireControllerClaimWithPlayerIndexFallback(int preferredPlayerIndex,
+                                                      ControllerClaimLease& lease,
+                                                      std::string* claimedKey,
+                                                      std::string* error) {
+    if (claimedKey != nullptr) {
+        claimedKey->clear();
+    }
+
+    const std::vector<std::string> keys = controllerClaimKeyFallbackOrderForPlayerIndex(preferredPlayerIndex);
+    if (keys.empty()) {
+        if (error != nullptr) {
+            *error = "Controller claim failed: unstable player index";
+        }
+        return false;
+    }
+
+    std::string firstError;
+    std::string attemptError;
+    for (const std::string& key : keys) {
+        if (tryAcquireControllerClaim(key, lease, &attemptError)) {
+            if (claimedKey != nullptr) {
+                *claimedKey = key;
+            }
+            if (error != nullptr) {
+                error->clear();
+            }
+            return true;
+        }
+        if (firstError.empty()) {
+            firstError = attemptError;
+        }
+    }
+
+    if (error != nullptr) {
+        *error = firstError.empty() ? "Controller claim failed: all fallback keys unavailable" : firstError;
+    }
+    return false;
 }

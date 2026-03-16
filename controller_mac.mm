@@ -241,7 +241,9 @@ void postControllerMessage(const std::string& message) {
 @interface LongMacControllerManager ()
 
 - (void)setPressed:(BOOL)pressed forButtonIndex:(int)buttonIndex;
-- (BOOL)attachController:(GCController*)controller announce:(BOOL)announce;
+- (BOOL)attachController:(GCController*)controller
+                announce:(BOOL)announce
+allowUnlitClaimRecovery:(BOOL)allowUnlitClaimRecovery;
 - (BOOL)attachBestAvailableControllerAnnounce:(BOOL)announce;
 - (void)detachActiveControllerAnnounce:(BOOL)announce;
 - (void)handleControllerConnected:(GCController*)controller;
@@ -421,7 +423,9 @@ void postControllerMessage(const std::string& message) {
                                       describeControllerIdentity(controller) +
                                       " (" + passName + ")");
             }
-            if ([self attachController:controller announce:announce]) {
+            if ([self attachController:controller
+                              announce:announce
+              allowUnlitClaimRecovery:unlitOnly]) {
                 return YES;
             }
         }
@@ -433,20 +437,26 @@ void postControllerMessage(const std::string& message) {
             return YES;
         }
         if (announce) {
-            postControllerMessage("Controller: No unlit candidate could be claimed; retrying all controllers");
+            postControllerMessage("Controller: No unlit candidate could be claimed; skipping lit fallback to avoid cross-app reuse");
         }
+        return NO;
     }
 
     return tryAttachPass(false, "fallback-all");
 }
 
-- (BOOL)attachController:(GCController*)controller announce:(BOOL)announce {
+- (BOOL)attachController:(GCController*)controller
+                announce:(BOOL)announce
+allowUnlitClaimRecovery:(BOOL)allowUnlitClaimRecovery {
     if (controller == nil) {
         return NO;
     }
 
     const std::string deviceName = nsStringToStd(controller.vendorName ?: @"Game Controller");
-    const std::string claimKey = controllerClaimKey(controller);
+    const int playerIndex = static_cast<int>(controller.playerIndex);
+    const bool controllerLightOn = controllerHasAnyLightColor(controller);
+    const std::string preferredClaimKey = controllerClaimKey(controller);
+    std::string claimKeyInUse = preferredClaimKey;
     bool alreadyLockedToController = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -455,9 +465,23 @@ void postControllerMessage(const std::string& message) {
 
     ControllerClaimLease newClaim;
     if (!alreadyLockedToController) {
-        if (!claimKey.empty()) {
+        if (!preferredClaimKey.empty()) {
             std::string claimError;
-            if (!tryAcquireControllerClaim(claimKey, newClaim, &claimError)) {
+            if (allowUnlitClaimRecovery && !controllerLightOn && isStableControllerPlayerIndex(playerIndex)) {
+                if (!tryAcquireControllerClaimWithPlayerIndexFallback(playerIndex,
+                                                                      newClaim,
+                                                                      &claimKeyInUse,
+                                                                      &claimError)) {
+                    if (announce) {
+                        postControllerMessage("Controller: Skipping " + deviceName + " (" + claimError + ")");
+                    }
+                    return NO;
+                }
+                if (announce && claimKeyInUse != preferredClaimKey) {
+                    postControllerMessage("Controller: Recovered unlit claim-key mismatch for " + deviceName +
+                                          " (preferred " + preferredClaimKey + ", using " + claimKeyInUse + ")");
+                }
+            } else if (!tryAcquireControllerClaim(preferredClaimKey, newClaim, &claimError)) {
                 if (announce) {
                     postControllerMessage("Controller: Skipping " + deviceName + " (" + claimError + ")");
                 }
@@ -465,7 +489,7 @@ void postControllerMessage(const std::string& message) {
             }
         }
 
-        if (shouldUseControllerLightOwnershipFallback(claimKey, newClaim) &&
+        if (shouldUseControllerLightOwnershipFallback(claimKeyInUse, newClaim) &&
             [self isControllerClaimedByOtherAppViaLight:controller]) {
             releaseControllerClaim(newClaim);
             if (announce) {
@@ -609,9 +633,7 @@ void postControllerMessage(const std::string& message) {
     }
 
     if (needsAttach) {
-        if (![self attachBestAvailableControllerAnnounce:YES]) {
-            [self attachController:controller announce:YES];
-        }
+        (void)[self attachBestAvailableControllerAnnounce:YES];
     }
 }
 
