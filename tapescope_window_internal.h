@@ -249,6 +249,8 @@ struct ProbeSnapshot {
     NSTextField* _phase7PlaybookSourceFilterField;
     NSPopUpButton* _phase7PlaybookModeFilterPopup;
     NSPopUpButton* _phase7PlaybookSortPopup;
+    NSPopUpButton* _phase7LedgerStatusFilterPopup;
+    NSPopUpButton* _phase7LedgerSortPopup;
     NSButton* _phase7ClearFiltersButton;
     NSButton* _phase7ChooseBundleButton;
     NSButton* _phase7RunAnalysisButton;
@@ -256,27 +258,37 @@ struct ProbeSnapshot {
     NSButton* _phase7BuildLedgerButton;
     NSButton* _phase7OpenAnalysisButton;
     NSButton* _phase7OpenPlaybookButton;
+    NSButton* _phase7OpenLedgerButton;
     NSButton* _phase7OpenSourceArtifactButton;
     NSButton* _phase7OpenLinkedAnalysisButton;
     NSButton* _phase7LoadRangeButton;
+    NSPopUpButton* _phase7ReviewStatusPopup;
+    NSTextField* _phase7ReviewActorField;
+    NSTextField* _phase7ReviewCommentField;
+    NSButton* _phase7RecordReviewButton;
     NSTextField* _phase7StateLabel;
     NSTableView* _phase7AnalysisTableView;
     NSTableView* _phase7PlaybookTableView;
+    NSTableView* _phase7LedgerTableView;
     NSTableView* _phase7FindingTableView;
     NSTableView* _phase7ActionTableView;
     NSTextView* _phase7ProfilesTextView;
     NSTextView* _phase7TextView;
     BOOL _phase7InFlight;
     BOOL _phase7SelectionIsPlaybook;
+    BOOL _phase7SelectionIsLedger;
     tapescope::RangeQuery _phase7ReplayRange;
     std::string _phase7DetailBody;
     std::string _phase7SelectedSourceArtifactId;
     std::string _phase7SelectedLinkedAnalysisArtifactId;
+    std::string _phase7SelectedLinkedPlaybookArtifactId;
     std::vector<tapescope::Phase7AnalyzerProfile> _latestPhase7Profiles;
     std::vector<tapescope::Phase7AnalysisArtifact> _latestPhase7AnalysisArtifacts;
     std::vector<tapescope::Phase7PlaybookArtifact> _latestPhase7PlaybookArtifacts;
+    std::vector<tapescope::Phase7ExecutionLedgerArtifact> _latestPhase7ExecutionLedgers;
     std::vector<tapescope::Phase7FindingRecord> _phase7VisibleFindings;
     std::vector<tapescope::Phase7PlaybookAction> _phase7VisibleActions;
+    std::vector<tapescope::Phase7ExecutionLedgerEntry> _phase7VisibleLedgerEntries;
 
     std::vector<std::pair<NSTableView*, tapescope::InvestigationPaneController*>> _evidencePaneBindings;
 }
@@ -417,8 +429,10 @@ struct ProbeSnapshot {
 - (void)openPhase7ExecutionLedgerArtifactId:(const std::string&)artifactId;
 - (void)openSelectedPhase7Analysis:(id)sender;
 - (void)openSelectedPhase7Playbook:(id)sender;
+- (void)openSelectedPhase7ExecutionLedger:(id)sender;
 - (void)openSelectedPhase7SourceArtifact:(id)sender;
 - (void)openSelectedPhase7LinkedAnalysis:(id)sender;
+- (void)recordSelectedPhase7LedgerReview:(id)sender;
 - (void)loadReplayRangeFromPhase7Selection:(id)sender;
 
 @end

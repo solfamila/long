@@ -11,9 +11,11 @@
 #include <functional>
 #include <iomanip>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 namespace tape_phase7 {
@@ -99,6 +101,46 @@ const std::vector<AnalyzerProfileSpec>& analyzerProfiles() {
             .supportedSourceBundleTypes = {"case_bundle", "session_bundle"},
             .findingCategories = {"trace_integrity", "identity_integrity", "evidence_confidence"},
             .defaultProfile = true
+        },
+        AnalyzerProfileSpec{
+            .analysisProfile = kIncidentTriageAnalyzerProfile,
+            .title = "Incident Triage",
+            .summary = "Inspect a portable Phase 6 session/case bundle for the top incident, uncertainty, and timeline hotspots that should drive review-first playbook planning.",
+            .supportedSourceBundleTypes = {"case_bundle", "session_bundle"},
+            .findingCategories = {"incident_priority", "incident_uncertainty", "timeline_hotspot"},
+            .defaultProfile = false
+        },
+        AnalyzerProfileSpec{
+            .analysisProfile = kFillQualityAnalyzerProfile,
+            .title = "Fill Quality Review",
+            .summary = "Inspect a portable Phase 6 bundle for fill invalidation, adverse-selection, and market-impact evidence that should gate execution readiness.",
+            .supportedSourceBundleTypes = {"case_bundle", "session_bundle"},
+            .findingCategories = {"fill_quality_risk", "adverse_selection_risk", "market_impact_risk"},
+            .defaultProfile = false
+        },
+        AnalyzerProfileSpec{
+            .analysisProfile = kLiquidityBehaviorAnalyzerProfile,
+            .title = "Liquidity Behavior",
+            .summary = "Inspect a portable Phase 6 bundle for display instability, refill/absorption behavior, and pressure-driven liquidity fades around the touch.",
+            .supportedSourceBundleTypes = {"case_bundle", "session_bundle"},
+            .findingCategories = {"display_instability_risk", "liquidity_refill_behavior", "pressure_and_thinning"},
+            .defaultProfile = false
+        },
+        AnalyzerProfileSpec{
+            .analysisProfile = kAdverseSelectionAnalyzerProfile,
+            .title = "Adverse Selection Review",
+            .summary = "Inspect a portable Phase 6 bundle for post-fill adverse-selection sequences, invalidation chains, and the fill context that should block execution approval.",
+            .supportedSourceBundleTypes = {"case_bundle", "session_bundle"},
+            .findingCategories = {"adverse_selection_risk", "fill_quality_risk"},
+            .defaultProfile = false
+        },
+        AnalyzerProfileSpec{
+            .analysisProfile = kOrderImpactAnalyzerProfile,
+            .title = "Order Impact Review",
+            .summary = "Inspect a portable Phase 6 bundle for market-impact footprint, cancel-chain pressure, and pre-impact fill context before execution approval.",
+            .supportedSourceBundleTypes = {"case_bundle", "session_bundle"},
+            .findingCategories = {"market_impact_risk", "fill_quality_risk"},
+            .defaultProfile = false
         }
     };
     return profiles;
@@ -319,8 +361,126 @@ json sourceBundleEvidenceRef(const tape_bundle::PortableBundleInspection& inspec
     };
 }
 
-std::vector<FindingRecord> buildFindings(const ArtifactRef& analysisArtifact,
-                                         const tape_bundle::PortableBundleInspection& inspection) {
+json bundleSummaryObject(const tape_bundle::PortableBundleInspection& inspection) {
+    return inspection.reportBundle.value("summary", json::object());
+}
+
+json bundleResultObject(const tape_bundle::PortableBundleInspection& inspection) {
+    return inspection.reportBundle.value("result", json::object());
+}
+
+json firstArrayObject(std::initializer_list<json> candidates) {
+    for (const auto& candidate : candidates) {
+        if (candidate.is_array()) {
+            return candidate;
+        }
+    }
+    return json::array();
+}
+
+json firstObject(std::initializer_list<json> candidates) {
+    for (const auto& candidate : candidates) {
+        if (candidate.is_object()) {
+            return candidate;
+        }
+    }
+    return json::object();
+}
+
+json incidentRowsFromInspection(const tape_bundle::PortableBundleInspection& inspection) {
+    const json summary = bundleSummaryObject(inspection);
+    const json result = bundleResultObject(inspection);
+    return firstArrayObject({
+        inspection.sourceReport.value("incident_rows", json()),
+        summary.value("incident_rows", json()),
+        result.value("incident_rows", json())
+    });
+}
+
+json citationRowsFromInspection(const tape_bundle::PortableBundleInspection& inspection) {
+    const json summary = bundleSummaryObject(inspection);
+    const json result = bundleResultObject(inspection);
+    return firstArrayObject({
+        inspection.sourceReport.value("citation_rows", json()),
+        summary.value("citation_rows", json()),
+        result.value("citation_rows", json())
+    });
+}
+
+json findingKindCountsFromInspection(const tape_bundle::PortableBundleInspection& inspection) {
+    const json summary = bundleSummaryObject(inspection);
+    const json report = firstObject({
+        summary.value("report", json()),
+        summary.value("report_summary", json()),
+        inspection.reportSummary
+    });
+    return firstObject({
+        summary.value("finding_kind_counts", json()),
+        report.value("finding_kind_counts", json())
+    });
+}
+
+json incidentKindCountsFromInspection(const tape_bundle::PortableBundleInspection& inspection) {
+    const json summary = bundleSummaryObject(inspection);
+    const json report = firstObject({
+        summary.value("report", json()),
+        summary.value("report_summary", json()),
+        inspection.reportSummary
+    });
+    return firstObject({
+        summary.value("incident_kind_counts", json()),
+        report.value("incident_kind_counts", json())
+    });
+}
+
+std::uint64_t countKinds(const json& countObject, std::initializer_list<const char*> kinds) {
+    std::uint64_t total = 0;
+    if (!countObject.is_object()) {
+        return 0;
+    }
+    for (const char* kind : kinds) {
+        if (!countObject.contains(kind)) {
+            continue;
+        }
+        if (countObject.at(kind).is_number_unsigned()) {
+            total += countObject.at(kind).get<std::uint64_t>();
+        } else if (countObject.at(kind).is_number_integer()) {
+            const auto value = countObject.at(kind).get<long long>();
+            total += value > 0 ? static_cast<std::uint64_t>(value) : 0ULL;
+        }
+    }
+    return total;
+}
+
+std::uint64_t countIncidentRowsByKind(const json& incidentRows, std::initializer_list<const char*> kinds) {
+    if (!incidentRows.is_array()) {
+        return 0;
+    }
+    std::uint64_t total = 0;
+    for (const auto& row : incidentRows) {
+        const std::string kind = row.value("kind", std::string());
+        for (const char* expected : kinds) {
+            if (kind == expected) {
+                ++total;
+                break;
+            }
+        }
+    }
+    return total;
+}
+
+std::uint64_t countKindsFromInspection(const tape_bundle::PortableBundleInspection& inspection,
+                                       std::initializer_list<const char*> kinds) {
+    const json incidentRows = incidentRowsFromInspection(inspection);
+    const json incidentKindCounts = incidentKindCountsFromInspection(inspection);
+    const json findingKindCounts = findingKindCountsFromInspection(inspection);
+    return countIncidentRowsByKind(incidentRows, kinds) +
+        countKinds(incidentKindCounts, kinds) +
+        countKinds(findingKindCounts, kinds);
+}
+
+std::vector<FindingRecord> buildTraceFillIntegrityFindings(const ArtifactRef& analysisArtifact,
+                                                           const tape_bundle::PortableBundleInspection& inspection) {
     const json summary = inspection.reportBundle.value("summary", json::object());
     const json dataQuality = summary.value("data_quality", json::object());
 
@@ -416,6 +576,350 @@ std::vector<FindingRecord> buildFindings(const ArtifactRef& analysisArtifact,
     }
 
     return findings;
+}
+
+std::vector<FindingRecord> buildIncidentTriageFindings(const ArtifactRef& analysisArtifact,
+                                                       const tape_bundle::PortableBundleInspection& inspection) {
+    const json reportSummary = inspection.reportSummary.is_object() ? inspection.reportSummary : json::object();
+    const json timelineHighlights = reportSummary.value("timeline_highlights", json::array());
+    const std::string topIncidentKind = reportSummary.value("top_incident_kind", std::string());
+    const std::string topIncidentTitle = reportSummary.value("top_incident_title", std::string());
+    const std::string topIncidentWhy = reportSummary.value("top_incident_why_it_matters", std::string());
+    const std::string topIncidentUncertainty = reportSummary.value("top_incident_uncertainty", std::string());
+    const std::string whatChangedFirst = reportSummary.value("what_changed_first", std::string());
+
+    const auto makeFinding = [&](std::string category,
+                                 std::string severity,
+                                 std::string summaryText) {
+        FindingRecord finding;
+        finding.category = std::move(category);
+        finding.severity = std::move(severity);
+        finding.summary = std::move(summaryText);
+        finding.findingId = "phase7-finding-" + fnv1aHex(analysisArtifact.artifactId + "|" + finding.category);
+        finding.evidenceRefs = json::array();
+        finding.evidenceRefs.push_back(sourceBundleEvidenceRef(inspection));
+        if (inspection.sourceReport.is_object() && inspection.sourceReport.contains("artifact_id")) {
+            finding.evidenceRefs.push_back({
+                {"kind", "source_report"},
+                {"artifact_id", inspection.sourceReport.value("artifact_id", std::string())},
+                {"report_id", inspection.sourceReport.value("report_id", 0ULL)}
+            });
+        }
+        return finding;
+    };
+
+    std::vector<FindingRecord> findings;
+    if (!topIncidentKind.empty() || !topIncidentTitle.empty()) {
+        std::ostringstream summaryText;
+        summaryText << "Top incident priority";
+        if (!topIncidentTitle.empty()) {
+            summaryText << ": " << topIncidentTitle;
+        } else {
+            summaryText << ": " << topIncidentKind;
+        }
+        if (!topIncidentKind.empty()) {
+            summaryText << " (" << topIncidentKind << ")";
+        }
+        if (!topIncidentWhy.empty()) {
+            summaryText << ". " << topIncidentWhy;
+        }
+        findings.push_back(makeFinding("incident_priority", "warning", summaryText.str()));
+    }
+
+    if (!topIncidentUncertainty.empty()) {
+        findings.push_back(makeFinding("incident_uncertainty",
+                                       "warning",
+                                       "Top incident uncertainty: " + topIncidentUncertainty));
+    }
+
+    if (!whatChangedFirst.empty() || (timelineHighlights.is_array() && !timelineHighlights.empty())) {
+        std::ostringstream summaryText;
+        summaryText << "Timeline hotspot review";
+        if (!whatChangedFirst.empty()) {
+            summaryText << ": " << whatChangedFirst;
+        }
+        if (timelineHighlights.is_array() && !timelineHighlights.empty()) {
+            const auto firstHighlight = timelineHighlights.front();
+            const std::string headline = firstHighlight.value("headline", std::string());
+            if (!headline.empty()) {
+                summaryText << ". First highlight: " << headline;
+            }
+            summaryText << ". Highlight count=" << timelineHighlights.size() << '.';
+        }
+        findings.push_back(makeFinding("timeline_hotspot", "info", summaryText.str()));
+    }
+
+    if (findings.empty()) {
+        findings.push_back(makeFinding(
+            "analysis_summary",
+            "info",
+            "No ranked incident or timeline hotspot stood out in the exported report summary."));
+    }
+
+    return findings;
+}
+
+std::vector<FindingRecord> buildFillQualityFindings(const ArtifactRef& analysisArtifact,
+                                                    const tape_bundle::PortableBundleInspection& inspection) {
+    const auto makeFinding = [&](std::string category,
+                                 std::string severity,
+                                 std::string summaryText) {
+        FindingRecord finding;
+        finding.category = std::move(category);
+        finding.severity = std::move(severity);
+        finding.summary = std::move(summaryText);
+        finding.findingId = "phase7-finding-" + fnv1aHex(analysisArtifact.artifactId + "|" + finding.category);
+        finding.evidenceRefs = json::array({sourceBundleEvidenceRef(inspection)});
+        if (inspection.sourceReport.is_object() && inspection.sourceReport.contains("artifact_id")) {
+            finding.evidenceRefs.push_back({
+                {"kind", "source_report"},
+                {"artifact_id", inspection.sourceReport.value("artifact_id", std::string())},
+                {"report_id", inspection.sourceReport.value("report_id", 0ULL)}
+            });
+        }
+        return finding;
+    };
+
+    const std::uint64_t fillQualitySignals = countKindsFromInspection(
+        inspection,
+        {"order_fill_context", "passive_fill_queue_proxy"});
+    const std::uint64_t adverseSignals = countKindsFromInspection(
+        inspection,
+        {"buy_fill_invalidation", "sell_fill_invalidation", "post_fill_adverse_selection", "fill_to_adverse_move_chain"});
+    const std::uint64_t marketImpactSignals = countKindsFromInspection(
+        inspection,
+        {"order_window_market_impact", "fill_to_cancel_chain"});
+
+    std::vector<FindingRecord> findings;
+    if (fillQualitySignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Fill-quality review should inspect " << fillQualitySignals
+                    << " fill-context signal(s) preserved in the portable evidence.";
+        findings.push_back(makeFinding("fill_quality_risk", "warning", summaryText.str()));
+    }
+    if (adverseSignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Adverse-selection risk surfaced " << adverseSignals
+                    << " post-fill invalidation/adverse-move signal(s) in the exported window.";
+        findings.push_back(makeFinding("adverse_selection_risk", "warning", summaryText.str()));
+    }
+    if (marketImpactSignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Market-impact review should inspect " << marketImpactSignals
+                    << " impact/cancel-chain signal(s) before execution approval.";
+        findings.push_back(makeFinding("market_impact_risk", "warning", summaryText.str()));
+    }
+
+    if (findings.empty()) {
+        findings.push_back(makeFinding(
+            "analysis_summary",
+            "info",
+            "No dedicated fill-quality or adverse-selection signals stood out in the exported evidence window."));
+    }
+    return findings;
+}
+
+std::vector<FindingRecord> buildLiquidityBehaviorFindings(const ArtifactRef& analysisArtifact,
+                                                          const tape_bundle::PortableBundleInspection& inspection) {
+    const auto makeFinding = [&](std::string category,
+                                 std::string severity,
+                                 std::string summaryText) {
+        FindingRecord finding;
+        finding.category = std::move(category);
+        finding.severity = std::move(severity);
+        finding.summary = std::move(summaryText);
+        finding.findingId = "phase7-finding-" + fnv1aHex(analysisArtifact.artifactId + "|" + finding.category);
+        finding.evidenceRefs = json::array({sourceBundleEvidenceRef(inspection)});
+        const json citations = citationRowsFromInspection(inspection);
+        if (citations.is_array()) {
+            for (const auto& row : citations) {
+                if (finding.evidenceRefs.size() >= 4) {
+                    break;
+                }
+                const std::string artifactId = row.value("artifact_id", std::string());
+                if (artifactId.empty()) {
+                    continue;
+                }
+                finding.evidenceRefs.push_back({
+                    {"kind", row.value("type", std::string("citation"))},
+                    {"artifact_id", artifactId}
+                });
+            }
+        }
+        return finding;
+    };
+
+    const std::uint64_t displaySignals = countKindsFromInspection(
+        inspection,
+        {"ask_display_instability", "bid_display_instability", "ask_quote_flicker", "bid_quote_flicker"});
+    const std::uint64_t refillSignals = countKindsFromInspection(
+        inspection,
+        {"ask_liquidity_refilled", "bid_liquidity_refilled", "ask_absorption_persistence", "bid_absorption_persistence",
+         "ask_genuine_refill", "bid_genuine_refill"});
+    const std::uint64_t pressureSignals = countKindsFromInspection(
+        inspection,
+        {"buy_trade_pressure", "sell_trade_pressure", "ask_trade_after_depletion", "bid_trade_after_depletion",
+         "ask_pull_follow_through", "bid_pull_follow_through"});
+
+    std::vector<FindingRecord> findings;
+    if (displaySignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Displayed-liquidity instability surfaced " << displaySignals
+                    << " flicker/instability signal(s) at the touch.";
+        findings.push_back(makeFinding("display_instability_risk", "warning", summaryText.str()));
+    }
+    if (refillSignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Refill/absorption behavior surfaced " << refillSignals
+                    << " refill persistence or genuine-refill signal(s) that should be reviewed together.";
+        findings.push_back(makeFinding("liquidity_refill_behavior", "warning", summaryText.str()));
+    }
+    if (pressureSignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Pressure/thinning review should inspect " << pressureSignals
+                    << " pressure, depletion, or pull-follow-through signal(s) around the inside market.";
+        findings.push_back(makeFinding("pressure_and_thinning", "warning", summaryText.str()));
+    }
+
+    if (findings.empty()) {
+        findings.push_back(makeFinding(
+            "analysis_summary",
+            "info",
+            "No display-instability or liquidity-behavior hotspots stood out in the exported evidence window."));
+    }
+    return findings;
+}
+
+std::vector<FindingRecord> buildAdverseSelectionFindings(const ArtifactRef& analysisArtifact,
+                                                         const tape_bundle::PortableBundleInspection& inspection) {
+    const auto makeFinding = [&](std::string category,
+                                 std::string severity,
+                                 std::string summaryText) {
+        FindingRecord finding;
+        finding.category = std::move(category);
+        finding.severity = std::move(severity);
+        finding.summary = std::move(summaryText);
+        finding.findingId = "phase7-finding-" + fnv1aHex(analysisArtifact.artifactId + "|" + finding.category);
+        finding.evidenceRefs = json::array({sourceBundleEvidenceRef(inspection)});
+        if (inspection.sourceReport.is_object() && inspection.sourceReport.contains("artifact_id")) {
+            finding.evidenceRefs.push_back({
+                {"kind", "source_report"},
+                {"artifact_id", inspection.sourceReport.value("artifact_id", std::string())},
+                {"report_id", inspection.sourceReport.value("report_id", 0ULL)}
+            });
+        }
+        return finding;
+    };
+
+    const std::uint64_t fillContextSignals = countKindsFromInspection(
+        inspection,
+        {"order_fill_context", "passive_fill_queue_proxy", "buy_fill_invalidation", "sell_fill_invalidation"});
+    const std::uint64_t adverseSignals = countKindsFromInspection(
+        inspection,
+        {"post_fill_adverse_selection", "fill_to_adverse_move_chain", "buy_fill_invalidation", "sell_fill_invalidation"});
+
+    std::vector<FindingRecord> findings;
+    if (fillContextSignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Adverse-selection review should anchor on " << fillContextSignals
+                    << " fill-context or invalidation signal(s) before approving the sequence.";
+        findings.push_back(makeFinding("fill_quality_risk", "warning", summaryText.str()));
+    }
+    if (adverseSignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Post-fill adverse-selection review surfaced " << adverseSignals
+                    << " adverse-move or invalidation chain signal(s) in the exported window.";
+        findings.push_back(makeFinding("adverse_selection_risk", "warning", summaryText.str()));
+    }
+
+    if (findings.empty()) {
+        findings.push_back(makeFinding(
+            "analysis_summary",
+            "info",
+            "No dedicated adverse-selection sequence stood out in the exported evidence window."));
+    }
+    return findings;
+}
+
+std::vector<FindingRecord> buildOrderImpactFindings(const ArtifactRef& analysisArtifact,
+                                                    const tape_bundle::PortableBundleInspection& inspection) {
+    const auto makeFinding = [&](std::string category,
+                                 std::string severity,
+                                 std::string summaryText) {
+        FindingRecord finding;
+        finding.category = std::move(category);
+        finding.severity = std::move(severity);
+        finding.summary = std::move(summaryText);
+        finding.findingId = "phase7-finding-" + fnv1aHex(analysisArtifact.artifactId + "|" + finding.category);
+        finding.evidenceRefs = json::array({sourceBundleEvidenceRef(inspection)});
+        const json citations = citationRowsFromInspection(inspection);
+        if (citations.is_array()) {
+            for (const auto& row : citations) {
+                if (finding.evidenceRefs.size() >= 4) {
+                    break;
+                }
+                const std::string artifactId = row.value("artifact_id", std::string());
+                if (artifactId.empty()) {
+                    continue;
+                }
+                finding.evidenceRefs.push_back({
+                    {"kind", row.value("type", std::string("citation"))},
+                    {"artifact_id", artifactId}
+                });
+            }
+        }
+        return finding;
+    };
+
+    const std::uint64_t fillContextSignals = countKindsFromInspection(
+        inspection,
+        {"order_fill_context", "passive_fill_queue_proxy"});
+    const std::uint64_t impactSignals = countKindsFromInspection(
+        inspection,
+        {"order_window_market_impact", "fill_to_cancel_chain", "buy_sweep_sequence", "sell_sweep_sequence"});
+
+    std::vector<FindingRecord> findings;
+    if (fillContextSignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Order-impact review should ground the impact read on " << fillContextSignals
+                    << " fill-context or queue-context signal(s).";
+        findings.push_back(makeFinding("fill_quality_risk", "warning", summaryText.str()));
+    }
+    if (impactSignals > 0) {
+        std::ostringstream summaryText;
+        summaryText << "Order-impact review surfaced " << impactSignals
+                    << " impact, cancel-chain, or sweep sequence signal(s) before approval.";
+        findings.push_back(makeFinding("market_impact_risk", "warning", summaryText.str()));
+    }
+
+    if (findings.empty()) {
+        findings.push_back(makeFinding(
+            "analysis_summary",
+            "info",
+            "No dedicated order-impact footprint stood out in the exported evidence window."));
+    }
+    return findings;
+}
+
+std::vector<FindingRecord> buildFindings(const ArtifactRef& analysisArtifact,
+                                         const tape_bundle::PortableBundleInspection& inspection,
+                                         const AnalyzerProfileSpec& profile) {
+    if (normalizeToken(profile.analysisProfile) == normalizeToken(kIncidentTriageAnalyzerProfile)) {
+        return buildIncidentTriageFindings(analysisArtifact, inspection);
+    }
+    if (normalizeToken(profile.analysisProfile) == normalizeToken(kFillQualityAnalyzerProfile)) {
+        return buildFillQualityFindings(analysisArtifact, inspection);
+    }
+    if (normalizeToken(profile.analysisProfile) == normalizeToken(kLiquidityBehaviorAnalyzerProfile)) {
+        return buildLiquidityBehaviorFindings(analysisArtifact, inspection);
+    }
+    if (normalizeToken(profile.analysisProfile) == normalizeToken(kAdverseSelectionAnalyzerProfile)) {
+        return buildAdverseSelectionFindings(analysisArtifact, inspection);
+    }
+    if (normalizeToken(profile.analysisProfile) == normalizeToken(kOrderImpactAnalyzerProfile)) {
+        return buildOrderImpactFindings(analysisArtifact, inspection);
+    }
+    return buildTraceFillIntegrityFindings(analysisArtifact, inspection);
 }
 
 json manifestForAnalysis(const AnalysisArtifact& analysis) {
@@ -731,7 +1235,8 @@ bool listArtifactsUnder(const fs::path& rootDir,
     return true;
 }
 
-json playbookActionTools(std::string_view category) {
+json playbookActionTools(std::string_view analysisProfile, std::string_view category) {
+    const std::string normalizedProfile = normalizeToken(analysisProfile);
     if (category == "trace_integrity") {
         return json::array({"tapescript_read_artifact", "tapescript_read_session_quality", "tapescript_replay_snapshot"});
     }
@@ -740,6 +1245,45 @@ json playbookActionTools(std::string_view category) {
     }
     if (category == "evidence_confidence") {
         return json::array({"tapescript_read_session_quality", "tapescript_read_artifact", "tapescript_read_incident"});
+    }
+    if (category == "incident_priority") {
+        return json::array({"tapescript_read_incident", "tapescript_read_artifact", "tapescript_replay_snapshot"});
+    }
+    if (category == "incident_uncertainty") {
+        return json::array({"tapescript_read_incident", "tapescript_read_session_quality", "tapescript_read_artifact"});
+    }
+    if (category == "timeline_hotspot") {
+        return json::array({"tapescript_read_artifact", "tapescript_read_range", "tapescript_replay_snapshot"});
+    }
+    if (category == "fill_quality_risk") {
+        if (normalizedProfile == normalizeToken(kAdverseSelectionAnalyzerProfile)) {
+            return json::array({"tapescript_read_order_case", "tapescript_read_session_quality", "tapescript_replay_snapshot"});
+        }
+        if (normalizedProfile == normalizeToken(kOrderImpactAnalyzerProfile)) {
+            return json::array({"tapescript_read_range", "tapescript_read_artifact", "tapescript_read_protected_window"});
+        }
+        return json::array({"tapescript_read_order_case", "tapescript_read_artifact", "tapescript_replay_snapshot"});
+    }
+    if (category == "adverse_selection_risk") {
+        if (normalizedProfile == normalizeToken(kAdverseSelectionAnalyzerProfile)) {
+            return json::array({"tapescript_read_order_case", "tapescript_read_range", "tapescript_replay_snapshot"});
+        }
+        return json::array({"tapescript_read_incident", "tapescript_read_order_case", "tapescript_read_session_quality"});
+    }
+    if (category == "market_impact_risk") {
+        if (normalizedProfile == normalizeToken(kOrderImpactAnalyzerProfile)) {
+            return json::array({"tapescript_read_range", "tapescript_read_protected_window", "tapescript_read_artifact"});
+        }
+        return json::array({"tapescript_read_incident", "tapescript_read_artifact", "tapescript_read_range"});
+    }
+    if (category == "display_instability_risk") {
+        return json::array({"tapescript_read_incident", "tapescript_read_artifact", "tapescript_replay_snapshot"});
+    }
+    if (category == "liquidity_refill_behavior") {
+        return json::array({"tapescript_read_incident", "tapescript_read_protected_window", "tapescript_read_range"});
+    }
+    if (category == "pressure_and_thinning") {
+        return json::array({"tapescript_read_incident", "tapescript_read_artifact", "tapescript_read_session_overview"});
     }
     return json::array({"tapescript_read_artifact", "tapescript_read_session_overview"});
 }
@@ -755,24 +1299,314 @@ PlaybookAction playbookActionForFinding(const AnalysisArtifact& analysis, const 
     } else if (finding.category == "evidence_confidence") {
         action.actionType = "phase7.review_evidence_confidence.v1";
         action.title = "Review evidence confidence limits";
+    } else if (finding.category == "incident_priority") {
+        action.actionType = "phase7.review_incident_priority.v1";
+        action.title = "Review top incident context";
+    } else if (finding.category == "incident_uncertainty") {
+        action.actionType = "phase7.review_incident_uncertainty.v1";
+        action.title = "Review incident uncertainty";
+    } else if (finding.category == "timeline_hotspot") {
+        action.actionType = "phase7.review_timeline_hotspot.v1";
+        action.title = "Review timeline hotspot";
+    } else if (finding.category == "fill_quality_risk") {
+        if (normalizeToken(analysis.analysisProfile) == normalizeToken(kAdverseSelectionAnalyzerProfile)) {
+            action.actionType = "phase7.review_fill_context_before_adverse_selection.v1";
+            action.title = "Review fill context before adverse selection";
+        } else if (normalizeToken(analysis.analysisProfile) == normalizeToken(kOrderImpactAnalyzerProfile)) {
+            action.actionType = "phase7.review_fill_context_before_order_impact.v1";
+            action.title = "Review fill context before order impact";
+        } else {
+            action.actionType = "phase7.review_fill_quality.v1";
+            action.title = "Review fill-quality evidence";
+        }
+    } else if (finding.category == "adverse_selection_risk") {
+        if (normalizeToken(analysis.analysisProfile) == normalizeToken(kAdverseSelectionAnalyzerProfile)) {
+            action.actionType = "phase7.review_post_fill_adverse_selection.v1";
+            action.title = "Review post-fill adverse-selection sequence";
+        } else {
+            action.actionType = "phase7.review_adverse_selection.v1";
+            action.title = "Review adverse-selection risk";
+        }
+    } else if (finding.category == "market_impact_risk") {
+        if (normalizeToken(analysis.analysisProfile) == normalizeToken(kOrderImpactAnalyzerProfile)) {
+            action.actionType = "phase7.review_order_impact_footprint.v1";
+            action.title = "Review order-impact footprint";
+        } else {
+            action.actionType = "phase7.review_market_impact.v1";
+            action.title = "Review market-impact evidence";
+        }
+    } else if (finding.category == "display_instability_risk") {
+        action.actionType = "phase7.review_display_instability.v1";
+        action.title = "Review display instability";
+    } else if (finding.category == "liquidity_refill_behavior") {
+        action.actionType = "phase7.review_liquidity_refill.v1";
+        action.title = "Review refill and absorption behavior";
+    } else if (finding.category == "pressure_and_thinning") {
+        action.actionType = "phase7.review_pressure_thinning.v1";
+        action.title = "Review pressure and thinning";
     } else {
         action.actionType = "phase7.review_analysis_summary.v1";
         action.title = "Review analysis summary";
     }
     action.findingId = finding.findingId;
     action.summary = finding.summary;
-    action.suggestedTools = playbookActionTools(finding.category);
+    action.suggestedTools = playbookActionTools(analysis.analysisProfile, finding.category);
     action.actionId = "phase7-action-" + fnv1aHex(
         analysis.analysisArtifact.artifactId + "|" + finding.findingId + "|" + action.actionType);
     return action;
 }
 
 json executionPolicyForLedger() {
+    const json reviewPolicy = {
+        {"actor_required", true},
+        {"comment_required_statuses", json::array({kLedgerEntryStatusBlocked, kLedgerEntryStatusNeedsInfo})},
+        {"distinct_approvals_required", 2},
+        {"approval_status", kLedgerEntryStatusApproved},
+        {"terminal_statuses", json::array({
+            kLedgerEntryStatusApproved,
+            kLedgerEntryStatusBlocked,
+            kLedgerEntryStatusNeedsInfo,
+            kLedgerEntryStatusNotApplicable
+        })}
+    };
     return {
         {"apply_supported", false},
         {"deferred_reason", "live apply remains deferred until Phase 7 has a full execution/audit model"},
         {"recommended_next_step", "review_only"},
-        {"manual_confirmation_required", true}
+        {"manual_confirmation_required", true},
+        {"review_policy", reviewPolicy}
+    };
+}
+
+bool isSupportedLedgerEntryStatus(std::string_view reviewStatus) {
+    return reviewStatus == kDefaultLedgerEntryStatus ||
+        reviewStatus == kLedgerEntryStatusApproved ||
+        reviewStatus == kLedgerEntryStatusBlocked ||
+        reviewStatus == kLedgerEntryStatusNeedsInfo ||
+        reviewStatus == kLedgerEntryStatusNotApplicable;
+}
+
+bool isTerminalLedgerEntryStatus(std::string_view reviewStatus) {
+    return reviewStatus == kLedgerEntryStatusApproved ||
+        reviewStatus == kLedgerEntryStatusBlocked ||
+        reviewStatus == kLedgerEntryStatusNeedsInfo ||
+        reviewStatus == kLedgerEntryStatusNotApplicable;
+}
+
+std::string trimAscii(std::string_view value) {
+    std::size_t first = 0;
+    while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
+        ++first;
+    }
+    std::size_t last = value.size();
+    while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1])) != 0) {
+        --last;
+    }
+    return std::string(value.substr(first, last - first));
+}
+
+std::size_t reviewPolicyDistinctApprovalCount(const json& reviewPolicy) {
+    if (!reviewPolicy.is_object()) {
+        return 2;
+    }
+    if (reviewPolicy.contains("distinct_approvals_required") &&
+        reviewPolicy.at("distinct_approvals_required").is_number_unsigned()) {
+        return reviewPolicy.at("distinct_approvals_required").get<std::size_t>();
+    }
+    if (reviewPolicy.contains("distinct_approvals_required") &&
+        reviewPolicy.at("distinct_approvals_required").is_number_integer()) {
+        const auto value = reviewPolicy.at("distinct_approvals_required").get<long long>();
+        return value > 0 ? static_cast<std::size_t>(value) : 2ULL;
+    }
+    return 2;
+}
+
+bool reviewPolicyActorRequired(const json& reviewPolicy) {
+    return !reviewPolicy.is_object() || reviewPolicy.value("actor_required", true);
+}
+
+bool reviewPolicyCommentRequired(const json& reviewPolicy, std::string_view reviewStatus) {
+    if (!reviewPolicy.is_object()) {
+        return reviewStatus == kLedgerEntryStatusBlocked || reviewStatus == kLedgerEntryStatusNeedsInfo;
+    }
+    const json statuses = reviewPolicy.value("comment_required_statuses", json::array());
+    if (!statuses.is_array()) {
+        return false;
+    }
+    for (const auto& item : statuses) {
+        if (item.is_string() && item.get_ref<const std::string&>() == reviewStatus) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::unordered_map<std::string, std::set<std::string>> ledgerReviewActorsByEntry(const ExecutionLedgerArtifact& artifact,
+                                                                                  bool approvalsOnly) {
+    std::unordered_map<std::string, std::set<std::string>> actorsByEntry;
+    if (!artifact.auditTrail.is_array()) {
+        return actorsByEntry;
+    }
+    for (const auto& event : artifact.auditTrail) {
+        if (!event.is_object() || event.value("event_type", std::string()) != "review_status_recorded") {
+            continue;
+        }
+        const std::string actor = trimAscii(event.value("actor", std::string()));
+        if (actor.empty()) {
+            continue;
+        }
+        const std::string reviewStatus = event.value("review_status", std::string());
+        if (approvalsOnly && reviewStatus != kLedgerEntryStatusApproved) {
+            continue;
+        }
+        for (const auto& entryId : event.value("updated_entry_ids", json::array())) {
+            if (!entryId.is_string()) {
+                continue;
+            }
+            actorsByEntry[entryId.get<std::string>()].insert(actor);
+        }
+    }
+    return actorsByEntry;
+}
+
+std::set<std::string> distinctLedgerReviewActors(const ExecutionLedgerArtifact& artifact) {
+    std::set<std::string> actors;
+    if (!artifact.auditTrail.is_array()) {
+        return actors;
+    }
+    for (const auto& event : artifact.auditTrail) {
+        if (!event.is_object() || event.value("event_type", std::string()) != "review_status_recorded") {
+            continue;
+        }
+        const std::string actor = trimAscii(event.value("actor", std::string()));
+        if (!actor.empty()) {
+            actors.insert(actor);
+        }
+    }
+    return actors;
+}
+
+std::string summarizeLedgerStatus(const std::vector<ExecutionLedgerEntry>& entries,
+                                  std::size_t requiredApprovals) {
+    if (entries.empty()) {
+        return kDefaultLedgerStatus;
+    }
+
+    std::size_t pendingCount = 0;
+    std::size_t blockedCount = 0;
+    std::size_t needsInfoCount = 0;
+    std::size_t approvedCount = 0;
+    std::size_t approvedReadyCount = 0;
+    std::size_t notApplicableCount = 0;
+    for (const auto& entry : entries) {
+        if (entry.reviewStatus == kDefaultLedgerEntryStatus) {
+            ++pendingCount;
+        } else if (entry.reviewStatus == kLedgerEntryStatusBlocked) {
+            ++blockedCount;
+        } else if (entry.reviewStatus == kLedgerEntryStatusNeedsInfo) {
+            ++needsInfoCount;
+        } else if (entry.reviewStatus == kLedgerEntryStatusApproved) {
+            ++approvedCount;
+            if (entry.approvalReviewerCount >= requiredApprovals) {
+                ++approvedReadyCount;
+            }
+        } else if (entry.reviewStatus == kLedgerEntryStatusNotApplicable) {
+            ++notApplicableCount;
+        }
+    }
+
+    if (blockedCount > 0) {
+        return kLedgerStatusBlocked;
+    }
+    if (needsInfoCount > 0) {
+        return kLedgerStatusNeedsInformation;
+    }
+    if (pendingCount == entries.size()) {
+        return kDefaultLedgerStatus;
+    }
+    if (pendingCount > 0) {
+        return kLedgerStatusInProgress;
+    }
+    if (approvedCount == 0 && notApplicableCount == entries.size()) {
+        return kLedgerStatusCompleted;
+    }
+    if (approvedCount > 0 && approvedReadyCount == approvedCount) {
+        return kLedgerStatusReadyForExecution;
+    }
+    if (approvedCount > 0) {
+        return kLedgerStatusWaitingApproval;
+    }
+    return kLedgerStatusCompleted;
+}
+
+ExecutionLedgerReviewSummary summarizeExecutionLedgerReviewSummaryEntries(
+    const std::vector<ExecutionLedgerEntry>& entries,
+    std::size_t requiredApprovals,
+    std::size_t distinctReviewerCount,
+    std::string_view ledgerStatus) {
+    ExecutionLedgerReviewSummary summary;
+    summary.requiredApprovalCount = requiredApprovals;
+    summary.distinctReviewerCount = distinctReviewerCount;
+    summary.readyForExecution = (ledgerStatus == kLedgerStatusReadyForExecution);
+    for (const auto& entry : entries) {
+        if (entry.reviewStatus != kLedgerEntryStatusNotApplicable) {
+            ++summary.actionableEntryCount;
+        }
+        if (entry.reviewStatus == kLedgerEntryStatusApproved) {
+            ++summary.approvedCount;
+            ++summary.reviewedCount;
+            if (entry.approvalThresholdMet) {
+                ++summary.readyEntryCount;
+            } else {
+                ++summary.waitingApprovalCount;
+            }
+        } else if (entry.reviewStatus == kLedgerEntryStatusBlocked) {
+            ++summary.blockedCount;
+            ++summary.reviewedCount;
+        } else if (entry.reviewStatus == kLedgerEntryStatusNeedsInfo) {
+            ++summary.needsInfoCount;
+            ++summary.reviewedCount;
+        } else if (entry.reviewStatus == kLedgerEntryStatusNotApplicable) {
+            ++summary.notApplicableCount;
+            ++summary.reviewedCount;
+        } else {
+            ++summary.pendingReviewCount;
+        }
+    }
+    return summary;
+}
+
+void annotateExecutionLedgerReviewState(ExecutionLedgerArtifact* artifact) {
+    if (artifact == nullptr) {
+        return;
+    }
+    if (!artifact->executionPolicy.is_object()) {
+        artifact->executionPolicy = executionPolicyForLedger();
+    }
+    artifact->reviewPolicy = artifact->executionPolicy.value("review_policy", json::object());
+    if (!artifact->reviewPolicy.is_object() || artifact->reviewPolicy.empty()) {
+        artifact->reviewPolicy = executionPolicyForLedger().value("review_policy", json::object());
+        artifact->executionPolicy["review_policy"] = artifact->reviewPolicy;
+    }
+    const std::size_t requiredApprovals = reviewPolicyDistinctApprovalCount(artifact->reviewPolicy);
+    const auto reviewActors = ledgerReviewActorsByEntry(*artifact, false);
+    const auto approvalActors = ledgerReviewActorsByEntry(*artifact, true);
+    const auto distinctActors = distinctLedgerReviewActors(*artifact);
+    for (auto& entry : artifact->entries) {
+        const auto actorIt = reviewActors.find(entry.entryId);
+        entry.distinctReviewerCount = actorIt == reviewActors.end() ? 0 : actorIt->second.size();
+        const auto approvalIt = approvalActors.find(entry.entryId);
+        entry.approvalReviewerCount = approvalIt == approvalActors.end() ? 0 : approvalIt->second.size();
+        entry.approvalThresholdMet =
+            entry.reviewStatus == kLedgerEntryStatusApproved &&
+            entry.approvalReviewerCount >= requiredApprovals;
+    }
+    artifact->ledgerStatus = summarizeLedgerStatus(artifact->entries, requiredApprovals);
+    artifact->executionPolicy["review_state"] = {
+        {"required_distinct_approvals", requiredApprovals},
+        {"distinct_reviewer_count", distinctActors.size()},
+        {"ready_for_execution", artifact->ledgerStatus == kLedgerStatusReadyForExecution},
+        {"aggregate_status", artifact->ledgerStatus}
     };
 }
 
@@ -787,6 +1621,9 @@ ExecutionLedgerEntry executionLedgerEntryForAction(const PlaybookArtifact& playb
     entry.requiresManualConfirmation = true;
     entry.title = action.title;
     entry.summary = action.summary;
+    entry.distinctReviewerCount = 0;
+    entry.approvalReviewerCount = 0;
+    entry.approvalThresholdMet = false;
     entry.suggestedTools = action.suggestedTools;
     return entry;
 }
@@ -804,6 +1641,51 @@ json auditTrailForLedgerCreation(const PlaybookArtifact& playbook,
             {"message", "Execution remains deferred; this ledger is a review/audit record only."}
         }
     });
+}
+
+json auditEventForLedgerReview(const ExecutionLedgerArtifact& ledger,
+                               const std::vector<ExecutionLedgerEntry>& previousEntries,
+                               const std::vector<std::string>& updatedEntryIds,
+                               std::string_view reviewStatus,
+                               std::string_view actor,
+                               std::string_view comment,
+                               std::string_view previousLedgerStatus,
+                               const std::string& generatedAtUtc) {
+    json previousStatuses = json::array();
+    for (const auto& entry : previousEntries) {
+        previousStatuses.push_back({
+            {"entry_id", entry.entryId},
+            {"review_status", entry.reviewStatus}
+        });
+    }
+
+    std::ostringstream seed;
+    seed << ledger.ledgerArtifact.artifactId << "|" << generatedAtUtc << "|" << reviewStatus << "|" << actor;
+    for (const auto& entryId : updatedEntryIds) {
+        seed << "|" << entryId;
+    }
+
+    std::ostringstream message;
+    message << "Recorded " << updatedEntryIds.size() << " review entr";
+    message << (updatedEntryIds.size() == 1 ? "y" : "ies");
+    message << " as `" << reviewStatus << "` by `" << actor << "`.";
+    if (!comment.empty()) {
+        message << " Comment: " << comment;
+    }
+
+    return json{
+        {"event_id", "phase7-ledger-event-" + fnv1aHex(seed.str())},
+        {"event_type", "review_status_recorded"},
+        {"generated_at_utc", generatedAtUtc},
+        {"actor", actor},
+        {"review_status", reviewStatus},
+        {"comment", comment.empty() ? json(nullptr) : json(comment)},
+        {"updated_entry_ids", updatedEntryIds},
+        {"previous_entry_statuses", std::move(previousStatuses)},
+        {"previous_ledger_status", previousLedgerStatus.empty() ? json(nullptr) : json(previousLedgerStatus)},
+        {"ledger_status", ledger.ledgerStatus},
+        {"message", message.str()}
+    };
 }
 
 json manifestForPlaybook(const PlaybookArtifact& playbook) {
@@ -843,6 +1725,15 @@ bool parseExecutionLedgerEntry(const json& payload, ExecutionLedgerEntry* out) {
     out->requiresManualConfirmation = payload.value("requires_manual_confirmation", true);
     out->title = payload.value("title", std::string());
     out->summary = payload.value("summary", std::string());
+    out->reviewedAtUtc = payload.contains("reviewed_at_utc") && payload.at("reviewed_at_utc").is_string()
+        ? payload.at("reviewed_at_utc").get<std::string>()
+        : std::string();
+    out->reviewedBy = payload.contains("reviewed_by") && payload.at("reviewed_by").is_string()
+        ? payload.at("reviewed_by").get<std::string>()
+        : std::string();
+    out->reviewComment = payload.contains("review_comment") && payload.at("review_comment").is_string()
+        ? payload.at("review_comment").get<std::string>()
+        : std::string();
     out->suggestedTools = payload.value("suggested_tools", json::array());
     return !out->entryId.empty() && !out->actionId.empty() && !out->actionType.empty();
 }
@@ -912,6 +1803,7 @@ bool loadExecutionLedgerFromManifestJson(const json& manifest,
                                                  .value("generated_at_utc", std::string()));
     artifact.ledgerStatus = manifest.value("ledger_status", std::string(kDefaultLedgerStatus));
     artifact.executionPolicy = manifest.value("execution_policy", json::object());
+    artifact.reviewPolicy = artifact.executionPolicy.value("review_policy", json::object());
     artifact.replayContext = manifest.value("replay_context", json::object());
     artifact.auditTrail = manifest.value("audit_trail", json::array());
     artifact.manifest = manifest;
@@ -955,6 +1847,8 @@ bool loadExecutionLedgerFromManifestJson(const json& manifest,
         }
         artifact.entries.push_back(std::move(parsed));
     }
+
+    annotateExecutionLedgerReviewState(&artifact);
 
     *out = std::move(artifact);
     return true;
@@ -1030,7 +1924,74 @@ json executionLedgerEntryToJson(const ExecutionLedgerEntry& entry) {
         {"requires_manual_confirmation", entry.requiresManualConfirmation},
         {"title", entry.title},
         {"summary", entry.summary},
+        {"reviewed_at_utc", entry.reviewedAtUtc.empty() ? json(nullptr) : json(entry.reviewedAtUtc)},
+        {"reviewed_by", entry.reviewedBy.empty() ? json(nullptr) : json(entry.reviewedBy)},
+        {"review_comment", entry.reviewComment.empty() ? json(nullptr) : json(entry.reviewComment)},
+        {"distinct_reviewer_count", entry.distinctReviewerCount},
+        {"approval_reviewer_count", entry.approvalReviewerCount},
+        {"approval_threshold_met", entry.approvalThresholdMet},
         {"suggested_tools", entry.suggestedTools}
+    };
+}
+
+ExecutionLedgerReviewSummary summarizeExecutionLedgerReviewSummary(const ExecutionLedgerArtifact& artifact) {
+    return summarizeExecutionLedgerReviewSummaryEntries(
+        artifact.entries,
+        reviewPolicyDistinctApprovalCount(artifact.reviewPolicy),
+        distinctLedgerReviewActors(artifact).size(),
+        artifact.ledgerStatus);
+}
+
+json executionLedgerReviewSummaryToJson(const ExecutionLedgerReviewSummary& summary) {
+    return {
+        {"pending_review_count", summary.pendingReviewCount},
+        {"approved_count", summary.approvedCount},
+        {"blocked_count", summary.blockedCount},
+        {"needs_info_count", summary.needsInfoCount},
+        {"not_applicable_count", summary.notApplicableCount},
+        {"reviewed_count", summary.reviewedCount},
+        {"waiting_approval_count", summary.waitingApprovalCount},
+        {"ready_entry_count", summary.readyEntryCount},
+        {"actionable_entry_count", summary.actionableEntryCount},
+        {"distinct_reviewer_count", summary.distinctReviewerCount},
+        {"required_approval_count", summary.requiredApprovalCount},
+        {"ready_for_execution", summary.readyForExecution}
+    };
+}
+
+json latestExecutionLedgerAuditSummary(const ExecutionLedgerArtifact& artifact) {
+    if (!artifact.auditTrail.is_array() || artifact.auditTrail.empty()) {
+        return {
+            {"event_type", nullptr},
+            {"generated_at_utc", nullptr},
+            {"actor", nullptr},
+            {"review_status", nullptr},
+            {"message", nullptr},
+            {"ledger_status", nullptr}
+        };
+    }
+    const auto& event = artifact.auditTrail.back();
+    return {
+        {"event_type", event.contains("event_type") && event.at("event_type").is_string()
+                           ? event.at("event_type")
+                           : json(nullptr)},
+        {"generated_at_utc", event.contains("generated_at_utc") && event.at("generated_at_utc").is_string()
+                                 ? event.at("generated_at_utc")
+                                 : json(nullptr)},
+        {"actor", event.contains("actor") && event.at("actor").is_string()
+                      ? event.at("actor")
+                      : json(nullptr)},
+        {"review_status", event.contains("review_status") && event.at("review_status").is_string()
+                               ? event.at("review_status")
+                               : json(nullptr)},
+        {"message", event.contains("message") && event.at("message").is_string()
+                        ? event.at("message")
+                        : json(nullptr)},
+        {"ledger_status", event.contains("ledger_status") && event.at("ledger_status").is_string()
+                              ? event.at("ledger_status")
+                              : event.contains("status") && event.at("status").is_string()
+                                    ? event.at("status")
+                                    : json(nullptr)}
     };
 }
 
@@ -1133,7 +2094,7 @@ bool runAnalyzerFromBundlePath(const std::string& bundlePath,
         return false;
     }
 
-    artifact.findings = buildFindings(artifact.analysisArtifact, inspection);
+    artifact.findings = buildFindings(artifact.analysisArtifact, inspection, profile);
     artifact.manifest = manifestForAnalysis(artifact);
 
     std::string writeError;
@@ -1360,11 +2321,13 @@ bool buildExecutionLedger(const std::string& manifestPath,
     ledger.mode = playbook.mode;
     ledger.ledgerStatus = kDefaultLedgerStatus;
     ledger.executionPolicy = executionPolicyForLedger();
+    ledger.reviewPolicy = ledger.executionPolicy.value("review_policy", json::object());
     ledger.replayContext = playbook.replayContext;
     ledger.filteredFindingIds = playbook.filteredFindingIds;
     for (const auto& action : playbook.plannedActions) {
         ledger.entries.push_back(executionLedgerEntryForAction(playbook, action));
     }
+    annotateExecutionLedgerReviewState(&ledger);
 
     const fs::path manifestFile = ledger.ledgerArtifact.manifestPath;
     if (fs::exists(manifestFile)) {
@@ -1447,6 +2410,138 @@ bool listExecutionLedgers(std::size_t limit,
         });
 }
 
+bool recordExecutionLedgerReview(const std::string& manifestPath,
+                                 const std::string& artifactId,
+                                 const std::vector<std::string>& entryIds,
+                                 const std::string& reviewStatus,
+                                 const std::string& actor,
+                                 const std::string& comment,
+                                 ExecutionLedgerArtifact* out,
+                                 std::vector<std::string>* updatedEntryIds,
+                                 std::string* auditEventId,
+                                 std::string* errorCode,
+                                 std::string* errorMessage) {
+    if (entryIds.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "entry_ids must include at least one ledger entry id";
+        }
+        return false;
+    }
+    if (!isSupportedLedgerEntryStatus(reviewStatus)) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "review_status must be one of pending_review, approved, blocked, needs_info, or not_applicable";
+        }
+        return false;
+    }
+
+    ExecutionLedgerArtifact artifact;
+    if (!loadExecutionLedgerArtifact(manifestPath, artifactId, &artifact, errorCode, errorMessage)) {
+        return false;
+    }
+
+    const std::string normalizedActor = trimAscii(actor);
+    if (reviewPolicyActorRequired(artifact.reviewPolicy) && normalizedActor.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "actor is required by the Phase 7 ledger review policy";
+        }
+        return false;
+    }
+    const std::string normalizedComment = trimAscii(comment);
+    if (reviewPolicyCommentRequired(artifact.reviewPolicy, reviewStatus) && normalizedComment.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "comment is required when review_status is blocked or needs_info";
+        }
+        return false;
+    }
+
+    std::vector<std::string> uniqueEntryIds = entryIds;
+    std::sort(uniqueEntryIds.begin(), uniqueEntryIds.end());
+    uniqueEntryIds.erase(std::unique(uniqueEntryIds.begin(), uniqueEntryIds.end()), uniqueEntryIds.end());
+
+    std::vector<ExecutionLedgerEntry> previousEntries;
+    previousEntries.reserve(uniqueEntryIds.size());
+    for (const auto& entryId : uniqueEntryIds) {
+        const auto it = std::find_if(
+            artifact.entries.begin(),
+            artifact.entries.end(),
+            [&](const ExecutionLedgerEntry& entry) { return entry.entryId == entryId; });
+        if (it == artifact.entries.end()) {
+            if (errorCode != nullptr) {
+                *errorCode = "entry_not_found";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution ledger review references an entry that does not exist";
+            }
+            return false;
+        }
+        previousEntries.push_back(*it);
+    }
+
+    const std::string generatedAtUtc = utcTimestampIso8601Now();
+    const std::string previousLedgerStatus = artifact.ledgerStatus;
+    for (auto& entry : artifact.entries) {
+        if (std::find(uniqueEntryIds.begin(), uniqueEntryIds.end(), entry.entryId) == uniqueEntryIds.end()) {
+            continue;
+        }
+        entry.reviewStatus = reviewStatus;
+        entry.reviewedAtUtc = generatedAtUtc;
+        entry.reviewedBy = normalizedActor;
+        entry.reviewComment = normalizedComment;
+    }
+    json auditEvent = auditEventForLedgerReview(artifact,
+                                                previousEntries,
+                                                uniqueEntryIds,
+                                                reviewStatus,
+                                                normalizedActor,
+                                                normalizedComment,
+                                                previousLedgerStatus,
+                                                generatedAtUtc);
+    artifact.auditTrail.push_back(auditEvent);
+    annotateExecutionLedgerReviewState(&artifact);
+    artifact.auditTrail.back()["ledger_status"] = artifact.ledgerStatus;
+    artifact.manifest = manifestForExecutionLedger(artifact);
+
+    std::string writeError;
+    if (!writeJsonTextFile(artifact.ledgerArtifact.manifestPath, artifact.manifest, &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+
+    if (updatedEntryIds != nullptr) {
+        *updatedEntryIds = uniqueEntryIds;
+    }
+    if (auditEventId != nullptr) {
+        *auditEventId = auditEvent.value("event_id", std::string());
+    }
+    if (out != nullptr) {
+        *out = std::move(artifact);
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
 std::string analysisArtifactMarkdown(const AnalysisArtifact& artifact) {
     std::ostringstream out;
     out << "# Phase 7 Analysis\n\n"
@@ -1485,6 +2580,8 @@ std::string playbookArtifactMarkdown(const PlaybookArtifact& artifact) {
 }
 
 std::string executionLedgerArtifactMarkdown(const ExecutionLedgerArtifact& artifact) {
+    const ExecutionLedgerReviewSummary reviewSummary = summarizeExecutionLedgerReviewSummary(artifact);
+    const json latestAudit = latestExecutionLedgerAuditSummary(artifact);
     std::ostringstream out;
     out << "# Phase 7 Execution Ledger\n\n"
         << "- Artifact: `" << artifact.ledgerArtifact.artifactId << "`\n"
@@ -1493,22 +2590,67 @@ std::string executionLedgerArtifactMarkdown(const ExecutionLedgerArtifact& artif
         << "- Source artifact: `" << artifact.sourceArtifact.artifactId << "`\n"
         << "- Mode: `" << artifact.mode << "`\n"
         << "- Ledger status: `" << artifact.ledgerStatus << "`\n"
-        << "- Entries: " << artifact.entries.size() << "\n";
+        << "- Entries: " << artifact.entries.size() << "\n"
+        << "- Review summary: pending=" << reviewSummary.pendingReviewCount
+        << ", approved=" << reviewSummary.approvedCount
+        << ", blocked=" << reviewSummary.blockedCount
+        << ", needs_info=" << reviewSummary.needsInfoCount
+        << ", not_applicable=" << reviewSummary.notApplicableCount
+        << ", waiting_approval=" << reviewSummary.waitingApprovalCount
+        << ", ready=" << reviewSummary.readyEntryCount << "\n"
+        << "- Distinct reviewers: " << reviewSummary.distinctReviewerCount
+        << " (required approvals per actionable entry: " << reviewSummary.requiredApprovalCount << ")\n"
+        << "- Ready for execution: `" << (reviewSummary.readyForExecution ? "true" : "false") << "`\n";
     if (artifact.executionPolicy.is_object()) {
         out << "- Apply supported: `" << (artifact.executionPolicy.value("apply_supported", false) ? "true" : "false")
             << "`\n"
             << "- Deferred reason: `" << artifact.executionPolicy.value("deferred_reason", std::string()) << "`\n";
     }
+    if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+        out << "- Latest audit event: `" << latestAudit.value("event_type", std::string()) << "`";
+        if (latestAudit.contains("generated_at_utc") && latestAudit.at("generated_at_utc").is_string()) {
+            out << " at `" << latestAudit.at("generated_at_utc").get<std::string>() << "`";
+        }
+        if (latestAudit.contains("actor") && latestAudit.at("actor").is_string()) {
+            out << " by `" << latestAudit.at("actor").get<std::string>() << "`";
+        }
+        out << "\n  " << latestAudit.at("message").get<std::string>() << "\n";
+    }
     out << "\n## Review Entries\n";
     for (const auto& entry : artifact.entries) {
         out << "- [" << entry.reviewStatus << "] `" << entry.actionType << "` for `"
-            << entry.findingId << "`: " << entry.title << "\n";
+            << entry.findingId << "`: " << entry.title;
+        if (entry.reviewStatus == kLedgerEntryStatusApproved) {
+            out << " (approvals=" << entry.approvalReviewerCount
+                << "/" << reviewSummary.requiredApprovalCount
+                << ", ready=`" << (entry.approvalThresholdMet ? "true" : "false") << "`)";
+        }
+        out << "\n";
+        if (!entry.reviewedBy.empty()) {
+            out << "  reviewed_by: `" << entry.reviewedBy << "`";
+            if (!entry.reviewedAtUtc.empty()) {
+                out << " at `" << entry.reviewedAtUtc << "`";
+            }
+            out << "\n";
+        }
+        if (!entry.reviewComment.empty()) {
+            out << "  comment: " << entry.reviewComment << "\n";
+        }
     }
     if (artifact.auditTrail.is_array() && !artifact.auditTrail.empty()) {
         out << "\n## Audit Trail\n";
         for (const auto& event : artifact.auditTrail) {
-            out << "- `" << event.value("event_type", std::string()) << "`: "
-                << event.value("message", std::string()) << "\n";
+            out << "- `" << event.value("event_type", std::string()) << "`";
+            if (event.contains("generated_at_utc") && event.at("generated_at_utc").is_string()) {
+                out << " at `" << event.at("generated_at_utc").get<std::string>() << "`";
+            }
+            if (event.contains("actor") && event.at("actor").is_string()) {
+                out << " by `" << event.at("actor").get<std::string>() << "`";
+            }
+            out << ": " << event.value("message", std::string()) << "\n";
+            if (event.contains("comment") && event.at("comment").is_string()) {
+                out << "  comment: " << event.at("comment").get<std::string>() << "\n";
+            }
         }
     }
     return out.str();

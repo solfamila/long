@@ -131,11 +131,15 @@ using namespace tapescope_support;
     if (tableView == _phase7PlaybookTableView) {
         return static_cast<NSInteger>(_latestPhase7PlaybookArtifacts.size());
     }
+    if (tableView == _phase7LedgerTableView) {
+        return static_cast<NSInteger>(_latestPhase7ExecutionLedgers.size());
+    }
     if (tableView == _phase7FindingTableView) {
         return static_cast<NSInteger>(_phase7VisibleFindings.size());
     }
     if (tableView == _phase7ActionTableView) {
-        return static_cast<NSInteger>(_phase7VisibleActions.size());
+        return static_cast<NSInteger>(_phase7SelectionIsLedger ? _phase7VisibleLedgerEntries.size()
+                                                               : _phase7VisibleActions.size());
     }
     return 0;
 }
@@ -154,8 +158,10 @@ using namespace tapescope_support;
     const tapescope::ImportedCaseRow* importedCaseItem = nullptr;
     const tapescope::Phase7AnalysisArtifact* analysisArtifactItem = nullptr;
     const tapescope::Phase7PlaybookArtifact* playbookArtifactItem = nullptr;
+    const tapescope::Phase7ExecutionLedgerArtifact* executionLedgerArtifactItem = nullptr;
     const tapescope::Phase7FindingRecord* phase7FindingItem = nullptr;
     const tapescope::Phase7PlaybookAction* phase7ActionItem = nullptr;
+    const tapescope::Phase7ExecutionLedgerEntry* phase7LedgerEntryItem = nullptr;
     if (tableView == _liveTableView) {
         if (static_cast<std::size_t>(row) >= _liveEvents.size()) {
             return nil;
@@ -246,16 +252,28 @@ using namespace tapescope_support;
             return nil;
         }
         playbookArtifactItem = &_latestPhase7PlaybookArtifacts.at(static_cast<std::size_t>(row));
+    } else if (tableView == _phase7LedgerTableView) {
+        if (static_cast<std::size_t>(row) >= _latestPhase7ExecutionLedgers.size()) {
+            return nil;
+        }
+        executionLedgerArtifactItem = &_latestPhase7ExecutionLedgers.at(static_cast<std::size_t>(row));
     } else if (tableView == _phase7FindingTableView) {
         if (static_cast<std::size_t>(row) >= _phase7VisibleFindings.size()) {
             return nil;
         }
         phase7FindingItem = &_phase7VisibleFindings.at(static_cast<std::size_t>(row));
     } else if (tableView == _phase7ActionTableView) {
-        if (static_cast<std::size_t>(row) >= _phase7VisibleActions.size()) {
-            return nil;
+        if (_phase7SelectionIsLedger) {
+            if (static_cast<std::size_t>(row) >= _phase7VisibleLedgerEntries.size()) {
+                return nil;
+            }
+            phase7LedgerEntryItem = &_phase7VisibleLedgerEntries.at(static_cast<std::size_t>(row));
+        } else {
+            if (static_cast<std::size_t>(row) >= _phase7VisibleActions.size()) {
+                return nil;
+            }
+            phase7ActionItem = &_phase7VisibleActions.at(static_cast<std::size_t>(row));
         }
-        phase7ActionItem = &_phase7VisibleActions.at(static_cast<std::size_t>(row));
     } else {
         return nil;
     }
@@ -409,6 +427,34 @@ using namespace tapescope_support;
         } else {
             value = std::to_string(playbookArtifactItem->plannedActions.size());
         }
+    } else if (tableView == _phase7LedgerTableView) {
+        const auto reviewSummary = tape_phase7::summarizeExecutionLedgerReviewSummary(*executionLedgerArtifactItem);
+        const auto latestAudit = tape_phase7::latestExecutionLedgerAuditSummary(*executionLedgerArtifactItem);
+        if ([columnId isEqualToString:@"artifact_id"]) {
+            value = executionLedgerArtifactItem->ledgerArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"playbook_artifact_id"]) {
+            value = executionLedgerArtifactItem->playbookArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"ledger_status"]) {
+            value = executionLedgerArtifactItem->ledgerStatus;
+        } else if ([columnId isEqualToString:@"pending_review_count"]) {
+            value = std::to_string(reviewSummary.pendingReviewCount);
+        } else if ([columnId isEqualToString:@"waiting_approval_count"]) {
+            value = std::to_string(reviewSummary.waitingApprovalCount);
+        } else if ([columnId isEqualToString:@"ready_entry_count"]) {
+            value = std::to_string(reviewSummary.readyEntryCount);
+        } else if ([columnId isEqualToString:@"blocked_count"]) {
+            value = std::to_string(reviewSummary.blockedCount);
+        } else if ([columnId isEqualToString:@"distinct_reviewer_count"]) {
+            value = std::to_string(reviewSummary.distinctReviewerCount);
+        } else if ([columnId isEqualToString:@"reviewed_count"]) {
+            value = std::to_string(reviewSummary.reviewedCount);
+        } else if ([columnId isEqualToString:@"latest_audit_event"]) {
+            if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+                value = latestAudit.at("message").get<std::string>();
+            }
+        } else {
+            value = std::to_string(executionLedgerArtifactItem->entries.size());
+        }
     } else if (tableView == _phase7FindingTableView) {
         if ([columnId isEqualToString:@"finding_id"]) {
             value = phase7FindingItem->findingId;
@@ -420,14 +466,30 @@ using namespace tapescope_support;
             value = phase7FindingItem->summary;
         }
     } else if (tableView == _phase7ActionTableView) {
-        if ([columnId isEqualToString:@"action_id"]) {
-            value = phase7ActionItem->actionId;
-        } else if ([columnId isEqualToString:@"action_type"]) {
-            value = phase7ActionItem->actionType;
-        } else if ([columnId isEqualToString:@"finding_id"]) {
-            value = phase7ActionItem->findingId;
+        if (_phase7SelectionIsLedger) {
+            if ([columnId isEqualToString:@"action_id"]) {
+                value = phase7LedgerEntryItem->actionId;
+            } else if ([columnId isEqualToString:@"action_type"]) {
+                value = phase7LedgerEntryItem->actionType;
+            } else if ([columnId isEqualToString:@"finding_id"]) {
+                value = phase7LedgerEntryItem->findingId;
+            } else if ([columnId isEqualToString:@"review_status"]) {
+                value = phase7LedgerEntryItem->reviewStatus;
+            } else {
+                value = phase7LedgerEntryItem->title;
+            }
         } else {
-            value = phase7ActionItem->title;
+            if ([columnId isEqualToString:@"action_id"]) {
+                value = phase7ActionItem->actionId;
+            } else if ([columnId isEqualToString:@"action_type"]) {
+                value = phase7ActionItem->actionType;
+            } else if ([columnId isEqualToString:@"finding_id"]) {
+                value = phase7ActionItem->findingId;
+            } else if ([columnId isEqualToString:@"review_status"]) {
+                value = {};
+            } else {
+                value = phase7ActionItem->title;
+            }
         }
     }
 
@@ -565,8 +627,10 @@ using namespace tapescope_support;
     if (tableView == _phase7AnalysisTableView) {
         const NSInteger selected = _phase7AnalysisTableView.selectedRow;
         _phase7SelectionIsPlaybook = NO;
+        _phase7SelectionIsLedger = NO;
         if (selected >= 0) {
             [_phase7PlaybookTableView deselectAll:nil];
+            [_phase7LedgerTableView deselectAll:nil];
         }
         [self refreshPhase7DetailText];
         return;
@@ -575,8 +639,22 @@ using namespace tapescope_support;
     if (tableView == _phase7PlaybookTableView) {
         const NSInteger selected = _phase7PlaybookTableView.selectedRow;
         _phase7SelectionIsPlaybook = (selected >= 0);
+        _phase7SelectionIsLedger = NO;
         if (selected >= 0) {
             [_phase7AnalysisTableView deselectAll:nil];
+            [_phase7LedgerTableView deselectAll:nil];
+        }
+        [self refreshPhase7DetailText];
+        return;
+    }
+
+    if (tableView == _phase7LedgerTableView) {
+        const NSInteger selected = _phase7LedgerTableView.selectedRow;
+        _phase7SelectionIsPlaybook = NO;
+        _phase7SelectionIsLedger = (selected >= 0);
+        if (selected >= 0) {
+            [_phase7AnalysisTableView deselectAll:nil];
+            [_phase7PlaybookTableView deselectAll:nil];
         }
         [self refreshPhase7DetailText];
         return;

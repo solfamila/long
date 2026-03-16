@@ -188,7 +188,9 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         {"playbook_analysis_filter", ToStdString(_phase7PlaybookAnalysisFilterField.stringValue)},
         {"playbook_source_filter", ToStdString(_phase7PlaybookSourceFilterField.stringValue)},
         {"playbook_mode_filter", ToStdString(_phase7PlaybookModeFilterPopup.titleOfSelectedItem)},
-        {"playbook_sort", ToStdString(_phase7PlaybookSortPopup.titleOfSelectedItem)}
+        {"playbook_sort", ToStdString(_phase7PlaybookSortPopup.titleOfSelectedItem)},
+        {"ledger_status_filter", ToStdString(_phase7LedgerStatusFilterPopup.titleOfSelectedItem)},
+        {"ledger_sort", ToStdString(_phase7LedgerSortPopup.titleOfSelectedItem)}
     };
     return state;
 }
@@ -290,6 +292,14 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     const std::string phase7PlaybookSort = phase7.value("playbook_sort", std::string());
     if (!phase7PlaybookSort.empty()) {
         [_phase7PlaybookSortPopup selectItemWithTitle:ToNSString(phase7PlaybookSort)];
+    }
+    const std::string phase7LedgerStatusFilter = phase7.value("ledger_status_filter", std::string());
+    if (!phase7LedgerStatusFilter.empty()) {
+        [_phase7LedgerStatusFilterPopup selectItemWithTitle:ToNSString(phase7LedgerStatusFilter)];
+    }
+    const std::string phase7LedgerSort = phase7.value("ledger_sort", std::string());
+    if (!phase7LedgerSort.empty()) {
+        [_phase7LedgerSortPopup selectItemWithTitle:ToNSString(phase7LedgerSort)];
     }
 
     _recentHistoryItems.clear();

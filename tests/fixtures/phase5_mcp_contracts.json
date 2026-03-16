@@ -225,11 +225,11 @@
       },
       "has_data_quality": true,
       "headline": "Session overview",
-      "incident_kinds": [
-        "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
-      ],
+    "incident_kinds": [
+      "order_fill_context",
+      "order_flow_timeline",
+      "source_gap"
+    ],
       "includes_mutable_tail": false,
       "replay_range": {
         "first_session_seq": 1,
@@ -239,12 +239,12 @@
           "last_session_seq"
         ]
       },
-      "report": {
-        "headline": "Session overview",
-        "report_type": "session_overview",
-        "schema_version": 1,
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
-      },
+    "report": {
+      "headline": "Session overview",
+      "report_type": "session_overview",
+      "schema_version": 1,
+      "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+    },
       "served_revision_id": 7
     },
     "uri": "tape://report/session/<id>"
@@ -436,138 +436,6 @@
     },
     "ok": true,
     "result": {
-      "findings": [
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.72,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_flow_timeline",
-          "last_session_seq": 2,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order window captured 2 lifecycle events"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.84,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_fill_context",
-          "last_session_seq": 4,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order/fill context captured 0 market updates around 1 fills"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.84,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_fill_context",
-          "last_session_seq": 4,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order/fill context captured 0 market updates around 1 fills"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.84,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_fill_context",
-          "last_session_seq": 4,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order/fill context captured 0 market updates around 1 fills"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.84,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_fill_context",
-          "last_session_seq": 4,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order/fill context captured 0 market updates around 1 fills"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.78,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_flow_timeline",
-          "last_session_seq": 4,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order window captured 2 lifecycle events and 1 fills"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.78,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_flow_timeline",
-          "last_session_seq": 4,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order window captured 2 lifecycle events and 1 fills"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.78,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_flow_timeline",
-          "last_session_seq": 4,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order window captured 2 lifecycle events and 1 fills"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.78,
-          "finding_id": "<id>",
-          "first_session_seq": 1,
-          "incident_revision_id": "<id>",
-          "kind": "order_flow_timeline",
-          "last_session_seq": 4,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "info",
-          "title": "Order window captured 2 lifecycle events and 1 fills"
-        },
-        {
-          "artifact_id": "finding:<id>",
-          "confidence": 0.95,
-          "finding_id": "<id>",
-          "first_session_seq": 3,
-          "incident_revision_id": "<id>",
-          "kind": "source_gap",
-          "last_session_seq": 3,
-          "logical_incident_id": "<id>",
-          "revision_id": "<id>",
-          "severity": "warning",
-          "title": "Feed gap detected"
-        }
-      ],
       "returned_count": 10
     },
     "revision": {
@@ -827,9 +695,9 @@
       "has_data_quality": true,
       "headline": "Session overview",
       "incident_kinds": [
+        "order_fill_context",
         "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
+        "source_gap"
       ],
       "includes_mutable_tail": false,
       "replay_range": {
@@ -971,11 +839,11 @@
         "schema_version": 1
       },
       "has_data_quality": true,
-      "headline": "Order case for order 7401",
-      "incident_kinds": [
+    "headline": "Order case for order 7401",
+    "incident_kinds": [
+        "order_fill_context",
         "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
+        "source_gap"
       ],
       "includes_mutable_tail": false,
       "replay_range": {
@@ -1382,11 +1250,11 @@
         "schema_version": 1
       },
       "has_data_quality": true,
-      "headline": "Order anchor 3",
-      "incident_kinds": [
+    "headline": "Order anchor 3",
+    "incident_kinds": [
+        "order_fill_context",
         "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
+        "source_gap"
       ],
       "includes_mutable_tail": false,
       "replay_range": {
@@ -1531,9 +1399,9 @@
       "has_data_quality": true,
       "headline": "Order case for order 7401",
       "incident_kinds": [
+        "order_fill_context",
         "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
+        "source_gap"
       ],
       "includes_mutable_tail": false,
       "replay_range": {
@@ -1781,9 +1649,9 @@
       "has_data_quality": true,
       "headline": "Session overview",
       "incident_kinds": [
+        "order_fill_context",
         "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
+        "source_gap"
       ],
       "includes_mutable_tail": false,
       "replay_range": {
@@ -1794,12 +1662,12 @@
           "last_session_seq"
         ]
       },
-      "report": {
-        "headline": "Session overview",
-        "report_type": "session_overview",
-        "schema_version": 1,
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
-      },
+    "report": {
+      "headline": "Session overview",
+      "report_type": "session_overview",
+      "schema_version": 1,
+      "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+    },
       "served_revision_id": 7
     },
     "revision": {
@@ -1968,9 +1836,9 @@
       "has_data_quality": true,
       "headline": "Session overview",
       "incident_kinds": [
+        "order_fill_context",
         "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
+        "source_gap"
       ],
       "includes_mutable_tail": false,
       "replay_range": {
@@ -1981,12 +1849,12 @@
           "last_session_seq"
         ]
       },
-      "report": {
-        "headline": "Session overview",
-        "report_type": "session_overview",
-        "schema_version": 1,
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
-      },
+    "report": {
+      "headline": "Session overview",
+      "report_type": "session_overview",
+      "schema_version": 1,
+      "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+    },
       "served_revision_id": 7
     },
     "revision": {
@@ -2298,11 +2166,11 @@
         "schema_version": 1
       },
       "has_data_quality": true,
-      "headline": "Order case for order 7401",
-      "incident_kinds": [
+    "headline": "Order case for order 7401",
+    "incident_kinds": [
+        "order_fill_context",
         "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
+        "source_gap"
       ],
       "includes_mutable_tail": false,
       "replay_range": {
@@ -2439,9 +2307,9 @@
       "has_data_quality": true,
       "headline": "Session overview",
       "incident_kinds": [
+        "order_fill_context",
         "order_flow_timeline",
-        "source_gap",
-        "order_fill_context"
+        "source_gap"
       ],
       "includes_mutable_tail": false,
       "replay_range": {
@@ -2452,12 +2320,12 @@
           "last_session_seq"
         ]
       },
-      "report": {
-        "headline": "Session overview",
-        "report_type": "session_overview",
-        "schema_version": 1,
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
-      },
+    "report": {
+      "headline": "Session overview",
+      "report_type": "session_overview",
+      "schema_version": 1,
+      "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+    },
       "served_revision_id": 7
     },
     "revision": {
@@ -2653,8 +2521,8 @@
       ]
     },
     {
-      "name": "tapescript_list_execution_ledgers",
       "input_required": [],
+      "name": "tapescript_list_execution_ledgers",
       "output_required": [
         "returned_count",
         "applied_filters",
@@ -2734,8 +2602,8 @@
       ]
     },
     {
-      "name": "tapescript_prepare_execution_ledger",
       "input_required": [],
+      "name": "tapescript_prepare_execution_ledger",
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2747,6 +2615,8 @@
         "execution_policy",
         "filtered_finding_ids",
         "entry_count",
+        "review_summary",
+        "latest_audit_event",
         "entries",
         "audit_trail",
         "replay_context",
@@ -2828,8 +2698,8 @@
       ]
     },
     {
-      "name": "tapescript_read_execution_ledger",
       "input_required": [],
+      "name": "tapescript_read_execution_ledger",
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2841,6 +2711,8 @@
         "execution_policy",
         "filtered_finding_ids",
         "entry_count",
+        "review_summary",
+        "latest_audit_event",
         "entries",
         "audit_trail",
         "replay_context"
@@ -3051,6 +2923,29 @@
         "incident_rows",
         "citation_rows",
         "events"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_record_execution_ledger_review",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "playbook_artifact",
+        "execution_ledger",
+        "mode",
+        "generated_at_utc",
+        "ledger_status",
+        "execution_policy",
+        "filtered_finding_ids",
+        "entry_count",
+        "review_summary",
+        "latest_audit_event",
+        "entries",
+        "audit_trail",
+        "replay_context",
+        "updated_entry_ids",
+        "audit_event_id"
       ]
     },
     {

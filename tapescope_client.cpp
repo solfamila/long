@@ -97,6 +97,7 @@ json phase7ExecutionLedgerAppliedFilters(const Phase7ExecutionLedgerInventorySel
         {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
         {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
         {"ledger_status", selection.ledgerStatus.empty() ? json(nullptr) : json(selection.ledgerStatus)},
+        {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
         {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
         {"matched_count", matchedCount}
     };
@@ -279,9 +280,45 @@ Phase7ExecutionLedgerInventoryPayload selectPhase7ExecutionLedgers(
             filtered.push_back(std::move(artifact));
         }
     }
+    const auto statusRank = [](const std::string& ledgerStatus) {
+        if (ledgerStatus == tape_phase7::kLedgerStatusBlocked) {
+            return 0;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusNeedsInformation) {
+            return 1;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusWaitingApproval) {
+            return 2;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution) {
+            return 3;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusInProgress) {
+            return 4;
+        }
+        if (ledgerStatus == tape_phase7::kDefaultLedgerStatus) {
+            return 5;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusCompleted) {
+            return 6;
+        }
+        return 7;
+    };
+    const std::string sortMode(selection.sortBy.empty() ? "generated_at_desc" : selection.sortBy);
     std::sort(filtered.begin(),
               filtered.end(),
-              [](const Phase7ExecutionLedgerArtifact& lhs, const Phase7ExecutionLedgerArtifact& rhs) {
+              [&](const Phase7ExecutionLedgerArtifact& lhs, const Phase7ExecutionLedgerArtifact& rhs) {
+                  if (sortMode == "attention_desc") {
+                      const int lhsRank = statusRank(lhs.ledgerStatus);
+                      const int rhsRank = statusRank(rhs.ledgerStatus);
+                      if (lhsRank != rhsRank) {
+                          return lhsRank < rhsRank;
+                      }
+                  } else if (sortMode == "source_artifact_asc") {
+                      if (lhs.sourceArtifact.artifactId != rhs.sourceArtifact.artifactId) {
+                          return lhs.sourceArtifact.artifactId < rhs.sourceArtifact.artifactId;
+                      }
+                  }
                   if (lhs.generatedAtUtc != rhs.generatedAtUtc) {
                       return lhs.generatedAtUtc > rhs.generatedAtUtc;
                   }
@@ -872,6 +909,32 @@ QueryResult<Phase7ExecutionLedgerArtifact> QueryClient::readExecutionLedgerArtif
     return packPhase7LocalResult(
         tape_phase7::loadExecutionLedgerArtifact("", artifactId, &artifact, &errorCode, &errorMessage),
         std::move(artifact),
+        errorCode,
+        errorMessage);
+}
+
+QueryResult<Phase7ExecutionLedgerReviewPayload> QueryClient::recordExecutionLedgerReviewPayload(
+    const std::string& artifactId,
+    const std::vector<std::string>& entryIds,
+    const std::string& reviewStatus,
+    const std::string& actor,
+    const std::string& comment) const {
+    Phase7ExecutionLedgerReviewPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(
+        tape_phase7::recordExecutionLedgerReview("",
+                                                 artifactId,
+                                                 entryIds,
+                                                 reviewStatus,
+                                                 actor,
+                                                 comment,
+                                                 &payload.artifact,
+                                                 &payload.updatedEntryIds,
+                                                 &payload.auditEventId,
+                                                 &errorCode,
+                                                 &errorMessage),
+        std::move(payload),
         errorCode,
         errorMessage);
 }

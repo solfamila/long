@@ -90,8 +90,24 @@ std::string DescribePhase7PlaybookArtifact(const tapescope::Phase7PlaybookArtifa
 }
 
 std::string DescribePhase7ExecutionLedgerArtifact(const tapescope::Phase7ExecutionLedgerArtifact& artifact) {
+    const auto reviewSummary = tape_phase7::summarizeExecutionLedgerReviewSummary(artifact);
+    const auto latestAudit = tape_phase7::latestExecutionLedgerAuditSummary(artifact);
     std::ostringstream out;
     out << tape_phase7::executionLedgerArtifactMarkdown(artifact);
+    out << "\nReview summary detail: pending=" << reviewSummary.pendingReviewCount
+        << ", approved=" << reviewSummary.approvedCount
+        << ", blocked=" << reviewSummary.blockedCount
+        << ", needs_info=" << reviewSummary.needsInfoCount
+        << ", not_applicable=" << reviewSummary.notApplicableCount
+        << ", waiting_approval=" << reviewSummary.waitingApprovalCount
+        << ", ready=" << reviewSummary.readyEntryCount
+        << ", actionable=" << reviewSummary.actionableEntryCount << "\n";
+    out << "Review policy: distinct_reviewers=" << reviewSummary.distinctReviewerCount
+        << ", required_approvals=" << reviewSummary.requiredApprovalCount
+        << ", ready_for_execution=" << (reviewSummary.readyForExecution ? "true" : "false") << "\n";
+    if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+        out << "Latest audit note: " << latestAudit.at("message").get<std::string>() << "\n";
+    }
     if (!artifact.generatedAtUtc.empty()) {
         out << "\nGenerated at: " << artifact.generatedAtUtc << "\n";
     }
@@ -210,6 +226,21 @@ std::vector<std::string> SelectedPhase7ActionIds(NSTableView* tableView,
     return selectedIds;
 }
 
+std::vector<std::string> SelectedPhase7LedgerEntryIds(NSTableView* tableView,
+                                                      const std::vector<tapescope::Phase7ExecutionLedgerEntry>& entries) {
+    std::vector<std::string> selectedIds;
+    if (tableView == nil) {
+        return selectedIds;
+    }
+    NSIndexSet* indexes = tableView.selectedRowIndexes;
+    for (NSUInteger idx = indexes.firstIndex; idx != NSNotFound; idx = [indexes indexGreaterThanIndex:idx]) {
+        if (idx < entries.size()) {
+            selectedIds.push_back(entries.at(idx).entryId);
+        }
+    }
+    return selectedIds;
+}
+
 NSIndexSet* IndexSetForPhase7FindingIds(const std::vector<std::string>& selectedIds,
                                         const std::vector<tapescope::Phase7FindingRecord>& findings) {
     NSMutableIndexSet* indexes = [NSMutableIndexSet indexSet];
@@ -229,6 +260,19 @@ NSIndexSet* IndexSetForPhase7ActionIds(const std::vector<std::string>& selectedI
     if (!selectedIds.empty()) {
         for (std::size_t index = 0; index < actions.size(); ++index) {
             if (std::find(selectedIds.begin(), selectedIds.end(), actions[index].actionId) != selectedIds.end()) {
+                [indexes addIndex:index];
+            }
+        }
+    }
+    return indexes;
+}
+
+NSIndexSet* IndexSetForPhase7LedgerEntryIds(const std::vector<std::string>& selectedIds,
+                                            const std::vector<tapescope::Phase7ExecutionLedgerEntry>& entries) {
+    NSMutableIndexSet* indexes = [NSMutableIndexSet indexSet];
+    if (!selectedIds.empty()) {
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            if (std::find(selectedIds.begin(), selectedIds.end(), entries[index].entryId) != selectedIds.end()) {
                 [indexes addIndex:index];
             }
         }
@@ -298,6 +342,73 @@ std::string DescribeSelectedPhase7Actions(const std::vector<tapescope::Phase7Pla
     return out.str();
 }
 
+std::string DescribePhase7LedgerEntry(const tapescope::Phase7ExecutionLedgerEntry& entry) {
+    std::ostringstream out;
+    out << "entry_id: " << entry.entryId << "\n"
+        << "action_id: " << entry.actionId << "\n"
+        << "action_type: " << entry.actionType << "\n"
+        << "finding_id: " << entry.findingId << "\n"
+        << "review_status: " << entry.reviewStatus << "\n"
+        << "distinct_reviewer_count: " << entry.distinctReviewerCount << "\n"
+        << "approval_reviewer_count: " << entry.approvalReviewerCount << "\n"
+        << "approval_threshold_met: " << (entry.approvalThresholdMet ? "true" : "false") << "\n"
+        << "requires_manual_confirmation: " << (entry.requiresManualConfirmation ? "true" : "false") << "\n"
+        << "title: " << entry.title << "\n"
+        << "summary: " << entry.summary << "\n";
+    if (!entry.reviewedBy.empty()) {
+        out << "reviewed_by: " << entry.reviewedBy << "\n";
+    }
+    if (!entry.reviewedAtUtc.empty()) {
+        out << "reviewed_at_utc: " << entry.reviewedAtUtc << "\n";
+    }
+    if (!entry.reviewComment.empty()) {
+        out << "review_comment: " << entry.reviewComment << "\n";
+    }
+    if (entry.suggestedTools.is_array() && !entry.suggestedTools.empty()) {
+        out << "suggested_tools:\n" << entry.suggestedTools.dump(2) << "\n";
+    }
+    return out.str();
+}
+
+std::string DescribeSelectedPhase7LedgerEntries(const std::vector<tapescope::Phase7ExecutionLedgerEntry>& entries,
+                                                NSIndexSet* selectedIndexes) {
+    if (entries.empty()) {
+        return "No execution-ledger review entries are available for this artifact.";
+    }
+    if (selectedIndexes == nil || selectedIndexes.count == 0) {
+        std::ostringstream out;
+        out << "Review entries available: " << entries.size()
+            << ". Select one or more review rows, choose a review status, and record an append-only audit decision.\n";
+        return out.str();
+    }
+    std::ostringstream out;
+    out << "Selected review entries: " << selectedIndexes.count << "\n";
+    NSUInteger rendered = 0;
+    for (NSUInteger idx = selectedIndexes.firstIndex; idx != NSNotFound; idx = [selectedIndexes indexGreaterThanIndex:idx]) {
+        if (idx >= entries.size()) {
+            continue;
+        }
+        if (rendered > 0) {
+            out << "\n";
+        }
+        out << DescribePhase7LedgerEntry(entries.at(idx));
+        ++rendered;
+        if (rendered >= 3 && selectedIndexes.count > 3) {
+            out << "\n… " << (selectedIndexes.count - rendered) << " more selected ledger entr";
+            out << (selectedIndexes.count - rendered == 1 ? "y" : "ies");
+            break;
+        }
+    }
+    return out.str();
+}
+
+std::string SelectedPhase7ReviewStatus(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return {};
+    }
+    return TrimAscii(ToStdString(popup.titleOfSelectedItem));
+}
+
 void UpdatePhase7BuildPlaybookButtonTitle(NSButton* button, std::size_t selectedCount) {
     if (button == nil) {
         return;
@@ -365,13 +476,37 @@ std::string SelectedPhase7PlaybookSort(NSPopUpButton* popup) {
     return "generated_at_desc";
 }
 
+std::string SelectedPhase7LedgerStatusFilter(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return {};
+    }
+    const std::string value = ToStdString(popup.titleOfSelectedItem);
+    return value == "All Ledgers" ? std::string() : value;
+}
+
+std::string SelectedPhase7LedgerSort(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return "generated_at_desc";
+    }
+    const std::string value = ToStdString(popup.titleOfSelectedItem);
+    if (value == "Needs Attention") {
+        return "attention_desc";
+    }
+    if (value == "Source Artifact") {
+        return "source_artifact_asc";
+    }
+    return "generated_at_desc";
+}
+
 std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInventoryPayload& analyses,
-                                          const tapescope::Phase7PlaybookInventoryPayload& playbooks) {
+                                          const tapescope::Phase7PlaybookInventoryPayload& playbooks,
+                                          const tapescope::Phase7ExecutionLedgerInventoryPayload& ledgers) {
     std::ostringstream out;
     out << "Phase 7 inventory loaded. "
         << "Analyses: " << analyses.artifacts.size() << "/" << analyses.matchedCount
         << " matched. Playbooks: " << playbooks.artifacts.size() << "/" << playbooks.matchedCount
-        << " matched. Execution ledgers are prepared from selected playbooks and reopen through recent history.";
+        << " matched. Ledgers: " << ledgers.artifacts.size() << "/" << ledgers.matchedCount
+        << " matched. Execution remains deferred; ledger entries capture append-only review decisions only.";
     return out.str();
 }
 
@@ -406,6 +541,11 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
 
     _phase7ProfilePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 220, 24) pullsDown:NO];
     [_phase7ProfilePopup addItemWithTitle:@"phase7.trace_fill_integrity.v1"];
+    [_phase7ProfilePopup addItemWithTitle:@"phase7.incident_triage.v1"];
+    [_phase7ProfilePopup addItemWithTitle:@"phase7.fill_quality_review.v1"];
+    [_phase7ProfilePopup addItemWithTitle:@"phase7.liquidity_behavior_review.v1"];
+    [_phase7ProfilePopup addItemWithTitle:@"phase7.adverse_selection_review.v1"];
+    [_phase7ProfilePopup addItemWithTitle:@"phase7.order_impact_review.v1"];
     [controls addArrangedSubview:_phase7ProfilePopup];
 
     _phase7RunAnalysisButton = [NSButton buttonWithTitle:@"Run Analyzer"
@@ -437,6 +577,12 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7OpenPlaybookButton.enabled = NO;
     [controls addArrangedSubview:_phase7OpenPlaybookButton];
 
+    _phase7OpenLedgerButton = [NSButton buttonWithTitle:@"Open Selected Ledger"
+                                                 target:self
+                                                 action:@selector(openSelectedPhase7ExecutionLedger:)];
+    _phase7OpenLedgerButton.enabled = NO;
+    [controls addArrangedSubview:_phase7OpenLedgerButton];
+
     _phase7OpenSourceArtifactButton = [NSButton buttonWithTitle:@"Open Source Artifact"
                                                          target:self
                                                          action:@selector(openSelectedPhase7SourceArtifact:)];
@@ -455,6 +601,24 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7LoadRangeButton.enabled = NO;
     [controls addArrangedSubview:_phase7LoadRangeButton];
     [stack addArrangedSubview:controls];
+
+    NSStackView* reviewControls = MakeControlRow();
+    [reviewControls addArrangedSubview:MakeLabel(@"ledger review",
+                                                 [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                 [NSColor secondaryLabelColor])];
+    _phase7ReviewStatusPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 150, 24) pullsDown:NO];
+    [_phase7ReviewStatusPopup addItemsWithTitles:@[@"approved", @"blocked", @"needs_info", @"not_applicable"]];
+    [reviewControls addArrangedSubview:_phase7ReviewStatusPopup];
+    _phase7ReviewActorField = MakeMonospacedField(160.0, @"tapescope", @"actor");
+    [reviewControls addArrangedSubview:_phase7ReviewActorField];
+    _phase7ReviewCommentField = MakeMonospacedField(320.0, nil, @"review comment");
+    [reviewControls addArrangedSubview:_phase7ReviewCommentField];
+    _phase7RecordReviewButton = [NSButton buttonWithTitle:@"Record Review"
+                                                   target:self
+                                                   action:@selector(recordSelectedPhase7LedgerReview:)];
+    _phase7RecordReviewButton.enabled = NO;
+    [reviewControls addArrangedSubview:_phase7RecordReviewButton];
+    [stack addArrangedSubview:reviewControls];
 
     _phase7StateLabel = MakeLabel(@"No Phase 7 artifacts loaded yet.",
                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
@@ -495,6 +659,25 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     [playbookFilters addArrangedSubview:_phase7ClearFiltersButton];
     [stack addArrangedSubview:playbookFilters];
 
+    NSStackView* ledgerFilters = MakeControlRow();
+    [ledgerFilters addArrangedSubview:MakeLabel(@"ledger filters",
+                                                [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                [NSColor secondaryLabelColor])];
+    _phase7LedgerStatusFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24) pullsDown:NO];
+    [_phase7LedgerStatusFilterPopup addItemsWithTitles:@[@"All Ledgers",
+                                                         @"review_pending",
+                                                         @"review_in_progress",
+                                                         @"review_blocked",
+                                                         @"needs_information",
+                                                         @"review_waiting_approval",
+                                                         @"ready_for_execution",
+                                                         @"review_completed"]];
+    [ledgerFilters addArrangedSubview:_phase7LedgerStatusFilterPopup];
+    _phase7LedgerSortPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24) pullsDown:NO];
+    [_phase7LedgerSortPopup addItemsWithTitles:@[@"Newest First", @"Needs Attention", @"Source Artifact"]];
+    [ledgerFilters addArrangedSubview:_phase7LedgerSortPopup];
+    [stack addArrangedSubview:ledgerFilters];
+
     [stack addArrangedSubview:MakeSectionLabel(@"Analyzer Profiles")];
 
     _phase7ProfilesTextView = MakeReadOnlyTextView();
@@ -521,6 +704,22 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     ConfigureTablePrimaryAction(_phase7PlaybookTableView, self, @selector(openSelectedPhase7Playbook:));
     [stack addArrangedSubview:MakeTableScrollView(_phase7PlaybookTableView, 150.0)];
 
+    [stack addArrangedSubview:MakeSectionLabel(@"Execution Ledgers")];
+
+    _phase7LedgerTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_phase7LedgerTableView, @"artifact_id", @"artifact_id", 220.0);
+    AddTableColumn(_phase7LedgerTableView, @"playbook_artifact_id", @"playbook_artifact_id", 220.0);
+    AddTableColumn(_phase7LedgerTableView, @"ledger_status", @"ledger_status", 150.0);
+    AddTableColumn(_phase7LedgerTableView, @"pending_review_count", @"pending", 90.0);
+    AddTableColumn(_phase7LedgerTableView, @"waiting_approval_count", @"waiting", 90.0);
+    AddTableColumn(_phase7LedgerTableView, @"ready_entry_count", @"ready", 90.0);
+    AddTableColumn(_phase7LedgerTableView, @"blocked_count", @"blocked", 90.0);
+    AddTableColumn(_phase7LedgerTableView, @"distinct_reviewer_count", @"reviewers", 90.0);
+    AddTableColumn(_phase7LedgerTableView, @"reviewed_count", @"reviewed", 90.0);
+    AddTableColumn(_phase7LedgerTableView, @"latest_audit_event", @"latest_audit", 320.0);
+    ConfigureTablePrimaryAction(_phase7LedgerTableView, self, @selector(openSelectedPhase7ExecutionLedger:));
+    [stack addArrangedSubview:MakeTableScrollView(_phase7LedgerTableView, 150.0)];
+
     [stack addArrangedSubview:MakeSectionLabel(@"Selected Findings")];
 
     _phase7FindingTableView = MakeStandardTableView(self, self);
@@ -531,13 +730,14 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     AddTableColumn(_phase7FindingTableView, @"summary", @"summary", 360.0);
     [stack addArrangedSubview:MakeTableScrollView(_phase7FindingTableView, 140.0)];
 
-    [stack addArrangedSubview:MakeSectionLabel(@"Planned Actions")];
+    [stack addArrangedSubview:MakeSectionLabel(@"Planned Actions / Review Entries")];
 
     _phase7ActionTableView = MakeStandardTableView(self, self);
     _phase7ActionTableView.allowsMultipleSelection = YES;
     AddTableColumn(_phase7ActionTableView, @"action_id", @"action_id", 220.0);
     AddTableColumn(_phase7ActionTableView, @"action_type", @"action_type", 220.0);
     AddTableColumn(_phase7ActionTableView, @"finding_id", @"finding_id", 220.0);
+    AddTableColumn(_phase7ActionTableView, @"review_status", @"review_status", 140.0);
     AddTableColumn(_phase7ActionTableView, @"title", @"title", 260.0);
     [stack addArrangedSubview:MakeTableScrollView(_phase7ActionTableView, 140.0)];
 
@@ -572,18 +772,27 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     playbookSelection.sortBy = SelectedPhase7PlaybookSort(_phase7PlaybookSortPopup);
     playbookSelection.limit = 20;
 
+    tapescope::Phase7ExecutionLedgerInventorySelection ledgerSelection;
+    ledgerSelection.analysisArtifactId = playbookSelection.analysisArtifactId;
+    ledgerSelection.sourceArtifactId = playbookSelection.sourceArtifactId;
+    ledgerSelection.ledgerStatus = SelectedPhase7LedgerStatusFilter(_phase7LedgerStatusFilterPopup);
+    ledgerSelection.sortBy = SelectedPhase7LedgerSort(_phase7LedgerSortPopup);
+    ledgerSelection.limit = 20;
+
     _phase7InFlight = YES;
     const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
     _phase7RefreshButton.enabled = NO;
     _phase7OpenAnalysisButton.enabled = NO;
     _phase7OpenPlaybookButton.enabled = NO;
+    _phase7OpenLedgerButton.enabled = NO;
     _phase7BuildLedgerButton.enabled = NO;
     _phase7OpenSourceArtifactButton.enabled = NO;
     _phase7OpenLinkedAnalysisButton.enabled = NO;
     _phase7LoadRangeButton.enabled = NO;
+    _phase7RecordReviewButton.enabled = NO;
     _phase7StateLabel.stringValue = @"Refreshing Phase 7 artifact inventory…";
     _phase7StateLabel.textColor = [NSColor systemOrangeColor];
-    _phase7TextView.string = @"Refreshing durable Phase 7 analyses and playbooks…";
+    _phase7TextView.string = @"Refreshing durable Phase 7 analyses, playbooks, and review ledgers…";
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_artifactQueue, ^{
@@ -594,6 +803,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         const auto profiles = strongSelf->_client->listAnalysisProfilesPayload();
         const auto analyses = strongSelf->_client->listAnalysisArtifactsPayload(analysisSelection);
         const auto playbooks = strongSelf->_client->listPlaybookArtifactsPayload(playbookSelection);
+        const auto ledgers = strongSelf->_client->listExecutionLedgerArtifactsPayload(ledgerSelection);
         dispatch_async(dispatch_get_main_queue(), ^{
             TapeScopeWindowController* innerSelf = weakSelf;
             if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
@@ -604,6 +814,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
             innerSelf->_latestPhase7Profiles.clear();
             innerSelf->_latestPhase7AnalysisArtifacts.clear();
             innerSelf->_latestPhase7PlaybookArtifacts.clear();
+            innerSelf->_latestPhase7ExecutionLedgers.clear();
             if (profiles.ok()) {
                 innerSelf->_latestPhase7Profiles = profiles.value;
             }
@@ -612,6 +823,9 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
             }
             if (playbooks.ok()) {
                 innerSelf->_latestPhase7PlaybookArtifacts = playbooks.value.artifacts;
+            }
+            if (ledgers.ok()) {
+                innerSelf->_latestPhase7ExecutionLedgers = ledgers.value.artifacts;
             }
             innerSelf->_phase7ProfilesTextView.string = ToNSString(DescribePhase7Profiles(profiles));
             const std::string requestedFilterProfile = analysisSelection.analysisProfile;
@@ -630,6 +844,11 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 }
             } else {
                 [innerSelf->_phase7ProfilePopup addItemWithTitle:@"phase7.trace_fill_integrity.v1"];
+                [innerSelf->_phase7ProfilePopup addItemWithTitle:@"phase7.incident_triage.v1"];
+                [innerSelf->_phase7ProfilePopup addItemWithTitle:@"phase7.fill_quality_review.v1"];
+                [innerSelf->_phase7ProfilePopup addItemWithTitle:@"phase7.liquidity_behavior_review.v1"];
+                [innerSelf->_phase7ProfilePopup addItemWithTitle:@"phase7.adverse_selection_review.v1"];
+                [innerSelf->_phase7ProfilePopup addItemWithTitle:@"phase7.order_impact_review.v1"];
             }
             [innerSelf->_phase7AnalysisProfileFilterPopup removeAllItems];
             [innerSelf->_phase7AnalysisProfileFilterPopup addItemWithTitle:@"All Profiles"];
@@ -643,21 +862,32 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
             }
             [innerSelf->_phase7AnalysisTableView reloadData];
             [innerSelf->_phase7PlaybookTableView reloadData];
+            [innerSelf->_phase7LedgerTableView reloadData];
             if (!innerSelf->_latestPhase7AnalysisArtifacts.empty()) {
                 innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
                 [innerSelf->_phase7AnalysisTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                 byExtendingSelection:NO];
             } else if (!innerSelf->_latestPhase7PlaybookArtifacts.empty()) {
                 innerSelf->_phase7SelectionIsPlaybook = YES;
+                innerSelf->_phase7SelectionIsLedger = NO;
                 [innerSelf->_phase7PlaybookTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                  byExtendingSelection:NO];
+            } else if (!innerSelf->_latestPhase7ExecutionLedgers.empty()) {
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = YES;
+                [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                               byExtendingSelection:NO];
             }
 
-            if (profiles.ok() || analyses.ok() || playbooks.ok()) {
-                if (!innerSelf->_latestPhase7AnalysisArtifacts.empty() || !innerSelf->_latestPhase7PlaybookArtifacts.empty()) {
+            if (profiles.ok() || analyses.ok() || playbooks.ok() || ledgers.ok()) {
+                if (!innerSelf->_latestPhase7AnalysisArtifacts.empty() ||
+                    !innerSelf->_latestPhase7PlaybookArtifacts.empty() ||
+                    !innerSelf->_latestPhase7ExecutionLedgers.empty()) {
                     innerSelf->_phase7StateLabel.stringValue = ToNSString(DescribePhase7InventoryStatus(
                         analyses.ok() ? analyses.value : tapescope::Phase7AnalysisInventoryPayload{},
-                        playbooks.ok() ? playbooks.value : tapescope::Phase7PlaybookInventoryPayload{}));
+                        playbooks.ok() ? playbooks.value : tapescope::Phase7PlaybookInventoryPayload{},
+                        ledgers.ok() ? ledgers.value : tapescope::Phase7ExecutionLedgerInventoryPayload{}));
                     innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
                 } else {
                     innerSelf->_phase7StateLabel.stringValue =
@@ -665,9 +895,10 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                          analysisSelection.analysisProfile.empty() &&
                          playbookSelection.analysisArtifactId.empty() &&
                          playbookSelection.sourceArtifactId.empty() &&
-                         playbookSelection.mode.empty())
-                            ? @"No Phase 7 analysis or playbook artifacts are available yet."
-                            : @"Phase 7 filters matched no analysis or playbook artifacts.";
+                         playbookSelection.mode.empty() &&
+                         ledgerSelection.ledgerStatus.empty())
+                            ? @"No Phase 7 analysis, playbook, or ledger artifacts are available yet."
+                            : @"Phase 7 filters matched no analysis, playbook, or ledger artifacts.";
                     innerSelf->_phase7StateLabel.textColor = TapeInkMutedColor();
                 }
             } else {
@@ -688,6 +919,8 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7PlaybookSourceFilterField.stringValue = @"";
     [_phase7PlaybookModeFilterPopup selectItemWithTitle:@"All Modes"];
     [_phase7PlaybookSortPopup selectItemWithTitle:@"Newest First"];
+    [_phase7LedgerStatusFilterPopup selectItemWithTitle:@"All Ledgers"];
+    [_phase7LedgerSortPopup selectItemWithTitle:@"Newest First"];
     [self refreshPhase7Artifacts:nil];
 }
 
@@ -708,21 +941,27 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         SelectedPhase7FindingIds(_phase7FindingTableView, _phase7VisibleFindings);
     const std::vector<std::string> selectedActionIds =
         SelectedPhase7ActionIds(_phase7ActionTableView, _phase7VisibleActions);
+    const std::vector<std::string> selectedLedgerEntryIds =
+        SelectedPhase7LedgerEntryIds(_phase7ActionTableView, _phase7VisibleLedgerEntries);
     _phase7SelectedSourceArtifactId.clear();
     _phase7SelectedLinkedAnalysisArtifactId.clear();
+    _phase7SelectedLinkedPlaybookArtifactId.clear();
     _phase7ReplayRange = {};
     _phase7VisibleFindings.clear();
     _phase7VisibleActions.clear();
+    _phase7VisibleLedgerEntries.clear();
 
     const NSInteger analysisSelected = _phase7AnalysisTableView.selectedRow;
     if (analysisSelected >= 0 &&
         static_cast<std::size_t>(analysisSelected) < _latestPhase7AnalysisArtifacts.size() &&
-        (_phase7SelectionIsPlaybook == NO || _phase7PlaybookTableView.selectedRow < 0)) {
+        _phase7SelectionIsPlaybook == NO &&
+        _phase7SelectionIsLedger == NO) {
         const auto& artifact = _latestPhase7AnalysisArtifacts.at(static_cast<std::size_t>(analysisSelected));
         _phase7DetailBody = DescribePhase7AnalysisArtifact(artifact);
         _phase7VisibleFindings = artifact.findings;
         _phase7SelectedSourceArtifactId = artifact.sourceArtifact.artifactId;
         _phase7SelectedLinkedAnalysisArtifactId.clear();
+        _phase7SelectedLinkedPlaybookArtifactId.clear();
         if (const auto replayRange = ReplayRangeFromPhase7Context(artifact.replayContext); replayRange.has_value()) {
             _phase7ReplayRange = *replayRange;
             _phase7LoadRangeButton.enabled = YES;
@@ -733,9 +972,12 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         _phase7BuildLedgerButton.enabled = NO;
         UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, selectedFindingIds.size());
         _phase7OpenAnalysisButton.enabled = YES;
+        _phase7OpenPlaybookButton.title = @"Open Selected Playbook";
         _phase7OpenPlaybookButton.enabled = NO;
+        _phase7OpenLedgerButton.enabled = NO;
         _phase7OpenSourceArtifactButton.enabled = !_phase7SelectedSourceArtifactId.empty();
         _phase7OpenLinkedAnalysisButton.enabled = NO;
+        _phase7RecordReviewButton.enabled = NO;
         [_phase7FindingTableView reloadData];
         [_phase7ActionTableView reloadData];
         NSIndexSet* findingSelection = IndexSetForPhase7FindingIds(selectedFindingIds, _phase7VisibleFindings);
@@ -752,11 +994,14 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     }
 
     const NSInteger playbookSelected = _phase7PlaybookTableView.selectedRow;
-    if (playbookSelected >= 0 && static_cast<std::size_t>(playbookSelected) < _latestPhase7PlaybookArtifacts.size()) {
+    if (playbookSelected >= 0 &&
+        static_cast<std::size_t>(playbookSelected) < _latestPhase7PlaybookArtifacts.size() &&
+        _phase7SelectionIsLedger == NO) {
         const auto& artifact = _latestPhase7PlaybookArtifacts.at(static_cast<std::size_t>(playbookSelected));
         _phase7DetailBody = DescribePhase7PlaybookArtifact(artifact);
         _phase7VisibleActions = artifact.plannedActions;
         _phase7SelectedLinkedAnalysisArtifactId = artifact.analysisArtifact.artifactId;
+        _phase7SelectedLinkedPlaybookArtifactId = artifact.playbookArtifact.artifactId;
         _phase7SelectedSourceArtifactId = SourceArtifactIdForPlaybook(artifact, _latestPhase7AnalysisArtifacts);
         if (_phase7SelectedSourceArtifactId.empty() && _client != nullptr &&
             !_phase7SelectedLinkedAnalysisArtifactId.empty()) {
@@ -775,9 +1020,12 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         _phase7BuildLedgerButton.enabled = YES;
         UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, 0);
         _phase7OpenAnalysisButton.enabled = NO;
+        _phase7OpenPlaybookButton.title = @"Open Selected Playbook";
         _phase7OpenPlaybookButton.enabled = YES;
+        _phase7OpenLedgerButton.enabled = NO;
         _phase7OpenSourceArtifactButton.enabled = !_phase7SelectedSourceArtifactId.empty();
         _phase7OpenLinkedAnalysisButton.enabled = !_phase7SelectedLinkedAnalysisArtifactId.empty();
+        _phase7RecordReviewButton.enabled = NO;
         [_phase7FindingTableView reloadData];
         [_phase7ActionTableView reloadData];
         [_phase7FindingTableView deselectAll:nil];
@@ -793,15 +1041,58 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         return;
     }
 
+    const NSInteger ledgerSelected = _phase7LedgerTableView.selectedRow;
+    if (ledgerSelected >= 0 &&
+        static_cast<std::size_t>(ledgerSelected) < _latestPhase7ExecutionLedgers.size()) {
+        const auto& artifact = _latestPhase7ExecutionLedgers.at(static_cast<std::size_t>(ledgerSelected));
+        _phase7DetailBody = DescribePhase7ExecutionLedgerArtifact(artifact);
+        _phase7VisibleLedgerEntries = artifact.entries;
+        _phase7SelectedSourceArtifactId = artifact.sourceArtifact.artifactId;
+        _phase7SelectedLinkedAnalysisArtifactId = artifact.analysisArtifact.artifactId;
+        _phase7SelectedLinkedPlaybookArtifactId = artifact.playbookArtifact.artifactId;
+        if (const auto replayRange = ReplayRangeFromPhase7Context(artifact.replayContext); replayRange.has_value()) {
+            _phase7ReplayRange = *replayRange;
+            _phase7LoadRangeButton.enabled = YES;
+        } else {
+            _phase7LoadRangeButton.enabled = NO;
+        }
+        _phase7BuildPlaybookButton.enabled = NO;
+        _phase7BuildLedgerButton.enabled = NO;
+        UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, 0);
+        _phase7OpenAnalysisButton.enabled = NO;
+        _phase7OpenPlaybookButton.title = @"Open Linked Playbook";
+        _phase7OpenPlaybookButton.enabled = !_phase7SelectedLinkedPlaybookArtifactId.empty();
+        _phase7OpenLedgerButton.enabled = YES;
+        _phase7OpenSourceArtifactButton.enabled = !_phase7SelectedSourceArtifactId.empty();
+        _phase7OpenLinkedAnalysisButton.enabled = !_phase7SelectedLinkedAnalysisArtifactId.empty();
+        [_phase7FindingTableView reloadData];
+        [_phase7ActionTableView reloadData];
+        [_phase7FindingTableView deselectAll:nil];
+        NSIndexSet* ledgerSelection = IndexSetForPhase7LedgerEntryIds(selectedLedgerEntryIds, _phase7VisibleLedgerEntries);
+        if (ledgerSelection.count > 0) {
+            [_phase7ActionTableView selectRowIndexes:ledgerSelection byExtendingSelection:NO];
+        } else {
+            [_phase7ActionTableView deselectAll:nil];
+        }
+        _phase7RecordReviewButton.enabled = (_phase7ActionTableView.selectedRowIndexes.count > 0);
+        _phase7TextView.string = ToNSString(_phase7DetailBody + "\n\n" +
+                                            DescribeSelectedPhase7LedgerEntries(_phase7VisibleLedgerEntries,
+                                                                               _phase7ActionTableView.selectedRowIndexes));
+        return;
+    }
+
     _phase7DetailBody = Phase7DetailPlaceholder();
     _phase7OpenAnalysisButton.enabled = NO;
+    _phase7OpenPlaybookButton.title = @"Open Selected Playbook";
     _phase7OpenPlaybookButton.enabled = NO;
+    _phase7OpenLedgerButton.enabled = NO;
     _phase7BuildPlaybookButton.enabled = NO;
     _phase7BuildLedgerButton.enabled = NO;
     UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, 0);
     _phase7OpenSourceArtifactButton.enabled = NO;
     _phase7OpenLinkedAnalysisButton.enabled = NO;
     _phase7LoadRangeButton.enabled = NO;
+    _phase7RecordReviewButton.enabled = NO;
     [_phase7FindingTableView reloadData];
     [_phase7ActionTableView reloadData];
     _phase7TextView.string = ToNSString(_phase7DetailBody);
@@ -1048,8 +1339,35 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 return;
             }
 
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionLedgers.begin(),
+                                   innerSelf->_latestPhase7ExecutionLedgers.end(),
+                                   [&](const tapescope::Phase7ExecutionLedgerArtifact& item) {
+                                       return item.ledgerArtifact.artifactId == result.value.artifact.ledgerArtifact.artifactId;
+                                   });
+            if (it != innerSelf->_latestPhase7ExecutionLedgers.end()) {
+                *it = result.value.artifact;
+                const std::size_t index =
+                    static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionLedgers.begin(), it));
+                [innerSelf->_phase7LedgerTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = YES;
+                [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
+                                               byExtendingSelection:NO];
+            } else {
+                innerSelf->_latestPhase7ExecutionLedgers.insert(innerSelf->_latestPhase7ExecutionLedgers.begin(),
+                                                                result.value.artifact);
+                [innerSelf->_phase7LedgerTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = YES;
+                [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                               byExtendingSelection:NO];
+            }
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7SelectedSourceArtifactId = result.value.artifact.sourceArtifact.artifactId;
             innerSelf->_phase7SelectedLinkedAnalysisArtifactId = result.value.artifact.analysisArtifact.artifactId;
+            innerSelf->_phase7SelectedLinkedPlaybookArtifactId = result.value.artifact.playbookArtifact.artifactId;
             if (const auto replayRange = ReplayRangeFromPhase7Context(result.value.artifact.replayContext); replayRange.has_value()) {
                 innerSelf->_phase7ReplayRange = *replayRange;
                 innerSelf->_phase7LoadRangeButton.enabled = YES;
@@ -1095,11 +1413,26 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     (void)sender;
     const NSInteger selected = _phase7PlaybookTableView.selectedRow;
     if (selected < 0 || static_cast<std::size_t>(selected) >= _latestPhase7PlaybookArtifacts.size()) {
+        if (_phase7SelectionIsLedger && !_phase7SelectedLinkedPlaybookArtifactId.empty()) {
+            [self openPhase7PlaybookArtifactId:_phase7SelectedLinkedPlaybookArtifactId];
+            return;
+        }
         _phase7StateLabel.stringValue = @"Select a Phase 7 playbook row first.";
         _phase7StateLabel.textColor = [NSColor systemRedColor];
         return;
     }
     [self openPhase7PlaybookArtifactId:_latestPhase7PlaybookArtifacts.at(static_cast<std::size_t>(selected)).playbookArtifact.artifactId];
+}
+
+- (void)openSelectedPhase7ExecutionLedger:(id)sender {
+    (void)sender;
+    const NSInteger selected = _phase7LedgerTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _latestPhase7ExecutionLedgers.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution ledger row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    [self openPhase7ExecutionLedgerArtifactId:_latestPhase7ExecutionLedgers.at(static_cast<std::size_t>(selected)).ledgerArtifact.artifactId];
 }
 
 - (void)openPhase7AnalysisArtifactId:(const std::string&)artifactId {
@@ -1147,14 +1480,17 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 *it = result.value;
                 const std::size_t index = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7AnalysisArtifacts.begin(), it));
                 innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
                 [innerSelf->_phase7AnalysisTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
             } else {
                 innerSelf->_latestPhase7AnalysisArtifacts.insert(innerSelf->_latestPhase7AnalysisArtifacts.begin(), result.value);
                 [innerSelf->_phase7AnalysisTableView reloadData];
                 innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
                 [innerSelf->_phase7AnalysisTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
             }
             [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
             [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7StateLabel.stringValue = @"Phase 7 analysis reopened.";
             innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
@@ -1218,14 +1554,17 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 *it = result.value;
                 const std::size_t index = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7PlaybookArtifacts.begin(), it));
                 innerSelf->_phase7SelectionIsPlaybook = YES;
+                innerSelf->_phase7SelectionIsLedger = NO;
                 [innerSelf->_phase7PlaybookTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
             } else {
                 innerSelf->_latestPhase7PlaybookArtifacts.insert(innerSelf->_latestPhase7PlaybookArtifacts.begin(), result.value);
                 [innerSelf->_phase7PlaybookTableView reloadData];
                 innerSelf->_phase7SelectionIsPlaybook = YES;
+                innerSelf->_phase7SelectionIsLedger = NO;
                 [innerSelf->_phase7PlaybookTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
             }
             [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
             [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7StateLabel.stringValue = @"Phase 7 playbook reopened (dry-run only).";
             innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
@@ -1279,8 +1618,33 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 return;
             }
 
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionLedgers.begin(),
+                                   innerSelf->_latestPhase7ExecutionLedgers.end(),
+                                   [&](const tapescope::Phase7ExecutionLedgerArtifact& item) {
+                                       return item.ledgerArtifact.artifactId == artifactId;
+                                   });
+            if (it != innerSelf->_latestPhase7ExecutionLedgers.end()) {
+                *it = result.value;
+                const std::size_t index =
+                    static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionLedgers.begin(), it));
+                [innerSelf->_phase7LedgerTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = YES;
+                [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
+                                               byExtendingSelection:NO];
+            } else {
+                innerSelf->_latestPhase7ExecutionLedgers.insert(innerSelf->_latestPhase7ExecutionLedgers.begin(), result.value);
+                [innerSelf->_phase7LedgerTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = YES;
+                [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                               byExtendingSelection:NO];
+            }
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
             innerSelf->_phase7SelectedSourceArtifactId = result.value.sourceArtifact.artifactId;
             innerSelf->_phase7SelectedLinkedAnalysisArtifactId = result.value.analysisArtifact.artifactId;
+            innerSelf->_phase7SelectedLinkedPlaybookArtifactId = result.value.playbookArtifact.artifactId;
             if (const auto replayRange = ReplayRangeFromPhase7Context(result.value.replayContext); replayRange.has_value()) {
                 innerSelf->_phase7ReplayRange = *replayRange;
                 innerSelf->_phase7LoadRangeButton.enabled = YES;
@@ -1288,6 +1652,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 innerSelf->_phase7ReplayRange = {};
                 innerSelf->_phase7LoadRangeButton.enabled = NO;
             }
+            [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7StateLabel.stringValue = @"Phase 7 execution ledger reopened.";
             innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
             innerSelf->_phase7TextView.string = ToNSString(DescribePhase7ExecutionLedgerArtifact(result.value));
@@ -1329,6 +1694,140 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         return;
     }
     [self openPhase7AnalysisArtifactId:_phase7SelectedLinkedAnalysisArtifactId];
+}
+
+- (void)recordSelectedPhase7LedgerReview:(id)sender {
+    (void)sender;
+    if (_phase7InFlight || !_client) {
+        return;
+    }
+    const NSInteger ledgerSelected = _phase7LedgerTableView.selectedRow;
+    if (ledgerSelected < 0 || static_cast<std::size_t>(ledgerSelected) >= _latestPhase7ExecutionLedgers.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution ledger row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& ledger = _latestPhase7ExecutionLedgers.at(static_cast<std::size_t>(ledgerSelected));
+    const std::vector<std::string> entryIds =
+        SelectedPhase7LedgerEntryIds(_phase7ActionTableView, _phase7VisibleLedgerEntries);
+    if (entryIds.empty()) {
+        _phase7StateLabel.stringValue = @"Select one or more review entries first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const std::string reviewStatus = SelectedPhase7ReviewStatus(_phase7ReviewStatusPopup);
+    if (reviewStatus.empty()) {
+        _phase7StateLabel.stringValue = @"Choose a ledger review status first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const std::string actor = TrimAscii(ToStdString(_phase7ReviewActorField.stringValue));
+    const std::string comment = TrimAscii(ToStdString(_phase7ReviewCommentField.stringValue));
+    if (actor.empty()) {
+        _phase7StateLabel.stringValue = @"Ledger review requires a reviewer identity.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if ((reviewStatus == tape_phase7::kLedgerEntryStatusBlocked ||
+         reviewStatus == tape_phase7::kLedgerEntryStatusNeedsInfo) &&
+        comment.empty()) {
+        _phase7StateLabel.stringValue = @"Blocked and needs_info reviews require a review comment.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _phase7InFlight = YES;
+    const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
+    _phase7RefreshButton.enabled = NO;
+    _phase7ChooseBundleButton.enabled = NO;
+    _phase7RunAnalysisButton.enabled = NO;
+    _phase7BuildPlaybookButton.enabled = NO;
+    _phase7BuildLedgerButton.enabled = NO;
+    _phase7OpenLedgerButton.enabled = NO;
+    _phase7RecordReviewButton.enabled = NO;
+    _phase7StateLabel.stringValue = @"Recording ledger review decision…";
+    _phase7StateLabel.textColor = [NSColor systemOrangeColor];
+    _phase7TextView.string = @"Appending a review decision to the selected Phase 7 execution-ledger entries…";
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->recordExecutionLedgerReviewPayload(
+            ledger.ledgerArtifact.artifactId,
+            entryIds,
+            reviewStatus,
+            actor,
+            comment);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
+                return;
+            }
+            innerSelf->_phase7InFlight = NO;
+            innerSelf->_phase7RefreshButton.enabled = YES;
+            innerSelf->_phase7ChooseBundleButton.enabled = YES;
+            innerSelf->_phase7RunAnalysisButton.enabled = YES;
+            if (!result.ok()) {
+                innerSelf->_phase7StateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_phase7StateLabel.textColor = ErrorColorForKind(result.error.kind);
+                return;
+            }
+
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionLedgers.begin(),
+                                   innerSelf->_latestPhase7ExecutionLedgers.end(),
+                                   [&](const tapescope::Phase7ExecutionLedgerArtifact& item) {
+                                       return item.ledgerArtifact.artifactId == result.value.artifact.ledgerArtifact.artifactId;
+                                   });
+            std::size_t selectedIndex = 0;
+            if (it != innerSelf->_latestPhase7ExecutionLedgers.end()) {
+                *it = result.value.artifact;
+                selectedIndex = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionLedgers.begin(), it));
+            } else {
+                innerSelf->_latestPhase7ExecutionLedgers.insert(innerSelf->_latestPhase7ExecutionLedgers.begin(),
+                                                                result.value.artifact);
+                selectedIndex = 0;
+            }
+            [innerSelf->_phase7LedgerTableView reloadData];
+            innerSelf->_phase7SelectionIsPlaybook = NO;
+            innerSelf->_phase7SelectionIsLedger = YES;
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:selectedIndex]
+                                           byExtendingSelection:NO];
+            [innerSelf refreshPhase7DetailText];
+            NSIndexSet* updatedSelection = IndexSetForPhase7LedgerEntryIds(result.value.updatedEntryIds,
+                                                                           innerSelf->_phase7VisibleLedgerEntries);
+            if (updatedSelection.count > 0) {
+                [innerSelf->_phase7ActionTableView selectRowIndexes:updatedSelection byExtendingSelection:NO];
+                innerSelf->_phase7RecordReviewButton.enabled = YES;
+                innerSelf->_phase7TextView.string = ToNSString(innerSelf->_phase7DetailBody + "\n\n" +
+                                                               DescribeSelectedPhase7LedgerEntries(
+                                                                   innerSelf->_phase7VisibleLedgerEntries,
+                                                                   innerSelf->_phase7ActionTableView.selectedRowIndexes));
+            }
+            innerSelf->_phase7StateLabel.stringValue = ToNSString(
+                std::string("Recorded `") + reviewStatus + "` for " + std::to_string(result.value.updatedEntryIds.size()) +
+                " ledger entr" + (result.value.updatedEntryIds.size() == 1 ? "y." : "ies."));
+            innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
+            [innerSelf recordRecentHistoryEntry:tapescope::json{
+                {"kind", "phase7_execution_ledger"},
+                {"target_id", result.value.artifact.ledgerArtifact.artifactId},
+                {"artifact_id", result.value.artifact.ledgerArtifact.artifactId},
+                {"playbook_artifact_id", result.value.artifact.playbookArtifact.artifactId},
+                {"analysis_artifact_id", result.value.artifact.analysisArtifact.artifactId},
+                {"source_artifact_id", result.value.artifact.sourceArtifact.artifactId},
+                {"headline", std::string("Phase 7 execution ledger")},
+                {"detail", std::string("Recorded ") + reviewStatus + " for " +
+                               std::to_string(result.value.updatedEntryIds.size()) + " entr" +
+                               (result.value.updatedEntryIds.size() == 1 ? "y" : "ies")},
+                {"first_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
+                {"last_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
+            }];
+        });
+    });
 }
 
 - (void)loadReplayRangeFromPhase7Selection:(id)sender {

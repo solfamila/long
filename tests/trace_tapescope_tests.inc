@@ -254,12 +254,74 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(!typedPhase7Profiles.value.empty() &&
                typedPhase7Profiles.value.front().analysisProfile == tape_phase7::kDefaultAnalyzerProfile,
            "TapeScope typed phase7 profile list should expose the default analysis profile");
+    const auto incidentTriageProfileIt = std::find_if(
+        typedPhase7Profiles.value.begin(),
+        typedPhase7Profiles.value.end(),
+        [](const tapescope::Phase7AnalyzerProfile& profile) {
+            return profile.analysisProfile == tape_phase7::kIncidentTriageAnalyzerProfile;
+        });
+    expect(incidentTriageProfileIt != typedPhase7Profiles.value.end(),
+           "TapeScope typed phase7 profile list should expose the incident-triage analysis profile");
+    const auto fillQualityProfileIt = std::find_if(
+        typedPhase7Profiles.value.begin(),
+        typedPhase7Profiles.value.end(),
+        [](const tapescope::Phase7AnalyzerProfile& profile) {
+            return profile.analysisProfile == tape_phase7::kFillQualityAnalyzerProfile;
+        });
+    expect(fillQualityProfileIt != typedPhase7Profiles.value.end(),
+           "TapeScope typed phase7 profile list should expose the fill-quality analysis profile");
+    const auto liquidityBehaviorProfileIt = std::find_if(
+        typedPhase7Profiles.value.begin(),
+        typedPhase7Profiles.value.end(),
+        [](const tapescope::Phase7AnalyzerProfile& profile) {
+            return profile.analysisProfile == tape_phase7::kLiquidityBehaviorAnalyzerProfile;
+        });
+    expect(liquidityBehaviorProfileIt != typedPhase7Profiles.value.end(),
+           "TapeScope typed phase7 profile list should expose the liquidity-behavior analysis profile");
+    const auto adverseSelectionProfileIt = std::find_if(
+        typedPhase7Profiles.value.begin(),
+        typedPhase7Profiles.value.end(),
+        [](const tapescope::Phase7AnalyzerProfile& profile) {
+            return profile.analysisProfile == tape_phase7::kAdverseSelectionAnalyzerProfile;
+        });
+    expect(adverseSelectionProfileIt != typedPhase7Profiles.value.end(),
+           "TapeScope typed phase7 profile list should expose the adverse-selection analysis profile");
+    const auto orderImpactProfileIt = std::find_if(
+        typedPhase7Profiles.value.begin(),
+        typedPhase7Profiles.value.end(),
+        [](const tapescope::Phase7AnalyzerProfile& profile) {
+            return profile.analysisProfile == tape_phase7::kOrderImpactAnalyzerProfile;
+        });
+    expect(orderImpactProfileIt != typedPhase7Profiles.value.end(),
+           "TapeScope typed phase7 profile list should expose the order-impact analysis profile");
 
     const auto typedPhase7Profile = client.readAnalysisProfilePayload(tape_phase7::kDefaultAnalyzerProfile);
     expect(typedPhase7Profile.ok(), "TapeScope typed phase7 profile read should succeed: " +
                                         tapescope::QueryClient::describeError(typedPhase7Profile.error));
     expect(typedPhase7Profile.value.defaultProfile,
            "TapeScope typed phase7 profile read should preserve the default profile flag");
+    const auto typedIncidentTriageProfile =
+        client.readAnalysisProfilePayload(tape_phase7::kIncidentTriageAnalyzerProfile);
+    expect(typedIncidentTriageProfile.ok(), "TapeScope typed incident-triage phase7 profile read should succeed: " +
+                                                tapescope::QueryClient::describeError(typedIncidentTriageProfile.error));
+    expect(!typedIncidentTriageProfile.value.defaultProfile,
+           "TapeScope typed incident-triage phase7 profile read should remain non-default");
+    const auto typedFillQualityProfile =
+        client.readAnalysisProfilePayload(tape_phase7::kFillQualityAnalyzerProfile);
+    expect(typedFillQualityProfile.ok(), "TapeScope typed fill-quality phase7 profile read should succeed: " +
+                                             tapescope::QueryClient::describeError(typedFillQualityProfile.error));
+    const auto typedLiquidityBehaviorProfile =
+        client.readAnalysisProfilePayload(tape_phase7::kLiquidityBehaviorAnalyzerProfile);
+    expect(typedLiquidityBehaviorProfile.ok(), "TapeScope typed liquidity-behavior phase7 profile read should succeed: " +
+                                                   tapescope::QueryClient::describeError(typedLiquidityBehaviorProfile.error));
+    const auto typedAdverseSelectionProfile =
+        client.readAnalysisProfilePayload(tape_phase7::kAdverseSelectionAnalyzerProfile);
+    expect(typedAdverseSelectionProfile.ok(), "TapeScope typed adverse-selection phase7 profile read should succeed: " +
+                                                  tapescope::QueryClient::describeError(typedAdverseSelectionProfile.error));
+    const auto typedOrderImpactProfile =
+        client.readAnalysisProfilePayload(tape_phase7::kOrderImpactAnalyzerProfile);
+    expect(typedOrderImpactProfile.ok(), "TapeScope typed order-impact phase7 profile read should succeed: " +
+                                             tapescope::QueryClient::describeError(typedOrderImpactProfile.error));
 
     const auto phase7AnalysisRun = client.runAnalysisPayload(movedCaseBundlePath.string(),
                                                              tape_phase7::kDefaultAnalyzerProfile);
@@ -328,6 +390,101 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(sortedPhase7Analyses.value.artifacts.front().sourceArtifact.artifactId <=
                sortedPhase7Analyses.value.artifacts.back().sourceArtifact.artifactId,
            "TapeScope sorted phase7 analysis inventory should sort by source artifact id");
+
+    const auto incidentTriageAnalysisRun = client.runAnalysisPayload(movedCaseBundlePath.string(),
+                                                                     tape_phase7::kIncidentTriageAnalyzerProfile);
+    expect(incidentTriageAnalysisRun.ok(), "TapeScope typed incident-triage phase7 analysis run should succeed: " +
+                                               tapescope::QueryClient::describeError(incidentTriageAnalysisRun.error));
+    expect(incidentTriageAnalysisRun.value.created,
+           "TapeScope typed incident-triage phase7 analysis run should create the artifact on first run");
+    expect(incidentTriageAnalysisRun.value.artifact.analysisProfile == tape_phase7::kIncidentTriageAnalyzerProfile,
+           "TapeScope typed incident-triage phase7 analysis should preserve the requested profile");
+    expect(std::any_of(incidentTriageAnalysisRun.value.artifact.findings.begin(),
+                       incidentTriageAnalysisRun.value.artifact.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "incident_priority" ||
+                               finding.category == "incident_uncertainty" ||
+                               finding.category == "timeline_hotspot";
+                       }),
+           "TapeScope typed incident-triage phase7 analysis should emit incident triage finding categories");
+    const auto reusedIncidentTriageAnalysisRun = client.runAnalysisPayload(
+        movedCaseBundlePath.string(),
+        tape_phase7::kIncidentTriageAnalyzerProfile);
+    expect(reusedIncidentTriageAnalysisRun.ok(),
+           "TapeScope typed incident-triage phase7 analysis rerun should succeed: " +
+               tapescope::QueryClient::describeError(reusedIncidentTriageAnalysisRun.error));
+    expect(!reusedIncidentTriageAnalysisRun.value.created,
+           "TapeScope typed incident-triage phase7 analysis rerun should reuse the deterministic artifact");
+
+    tapescope::Phase7AnalysisInventorySelection incidentTriageSelection;
+    incidentTriageSelection.sourceArtifactId = incidentTriageAnalysisRun.value.artifact.sourceArtifact.artifactId;
+    incidentTriageSelection.analysisProfile = tape_phase7::kIncidentTriageAnalyzerProfile;
+    incidentTriageSelection.limit = 10;
+    const auto incidentTriageAnalyses = client.listAnalysisArtifactsPayload(incidentTriageSelection);
+    expect(incidentTriageAnalyses.ok(), "TapeScope filtered incident-triage analysis inventory should succeed: " +
+                                            tapescope::QueryClient::describeError(incidentTriageAnalyses.error));
+    expect(incidentTriageAnalyses.value.matchedCount >= 1 && !incidentTriageAnalyses.value.artifacts.empty(),
+           "TapeScope filtered incident-triage analysis inventory should return the matching durable analysis");
+    expect(incidentTriageAnalyses.value.appliedFilters.value("analysis_profile", std::string()) ==
+               tape_phase7::kIncidentTriageAnalyzerProfile,
+           "TapeScope filtered incident-triage analysis inventory should preserve the requested profile filter");
+
+    const auto fillQualityAnalysisRun = client.runAnalysisPayload(movedCaseBundlePath.string(),
+                                                                  tape_phase7::kFillQualityAnalyzerProfile);
+    expect(fillQualityAnalysisRun.ok(), "TapeScope typed fill-quality phase7 analysis run should succeed: " +
+                                            tapescope::QueryClient::describeError(fillQualityAnalysisRun.error));
+    expect(std::any_of(fillQualityAnalysisRun.value.artifact.findings.begin(),
+                       fillQualityAnalysisRun.value.artifact.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "fill_quality_risk" ||
+                               finding.category == "adverse_selection_risk" ||
+                               finding.category == "market_impact_risk" ||
+                               finding.category == "analysis_summary";
+                       }),
+           "TapeScope typed fill-quality phase7 analysis should emit fill-quality categories");
+
+    const auto liquidityBehaviorAnalysisRun = client.runAnalysisPayload(movedCaseBundlePath.string(),
+                                                                        tape_phase7::kLiquidityBehaviorAnalyzerProfile);
+    expect(liquidityBehaviorAnalysisRun.ok(),
+           "TapeScope typed liquidity-behavior phase7 analysis run should succeed: " +
+               tapescope::QueryClient::describeError(liquidityBehaviorAnalysisRun.error));
+    expect(std::any_of(liquidityBehaviorAnalysisRun.value.artifact.findings.begin(),
+                       liquidityBehaviorAnalysisRun.value.artifact.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "display_instability_risk" ||
+                               finding.category == "liquidity_refill_behavior" ||
+                               finding.category == "pressure_and_thinning" ||
+                               finding.category == "analysis_summary";
+                       }),
+           "TapeScope typed liquidity-behavior phase7 analysis should emit liquidity categories");
+
+    const auto adverseSelectionAnalysisRun = client.runAnalysisPayload(movedCaseBundlePath.string(),
+                                                                       tape_phase7::kAdverseSelectionAnalyzerProfile);
+    expect(adverseSelectionAnalysisRun.ok(),
+           "TapeScope typed adverse-selection phase7 analysis run should succeed: " +
+               tapescope::QueryClient::describeError(adverseSelectionAnalysisRun.error));
+    expect(std::any_of(adverseSelectionAnalysisRun.value.artifact.findings.begin(),
+                       adverseSelectionAnalysisRun.value.artifact.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "adverse_selection_risk" ||
+                               finding.category == "fill_quality_risk" ||
+                               finding.category == "analysis_summary";
+                       }),
+           "TapeScope typed adverse-selection phase7 analysis should emit adverse-selection categories");
+
+    const auto orderImpactAnalysisRun = client.runAnalysisPayload(movedCaseBundlePath.string(),
+                                                                  tape_phase7::kOrderImpactAnalyzerProfile);
+    expect(orderImpactAnalysisRun.ok(),
+           "TapeScope typed order-impact phase7 analysis run should succeed: " +
+               tapescope::QueryClient::describeError(orderImpactAnalysisRun.error));
+    expect(std::any_of(orderImpactAnalysisRun.value.artifact.findings.begin(),
+                       orderImpactAnalysisRun.value.artifact.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "market_impact_risk" ||
+                               finding.category == "fill_quality_risk" ||
+                               finding.category == "analysis_summary";
+                       }),
+           "TapeScope typed order-impact phase7 analysis should emit order-impact categories");
 
     const auto phase7PlaybookBuild =
         client.buildPlaybookPayload(phase7AnalysisArtifact.analysisArtifact.artifactId, selectedFindingIds);
@@ -400,9 +557,98 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                phase7AnalysisArtifact.sourceArtifact.artifactId,
            "TapeScope typed phase7 execution ledger read should preserve the linked source artifact id");
 
+    const std::vector<std::string> reviewedEntryIds = {
+        phase7ExecutionLedgerBuild.value.artifact.entries.front().entryId
+    };
+    const auto missingActorPhase7ExecutionLedgerReview = client.recordExecutionLedgerReviewPayload(
+        phase7ExecutionLedgerBuild.value.artifact.ledgerArtifact.artifactId,
+        reviewedEntryIds,
+        tape_phase7::kLedgerEntryStatusApproved,
+        "",
+        "Missing actor should fail.");
+    expect(!missingActorPhase7ExecutionLedgerReview.ok(),
+           "TapeScope typed phase7 execution ledger review should require a reviewer identity");
+    expect(tapescope::QueryClient::describeError(missingActorPhase7ExecutionLedgerReview.error).find("actor is required") !=
+               std::string::npos,
+           "TapeScope typed phase7 execution ledger review should surface the actor-required policy");
+    const auto missingCommentPhase7ExecutionLedgerReview = client.recordExecutionLedgerReviewPayload(
+        phase7ExecutionLedgerBuild.value.artifact.ledgerArtifact.artifactId,
+        reviewedEntryIds,
+        tape_phase7::kLedgerEntryStatusBlocked,
+        "tapescope-test",
+        "");
+    expect(!missingCommentPhase7ExecutionLedgerReview.ok(),
+           "TapeScope typed phase7 execution ledger review should require a comment for blocked status");
+    expect(tapescope::QueryClient::describeError(missingCommentPhase7ExecutionLedgerReview.error).find("comment is required") !=
+               std::string::npos,
+           "TapeScope typed phase7 execution ledger review should surface the comment-required policy");
+    const auto reviewedPhase7ExecutionLedger = client.recordExecutionLedgerReviewPayload(
+        phase7ExecutionLedgerBuild.value.artifact.ledgerArtifact.artifactId,
+        reviewedEntryIds,
+        tape_phase7::kLedgerEntryStatusApproved,
+        "tapescope-reviewer-a",
+        "First approval through the typed TapeScope seam.");
+    expect(reviewedPhase7ExecutionLedger.ok(),
+           "TapeScope typed phase7 execution ledger review should succeed: " +
+               tapescope::QueryClient::describeError(reviewedPhase7ExecutionLedger.error));
+    expect(reviewedPhase7ExecutionLedger.value.updatedEntryIds == reviewedEntryIds,
+           "TapeScope typed phase7 execution ledger review should report the updated entry ids");
+    expect(!reviewedPhase7ExecutionLedger.value.auditEventId.empty(),
+           "TapeScope typed phase7 execution ledger review should expose the appended audit event id");
+    expect(reviewedPhase7ExecutionLedger.value.artifact.ledgerStatus == tape_phase7::kLedgerStatusWaitingApproval,
+           "TapeScope typed phase7 execution ledger review should wait for the required second approval");
+    expect(reviewedPhase7ExecutionLedger.value.artifact.entries.front().reviewStatus ==
+               tape_phase7::kLedgerEntryStatusApproved,
+           "TapeScope typed phase7 execution ledger review should persist the updated entry status");
+    expect(reviewedPhase7ExecutionLedger.value.artifact.entries.front().reviewedBy == "tapescope-reviewer-a",
+           "TapeScope typed phase7 execution ledger review should preserve the reviewing actor");
+    expect(!reviewedPhase7ExecutionLedger.value.artifact.entries.front().reviewedAtUtc.empty(),
+           "TapeScope typed phase7 execution ledger review should stamp reviewed_at_utc");
+    expect(reviewedPhase7ExecutionLedger.value.artifact.entries.front().approvalReviewerCount == 1 &&
+               !reviewedPhase7ExecutionLedger.value.artifact.entries.front().approvalThresholdMet,
+           "TapeScope typed phase7 execution ledger review should track the first approval without marking the entry ready");
+    const auto reviewedLedgerSummary =
+        tape_phase7::summarizeExecutionLedgerReviewSummary(reviewedPhase7ExecutionLedger.value.artifact);
+    expect(reviewedLedgerSummary.approvedCount == 1 &&
+               reviewedLedgerSummary.waitingApprovalCount == 1 &&
+               reviewedLedgerSummary.requiredApprovalCount == 2 &&
+               reviewedLedgerSummary.distinctReviewerCount == 1 &&
+               !reviewedLedgerSummary.readyForExecution,
+           "TapeScope typed phase7 execution ledger review should expose the waiting-for-approval summary state");
+
+    const auto readyPhase7ExecutionLedger = client.recordExecutionLedgerReviewPayload(
+        phase7ExecutionLedgerBuild.value.artifact.ledgerArtifact.artifactId,
+        reviewedEntryIds,
+        tape_phase7::kLedgerEntryStatusApproved,
+        "tapescope-reviewer-b",
+        "Second approval through the typed TapeScope seam.");
+    expect(readyPhase7ExecutionLedger.ok(),
+           "TapeScope typed phase7 execution ledger second approval should succeed: " +
+               tapescope::QueryClient::describeError(readyPhase7ExecutionLedger.error));
+    expect(readyPhase7ExecutionLedger.value.artifact.ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution,
+           "TapeScope typed phase7 execution ledger second approval should mark the ledger ready for execution");
+    expect(readyPhase7ExecutionLedger.value.artifact.entries.front().approvalReviewerCount == 2 &&
+               readyPhase7ExecutionLedger.value.artifact.entries.front().approvalThresholdMet,
+           "TapeScope typed phase7 execution ledger second approval should satisfy the distinct-approval threshold");
+    const auto readyLedgerSummary =
+        tape_phase7::summarizeExecutionLedgerReviewSummary(readyPhase7ExecutionLedger.value.artifact);
+    expect(readyLedgerSummary.readyEntryCount == 1 &&
+               readyLedgerSummary.waitingApprovalCount == 0 &&
+               readyLedgerSummary.distinctReviewerCount >= 2 &&
+               readyLedgerSummary.readyForExecution,
+           "TapeScope typed phase7 execution ledger second approval should expose the ready-for-execution summary");
+
+    const auto phase7FullExecutionLedgerBuild =
+        client.buildExecutionLedgerPayload(phase7FullPlaybookArtifact.playbookArtifact.artifactId);
+    expect(phase7FullExecutionLedgerBuild.ok(), "TapeScope typed full-scope phase7 execution ledger build should succeed: " +
+                                                    tapescope::QueryClient::describeError(phase7FullExecutionLedgerBuild.error));
+    expect(phase7FullExecutionLedgerBuild.value.artifact.ledgerStatus == tape_phase7::kDefaultLedgerStatus,
+           "TapeScope typed full-scope phase7 execution ledger should start pending review");
+
     tapescope::Phase7ExecutionLedgerInventorySelection filteredLedgerSelection;
     filteredLedgerSelection.playbookArtifactId = phase7PlaybookArtifact.playbookArtifact.artifactId;
     filteredLedgerSelection.sourceArtifactId = phase7AnalysisArtifact.sourceArtifact.artifactId;
+    filteredLedgerSelection.ledgerStatus = tape_phase7::kLedgerStatusReadyForExecution;
     filteredLedgerSelection.limit = 10;
     const auto filteredPhase7ExecutionLedgers = client.listExecutionLedgerArtifactsPayload(filteredLedgerSelection);
     expect(filteredPhase7ExecutionLedgers.ok(), "TapeScope filtered phase7 execution ledger inventory should succeed: " +
@@ -413,8 +659,65 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(filteredPhase7ExecutionLedgers.value.appliedFilters.value("playbook_artifact_id", std::string()) ==
                    phase7PlaybookArtifact.playbookArtifact.artifactId &&
                filteredPhase7ExecutionLedgers.value.appliedFilters.value("source_artifact_id", std::string()) ==
-                   phase7AnalysisArtifact.sourceArtifact.artifactId,
-           "TapeScope filtered phase7 execution ledger inventory should preserve the requested lineage filters");
+                   phase7AnalysisArtifact.sourceArtifact.artifactId &&
+               filteredPhase7ExecutionLedgers.value.appliedFilters.value("ledger_status", std::string()) ==
+                   tape_phase7::kLedgerStatusReadyForExecution,
+           "TapeScope filtered phase7 execution ledger inventory should preserve the requested lineage and review-status filters");
+    expect(filteredPhase7ExecutionLedgers.value.appliedFilters.value("sort_by", std::string()) == "generated_at_desc",
+           "TapeScope filtered phase7 execution ledger inventory should preserve the default sort mode");
+
+    tapescope::Phase7ExecutionLedgerInventorySelection sortedLedgerSelection;
+    sortedLedgerSelection.analysisArtifactId = phase7AnalysisArtifact.analysisArtifact.artifactId;
+    sortedLedgerSelection.sortBy = "attention_desc";
+    sortedLedgerSelection.limit = 10;
+    const auto sortedPhase7ExecutionLedgers = client.listExecutionLedgerArtifactsPayload(sortedLedgerSelection);
+    expect(sortedPhase7ExecutionLedgers.ok(), "TapeScope sorted phase7 execution ledger inventory should succeed: " +
+                                                  tapescope::QueryClient::describeError(sortedPhase7ExecutionLedgers.error));
+    expect(sortedPhase7ExecutionLedgers.value.artifacts.size() >= 2,
+           "TapeScope sorted phase7 execution ledger inventory should expose both reviewed and pending ledgers");
+    expect(sortedPhase7ExecutionLedgers.value.appliedFilters.value("sort_by", std::string()) == "attention_desc",
+           "TapeScope sorted phase7 execution ledger inventory should preserve the requested sort mode");
+    const auto ledgerAttentionRank = [](const std::string& ledgerStatus) {
+        if (ledgerStatus == tape_phase7::kLedgerStatusBlocked) {
+            return 6;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusNeedsInformation) {
+            return 5;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusWaitingApproval) {
+            return 4;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution) {
+            return 3;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusInProgress) {
+            return 2;
+        }
+        if (ledgerStatus == tape_phase7::kDefaultLedgerStatus) {
+            return 1;
+        }
+        return 0;
+    };
+    const auto findLedgerIndex = [&](const std::string& artifactId) {
+        for (size_t index = 0; index < sortedPhase7ExecutionLedgers.value.artifacts.size(); ++index) {
+            if (sortedPhase7ExecutionLedgers.value.artifacts[index].ledgerArtifact.artifactId == artifactId) {
+                return index;
+            }
+        }
+        return sortedPhase7ExecutionLedgers.value.artifacts.size();
+    };
+    const size_t reviewedLedgerIndex =
+        findLedgerIndex(readyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId);
+    const size_t pendingLedgerIndex =
+        findLedgerIndex(phase7FullExecutionLedgerBuild.value.artifact.ledgerArtifact.artifactId);
+    expect(reviewedLedgerIndex < sortedPhase7ExecutionLedgers.value.artifacts.size() &&
+               pendingLedgerIndex < sortedPhase7ExecutionLedgers.value.artifacts.size(),
+           "TapeScope sorted phase7 execution ledger inventory should include both reviewed and untouched pending ledgers");
+    expect(ledgerAttentionRank(readyPhase7ExecutionLedger.value.artifact.ledgerStatus) >=
+                   ledgerAttentionRank(phase7FullExecutionLedgerBuild.value.artifact.ledgerStatus)
+               ? reviewedLedgerIndex <= pendingLedgerIndex
+               : reviewedLedgerIndex >= pendingLedgerIndex,
+           "TapeScope sorted phase7 execution ledger inventory should order ledgers by attention rank instead of assuming one fixed review status");
 
     tapescope::Phase7PlaybookInventorySelection filteredPlaybookSelection;
     filteredPlaybookSelection.analysisArtifactId = phase7AnalysisArtifact.analysisArtifact.artifactId;

@@ -583,7 +583,19 @@ json phase7ExecutionLedgerFiltersSchema() {
             {"playbook_artifact_id", nullableStringSchema()},
             {"analysis_artifact_id", nullableStringSchema()},
             {"source_artifact_id", nullableStringSchema()},
-            {"ledger_status", nullableStringSchema()},
+            {"ledger_status", json{{"oneOf", json::array({
+                stringEnumSchema({
+                    tape_phase7::kDefaultLedgerStatus,
+                    tape_phase7::kLedgerStatusInProgress,
+                    tape_phase7::kLedgerStatusBlocked,
+                    tape_phase7::kLedgerStatusNeedsInformation,
+                    tape_phase7::kLedgerStatusCompleted,
+                    tape_phase7::kLedgerStatusWaitingApproval,
+                    tape_phase7::kLedgerStatusReadyForExecution
+                }),
+                json{{"type", "null"}}
+            })}}},
+            {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})},
             {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
             {"matched_count", nonNegativeIntegerSchema()}
         }},
@@ -592,6 +604,7 @@ json phase7ExecutionLedgerFiltersSchema() {
             "analysis_artifact_id",
             "source_artifact_id",
             "ledger_status",
+            "sort_by",
             "limit",
             "matched_count"
         })},
@@ -615,6 +628,28 @@ json phase7PlaybookActionSchema() {
     };
 }
 
+json phase7ExecutionLedgerEntryStatusSchema() {
+    return stringEnumSchema({
+        tape_phase7::kDefaultLedgerEntryStatus,
+        tape_phase7::kLedgerEntryStatusApproved,
+        tape_phase7::kLedgerEntryStatusBlocked,
+        tape_phase7::kLedgerEntryStatusNeedsInfo,
+        tape_phase7::kLedgerEntryStatusNotApplicable
+    });
+}
+
+json phase7ExecutionLedgerAggregateStatusSchema() {
+    return stringEnumSchema({
+        tape_phase7::kDefaultLedgerStatus,
+        tape_phase7::kLedgerStatusInProgress,
+        tape_phase7::kLedgerStatusBlocked,
+        tape_phase7::kLedgerStatusNeedsInformation,
+        tape_phase7::kLedgerStatusCompleted,
+        tape_phase7::kLedgerStatusWaitingApproval,
+        tape_phase7::kLedgerStatusReadyForExecution
+    });
+}
+
 json phase7ExecutionLedgerEntrySchema() {
     return json{
         {"type", "object"},
@@ -623,7 +658,13 @@ json phase7ExecutionLedgerEntrySchema() {
             {"action_id", stringSchema()},
             {"action_type", stringSchema()},
             {"finding_id", stringSchema()},
-            {"review_status", stringSchema()},
+            {"review_status", phase7ExecutionLedgerEntryStatusSchema()},
+            {"reviewed_at_utc", nullableStringSchema()},
+            {"reviewed_by", nullableStringSchema()},
+            {"review_comment", nullableStringSchema()},
+            {"distinct_reviewer_count", nonNegativeIntegerSchema()},
+            {"approval_reviewer_count", nonNegativeIntegerSchema()},
+            {"approval_threshold_met", booleanSchema()},
             {"requires_manual_confirmation", booleanSchema()},
             {"title", stringSchema()},
             {"summary", stringSchema()},
@@ -635,11 +676,77 @@ json phase7ExecutionLedgerEntrySchema() {
             "action_type",
             "finding_id",
             "review_status",
+            "reviewed_at_utc",
+            "reviewed_by",
+            "review_comment",
+            "distinct_reviewer_count",
+            "approval_reviewer_count",
+            "approval_threshold_met",
             "requires_manual_confirmation",
             "title",
             "summary",
             "suggested_tools"
         })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerReviewStatusSchema() {
+    return stringEnumSchema({
+        tape_phase7::kLedgerEntryStatusApproved,
+        tape_phase7::kLedgerEntryStatusBlocked,
+        tape_phase7::kLedgerEntryStatusNeedsInfo,
+        tape_phase7::kLedgerEntryStatusNotApplicable
+    });
+}
+
+json phase7ExecutionLedgerReviewSummarySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"pending_review_count", nonNegativeIntegerSchema()},
+            {"approved_count", nonNegativeIntegerSchema()},
+            {"blocked_count", nonNegativeIntegerSchema()},
+            {"needs_info_count", nonNegativeIntegerSchema()},
+            {"not_applicable_count", nonNegativeIntegerSchema()},
+            {"reviewed_count", nonNegativeIntegerSchema()},
+            {"waiting_approval_count", nonNegativeIntegerSchema()},
+            {"ready_entry_count", nonNegativeIntegerSchema()},
+            {"actionable_entry_count", nonNegativeIntegerSchema()},
+            {"distinct_reviewer_count", nonNegativeIntegerSchema()},
+            {"required_approval_count", nonNegativeIntegerSchema()},
+            {"ready_for_execution", booleanSchema()}
+        }},
+        {"required", json::array({
+            "pending_review_count",
+            "approved_count",
+            "blocked_count",
+            "needs_info_count",
+            "not_applicable_count",
+            "reviewed_count",
+            "waiting_approval_count",
+            "ready_entry_count",
+            "actionable_entry_count",
+            "distinct_reviewer_count",
+            "required_approval_count",
+            "ready_for_execution"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerAuditSummarySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"event_type", nullableStringSchema()},
+            {"generated_at_utc", nullableStringSchema()},
+            {"actor", nullableStringSchema()},
+            {"review_status", json{{"oneOf", json::array({phase7ExecutionLedgerEntryStatusSchema(), json{{"type", "null"}}})}}},
+            {"ledger_status", json{{"oneOf", json::array({phase7ExecutionLedgerAggregateStatusSchema(), json{{"type", "null"}}})}}},
+            {"message", nullableStringSchema()}
+        }},
+        {"required", json::array({"event_type", "generated_at_utc", "actor", "review_status", "ledger_status", "message"})},
         {"additionalProperties", false}
     };
 }
@@ -823,10 +930,12 @@ json phase7ExecutionLedgerResultSchema() {
             {"execution_ledger", json{{"type", "object"}, {"additionalProperties", true}}},
             {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
             {"generated_at_utc", stringSchema()},
-            {"ledger_status", stringSchema()},
+            {"ledger_status", phase7ExecutionLedgerAggregateStatusSchema()},
             {"execution_policy", json{{"type", "object"}, {"additionalProperties", true}}},
             {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
             {"entry_count", nonNegativeIntegerSchema()},
+            {"review_summary", phase7ExecutionLedgerReviewSummarySchema()},
+            {"latest_audit_event", phase7ExecutionLedgerAuditSummarySchema()},
             {"entries", json{{"type", "array"}, {"items", phase7ExecutionLedgerEntrySchema()}}},
             {"audit_trail", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
@@ -842,6 +951,8 @@ json phase7ExecutionLedgerResultSchema() {
             "execution_policy",
             "filtered_finding_ids",
             "entry_count",
+            "review_summary",
+            "latest_audit_event",
             "entries",
             "audit_trail",
             "replay_context"
@@ -857,6 +968,15 @@ json phase7ExecutionLedgerBuildResultSchema() {
     return schema;
 }
 
+json phase7ExecutionLedgerReviewResultSchema() {
+    json schema = phase7ExecutionLedgerResultSchema();
+    schema["properties"]["updated_entry_ids"] = json{{"type", "array"}, {"items", stringSchema()}};
+    schema["properties"]["audit_event_id"] = stringSchema();
+    schema["required"].push_back("updated_entry_ids");
+    schema["required"].push_back("audit_event_id");
+    return schema;
+}
+
 json phase7ExecutionLedgerRowSchema() {
     return json{
         {"type", "object"},
@@ -867,8 +987,10 @@ json phase7ExecutionLedgerRowSchema() {
             {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
             {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
             {"generated_at_utc", stringSchema()},
-            {"ledger_status", stringSchema()},
+            {"ledger_status", phase7ExecutionLedgerAggregateStatusSchema()},
             {"entry_count", nonNegativeIntegerSchema()},
+            {"review_summary", phase7ExecutionLedgerReviewSummarySchema()},
+            {"latest_audit_event", phase7ExecutionLedgerAuditSummarySchema()},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
         }},
         {"required", json::array({
@@ -880,6 +1002,8 @@ json phase7ExecutionLedgerRowSchema() {
             "generated_at_utc",
             "ledger_status",
             "entry_count",
+            "review_summary",
+            "latest_audit_event",
             "replay_context"
         })},
         {"additionalProperties", false}
@@ -1061,6 +1185,8 @@ std::string toolTitle(const ToolSpec& tool) {
             return "List Execution Ledgers";
         case ToolId::ReadExecutionLedger:
             return "Read Execution Ledger";
+        case ToolId::RecordExecutionLedgerReview:
+            return "Record Execution Ledger Review";
     }
     return tool.name;
 }
@@ -1077,6 +1203,7 @@ json toolAnnotationsForSpec(const ToolSpec& tool) {
         case ToolId::AnalyzerRun:
         case ToolId::PlaybookApply:
         case ToolId::PrepareExecutionLedger:
+        case ToolId::RecordExecutionLedgerReview:
             return toolAnnotations(false, true, false);
         default:
             return toolAnnotations(true, true, false);
@@ -1171,10 +1298,21 @@ json toolInputSchemaForList(const ToolSpec& tool) {
         case ToolId::ListExecutionLedgers:
             return withSchemaExamples(std::move(schema), {
                 json{{"limit", 10}},
-                json{{"playbook_artifact_id", "phase7-playbook-1234abcd"}}
+                json{{"playbook_artifact_id", "phase7-playbook-1234abcd"}},
+                json{{"ledger_status", "review_blocked"}, {"sort_by", "attention_desc"}},
+                json{{"ledger_status", "review_waiting_approval"}, {"sort_by", "attention_desc"}},
+                json{{"ledger_status", "ready_for_execution"}, {"sort_by", "attention_desc"}}
             });
         case ToolId::ReadExecutionLedger:
             return withSchemaExamples(std::move(schema), {json{{"execution_ledger_artifact_id", "phase7-ledger-1234abcd"}}});
+        case ToolId::RecordExecutionLedgerReview:
+            return withSchemaExamples(std::move(schema), {
+                json{{"execution_ledger_artifact_id", "phase7-ledger-1234abcd"},
+                     {"entry_ids", json::array({"phase7-ledger-entry-1111"})},
+                     {"review_status", tape_phase7::kLedgerEntryStatusApproved},
+                     {"actor", "tapescope"},
+                     {"comment", "Reviewed and safe for deferred follow-up."}}
+            });
         case ToolId::Status:
         default:
             return schema;
@@ -1516,7 +1654,7 @@ std::string promptMessageForPrompt(const PromptSpec& prompt, const json& args) {
             << (ledgerArtifactId.empty() ? "<execution_ledger_artifact_id>" : ledgerArtifactId)
             << "` and `tape://phase7/ledger/"
             << (ledgerArtifactId.empty() ? "<execution_ledger_artifact_id>" : ledgerArtifactId)
-            << "/markdown`, then follow the linked playbook and analysis artifacts with `tapescript_read_playbook_artifact` and `tapescript_findings_list`. Keep apply deferred and treat the ledger as an audit/review surface only. Return: review status, blocked actions, required confirmations, and the next safe investigation steps.";
+            << "/markdown`, then follow the linked playbook and analysis artifacts with `tapescript_read_playbook_artifact` and `tapescript_findings_list`. If review decisions need to be captured, call `tapescript_record_execution_ledger_review`. Keep apply deferred and treat the ledger as an audit/review surface only. Return: review status, blocked actions, required confirmations, and the next safe investigation steps.";
         return out.str();
     }
     return prompt.description;
@@ -1931,8 +2069,36 @@ json phase7ExecutionLedgerInventoryInputSchema() {
             {"playbook_artifact_id", stringSchema()},
             {"analysis_artifact_id", stringSchema()},
             {"source_artifact_id", stringSchema()},
-            {"ledger_status", stringSchema()}
+            {"ledger_status", stringEnumSchema({
+                tape_phase7::kDefaultLedgerStatus,
+                tape_phase7::kLedgerStatusInProgress,
+                tape_phase7::kLedgerStatusBlocked,
+                tape_phase7::kLedgerStatusNeedsInformation,
+                tape_phase7::kLedgerStatusCompleted,
+                tape_phase7::kLedgerStatusWaitingApproval,
+                tape_phase7::kLedgerStatusReadyForExecution
+            })},
+            {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})}
         }},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionLedgerReviewInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_ledger_manifest_path", stringSchema()},
+            {"execution_ledger_artifact_id", stringSchema()},
+            {"entry_ids", json{{"type", "array"}, {"items", stringSchema()}, {"minItems", 1}}},
+            {"review_status", phase7ExecutionLedgerReviewStatusSchema()},
+            {"actor", stringSchema()},
+            {"comment", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_ledger_manifest_path", "entry_ids", "review_status", "actor"})}},
+            json{{"required", json::array({"execution_ledger_artifact_id", "entry_ids", "review_status", "actor"})}}
+        })},
         {"additionalProperties", false}
     };
 }
@@ -2400,7 +2566,17 @@ std::vector<ToolSpec> buildToolSpecs() {
          tape_engine::QueryOperation::Unknown,
          false,
          kPhase7ContractVersion,
-         "phase7_read_execution_ledger_local"}
+         "phase7_read_execution_ledger_local"},
+        {ToolId::RecordExecutionLedgerReview,
+         "tapescript_record_execution_ledger_review",
+         "Append a review decision to one or more Phase 7 execution-ledger entries while live apply remains deferred.",
+         phase7ExecutionLedgerReviewInputSchema(),
+         phase7ExecutionLedgerReviewResultSchema(),
+         "phase7.execution-ledger-review.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_record_execution_ledger_review_local"}
     };
 }
 
@@ -2607,6 +2783,16 @@ struct Phase7ExecutionLedgerInventorySelection {
     std::string analysisArtifactId;
     std::string sourceArtifactId;
     std::string ledgerStatus;
+    std::string sortBy = "generated_at_desc";
+};
+
+struct Phase7ExecutionLedgerReviewSelection {
+    std::string manifestPath;
+    std::string artifactId;
+    std::vector<std::string> entryIds;
+    std::string reviewStatus;
+    std::string actor;
+    std::string comment;
 };
 
 std::optional<int> phase7SeverityRank(std::string_view severity) {
@@ -2813,6 +2999,103 @@ bool parsePhase7ExecutionLedgerRefArgs(const json& args,
     return true;
 }
 
+bool parsePhase7ExecutionLedgerReviewArgs(const json& args,
+                                          Phase7ExecutionLedgerReviewSelection* outSelection,
+                                          std::string* outCode,
+                                          std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args,
+                          {"execution_ledger_manifest_path",
+                           "execution_ledger_artifact_id",
+                           "entry_ids",
+                           "review_status",
+                           "actor",
+                           "comment"})) {
+        return fail("invalid_arguments",
+                    "execution ledger review arguments support one ledger reference plus entry_ids, review_status, actor, and comment");
+    }
+
+    Phase7ExecutionLedgerReviewSelection selection;
+    const bool hasManifest = args.contains("execution_ledger_manifest_path");
+    const bool hasArtifactId = args.contains("execution_ledger_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_ledger_manifest_path or execution_ledger_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("execution_ledger_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "execution_ledger_manifest_path must be a non-empty string");
+        }
+        selection.manifestPath = *manifestPath;
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("execution_ledger_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "execution_ledger_artifact_id must be a non-empty string");
+        }
+        selection.artifactId = *artifactId;
+    }
+    if (!args.contains("entry_ids")) {
+        return fail("invalid_arguments", "entry_ids is required");
+    }
+    const auto entryIds = asNonEmptyStringArray(args.at("entry_ids"));
+    if (!entryIds.has_value() || entryIds->empty()) {
+        return fail("invalid_arguments", "entry_ids must be an array of non-empty strings");
+    }
+    selection.entryIds = *entryIds;
+    if (!args.contains("review_status")) {
+        return fail("invalid_arguments", "review_status is required");
+    }
+    const auto reviewStatus = asNonEmptyString(args.at("review_status"));
+    if (!reviewStatus.has_value() ||
+        (*reviewStatus != tape_phase7::kLedgerEntryStatusApproved &&
+         *reviewStatus != tape_phase7::kLedgerEntryStatusBlocked &&
+         *reviewStatus != tape_phase7::kLedgerEntryStatusNeedsInfo &&
+         *reviewStatus != tape_phase7::kLedgerEntryStatusNotApplicable)) {
+        return fail("invalid_arguments",
+                    "review_status must be one of approved, blocked, needs_info, or not_applicable");
+    }
+    selection.reviewStatus = *reviewStatus;
+    if (!args.contains("actor")) {
+        return fail("invalid_arguments", "actor is required");
+    }
+    const auto actor = asNonEmptyString(args.at("actor"));
+    if (!actor.has_value()) {
+        return fail("invalid_arguments", "actor must be a non-empty string");
+    }
+    selection.actor = *actor;
+    if (args.contains("comment")) {
+        const auto comment = asNonEmptyString(args.at("comment"));
+        if (!comment.has_value()) {
+            return fail("invalid_arguments", "comment must be a non-empty string");
+        }
+        selection.comment = *comment;
+    }
+    if ((selection.reviewStatus == tape_phase7::kLedgerEntryStatusBlocked ||
+         selection.reviewStatus == tape_phase7::kLedgerEntryStatusNeedsInfo) &&
+        selection.comment.empty()) {
+        return fail("invalid_arguments", "comment is required for blocked and needs_info reviews");
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
 bool parsePhase7AnalysisInventoryArgs(const json& args,
                                       Phase7AnalysisInventorySelection* outSelection,
                                       std::string* outCode,
@@ -2939,9 +3222,9 @@ bool parsePhase7ExecutionLedgerInventoryArgs(const json& args,
     if (!args.is_object()) {
         return fail("invalid_arguments", "Tool arguments must be an object.");
     }
-    if (hasUnexpectedKeys(args, {"limit", "playbook_artifact_id", "analysis_artifact_id", "source_artifact_id", "ledger_status"})) {
+    if (hasUnexpectedKeys(args, {"limit", "playbook_artifact_id", "analysis_artifact_id", "source_artifact_id", "ledger_status", "sort_by"})) {
         return fail("invalid_arguments",
-                    "execution ledger inventory arguments support only limit, playbook_artifact_id, analysis_artifact_id, source_artifact_id, and ledger_status");
+                    "execution ledger inventory arguments support only limit, playbook_artifact_id, analysis_artifact_id, source_artifact_id, ledger_status, and sort_by");
     }
 
     Phase7ExecutionLedgerInventorySelection selection;
@@ -2975,10 +3258,27 @@ bool parsePhase7ExecutionLedgerInventoryArgs(const json& args,
     }
     if (args.contains("ledger_status")) {
         const auto ledgerStatus = asNonEmptyString(args.at("ledger_status"));
-        if (!ledgerStatus.has_value()) {
-            return fail("invalid_arguments", "ledger_status must be a non-empty string");
+        if (!ledgerStatus.has_value() ||
+            (*ledgerStatus != tape_phase7::kDefaultLedgerStatus &&
+             *ledgerStatus != tape_phase7::kLedgerStatusInProgress &&
+             *ledgerStatus != tape_phase7::kLedgerStatusBlocked &&
+             *ledgerStatus != tape_phase7::kLedgerStatusNeedsInformation &&
+             *ledgerStatus != tape_phase7::kLedgerStatusCompleted &&
+             *ledgerStatus != tape_phase7::kLedgerStatusWaitingApproval &&
+             *ledgerStatus != tape_phase7::kLedgerStatusReadyForExecution)) {
+            return fail("invalid_arguments",
+                        "ledger_status must be one of review_pending, review_in_progress, review_blocked, needs_information, review_completed, review_waiting_approval, or ready_for_execution");
         }
         selection.ledgerStatus = *ledgerStatus;
+    }
+    if (args.contains("sort_by")) {
+        const auto sortBy = asNonEmptyString(args.at("sort_by"));
+        if (!sortBy.has_value() ||
+            (*sortBy != "generated_at_desc" && *sortBy != "attention_desc" && *sortBy != "source_artifact_asc")) {
+            return fail("invalid_arguments",
+                        "sort_by must be one of generated_at_desc, attention_desc, or source_artifact_asc");
+        }
+        selection.sortBy = *sortBy;
     }
 
     if (outSelection != nullptr) {
@@ -3273,6 +3573,7 @@ json phase7ExecutionLedgerPayload(const tape_phase7::ExecutionLedgerArtifact& le
     for (const auto& entry : ledger.entries) {
         entries.push_back(tape_phase7::executionLedgerEntryToJson(entry));
     }
+    const auto reviewSummary = tape_phase7::summarizeExecutionLedgerReviewSummary(ledger);
     json payload = {
         {"source_artifact", tape_phase7::artifactRefToJson(ledger.sourceArtifact)},
         {"analysis_artifact", tape_phase7::artifactRefToJson(ledger.analysisArtifact)},
@@ -3284,6 +3585,8 @@ json phase7ExecutionLedgerPayload(const tape_phase7::ExecutionLedgerArtifact& le
         {"execution_policy", ledger.executionPolicy},
         {"filtered_finding_ids", ledger.filteredFindingIds},
         {"entry_count", ledger.entries.size()},
+        {"review_summary", tape_phase7::executionLedgerReviewSummaryToJson(reviewSummary)},
+        {"latest_audit_event", tape_phase7::latestExecutionLedgerAuditSummary(ledger)},
         {"entries", std::move(entries)},
         {"audit_trail", ledger.auditTrail},
         {"replay_context", ledger.replayContext}
@@ -3294,11 +3597,21 @@ json phase7ExecutionLedgerPayload(const tape_phase7::ExecutionLedgerArtifact& le
     return payload;
 }
 
+json phase7ExecutionLedgerReviewPayload(const tape_phase7::ExecutionLedgerArtifact& ledger,
+                                        const std::vector<std::string>& updatedEntryIds,
+                                        std::string_view auditEventId) {
+    json payload = phase7ExecutionLedgerPayload(ledger);
+    payload["updated_entry_ids"] = updatedEntryIds;
+    payload["audit_event_id"] = std::string(auditEventId);
+    return payload;
+}
+
 json phase7ExecutionLedgerInventoryPayload(const std::vector<tape_phase7::ExecutionLedgerArtifact>& artifacts,
                                            const Phase7ExecutionLedgerInventorySelection& selection,
                                            std::size_t matchedCount) {
     json rows = json::array();
     for (const auto& artifact : artifacts) {
+        const auto reviewSummary = tape_phase7::summarizeExecutionLedgerReviewSummary(artifact);
         rows.push_back({
             {"execution_ledger", tape_phase7::artifactRefToJson(artifact.ledgerArtifact)},
             {"playbook_artifact", tape_phase7::artifactRefToJson(artifact.playbookArtifact)},
@@ -3308,6 +3621,8 @@ json phase7ExecutionLedgerInventoryPayload(const std::vector<tape_phase7::Execut
             {"generated_at_utc", artifact.generatedAtUtc},
             {"ledger_status", artifact.ledgerStatus},
             {"entry_count", artifact.entries.size()},
+            {"review_summary", tape_phase7::executionLedgerReviewSummaryToJson(reviewSummary)},
+            {"latest_audit_event", tape_phase7::latestExecutionLedgerAuditSummary(artifact)},
             {"replay_context", artifact.replayContext}
         });
     }
@@ -3318,6 +3633,7 @@ json phase7ExecutionLedgerInventoryPayload(const std::vector<tape_phase7::Execut
             {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
             {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
             {"ledger_status", selection.ledgerStatus.empty() ? json(nullptr) : json(selection.ledgerStatus)},
+            {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
             {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
             {"matched_count", matchedCount}
         }},
@@ -4652,6 +4968,8 @@ json Adapter::invokeTool(const ToolSpec& tool, const json& args) const {
             return invokeListExecutionLedgersTool(tool, args);
         case ToolId::ReadExecutionLedger:
             return invokeReadExecutionLedgerTool(tool, args);
+        case ToolId::RecordExecutionLedgerReview:
+            return invokeRecordExecutionLedgerReviewTool(tool, args);
     }
     return makeToolResult(makeErrorEnvelope(
         tool.name,
@@ -6325,10 +6643,45 @@ json Adapter::invokeListExecutionLedgersTool(const ToolSpec& tool, const json& a
                                        return false;
                                    }),
                     artifacts.end());
+    const auto statusRank = [](const std::string& ledgerStatus) {
+        if (ledgerStatus == tape_phase7::kLedgerStatusBlocked) {
+            return 0;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusNeedsInformation) {
+            return 1;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusWaitingApproval) {
+            return 2;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution) {
+            return 3;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusInProgress) {
+            return 4;
+        }
+        if (ledgerStatus == tape_phase7::kDefaultLedgerStatus) {
+            return 5;
+        }
+        if (ledgerStatus == tape_phase7::kLedgerStatusCompleted) {
+            return 6;
+        }
+        return 7;
+    };
     std::sort(artifacts.begin(),
               artifacts.end(),
-              [](const tape_phase7::ExecutionLedgerArtifact& lhs,
-                 const tape_phase7::ExecutionLedgerArtifact& rhs) {
+              [&](const tape_phase7::ExecutionLedgerArtifact& lhs,
+                  const tape_phase7::ExecutionLedgerArtifact& rhs) {
+                  if (selection.sortBy == "attention_desc") {
+                      const int lhsRank = statusRank(lhs.ledgerStatus);
+                      const int rhsRank = statusRank(rhs.ledgerStatus);
+                      if (lhsRank != rhsRank) {
+                          return lhsRank < rhsRank;
+                      }
+                  } else if (selection.sortBy == "source_artifact_asc") {
+                      if (lhs.sourceArtifact.artifactId != rhs.sourceArtifact.artifactId) {
+                          return lhs.sourceArtifact.artifactId < rhs.sourceArtifact.artifactId;
+                      }
+                  }
                   if (lhs.generatedAtUtc != rhs.generatedAtUtc) {
                       return lhs.generatedAtUtc > rhs.generatedAtUtc;
                   }
@@ -6378,6 +6731,54 @@ json Adapter::invokeReadExecutionLedgerTool(const ToolSpec& tool, const json& ar
 
     return makeToolResult(makeSuccessEnvelope(tool,
                                               phase7ExecutionLedgerPayload(artifact),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeRecordExecutionLedgerReviewTool(const ToolSpec& tool, const json& args) const {
+    Phase7ExecutionLedgerReviewSelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionLedgerReviewArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionLedgerArtifact artifact;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+    if (!tape_phase7::recordExecutionLedgerReview(selection.manifestPath,
+                                                  selection.artifactId,
+                                                  selection.entryIds,
+                                                  selection.reviewStatus,
+                                                  selection.actor,
+                                                  selection.comment,
+                                                  &artifact,
+                                                  &updatedEntryIds,
+                                                  &auditEventId,
+                                                  &code,
+                                                  &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionLedgerReviewPayload(artifact, updatedEntryIds, auditEventId),
                                               revisionFromPhase7ReplayContext(artifact.replayContext)));
 }
 

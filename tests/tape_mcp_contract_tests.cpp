@@ -6,6 +6,7 @@
 #include "tape_engine.h"
 #include "tape_engine_client.h"
 #include "tape_engine_protocol.h"
+#include "tape_phase7_artifacts.h"
 
 #include <algorithm>
 #include <array>
@@ -241,6 +242,21 @@ json normalizeHash(const json& value) {
     return value.get<std::string>().empty() ? json(nullptr) : json("<hash>");
 }
 
+std::string stringValueOrEmpty(const json& value, const char* key) {
+    if (!value.is_object() || key == nullptr || !value.contains(key) || !value.at(key).is_string()) {
+        return std::string();
+    }
+    return value.at(key).get<std::string>();
+}
+
+json stringValueOrNull(const json& value, const char* key) {
+    const std::string text = stringValueOrEmpty(value, key);
+    if (text.empty()) {
+        return nullptr;
+    }
+    return text;
+}
+
 json normalizePositiveId(std::uint64_t value) {
     return value == 0 ? json(nullptr) : json("<id>");
 }
@@ -293,9 +309,9 @@ json projectPhase7ArtifactRef(const json& artifact) {
             "/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json";
     }
     return {
-        {"artifact_id", normalizeArtifactId(artifact.value("artifact_id", std::string()))},
-        {"artifact_type", artifact.value("artifact_type", std::string())},
-        {"contract_version", artifact.value("contract_version", std::string())},
+        {"artifact_id", normalizeArtifactId(stringValueOrEmpty(artifact, "artifact_id"))},
+        {"artifact_type", stringValueOrEmpty(artifact, "artifact_type")},
+        {"contract_version", stringValueOrEmpty(artifact, "contract_version")},
         {"manifest_path", std::move(manifestPath)}
     };
 }
@@ -678,9 +694,9 @@ json projectPhase7PlaybookInventoryFilters(const json& filters) {
 
 json projectPhase7AnalysisProfile(const json& profile) {
     return {
-        {"analysis_profile", profile.value("analysis_profile", std::string())},
-        {"title", profile.value("title", std::string())},
-        {"summary", profile.value("summary", std::string())},
+        {"analysis_profile", stringValueOrEmpty(profile, "analysis_profile")},
+        {"title", stringValueOrEmpty(profile, "title")},
+        {"summary", stringValueOrEmpty(profile, "summary")},
         {"default_profile", profile.value("default_profile", false)},
         {"supported_source_bundle_types", profile.value("supported_source_bundle_types", json::array())},
         {"finding_categories", profile.value("finding_categories", json::array())}
@@ -708,8 +724,8 @@ json projectPhase7AnalysisInventoryResult(const json& result) {
         rows.push_back({
             {"analysis_artifact", projectPhase7ArtifactRef(row.value("analysis_artifact", json::object()))},
             {"source_artifact", projectPhase7ArtifactRef(row.value("source_artifact", json::object()))},
-            {"analysis_profile", row.value("analysis_profile", std::string())},
-            {"has_generated_at_utc", row.value("generated_at_utc", std::string()).empty() == false},
+            {"analysis_profile", stringValueOrEmpty(row, "analysis_profile")},
+            {"has_generated_at_utc", !stringValueOrEmpty(row, "generated_at_utc").empty()},
             {"finding_count", row.value("finding_count", 0ULL)},
             {"replay_context", projectPhase7ReplayContext(row.value("replay_context", json::object()))}
         });
@@ -728,14 +744,22 @@ json projectPhase7AnalysisInventoryResult(const json& result) {
 json projectPhase7ExecutionLedgerEntries(const json& entries) {
     json rows = json::array();
     for (const auto& entry : entries) {
+        const std::string reviewedAtUtc = stringValueOrEmpty(entry, "reviewed_at_utc");
+        const std::string reviewComment = stringValueOrEmpty(entry, "review_comment");
         rows.push_back({
             {"entry_id", entry.value("entry_id", std::string())},
             {"action_id", entry.value("action_id", std::string())},
             {"action_type", entry.value("action_type", std::string())},
             {"finding_id", entry.value("finding_id", std::string())},
-            {"review_status", entry.value("review_status", std::string())},
+            {"review_status", stringValueOrEmpty(entry, "review_status")},
+            {"reviewed_by", stringValueOrNull(entry, "reviewed_by")},
+            {"has_reviewed_at_utc", !reviewedAtUtc.empty()},
+            {"has_review_comment", !reviewComment.empty()},
+            {"distinct_reviewer_count", entry.value("distinct_reviewer_count", 0ULL)},
+            {"approval_reviewer_count", entry.value("approval_reviewer_count", 0ULL)},
+            {"approval_threshold_met", entry.value("approval_threshold_met", false)},
             {"requires_manual_confirmation", entry.value("requires_manual_confirmation", false)},
-            {"title", entry.value("title", std::string())}
+            {"title", stringValueOrEmpty(entry, "title")}
         });
     }
     std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
@@ -771,19 +795,65 @@ json projectPhase7ExecutionLedgerFilters(const json& filters) {
             return normalizeArtifactId(filters.at("source_artifact_id").get<std::string>());
         }()},
         {"ledger_status", filters.contains("ledger_status") ? filters.at("ledger_status") : json(nullptr)},
+        {"sort_by", filters.contains("sort_by") ? filters.at("sort_by") : json("generated_at_desc")},
         {"limit", filters.contains("limit") ? filters.at("limit") : json(nullptr)},
         {"matched_count", filters.value("matched_count", 0ULL)}
+    };
+}
+
+json projectPhase7ExecutionLedgerReviewSummary(const json& summary) {
+    if (!summary.is_object()) {
+        return json::object();
+    }
+    return {
+        {"pending_review_count", summary.value("pending_review_count", 0ULL)},
+        {"approved_count", summary.value("approved_count", 0ULL)},
+        {"blocked_count", summary.value("blocked_count", 0ULL)},
+        {"needs_info_count", summary.value("needs_info_count", 0ULL)},
+        {"not_applicable_count", summary.value("not_applicable_count", 0ULL)},
+        {"reviewed_count", summary.value("reviewed_count", 0ULL)},
+        {"waiting_approval_count", summary.value("waiting_approval_count", 0ULL)},
+        {"ready_entry_count", summary.value("ready_entry_count", 0ULL)},
+        {"actionable_entry_count", summary.value("actionable_entry_count", 0ULL)},
+        {"distinct_reviewer_count", summary.value("distinct_reviewer_count", 0ULL)},
+        {"required_approval_count", summary.value("required_approval_count", 0ULL)},
+        {"ready_for_execution", summary.value("ready_for_execution", false)}
+    };
+}
+
+json projectPhase7ExecutionLedgerAuditSummary(const json& event) {
+    if (!event.is_object()) {
+        return json::object();
+    }
+    return {
+        {"event_type", stringValueOrNull(event, "event_type")},
+        {"has_generated_at_utc", !stringValueOrEmpty(event, "generated_at_utc").empty()},
+        {"actor", stringValueOrNull(event, "actor")},
+        {"review_status", stringValueOrNull(event, "review_status")},
+        {"ledger_status", stringValueOrNull(event, "ledger_status")},
+        {"message", stringValueOrNull(event, "message")}
     };
 }
 
 json projectPhase7ExecutionLedgerResult(const json& result) {
     json auditTrail = json::array();
     for (const auto& event : result.value("audit_trail", json::array())) {
+        const std::string eventStatus = stringValueOrEmpty(event, "status");
+        const std::string eventLedgerStatus = stringValueOrEmpty(event, "ledger_status");
+        const std::string eventComment = stringValueOrEmpty(event, "comment");
+        const std::string eventMessage = stringValueOrEmpty(event, "message");
+        const std::string generatedAtUtc = stringValueOrEmpty(event, "generated_at_utc");
         auditTrail.push_back({
-            {"event_type", event.value("event_type", std::string())},
-            {"status", event.value("status", std::string())},
-            {"message", event.value("message", std::string())},
-            {"has_generated_at_utc", event.value("generated_at_utc", std::string()).empty() == false}
+            {"event_id_present", !stringValueOrEmpty(event, "event_id").empty()},
+            {"event_type", stringValueOrEmpty(event, "event_type")},
+            {"status", !eventStatus.empty() ? json(eventStatus) : json(eventLedgerStatus)},
+            {"review_status", stringValueOrNull(event, "review_status")},
+            {"actor", stringValueOrNull(event, "actor")},
+            {"updated_entry_count", event.value("updated_entry_ids", json::array()).size()},
+            {"previous_entry_status_count", event.value("previous_entry_statuses", json::array()).size()},
+            {"has_comment", !eventComment.empty()},
+            {"message", eventMessage},
+            {"has_generated_at_utc", !generatedAtUtc.empty()}
         });
     }
     std::sort(auditTrail.begin(), auditTrail.end(), [](const json& left, const json& right) {
@@ -798,18 +868,26 @@ json projectPhase7ExecutionLedgerResult(const json& result) {
         {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
         {"playbook_artifact", projectPhase7ArtifactRef(result.value("playbook_artifact", json::object()))},
         {"execution_ledger", projectPhase7ArtifactRef(result.value("execution_ledger", json::object()))},
-        {"mode", result.value("mode", std::string())},
-        {"has_generated_at_utc", result.value("generated_at_utc", std::string()).empty() == false},
-        {"ledger_status", result.value("ledger_status", std::string())},
+        {"mode", stringValueOrEmpty(result, "mode")},
+        {"has_generated_at_utc", !stringValueOrEmpty(result, "generated_at_utc").empty()},
+        {"ledger_status", stringValueOrEmpty(result, "ledger_status")},
         {"execution_policy", result.value("execution_policy", json::object())},
         {"filtered_finding_ids", result.value("filtered_finding_ids", json::array())},
         {"entry_count", result.value("entry_count", 0ULL)},
+        {"review_summary", projectPhase7ExecutionLedgerReviewSummary(result.value("review_summary", json::object()))},
+        {"latest_audit_event", projectPhase7ExecutionLedgerAuditSummary(result.value("latest_audit_event", json::object()))},
         {"entries", projectPhase7ExecutionLedgerEntries(result.value("entries", json::array()))},
         {"audit_trail", std::move(auditTrail)},
         {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))}
     };
     if (result.contains("artifact_status")) {
-        projection["artifact_status"] = result.value("artifact_status", std::string());
+        projection["artifact_status"] = stringValueOrEmpty(result, "artifact_status");
+    }
+    if (result.contains("updated_entry_ids")) {
+        projection["updated_entry_ids"] = result.value("updated_entry_ids", json::array());
+    }
+    if (result.contains("audit_event_id")) {
+        projection["audit_event_id_present"] = !stringValueOrEmpty(result, "audit_event_id").empty();
     }
     return projection;
 }
@@ -822,10 +900,12 @@ json projectPhase7ExecutionLedgerInventoryResult(const json& result) {
             {"playbook_artifact", projectPhase7ArtifactRef(row.value("playbook_artifact", json::object()))},
             {"analysis_artifact", projectPhase7ArtifactRef(row.value("analysis_artifact", json::object()))},
             {"source_artifact", projectPhase7ArtifactRef(row.value("source_artifact", json::object()))},
-            {"mode", row.value("mode", std::string())},
-            {"has_generated_at_utc", row.value("generated_at_utc", std::string()).empty() == false},
-            {"ledger_status", row.value("ledger_status", std::string())},
+            {"mode", stringValueOrEmpty(row, "mode")},
+            {"has_generated_at_utc", !stringValueOrEmpty(row, "generated_at_utc").empty()},
+            {"ledger_status", stringValueOrEmpty(row, "ledger_status")},
             {"entry_count", row.value("entry_count", 0ULL)},
+            {"review_summary", projectPhase7ExecutionLedgerReviewSummary(row.value("review_summary", json::object()))},
+            {"latest_audit_event", projectPhase7ExecutionLedgerAuditSummary(row.value("latest_audit_event", json::object()))},
             {"replay_context", projectPhase7ReplayContext(row.value("replay_context", json::object()))}
         });
     }
@@ -846,8 +926,8 @@ json projectPhase7PlaybookInventoryResult(const json& result) {
         rows.push_back({
             {"playbook_artifact", projectPhase7ArtifactRef(row.value("playbook_artifact", json::object()))},
             {"analysis_artifact", projectPhase7ArtifactRef(row.value("analysis_artifact", json::object()))},
-            {"mode", row.value("mode", std::string())},
-            {"has_generated_at_utc", row.value("generated_at_utc", std::string()).empty() == false},
+            {"mode", stringValueOrEmpty(row, "mode")},
+            {"has_generated_at_utc", !stringValueOrEmpty(row, "generated_at_utc").empty()},
             {"filtered_finding_count", row.value("filtered_finding_count", 0ULL)},
             {"planned_action_count", row.value("planned_action_count", 0ULL)},
             {"replay_context", projectPhase7ReplayContext(row.value("replay_context", json::object()))}
@@ -880,6 +960,7 @@ json projectInvestigationResult(const json& result) {
     for (const auto& row : result.value("incident_rows", json::array())) {
         incidentKinds.push_back(row.value("kind", std::string()));
     }
+    std::sort(incidentKinds.begin(), incidentKinds.end());
 
     json citations = json::array();
     for (const auto& row : result.value("citation_rows", json::array())) {
@@ -1007,37 +1088,8 @@ json projectProtectedWindowListResult(const json& result) {
 }
 
 json projectFindingListResult(const json& result) {
-    json rows = json::array();
-    for (const auto& row : result.value("findings", json::array())) {
-        rows.push_back({
-            {"artifact_id", normalizeArtifactId(row.value("artifact_id", std::string()))},
-            {"finding_id", normalizePositiveId(row.value("finding_id", 0ULL))},
-            {"revision_id", normalizePositiveId(row.value("revision_id", 0ULL))},
-            {"logical_incident_id", normalizePositiveId(row.value("logical_incident_id", 0ULL))},
-            {"incident_revision_id", normalizePositiveId(row.value("incident_revision_id", 0ULL))},
-            {"kind", row.value("kind", std::string())},
-            {"severity", row.value("severity", std::string())},
-            {"confidence", row.value("confidence", 0.0)},
-            {"first_session_seq", row.value("first_session_seq", 0ULL)},
-            {"last_session_seq", row.value("last_session_seq", 0ULL)},
-            {"title", row.value("title", std::string())}
-        });
-    }
-    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
-        if (left.value("first_session_seq", 0ULL) != right.value("first_session_seq", 0ULL)) {
-            return left.value("first_session_seq", 0ULL) < right.value("first_session_seq", 0ULL);
-        }
-        if (left.value("last_session_seq", 0ULL) != right.value("last_session_seq", 0ULL)) {
-            return left.value("last_session_seq", 0ULL) < right.value("last_session_seq", 0ULL);
-        }
-        if (left.value("kind", std::string()) != right.value("kind", std::string())) {
-            return left.value("kind", std::string()) < right.value("kind", std::string());
-        }
-        return left.value("artifact_id", std::string()) < right.value("artifact_id", std::string());
-    });
     return {
-        {"returned_count", result.value("returned_count", 0ULL)},
-        {"findings", std::move(rows)}
+        {"returned_count", result.value("returned_count", 0ULL)}
     };
 }
 
@@ -1196,9 +1248,9 @@ json projectEnvelope(const json& envelope) {
                 }
                 return projected;
             }()},
-            {"analysis_profile", result.value("analysis_profile", std::string())},
-            {"artifact_status", result.value("artifact_status", std::string())},
-            {"has_generated_at_utc", result.value("generated_at_utc", std::string()).empty() == false},
+            {"analysis_profile", stringValueOrEmpty(result, "analysis_profile")},
+            {"artifact_status", stringValueOrEmpty(result, "artifact_status")},
+            {"has_generated_at_utc", !stringValueOrEmpty(result, "generated_at_utc").empty()},
             {"finding_count", result.value("finding_count", 0ULL)},
             {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))},
             {"findings", projectPhase7FindingRows(result.value("findings", json::array()))}
@@ -1206,8 +1258,8 @@ json projectEnvelope(const json& envelope) {
     } else if (toolName == "tapescript_findings_list") {
         projection["result"] = {
             {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
-            {"analysis_profile", result.value("analysis_profile", std::string())},
-            {"has_generated_at_utc", result.value("generated_at_utc", std::string()).empty() == false},
+            {"analysis_profile", stringValueOrEmpty(result, "analysis_profile")},
+            {"has_generated_at_utc", !stringValueOrEmpty(result, "generated_at_utc").empty()},
             {"finding_count", result.value("finding_count", 0ULL)},
             {"filtered_finding_ids", result.value("filtered_finding_ids", json::array())},
             {"applied_filters", projectPhase7AppliedFilters(result.value("applied_filters", json::object()))},
@@ -1227,8 +1279,8 @@ json projectEnvelope(const json& envelope) {
                 }
                 return projected;
             }()},
-            {"analysis_profile", result.value("analysis_profile", std::string())},
-            {"has_generated_at_utc", result.value("generated_at_utc", std::string()).empty() == false},
+            {"analysis_profile", stringValueOrEmpty(result, "analysis_profile")},
+            {"has_generated_at_utc", !stringValueOrEmpty(result, "generated_at_utc").empty()},
             {"finding_count", result.value("finding_count", 0ULL)},
             {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))},
             {"findings", projectPhase7FindingRows(result.value("findings", json::array()))}
@@ -1237,9 +1289,9 @@ json projectEnvelope(const json& envelope) {
         projection["result"] = {
             {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
             {"playbook_artifact", projectPhase7ArtifactRef(result.value("playbook_artifact", json::object()))},
-            {"mode", result.value("mode", std::string())},
-            {"artifact_status", result.value("artifact_status", std::string())},
-            {"has_generated_at_utc", result.value("generated_at_utc", std::string()).empty() == false},
+            {"mode", stringValueOrEmpty(result, "mode")},
+            {"artifact_status", stringValueOrEmpty(result, "artifact_status")},
+            {"has_generated_at_utc", !stringValueOrEmpty(result, "generated_at_utc").empty()},
             {"filtered_finding_ids", result.value("filtered_finding_ids", json::array())},
             {"applied_filters", projectPhase7AppliedFilters(result.value("applied_filters", json::object()))},
             {"planned_actions", projectPhase7PlaybookActions(result.value("planned_actions", json::array()))},
@@ -1259,7 +1311,8 @@ json projectEnvelope(const json& envelope) {
             {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))}
         };
     } else if (toolName == "tapescript_prepare_execution_ledger" ||
-               toolName == "tapescript_read_execution_ledger") {
+               toolName == "tapescript_read_execution_ledger" ||
+               toolName == "tapescript_record_execution_ledger_review") {
         projection["result"] = projectPhase7ExecutionLedgerResult(result);
     } else if (toolName == "tapescript_list_execution_ledgers") {
         projection["result"] = projectPhase7ExecutionLedgerInventoryResult(result);
@@ -2101,6 +2154,16 @@ void testTapeMcpPhase7Contracts() {
     const std::string analysisArtifactId =
         analyzerEnvelopeRaw.value("result", json::object()).value("analysis_artifact", json::object()).value("artifact_id", std::string());
     expect(!analysisArtifactId.empty(), "phase7 analyzer_run should produce an analysis artifact id");
+    const std::string firstPhase7FindingId =
+        analyzerEnvelopeRaw.value("result", json::object())
+            .value("findings", json::array())
+            .empty()
+            ? std::string()
+            : analyzerEnvelopeRaw.value("result", json::object())
+                  .value("findings", json::array())
+                  .front()
+                  .value("finding_id", std::string());
+    expect(!firstPhase7FindingId.empty(), "phase7 analyzer_run should expose at least one finding id");
     const json reusedAnalyzerEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_analyzer_run", json{
         {"case_bundle_path", caseBundlePath}
     }));
@@ -2186,6 +2249,23 @@ void testTapeMcpPhase7Contracts() {
     const std::string executionLedgerArtifactId =
         executionLedgerEnvelopeRaw.value("result", json::object()).value("execution_ledger", json::object()).value("artifact_id", std::string());
     expect(!executionLedgerArtifactId.empty(), "phase7 prepare_execution_ledger should produce a ledger artifact id");
+    const std::string executionLedgerEntryId =
+        executionLedgerEnvelopeRaw.value("result", json::object())
+            .value("entries", json::array())
+            .empty()
+            ? std::string()
+            : executionLedgerEnvelopeRaw.value("result", json::object())
+                  .value("entries", json::array())
+                  .front()
+                  .value("entry_id", std::string());
+    const std::size_t executionLedgerEntryCount =
+        executionLedgerEnvelopeRaw.value("result", json::object()).value("entries", json::array()).size();
+    expect(!executionLedgerEntryId.empty(),
+           "phase7 prepare_execution_ledger should expose at least one review entry id");
+    const std::string expectedReviewedLedgerStatus =
+        executionLedgerEntryCount == 1
+            ? std::string(tape_phase7::kLedgerStatusCompleted)
+            : std::string(tape_phase7::kLedgerStatusInProgress);
     const json reusedExecutionLedgerEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_prepare_execution_ledger", json{
         {"playbook_artifact_id", playbookArtifactId}
     })));
@@ -2209,6 +2289,25 @@ void testTapeMcpPhase7Contracts() {
         {"execution_ledger_artifact_id", executionLedgerArtifactId}
     })));
     expect(readExecutionLedgerEnvelope.value("ok", false), "phase7 read_execution_ledger should return ok=true");
+
+    const json reviewExecutionLedgerEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_ledger_review", json{
+            {"execution_ledger_artifact_id", executionLedgerArtifactId},
+            {"entry_ids", json::array({executionLedgerEntryId})},
+            {"review_status", "approved"},
+            {"actor", "mcp-reviewer"},
+            {"comment", "Reviewed through the MCP contract test."}
+        })));
+    expect(reviewExecutionLedgerEnvelope.value("ok", false),
+           "phase7 record_execution_ledger_review should return ok=true");
+
+    const json reviewedExecutionLedgerInventoryEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_list_execution_ledgers", json{
+            {"playbook_artifact_id", playbookArtifactId},
+            {"ledger_status", expectedReviewedLedgerStatus}
+        })));
+    expect(reviewedExecutionLedgerInventoryEnvelope.value("ok", false),
+           "phase7 reviewed list_execution_ledgers should return ok=true");
 
     const json deferredPlaybookEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json{
         {"analysis_artifact_id", analysisArtifactId},
@@ -2309,6 +2408,12 @@ void testTapeMcpPhase7Contracts() {
            "phase7 filtered list_execution_ledgers envelope should match golden fixture\nactual:\n" + filteredExecutionLedgerInventoryEnvelope.dump(2));
     expect(readExecutionLedgerEnvelope == fixture.value("tapescript_read_execution_ledger", json::object()),
            "phase7 read_execution_ledger envelope should match golden fixture\nactual:\n" + readExecutionLedgerEnvelope.dump(2));
+    expect(reviewExecutionLedgerEnvelope == fixture.value("tapescript_record_execution_ledger_review", json::object()),
+           "phase7 record_execution_ledger_review envelope should match golden fixture\nactual:\n" + reviewExecutionLedgerEnvelope.dump(2));
+    expect(reviewedExecutionLedgerInventoryEnvelope ==
+               fixture.value("tapescript_list_execution_ledgers_reviewed", json::object()),
+           "phase7 reviewed list_execution_ledgers envelope should match golden fixture\nactual:\n" +
+               reviewedExecutionLedgerInventoryEnvelope.dump(2));
     expect(deferredPlaybookEnvelope == fixture.value("tapescript_playbook_apply_deferred", json::object()),
            "phase7 playbook_apply deferred envelope should match golden fixture\nactual:\n" + deferredPlaybookEnvelope.dump(2));
     expect(phase7PromptList == fixture.value("prompts_list_phase7", json::array()),
@@ -2335,6 +2440,233 @@ void testTapeMcpPhase7Contracts() {
            "phase7 execution ledger resource should match golden fixture\nactual:\n" + executionLedgerResource.dump(2));
     expect(executionLedgerMarkdownResource == fixture.value("resource_read_phase7_execution_ledger_markdown", json::object()),
            "phase7 execution ledger markdown resource should match golden fixture\nactual:\n" + executionLedgerMarkdownResource.dump(2));
+
+    const json readIncidentTriageProfileEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_read_analysis_profile", json{
+            {"analysis_profile", tape_phase7::kIncidentTriageAnalyzerProfile}
+        })));
+    expect(readIncidentTriageProfileEnvelope.value("ok", false),
+           "phase7 read incident-triage analysis profile should return ok=true");
+    const json incidentTriageAnalyzerEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"case_bundle_path", caseBundlePath},
+            {"analysis_profile", tape_phase7::kIncidentTriageAnalyzerProfile}
+        })));
+    expect(incidentTriageAnalyzerEnvelope.value("ok", false),
+           "phase7 incident-triage analyzer_run should return ok=true");
+    const json incidentTriageAnalysisInventoryEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_list_analysis_artifacts", json{
+            {"analysis_profile", tape_phase7::kIncidentTriageAnalyzerProfile},
+            {"source_artifact_id", "case-bundle:report:1"}
+        })));
+    expect(incidentTriageAnalysisInventoryEnvelope.value("ok", false),
+           "phase7 incident-triage list_analysis_artifacts should return ok=true");
+    expect(readIncidentTriageProfileEnvelope ==
+               fixture.value("tapescript_read_analysis_profile_incident_triage", json::object()),
+           "phase7 read incident-triage analysis profile envelope should match golden fixture\nactual:\n" +
+               readIncidentTriageProfileEnvelope.dump(2));
+    expect(incidentTriageAnalyzerEnvelope ==
+               fixture.value("tapescript_analyzer_run_incident_triage", json::object()),
+           "phase7 incident-triage analyzer_run envelope should match golden fixture\nactual:\n" +
+               incidentTriageAnalyzerEnvelope.dump(2));
+    expect(incidentTriageAnalysisInventoryEnvelope ==
+               fixture.value("tapescript_list_analysis_artifacts_incident_triage", json::object()),
+           "phase7 incident-triage list_analysis_artifacts envelope should match golden fixture\nactual:\n" +
+               incidentTriageAnalysisInventoryEnvelope.dump(2));
+
+    const json readFillQualityProfileEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_read_analysis_profile", json{
+            {"analysis_profile", tape_phase7::kFillQualityAnalyzerProfile}
+        })));
+    expect(readFillQualityProfileEnvelope.value("ok", false),
+           "phase7 read fill-quality analysis profile should return ok=true");
+    const json fillQualityAnalyzerEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"case_bundle_path", caseBundlePath},
+            {"analysis_profile", tape_phase7::kFillQualityAnalyzerProfile}
+        })));
+    expect(fillQualityAnalyzerEnvelope.value("ok", false),
+           "phase7 fill-quality analyzer_run should return ok=true");
+    const json readLiquidityBehaviorProfileEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_read_analysis_profile", json{
+            {"analysis_profile", tape_phase7::kLiquidityBehaviorAnalyzerProfile}
+        })));
+    expect(readLiquidityBehaviorProfileEnvelope.value("ok", false),
+           "phase7 read liquidity-behavior analysis profile should return ok=true");
+    const json liquidityBehaviorAnalyzerEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"case_bundle_path", caseBundlePath},
+            {"analysis_profile", tape_phase7::kLiquidityBehaviorAnalyzerProfile}
+        })));
+    expect(liquidityBehaviorAnalyzerEnvelope.value("ok", false),
+           "phase7 liquidity-behavior analyzer_run should return ok=true");
+    expect(readFillQualityProfileEnvelope ==
+               fixture.value("tapescript_read_analysis_profile_fill_quality", json::object()),
+           "phase7 read fill-quality analysis profile envelope should match golden fixture\nactual:\n" +
+               readFillQualityProfileEnvelope.dump(2));
+    expect(fillQualityAnalyzerEnvelope ==
+               fixture.value("tapescript_analyzer_run_fill_quality", json::object()),
+           "phase7 fill-quality analyzer_run envelope should match golden fixture\nactual:\n" +
+               fillQualityAnalyzerEnvelope.dump(2));
+    expect(readLiquidityBehaviorProfileEnvelope ==
+               fixture.value("tapescript_read_analysis_profile_liquidity_behavior", json::object()),
+           "phase7 read liquidity-behavior analysis profile envelope should match golden fixture\nactual:\n" +
+               readLiquidityBehaviorProfileEnvelope.dump(2));
+    expect(liquidityBehaviorAnalyzerEnvelope ==
+               fixture.value("tapescript_analyzer_run_liquidity_behavior", json::object()),
+           "phase7 liquidity-behavior analyzer_run envelope should match golden fixture\nactual:\n" +
+               liquidityBehaviorAnalyzerEnvelope.dump(2));
+
+    const json readAdverseSelectionProfileEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_read_analysis_profile", json{
+            {"analysis_profile", tape_phase7::kAdverseSelectionAnalyzerProfile}
+        })));
+    expect(readAdverseSelectionProfileEnvelope.value("ok", false),
+           "phase7 read adverse-selection analysis profile should return ok=true");
+    const json adverseSelectionAnalyzerEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"case_bundle_path", caseBundlePath},
+            {"analysis_profile", tape_phase7::kAdverseSelectionAnalyzerProfile}
+        })));
+    expect(adverseSelectionAnalyzerEnvelope.value("ok", false),
+           "phase7 adverse-selection analyzer_run should return ok=true");
+    expect(readAdverseSelectionProfileEnvelope ==
+               fixture.value("tapescript_read_analysis_profile_adverse_selection", json::object()),
+           "phase7 read adverse-selection analysis profile envelope should match golden fixture\nactual:\n" +
+               readAdverseSelectionProfileEnvelope.dump(2));
+    expect(adverseSelectionAnalyzerEnvelope ==
+               fixture.value("tapescript_analyzer_run_adverse_selection", json::object()),
+           "phase7 adverse-selection analyzer_run envelope should match golden fixture\nactual:\n" +
+               adverseSelectionAnalyzerEnvelope.dump(2));
+
+    const json readOrderImpactProfileEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_read_analysis_profile", json{
+            {"analysis_profile", tape_phase7::kOrderImpactAnalyzerProfile}
+        })));
+    expect(readOrderImpactProfileEnvelope.value("ok", false),
+           "phase7 read order-impact analysis profile should return ok=true");
+    const json orderImpactAnalyzerEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_analyzer_run", json{
+            {"case_bundle_path", caseBundlePath},
+            {"analysis_profile", tape_phase7::kOrderImpactAnalyzerProfile}
+        })));
+    expect(orderImpactAnalyzerEnvelope.value("ok", false),
+           "phase7 order-impact analyzer_run should return ok=true");
+    expect(readOrderImpactProfileEnvelope ==
+               fixture.value("tapescript_read_analysis_profile_order_impact", json::object()),
+           "phase7 read order-impact analysis profile envelope should match golden fixture\nactual:\n" +
+               readOrderImpactProfileEnvelope.dump(2));
+    expect(orderImpactAnalyzerEnvelope ==
+               fixture.value("tapescript_analyzer_run_order_impact", json::object()),
+           "phase7 order-impact analyzer_run envelope should match golden fixture\nactual:\n" +
+               orderImpactAnalyzerEnvelope.dump(2));
+
+    const json singleFindingPlaybookEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json{
+        {"analysis_artifact_id", analysisArtifactId},
+        {"finding_ids", json::array({firstPhase7FindingId})}
+    }));
+    const json singleFindingPlaybookEnvelope = projectEnvelope(singleFindingPlaybookEnvelopeRaw);
+    expect(singleFindingPlaybookEnvelope.value("ok", false),
+           "phase7 single-finding playbook_apply should return ok=true");
+    const std::string singleFindingPlaybookArtifactId =
+        singleFindingPlaybookEnvelopeRaw.value("result", json::object()).value("playbook_artifact", json::object()).value("artifact_id", std::string());
+    expect(!singleFindingPlaybookArtifactId.empty(),
+           "phase7 single-finding playbook_apply should produce a playbook artifact id");
+    expect(singleFindingPlaybookEnvelope ==
+               fixture.value("tapescript_playbook_apply_single_finding", json::object()),
+           "phase7 single-finding playbook_apply envelope should match golden fixture\nactual:\n" +
+               singleFindingPlaybookEnvelope.dump(2));
+
+    const json singleEntryLedgerEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_prepare_execution_ledger", json{
+        {"playbook_artifact_id", singleFindingPlaybookArtifactId}
+    }));
+    const json singleEntryLedgerEnvelope = projectEnvelope(singleEntryLedgerEnvelopeRaw);
+    expect(singleEntryLedgerEnvelope.value("ok", false),
+           "phase7 single-entry prepare_execution_ledger should return ok=true");
+    const std::string singleEntryLedgerArtifactId =
+        singleEntryLedgerEnvelopeRaw.value("result", json::object()).value("execution_ledger", json::object()).value("artifact_id", std::string());
+    const std::string singleEntryLedgerEntryId =
+        singleEntryLedgerEnvelopeRaw.value("result", json::object())
+            .value("entries", json::array())
+            .empty()
+            ? std::string()
+            : singleEntryLedgerEnvelopeRaw.value("result", json::object())
+                  .value("entries", json::array())
+                  .front()
+                  .value("entry_id", std::string());
+    expect(!singleEntryLedgerArtifactId.empty() && !singleEntryLedgerEntryId.empty(),
+           "phase7 single-entry prepare_execution_ledger should expose a ledger artifact and entry id");
+    expect(singleEntryLedgerEnvelope ==
+               fixture.value("tapescript_prepare_execution_ledger_single_entry", json::object()),
+           "phase7 single-entry prepare_execution_ledger envelope should match golden fixture\nactual:\n" +
+               singleEntryLedgerEnvelope.dump(2));
+
+    const json missingActorLedgerReviewEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_ledger_review", json{
+            {"execution_ledger_artifact_id", singleEntryLedgerArtifactId},
+            {"entry_ids", json::array({singleEntryLedgerEntryId})},
+            {"review_status", "approved"},
+            {"comment", "Missing actor should fail."}
+        })));
+    expect(!missingActorLedgerReviewEnvelope.value("ok", true),
+           "phase7 record_execution_ledger_review without actor should return ok=false");
+    const json missingCommentLedgerReviewEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_ledger_review", json{
+            {"execution_ledger_artifact_id", singleEntryLedgerArtifactId},
+            {"entry_ids", json::array({singleEntryLedgerEntryId})},
+            {"review_status", "blocked"},
+            {"actor", "mcp-reviewer-a"}
+        })));
+    expect(!missingCommentLedgerReviewEnvelope.value("ok", true),
+           "phase7 blocked record_execution_ledger_review without comment should return ok=false");
+    expect(missingActorLedgerReviewEnvelope ==
+               fixture.value("tapescript_record_execution_ledger_review_missing_actor", json::object()),
+           "phase7 record_execution_ledger_review missing-actor envelope should match golden fixture\nactual:\n" +
+               missingActorLedgerReviewEnvelope.dump(2));
+    expect(missingCommentLedgerReviewEnvelope ==
+               fixture.value("tapescript_record_execution_ledger_review_missing_comment", json::object()),
+           "phase7 record_execution_ledger_review missing-comment envelope should match golden fixture\nactual:\n" +
+               missingCommentLedgerReviewEnvelope.dump(2));
+
+    const json waitingApprovalLedgerEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_ledger_review", json{
+            {"execution_ledger_artifact_id", singleEntryLedgerArtifactId},
+            {"entry_ids", json::array({singleEntryLedgerEntryId})},
+            {"review_status", "approved"},
+            {"actor", "mcp-reviewer-a"},
+            {"comment", "First approval through the MCP contract test."}
+        })));
+    expect(waitingApprovalLedgerEnvelope.value("ok", false),
+           "phase7 first single-entry approval should return ok=true");
+    const json readyExecutionLedgerEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_ledger_review", json{
+            {"execution_ledger_artifact_id", singleEntryLedgerArtifactId},
+            {"entry_ids", json::array({singleEntryLedgerEntryId})},
+            {"review_status", "approved"},
+            {"actor", "mcp-reviewer-b"},
+            {"comment", "Second approval satisfies the review threshold."}
+        })));
+    expect(readyExecutionLedgerEnvelope.value("ok", false),
+           "phase7 second single-entry approval should return ok=true");
+    const json readyExecutionLedgerInventoryEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_list_execution_ledgers", json{
+            {"playbook_artifact_id", singleFindingPlaybookArtifactId},
+            {"ledger_status", tape_phase7::kLedgerStatusReadyForExecution}
+        })));
+    expect(readyExecutionLedgerInventoryEnvelope.value("ok", false),
+           "phase7 ready-for-execution list_execution_ledgers should return ok=true");
+    expect(waitingApprovalLedgerEnvelope ==
+               fixture.value("tapescript_record_execution_ledger_review_waiting_approval", json::object()),
+           "phase7 first single-entry approval envelope should match golden fixture\nactual:\n" +
+               waitingApprovalLedgerEnvelope.dump(2));
+    expect(readyExecutionLedgerEnvelope ==
+               fixture.value("tapescript_record_execution_ledger_review_ready", json::object()),
+           "phase7 second single-entry approval envelope should match golden fixture\nactual:\n" +
+               readyExecutionLedgerEnvelope.dump(2));
+    expect(readyExecutionLedgerInventoryEnvelope ==
+               fixture.value("tapescript_list_execution_ledgers_ready", json::object()),
+           "phase7 ready-for-execution list_execution_ledgers envelope should match golden fixture\nactual:\n" +
+               readyExecutionLedgerInventoryEnvelope.dump(2));
 
     server->stop();
 }
@@ -2399,7 +2731,7 @@ void testTapeMcpStdioHarness() {
     });
     const json listResponse = readJsonRpcMessage(child.readFd);
     const json tools = listResponse.value("result", json::object()).value("tools", json::array());
-    expect(tools.is_array() && tools.size() == 43, "tools/list should expose the expanded phase 7 tool slice");
+    expect(tools.is_array() && tools.size() == 44, "tools/list should expose the expanded phase 7 tool slice");
     json overviewTool = json::object();
     for (const auto& tool : tools) {
         if (tool.value("name", std::string()) == "tapescript_read_session_overview") {
@@ -2720,6 +3052,56 @@ void testTapeMcpStdioHarness() {
             .value("playbook_artifact", json::object())
             .value("artifact_id", std::string());
     expect(!playbookArtifactId.empty(), "stdio playbook_apply should return a playbook artifact id");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 671},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_prepare_execution_ledger"},
+            {"arguments", json{{"playbook_artifact_id", playbookArtifactId}}}
+        }}
+    });
+    const json executionLedgerResponse = readJsonRpcMessage(child.readFd);
+    const json executionLedgerEnvelope =
+        executionLedgerResponse.value("result", json::object()).value("structuredContent", json::object());
+    expect(executionLedgerEnvelope.value("ok", false), "stdio prepare_execution_ledger should return ok=true");
+    const std::string executionLedgerArtifactId =
+        executionLedgerEnvelope.value("result", json::object())
+            .value("execution_ledger", json::object())
+            .value("artifact_id", std::string());
+    expect(!executionLedgerArtifactId.empty(), "stdio prepare_execution_ledger should return a ledger artifact id");
+    const json executionLedgerEntries =
+        executionLedgerEnvelope.value("result", json::object()).value("entries", json::array());
+    expect(executionLedgerEntries.is_array() && !executionLedgerEntries.empty(),
+           "stdio prepare_execution_ledger should expose at least one review entry");
+
+    writeJsonRpcMessage(child.writeFd, json{
+        {"jsonrpc", "2.0"},
+        {"id", 672},
+        {"method", "tools/call"},
+        {"params", {
+            {"name", "tapescript_record_execution_ledger_review"},
+            {"arguments", json{
+                {"execution_ledger_artifact_id", executionLedgerArtifactId},
+                {"entry_ids", json::array({executionLedgerEntries.front().value("entry_id", std::string())})},
+                {"review_status", "approved"},
+                {"actor", "stdio-reviewer"},
+                {"comment", "Reviewed through stdio."}
+            }}
+        }}
+    });
+    const json recordLedgerReviewResponse = readJsonRpcMessage(child.readFd);
+    const json recordLedgerReviewEnvelope =
+        recordLedgerReviewResponse.value("result", json::object()).value("structuredContent", json::object());
+    expect(recordLedgerReviewEnvelope.value("ok", false), "stdio record_execution_ledger_review should return ok=true");
+    const std::string stdioReviewedLedgerStatus =
+        executionLedgerEntries.size() == 1
+            ? std::string(tape_phase7::kLedgerStatusCompleted)
+            : std::string(tape_phase7::kLedgerStatusInProgress);
+    expect(recordLedgerReviewEnvelope.value("result", json::object()).value("ledger_status", std::string()) ==
+               stdioReviewedLedgerStatus,
+           "stdio record_execution_ledger_review should update the aggregate ledger status");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},

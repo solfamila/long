@@ -66,7 +66,8 @@ enum class ToolId {
     ReadPlaybookArtifact,
     PrepareExecutionLedger,
     ListExecutionLedgers,
-    ReadExecutionLedger
+    ReadExecutionLedger,
+    RecordExecutionLedgerReview
 };
 
 struct ToolSpec {
@@ -145,6 +146,7 @@ private:
     [[nodiscard]] json invokePrepareExecutionLedgerTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeListExecutionLedgersTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadExecutionLedgerTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeRecordExecutionLedgerReviewTool(const ToolSpec& tool, const json& args) const;
 
     [[nodiscard]] json makeToolResult(const json& envelope) const;
     [[nodiscard]] json makeSuccessEnvelope(const ToolSpec& tool, json result, json revision) const;

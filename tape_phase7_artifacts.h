@@ -15,10 +15,25 @@ inline constexpr const char* kAnalysisArtifactType = "phase7.analysis_output.v1"
 inline constexpr const char* kPlaybookArtifactType = "phase7.playbook_plan.v1";
 inline constexpr const char* kExecutionLedgerArtifactType = "phase7.execution_ledger.v1";
 inline constexpr const char* kDefaultAnalyzerProfile = "phase7.trace_fill_integrity.v1";
+inline constexpr const char* kIncidentTriageAnalyzerProfile = "phase7.incident_triage.v1";
+inline constexpr const char* kFillQualityAnalyzerProfile = "phase7.fill_quality_review.v1";
+inline constexpr const char* kLiquidityBehaviorAnalyzerProfile = "phase7.liquidity_behavior_review.v1";
+inline constexpr const char* kAdverseSelectionAnalyzerProfile = "phase7.adverse_selection_review.v1";
+inline constexpr const char* kOrderImpactAnalyzerProfile = "phase7.order_impact_review.v1";
 inline constexpr const char* kDefaultPlaybookMode = "dry_run";
 inline constexpr const char* kApplyPlaybookMode = "apply";
 inline constexpr const char* kDefaultLedgerStatus = "review_pending";
 inline constexpr const char* kDefaultLedgerEntryStatus = "pending_review";
+inline constexpr const char* kLedgerStatusInProgress = "review_in_progress";
+inline constexpr const char* kLedgerStatusCompleted = "review_completed";
+inline constexpr const char* kLedgerStatusBlocked = "review_blocked";
+inline constexpr const char* kLedgerStatusNeedsInformation = "needs_information";
+inline constexpr const char* kLedgerStatusWaitingApproval = "review_waiting_approval";
+inline constexpr const char* kLedgerStatusReadyForExecution = "ready_for_execution";
+inline constexpr const char* kLedgerEntryStatusApproved = "approved";
+inline constexpr const char* kLedgerEntryStatusBlocked = "blocked";
+inline constexpr const char* kLedgerEntryStatusNeedsInfo = "needs_info";
+inline constexpr const char* kLedgerEntryStatusNotApplicable = "not_applicable";
 
 struct ArtifactRef {
     std::string artifactType;
@@ -84,6 +99,12 @@ struct ExecutionLedgerEntry {
     bool requiresManualConfirmation = true;
     std::string title;
     std::string summary;
+    std::string reviewedAtUtc;
+    std::string reviewedBy;
+    std::string reviewComment;
+    std::size_t distinctReviewerCount = 0;
+    std::size_t approvalReviewerCount = 0;
+    bool approvalThresholdMet = false;
     json suggestedTools = json::array();
 };
 
@@ -96,11 +117,27 @@ struct ExecutionLedgerArtifact {
     std::string generatedAtUtc;
     std::string ledgerStatus = kDefaultLedgerStatus;
     json executionPolicy = json::object();
+    json reviewPolicy = json::object();
     json replayContext = json::object();
     std::vector<std::string> filteredFindingIds;
     std::vector<ExecutionLedgerEntry> entries;
     json auditTrail = json::array();
     json manifest = json::object();
+};
+
+struct ExecutionLedgerReviewSummary {
+    std::size_t pendingReviewCount = 0;
+    std::size_t approvedCount = 0;
+    std::size_t blockedCount = 0;
+    std::size_t needsInfoCount = 0;
+    std::size_t notApplicableCount = 0;
+    std::size_t reviewedCount = 0;
+    std::size_t waitingApprovalCount = 0;
+    std::size_t readyEntryCount = 0;
+    std::size_t actionableEntryCount = 0;
+    std::size_t distinctReviewerCount = 0;
+    std::size_t requiredApprovalCount = 0;
+    bool readyForExecution = false;
 };
 
 bool listAnalyzerProfiles(std::vector<AnalyzerProfileSpec>* out,
@@ -168,10 +205,25 @@ bool listExecutionLedgers(std::size_t limit,
                           std::string* errorCode,
                           std::string* errorMessage);
 
+bool recordExecutionLedgerReview(const std::string& manifestPath,
+                                 const std::string& artifactId,
+                                 const std::vector<std::string>& entryIds,
+                                 const std::string& reviewStatus,
+                                 const std::string& actor,
+                                 const std::string& comment,
+                                 ExecutionLedgerArtifact* out,
+                                 std::vector<std::string>* updatedEntryIds,
+                                 std::string* auditEventId,
+                                 std::string* errorCode,
+                                 std::string* errorMessage);
+
 json artifactRefToJson(const ArtifactRef& artifact);
 json findingToJson(const FindingRecord& finding);
 json playbookActionToJson(const PlaybookAction& action);
 json executionLedgerEntryToJson(const ExecutionLedgerEntry& entry);
+ExecutionLedgerReviewSummary summarizeExecutionLedgerReviewSummary(const ExecutionLedgerArtifact& artifact);
+json executionLedgerReviewSummaryToJson(const ExecutionLedgerReviewSummary& summary);
+json latestExecutionLedgerAuditSummary(const ExecutionLedgerArtifact& artifact);
 std::string analysisArtifactMarkdown(const AnalysisArtifact& artifact);
 std::string playbookArtifactMarkdown(const PlaybookArtifact& artifact);
 std::string executionLedgerArtifactMarkdown(const ExecutionLedgerArtifact& artifact);

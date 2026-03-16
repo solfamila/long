@@ -1285,11 +1285,144 @@ void testTapeEnginePhase7ArtifactsReuseDeterministically() {
                readTextFile(secondAnalysis.analysisArtifact.manifestPath),
            "phase 7 analyzer rerun should leave the persisted manifest unchanged");
 
-    std::vector<std::string> findingIds;
-    for (const auto& finding : firstAnalysis.findings) {
-        findingIds.push_back(finding.findingId);
-    }
-    expect(!findingIds.empty(), "phase 7 analyzer should emit findings for the reusable playbook test");
+    std::vector<tape_phase7::AnalyzerProfileSpec> profiles;
+    expect(tape_phase7::listAnalyzerProfiles(&profiles, &phase7Code, &phase7Message),
+           "phase 7 profile discovery should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(profiles.begin(), profiles.end(),
+                       [](const tape_phase7::AnalyzerProfileSpec& profile) {
+                           return profile.analysisProfile == tape_phase7::kFillQualityAnalyzerProfile;
+                       }),
+           "phase 7 profile discovery should expose the fill-quality review profile");
+    expect(std::any_of(profiles.begin(), profiles.end(),
+                       [](const tape_phase7::AnalyzerProfileSpec& profile) {
+                           return profile.analysisProfile == tape_phase7::kLiquidityBehaviorAnalyzerProfile;
+                       }),
+           "phase 7 profile discovery should expose the liquidity-behavior review profile");
+    expect(std::any_of(profiles.begin(), profiles.end(),
+                       [](const tape_phase7::AnalyzerProfileSpec& profile) {
+                           return profile.analysisProfile == tape_phase7::kAdverseSelectionAnalyzerProfile;
+                       }),
+           "phase 7 profile discovery should expose the adverse-selection review profile");
+    expect(std::any_of(profiles.begin(), profiles.end(),
+                       [](const tape_phase7::AnalyzerProfileSpec& profile) {
+                           return profile.analysisProfile == tape_phase7::kOrderImpactAnalyzerProfile;
+                       }),
+           "phase 7 profile discovery should expose the order-impact review profile");
+
+    tape_phase7::AnalysisArtifact fillQualityAnalysis;
+    bool extraProfileCreated = false;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  tape_phase7::kFillQualityAnalyzerProfile,
+                                                  &fillQualityAnalysis,
+                                                  &extraProfileCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 fill-quality analyzer should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(fillQualityAnalysis.findings.begin(),
+                       fillQualityAnalysis.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "fill_quality_risk" ||
+                               finding.category == "adverse_selection_risk" ||
+                               finding.category == "market_impact_risk" ||
+                               finding.category == "analysis_summary";
+                       }),
+           "phase 7 fill-quality analyzer should emit fill-quality categories");
+
+    tape_phase7::AnalysisArtifact liquidityBehaviorAnalysis;
+    extraProfileCreated = false;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  tape_phase7::kLiquidityBehaviorAnalyzerProfile,
+                                                  &liquidityBehaviorAnalysis,
+                                                  &extraProfileCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 liquidity-behavior analyzer should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(liquidityBehaviorAnalysis.findings.begin(),
+                       liquidityBehaviorAnalysis.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "display_instability_risk" ||
+                               finding.category == "liquidity_refill_behavior" ||
+                               finding.category == "pressure_and_thinning" ||
+                               finding.category == "analysis_summary";
+                       }),
+           "phase 7 liquidity-behavior analyzer should emit liquidity categories");
+
+    tape_phase7::AnalysisArtifact adverseSelectionAnalysis;
+    extraProfileCreated = false;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  tape_phase7::kAdverseSelectionAnalyzerProfile,
+                                                  &adverseSelectionAnalysis,
+                                                  &extraProfileCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 adverse-selection analyzer should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(adverseSelectionAnalysis.findings.begin(),
+                       adverseSelectionAnalysis.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "adverse_selection_risk" ||
+                               finding.category == "fill_quality_risk" ||
+                               finding.category == "analysis_summary";
+                       }),
+           "phase 7 adverse-selection analyzer should emit adverse-selection categories");
+
+    tape_phase7::AnalysisArtifact orderImpactAnalysis;
+    extraProfileCreated = false;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  tape_phase7::kOrderImpactAnalyzerProfile,
+                                                  &orderImpactAnalysis,
+                                                  &extraProfileCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 order-impact analyzer should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(orderImpactAnalysis.findings.begin(),
+                       orderImpactAnalysis.findings.end(),
+                       [](const tape_phase7::FindingRecord& finding) {
+                           return finding.category == "market_impact_risk" ||
+                               finding.category == "fill_quality_risk" ||
+                               finding.category == "analysis_summary";
+                       }),
+           "phase 7 order-impact analyzer should emit order-impact categories");
+
+    tape_phase7::PlaybookArtifact adverseSelectionPlaybook;
+    bool profilePlaybookCreated = false;
+    expect(tape_phase7::buildGuardedPlaybook({},
+                                             adverseSelectionAnalysis.analysisArtifact.artifactId,
+                                             {},
+                                             tape_phase7::kDefaultPlaybookMode,
+                                             &adverseSelectionPlaybook,
+                                             &profilePlaybookCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 adverse-selection playbook should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(adverseSelectionPlaybook.plannedActions.begin(),
+                       adverseSelectionPlaybook.plannedActions.end(),
+                       [](const tape_phase7::PlaybookAction& action) {
+                           return action.actionType == "phase7.review_post_fill_adverse_selection.v1" ||
+                               action.actionType == "phase7.review_fill_context_before_adverse_selection.v1";
+                       }),
+           "phase 7 adverse-selection playbook should emit profile-specific review actions");
+
+    tape_phase7::PlaybookArtifact orderImpactPlaybook;
+    profilePlaybookCreated = false;
+    expect(tape_phase7::buildGuardedPlaybook({},
+                                             orderImpactAnalysis.analysisArtifact.artifactId,
+                                             {},
+                                             tape_phase7::kDefaultPlaybookMode,
+                                             &orderImpactPlaybook,
+                                             &profilePlaybookCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 order-impact playbook should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(orderImpactPlaybook.plannedActions.begin(),
+                       orderImpactPlaybook.plannedActions.end(),
+                       [](const tape_phase7::PlaybookAction& action) {
+                           return action.actionType == "phase7.review_order_impact_footprint.v1" ||
+                               action.actionType == "phase7.review_fill_context_before_order_impact.v1";
+                       }),
+           "phase 7 order-impact playbook should emit profile-specific review actions");
+
+    expect(!firstAnalysis.findings.empty(), "phase 7 analyzer should emit findings for the reusable playbook test");
+    const std::vector<std::string> findingIds = {firstAnalysis.findings.front().findingId};
 
     tape_phase7::PlaybookArtifact firstPlaybook;
     bool playbookCreated = false;
@@ -1338,6 +1471,8 @@ void testTapeEnginePhase7ArtifactsReuseDeterministically() {
     expect(ledgerCreated, "phase 7 execution ledger first run should create a new ledger artifact");
     expect(firstLedger.entries.size() == firstPlaybook.plannedActions.size(),
            "phase 7 execution ledger should preserve one review entry per planned playbook action");
+    expect(firstLedger.entries.size() == 1,
+           "phase 7 execution ledger should preserve the selected-finding scope for approval-threshold review");
     expect(firstLedger.ledgerStatus == tape_phase7::kDefaultLedgerStatus,
            "phase 7 execution ledger should start in the default deferred review status");
 
@@ -1370,6 +1505,152 @@ void testTapeEnginePhase7ArtifactsReuseDeterministically() {
            "phase 7 execution ledger read should preserve the linked playbook artifact id");
     expect(readLedger.sourceArtifact.artifactId == firstAnalysis.sourceArtifact.artifactId,
            "phase 7 execution ledger read should preserve the linked source artifact id");
+
+    std::vector<std::string> reviewedEntryIds = {firstLedger.entries.front().entryId};
+    tape_phase7::ExecutionLedgerArtifact invalidPolicyLedger;
+    std::vector<std::string> invalidPolicyUpdatedEntryIds;
+    std::string invalidPolicyAuditEventId;
+    expect(!tape_phase7::recordExecutionLedgerReview({},
+                                                     firstLedger.ledgerArtifact.artifactId,
+                                                     reviewedEntryIds,
+                                                     tape_phase7::kLedgerEntryStatusApproved,
+                                                     "",
+                                                     "Missing actor should fail.",
+                                                     &invalidPolicyLedger,
+                                                     &invalidPolicyUpdatedEntryIds,
+                                                     &invalidPolicyAuditEventId,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 execution ledger review should require a reviewer identity");
+    expect(phase7Code == "invalid_arguments" &&
+               phase7Message.find("actor is required") != std::string::npos,
+           "phase 7 execution ledger review should surface the actor-required policy");
+    expect(!tape_phase7::recordExecutionLedgerReview({},
+                                                     firstLedger.ledgerArtifact.artifactId,
+                                                     reviewedEntryIds,
+                                                     tape_phase7::kLedgerEntryStatusBlocked,
+                                                     "reviewer-a",
+                                                     "",
+                                                     &invalidPolicyLedger,
+                                                     &invalidPolicyUpdatedEntryIds,
+                                                     &invalidPolicyAuditEventId,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 execution ledger review should require a comment for blocked status");
+    expect(phase7Code == "invalid_arguments" &&
+               phase7Message.find("comment is required") != std::string::npos,
+           "phase 7 execution ledger review should surface the comment-required policy");
+
+    tape_phase7::ExecutionLedgerArtifact reviewedLedger;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    firstLedger.ledgerArtifact.artifactId,
+                                                    reviewedEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "reviewer-a",
+                                                    "First approval for deterministic artifact test.",
+                                                    &reviewedLedger,
+                                                    &updatedEntryIds,
+                                                    &auditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 execution ledger review should succeed: " + phase7Code + " " + phase7Message);
+    expect(updatedEntryIds == reviewedEntryIds,
+           "phase 7 execution ledger review should report the updated entry ids");
+    expect(!auditEventId.empty(),
+           "phase 7 execution ledger review should return a deterministic audit event id");
+    expect(reviewedLedger.ledgerStatus == tape_phase7::kLedgerStatusWaitingApproval,
+           "phase 7 execution ledger review should wait for the required second approval");
+    expect(reviewedLedger.auditTrail.is_array() && reviewedLedger.auditTrail.size() == 2,
+           "phase 7 execution ledger review should append a review audit event");
+    expect(reviewedLedger.auditTrail.back().value("event_type", std::string()) == "review_status_recorded",
+           "phase 7 execution ledger review should append the expected audit event type");
+    expect(reviewedLedger.auditTrail.back().value("actor", std::string()) == "reviewer-a",
+           "phase 7 execution ledger review should preserve the reviewing actor");
+    expect(reviewedLedger.auditTrail.back().value("review_status", std::string()) ==
+               tape_phase7::kLedgerEntryStatusApproved,
+           "phase 7 execution ledger review should preserve the recorded review status");
+    expect(reviewedLedger.entries.front().reviewStatus == tape_phase7::kLedgerEntryStatusApproved,
+           "phase 7 execution ledger review should update the entry review status");
+    expect(reviewedLedger.entries.front().reviewedBy == "reviewer-a",
+           "phase 7 execution ledger review should preserve the reviewing actor on the entry");
+    expect(!reviewedLedger.entries.front().reviewedAtUtc.empty(),
+           "phase 7 execution ledger review should stamp reviewed_at_utc");
+    expect(reviewedLedger.entries.front().reviewComment == "First approval for deterministic artifact test.",
+           "phase 7 execution ledger review should preserve the review comment");
+    expect(reviewedLedger.entries.front().approvalReviewerCount == 1 &&
+               !reviewedLedger.entries.front().approvalThresholdMet,
+           "phase 7 execution ledger review should track the first distinct approver without marking the entry ready");
+    const auto reviewedLedgerSummary = tape_phase7::summarizeExecutionLedgerReviewSummary(reviewedLedger);
+    expect(reviewedLedgerSummary.waitingApprovalCount == 1 &&
+               reviewedLedgerSummary.readyEntryCount == 0 &&
+               reviewedLedgerSummary.distinctReviewerCount == 1 &&
+               reviewedLedgerSummary.requiredApprovalCount == 2 &&
+               !reviewedLedgerSummary.readyForExecution,
+           "phase 7 execution ledger review summary should expose the waiting-for-approval state");
+
+    tape_phase7::ExecutionLedgerArtifact readyLedger;
+    std::vector<std::string> readyUpdatedEntryIds;
+    std::string readyAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    firstLedger.ledgerArtifact.artifactId,
+                                                    reviewedEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "reviewer-b",
+                                                    "Second approval completes the review threshold.",
+                                                    &readyLedger,
+                                                    &readyUpdatedEntryIds,
+                                                    &readyAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 execution ledger second approval should succeed: " + phase7Code + " " + phase7Message);
+    expect(readyUpdatedEntryIds == reviewedEntryIds && !readyAuditEventId.empty(),
+           "phase 7 execution ledger second approval should update the same entry and append an audit event");
+    expect(readyLedger.ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution,
+           "phase 7 execution ledger second approval should mark the ledger ready for execution");
+    expect(readyLedger.entries.front().approvalReviewerCount == 2 &&
+               readyLedger.entries.front().approvalThresholdMet,
+           "phase 7 execution ledger second approval should satisfy the distinct-approval threshold");
+    const auto readyLedgerSummary = tape_phase7::summarizeExecutionLedgerReviewSummary(readyLedger);
+    expect(readyLedgerSummary.waitingApprovalCount == 0 &&
+               readyLedgerSummary.readyEntryCount == 1 &&
+               readyLedgerSummary.distinctReviewerCount >= 2 &&
+               readyLedgerSummary.readyForExecution,
+           "phase 7 execution ledger second approval should expose the ready-for-execution summary state");
+
+    tape_phase7::ExecutionLedgerArtifact rereadReviewedLedger;
+    expect(tape_phase7::loadExecutionLedgerArtifact({},
+                                                    firstLedger.ledgerArtifact.artifactId,
+                                                    &rereadReviewedLedger,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 reviewed execution ledger read should succeed: " + phase7Code + " " + phase7Message);
+    expect(rereadReviewedLedger.entries.front().reviewStatus == tape_phase7::kLedgerEntryStatusApproved,
+           "phase 7 reviewed execution ledger read should persist the entry review status");
+    expect(rereadReviewedLedger.ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution,
+           "phase 7 reviewed execution ledger read should persist the aggregate review status");
+    expect(rereadReviewedLedger.entries.front().approvalReviewerCount == 2 &&
+               rereadReviewedLedger.entries.front().approvalThresholdMet,
+           "phase 7 reviewed execution ledger read should persist the approval threshold state");
+
+    tape_phase7::ExecutionLedgerArtifact invalidReviewLedger;
+    std::vector<std::string> invalidUpdatedEntryIds;
+    std::string invalidAuditEventId;
+    expect(!tape_phase7::recordExecutionLedgerReview({},
+                                                     firstLedger.ledgerArtifact.artifactId,
+                                                     {"phase7-ledger-entry-missing"},
+                                                     tape_phase7::kLedgerEntryStatusBlocked,
+                                                     "test-reviewer",
+                                                     "Missing entry should fail.",
+                                                     &invalidReviewLedger,
+                                                     &invalidUpdatedEntryIds,
+                                                     &invalidAuditEventId,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 execution ledger review should reject unknown entry ids");
+    expect(phase7Code == "entry_not_found",
+           "phase 7 execution ledger review should surface entry_not_found for unknown entry ids");
 
     std::vector<tape_phase7::AnalysisArtifact> analysisArtifacts;
     expect(tape_phase7::listAnalysisArtifacts(0, &analysisArtifacts, &phase7Code, &phase7Message),

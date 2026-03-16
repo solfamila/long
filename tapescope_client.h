@@ -64,6 +64,12 @@ struct Phase7ExecutionLedgerBuildPayload {
     bool created = false;
 };
 
+struct Phase7ExecutionLedgerReviewPayload {
+    Phase7ExecutionLedgerArtifact artifact;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+};
+
 struct Phase7AnalysisInventorySelection {
     std::string sourceArtifactId;
     std::string analysisProfile;
@@ -96,6 +102,7 @@ struct Phase7ExecutionLedgerInventorySelection {
     std::string analysisArtifactId;
     std::string sourceArtifactId;
     std::string ledgerStatus;
+    std::string sortBy = "generated_at_desc";
     std::size_t limit = 20;
 };
 
@@ -206,6 +213,12 @@ public:
         const Phase7ExecutionLedgerInventorySelection& selection) const;
     [[nodiscard]] QueryResult<Phase7ExecutionLedgerArtifact> readExecutionLedgerArtifactPayload(
         const std::string& artifactId) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionLedgerReviewPayload> recordExecutionLedgerReviewPayload(
+        const std::string& artifactId,
+        const std::vector<std::string>& entryIds,
+        const std::string& reviewStatus,
+        const std::string& actor,
+        const std::string& comment) const;
 
     [[nodiscard]] static std::string describeError(const QueryError& error);
 
