@@ -66,6 +66,7 @@ int main() {
         testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();
+        testSymbolSubscriptionCapturesImmediateMarketDataCallbacks();
         testRuntimePresentationSnapshotCapturesConsistentState();
         testPendingUiSyncUpdateConsumesFlags();
         testRuntimePresentationSnapshotTracksQuoteFreshnessAndCancelMarking();

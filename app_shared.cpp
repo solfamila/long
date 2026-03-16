@@ -3262,19 +3262,22 @@ bool requestSymbolSubscription(EClientSocket* client,
             if (error) *error = "TWS socket not connected";
             return false;
         }
+
+        // Publish the active request ids before requesting data so fast/mock
+        // callbacks are attributed to the new subscription instead of ignored.
+        invokeSharedDataMutation([&]() {
+            trading_engine::reduce(appState(), trading_engine::MarketSubscriptionStartedEvent{
+                symbol,
+                instrumentId,
+                mktDataReqId,
+                depthReqId,
+                recalcQtyFromFirstAsk
+            });
+        });
+
         client->reqMktData(mktDataReqId, contract, "", false, false, TagValueListSPtr());
         client->reqMktDepth(depthReqId, contract, MARKET_DEPTH_NUM_ROWS, true, TagValueListSPtr());
     }
-
-    invokeSharedDataMutation([&]() {
-        trading_engine::reduce(appState(), trading_engine::MarketSubscriptionStartedEvent{
-            symbol,
-            instrumentId,
-            mktDataReqId,
-            depthReqId,
-            recalcQtyFromFirstAsk
-        });
-    });
 
     appendSharedMessage("Subscription request sent for " + symbol);
     appendRuntimeJournalEvent("subscribe_request_sent", {

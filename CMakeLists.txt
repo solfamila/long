@@ -339,7 +339,9 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
             TWS_HAS_COMMISSION_AND_FEES_REPORT=1
         )
     else()
-        list(APPEND IB_API_LINK_LIBS "${VENDORED_IB_API_DIR}/lib/libbid.a")
+        list(APPEND IB_API_EXTRA_SOURCES
+            "${CMAKE_SOURCE_DIR}/ib_decimal_compat.cpp"
+        )
         list(APPEND IB_API_COMPILE_DEFINITIONS
             TWS_ORDER_STATUS_PERMID_IS_INT=1
             TWS_NEEDS_DECIMAL_FUNCTIONS_SHIM=1

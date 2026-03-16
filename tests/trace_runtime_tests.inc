@@ -89,6 +89,51 @@ void testTradingWrapperIgnoresDuplicateOrderStatus() {
     resetSharedDataForTesting();
 }
 
+void testSymbolSubscriptionCapturesImmediateMarketDataCallbacks() {
+#if !defined(TWS_GUI_MOCK_IBAPI)
+    return;
+#else
+    clearTestFiles();
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    TradingWrapper wrapper;
+    EReaderOSSignal signal(50);
+    EClientSocket client(&wrapper, &signal);
+    wrapper.setClient(&client);
+    expect(client.eConnect("127.0.0.1", 7496, 11), "mock socket connect should succeed");
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.connected = true;
+        g_data.sessionReady = true;
+    }
+    publishSharedDataSnapshot();
+
+    std::string error;
+    expect(requestSymbolSubscription(&client, "INTC", false, &error),
+           "symbol subscription should succeed: " + error);
+
+    const RuntimePresentationSnapshot snapshot = captureRuntimePresentationSnapshot("INTC", 0);
+    expect(snapshot.subscriptionActive, "subscription should stay active after subscribe");
+    expect(snapshot.activeSymbol == "INTC", "subscription should set the active symbol");
+    expect(std::abs(snapshot.symbol.bidPrice - 99.95) < 1e-9,
+           "immediate bid callback should populate the subscribed symbol");
+    expect(std::abs(snapshot.symbol.askPrice - 100.05) < 1e-9,
+           "immediate ask callback should populate the subscribed symbol");
+    expect(std::abs(snapshot.symbol.lastPrice - 100.0) < 1e-9,
+           "immediate last-price callback should populate the subscribed symbol");
+    expect(!snapshot.symbol.askBook.empty(),
+           "immediate depth callbacks should populate the ask book");
+    expect(!snapshot.symbol.bidBook.empty(),
+           "immediate depth callbacks should populate the bid book");
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+#endif
+}
+
 void testRuntimePresentationSnapshotCapturesConsistentState() {
     clearTestFiles();
 
@@ -564,4 +609,3 @@ void testManualReconcileAndAcknowledgeFlow() {
     unbindSharedDataOwner(&owner);
     resetSharedDataForTesting();
 }
-

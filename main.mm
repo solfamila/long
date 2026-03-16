@@ -15,6 +15,12 @@ namespace {
 
 NSString* const kWebSocketTokenDefaultsKey = @"websocketToken";
 
+#if defined(TWS_GUI_MOCK_IBAPI)
+constexpr bool kIsMockBuild = true;
+#else
+constexpr bool kIsMockBuild = false;
+#endif
+
 NSString* ToNSString(const std::string& value) {
     return [NSString stringWithUTF8String:value.c_str()];
 }
@@ -268,6 +274,7 @@ void StylePanel(NSView* view) {
     NSTextField* _twsStatusLabel;
     NSTextField* _accountStatusLabel;
     NSTextField* _websocketStatusLabel;
+    NSTextField* _buildModeBannerLabel;
     NSTextField* _recoveryBannerLabel;
 
     NSTextField* _symbolField;
@@ -521,6 +528,11 @@ void StylePanel(NSView* view) {
     [statusRow addArrangedSubview:statusControls];
     [rootStack addArrangedSubview:statusRow];
     [statusRow.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
+
+    _buildModeBannerLabel = MakeLabel(@"", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor systemOrangeColor]);
+    _buildModeBannerLabel.hidden = YES;
+    [rootStack addArrangedSubview:_buildModeBannerLabel];
+    [_buildModeBannerLabel.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor].active = YES;
 
     _recoveryBannerLabel = MakeLabel(@"", [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold], [NSColor systemRedColor]);
     _recoveryBannerLabel.hidden = YES;
@@ -1346,6 +1358,15 @@ void StylePanel(NSView* view) {
                          [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
 
     StyleTintedButton(_settingsButton, [NSColor colorWithCalibratedRed:0.25 green:0.45 blue:0.70 alpha:1.0], [NSColor whiteColor]);
+
+    if (kIsMockBuild) {
+        _buildModeBannerLabel.hidden = NO;
+        _buildModeBannerLabel.stringValue = @"Mock build: not connected to live Interactive Brokers market data or order routing.";
+        _buildModeBannerLabel.textColor = [NSColor systemOrangeColor];
+    } else {
+        _buildModeBannerLabel.hidden = YES;
+        _buildModeBannerLabel.stringValue = @"";
+    }
 
     if (!state.status.startupRecoveryBanner.empty()) {
         _recoveryBannerLabel.hidden = NO;
