@@ -102,20 +102,20 @@ void SetActionButtonAvailability(NSButton* button,
 }
 
 NSInteger ControllerArmModePopupIndex(ControllerArmMode mode) {
-    (void)mode;
-    return 0;
+    return mode == ControllerArmMode::Manual ? 1 : 0;
 }
 
 ControllerArmMode ControllerArmModeFromPopupIndex(NSInteger index) {
-    (void)index;
-    return ControllerArmMode::Manual;
+    return index == 1 ? ControllerArmMode::Manual : ControllerArmMode::OneShot;
 }
 
 NSString* ControllerArmSafetyText(const RiskControlsSnapshot& risk) {
     if (!risk.controllerArmed) {
         return @"controller disarmed";
     }
-    return @"controller armed (manual)";
+    return risk.controllerArmMode == ControllerArmMode::Manual
+        ? @"controller armed (manual)"
+        : @"controller armed (1-shot)";
 }
 
 void StyleTintedButton(NSButton* button, NSColor* bezelColor, NSColor* tintColor) {

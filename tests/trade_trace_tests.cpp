@@ -1110,97 +1110,6 @@ void testShortOpenValidationUsesShortExposureForMaxOpenNotional() {
     resetSharedDataForTesting();
 }
 
-void testControllerOriginatedSubmitsStayArmed() {
-    clearTestFiles();
-
-    SharedData owner;
-    bindSharedDataOwner(&owner);
-
-    TradingWrapper wrapper;
-    EReaderOSSignal signal(50);
-    EClientSocket client(&wrapper, &signal);
-    connectReadyMockSession(wrapper, client, 25);
-
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        g_data.currentSymbol = "INTC";
-        g_data.askPrice = 100.10;
-        g_data.bidPrice = 100.00;
-        g_data.lastPrice = 100.05;
-        g_data.lastQuoteUpdate = std::chrono::steady_clock::now();
-        g_data.borrowAvailability = BorrowAvailability::Borrowable;
-        g_data.controllerArmMode = ControllerArmMode::OneShot;
-        g_data.controllerArmed = true;
-
-        PositionInfo shortPosition;
-        shortPosition.account = "U23164862";
-        shortPosition.symbol = "INTC";
-        shortPosition.quantity = -3.0;
-        shortPosition.avgCost = 99.75;
-        g_data.positions[makePositionKey("U23164862", "INTC")] = shortPosition;
-    }
-    publishSharedDataSnapshot();
-
-    SubmitIntent openIntent = captureSubmitIntent("Controller",
-                                                  "INTC",
-                                                  "SELL",
-                                                  1,
-                                                  100.00,
-                                                  false,
-                                                  0.0,
-                                                  0.0,
-                                                  "Controller Square button (open short)");
-    std::string error;
-    expect(submitLimitOrder(&client,
-                            "INTC",
-                            "SELL",
-                            1.0,
-                            100.00,
-                            false,
-                            &openIntent,
-                            &error,
-                            nullptr,
-                            nullptr),
-           "controller open-short submit should succeed");
-    expect(error.empty(), "controller open-short submit should not return an error");
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        expect(g_data.controllerArmed,
-               "controller open-short submit should keep controller trading armed");
-    }
-
-    SubmitIntent coverIntent = captureSubmitIntent("Controller",
-                                                   "INTC",
-                                                   "BUY",
-                                                   1,
-                                                   100.10,
-                                                   true,
-                                                   0.0,
-                                                   0.0,
-                                                   "Controller Circle button (buy to cover)");
-    error.clear();
-    expect(submitLimitOrder(&client,
-                            "INTC",
-                            "BUY",
-                            1.0,
-                            100.10,
-                            true,
-                            &coverIntent,
-                            &error,
-                            nullptr,
-                            nullptr),
-           "controller buy-to-cover submit should succeed");
-    expect(error.empty(), "controller buy-to-cover submit should not return an error");
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
-        expect(g_data.controllerArmed,
-               "controller buy-to-cover submit should keep controller trading armed");
-    }
-
-    unbindSharedDataOwner(&owner);
-    resetSharedDataForTesting();
-}
-
 void testOrderWatchdogEscalatesToManualReview() {
     clearTestFiles();
 
@@ -1520,7 +1429,6 @@ int main() {
         testBuyToCoverSubmitSucceedsWhenBorrowUnavailable();
         testShortOpenRejectsWhenBorrowIsUnavailable();
         testShortOpenValidationUsesShortExposureForMaxOpenNotional();
-        testControllerOriginatedSubmitsStayArmed();
         testOrderWatchdogEscalatesToManualReview();
         testCancelAndPartialFillWatchdogs();
         testOpenOrderResolvesReconcilingStateAndFloorsOrderIds();

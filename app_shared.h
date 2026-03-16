@@ -361,7 +361,7 @@ struct SharedData {
     int brokerEchoTimeoutMs = 2000;
     int cancelAckTimeoutMs = 5000;
     int partialFillQuietTimeoutMs = 15000;
-    ControllerArmMode controllerArmMode = ControllerArmMode::Manual;
+    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
 
@@ -498,7 +498,7 @@ struct RiskControlsSnapshot {
     int partialFillQuietTimeoutMs = 15000;
     double maxOrderNotional = 15000.0;
     double maxOpenNotional = 50000.0;
-    ControllerArmMode controllerArmMode = ControllerArmMode::Manual;
+    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
 };
@@ -578,7 +578,7 @@ struct RiskControlsUpdatedEvent {
     int partialFillQuietTimeoutMs = 15000;
     double maxOrderNotional = 15000.0;
     double maxOpenNotional = 50000.0;
-    ControllerArmMode controllerArmMode = ControllerArmMode::Manual;
+    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
 };
 
 struct ControllerArmedChangedEvent {
