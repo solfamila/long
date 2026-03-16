@@ -109,11 +109,13 @@ void StyleTintedButton(NSButton* button, NSColor* bezelColor, NSColor* tintColor
 }
 
 NSInteger ControllerArmModePopupIndex(ControllerArmMode mode) {
-    return mode == ControllerArmMode::Manual ? 1 : 0;
+    (void)mode;
+    return 0;
 }
 
 ControllerArmMode ControllerArmModeFromPopupIndex(NSInteger index) {
-    return index == 1 ? ControllerArmMode::Manual : ControllerArmMode::OneShot;
+    (void)index;
+    return ControllerArmMode::Manual;
 }
 
 } // namespace
@@ -167,7 +169,6 @@ bool RunTradingSettingsSheet(NSWindow* parentWindow,
     NSPopUpButton* controllerArmModePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     controllerArmModePopup.translatesAutoresizingMaskIntoConstraints = NO;
     controllerArmModePopup.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightRegular];
-    [controllerArmModePopup addItemWithTitle:@"One-shot after controller trade"];
     [controllerArmModePopup addItemWithTitle:@"Stay armed until manual disarm"];
     [controllerArmModePopup selectItemAtIndex:ControllerArmModePopupIndex(currentRisk.controllerArmMode)];
     [controllerArmModePopup.widthAnchor constraintEqualToConstant:280.0].active = YES;

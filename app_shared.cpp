@@ -243,7 +243,7 @@ struct ImmutableSharedDataSnapshot {
     int brokerEchoTimeoutMs = 2000;
     int cancelAckTimeoutMs = 5000;
     int partialFillQuietTimeoutMs = 15000;
-    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
+    ControllerArmMode controllerArmMode = ControllerArmMode::Manual;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
 
@@ -3277,7 +3277,6 @@ bool submitLimitOrder(EClientSocket* client,
     double maxOpenNotional = 0.0;
     double openShortExposure = 0.0;
     double currentPositionValue = 0.0;
-    ControllerArmMode controllerArmMode = ControllerArmMode::OneShot;
     bool controllerArmed = false;
     bool tradingKillSwitch = false;
     std::string duplicateFingerprint;
@@ -3289,7 +3288,6 @@ bool submitLimitOrder(EClientSocket* client,
         staleQuoteThresholdMs = published->staleQuoteThresholdMs;
         maxOrderNotional = published->maxOrderNotional;
         maxOpenNotional = published->maxOpenNotional;
-        controllerArmMode = published->controllerArmMode;
         controllerArmed = published->controllerArmed;
         tradingKillSwitch = published->tradingKillSwitch;
         borrowAvailability = published->borrowAvailability;
@@ -3444,10 +3442,6 @@ bool submitLimitOrder(EClientSocket* client,
     appendSharedMessage(msg);
 
     if (outOrderId) *outOrderId = orderId;
-    if (effectiveIntent.source.find("Controller") != std::string::npos &&
-        controllerArmMode == ControllerArmMode::OneShot) {
-        setControllerArmed(false);
-    }
     return true;
 }
 
