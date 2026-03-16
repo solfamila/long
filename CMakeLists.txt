@@ -132,9 +132,11 @@ set(TAPESCOPE_SOURCES
     tapescope_order_queries.mm
     tapescope_artifact_queries.mm
     tapescope_phase7_queries.mm
+    tapescope_phase7_runtime.mm
     tapescope_bundle_preview.cpp
     tapescope_client.cpp
     tape_phase7_artifacts.cpp
+    tape_phase7_runtime_bridge.cpp
     tape_bundle_inspection.cpp
     tape_query_payloads.cpp
     tapescope_investigation_pane.mm
@@ -143,6 +145,18 @@ set(TAPESCOPE_SOURCES
     tapescope_table_bindings.mm
     tape_engine_client.cpp
     tape_engine_protocol.cpp
+    app_shared.cpp
+    controller_claim.cpp
+    bridge_batch_codec.cpp
+    bridge_batch_transport.cpp
+    runtime_qos.cpp
+    websocket_handlers.cpp
+    trading_runtime.cpp
+    trading_runtime_host.cpp
+    trace_exporter.cpp
+    trading_ui_format.cpp
+    controller_mac.mm
+    mac_observability.mm
 )
 
 set(TAPE_MCP_SOURCES
@@ -228,6 +242,7 @@ target_link_libraries(tape_engine_ctl PRIVATE
 
 target_link_libraries(TapeScope PRIVATE
     Threads::Threads
+    ixwebsocket::ixwebsocket
 )
 
 target_link_libraries(tape_mcp PRIVATE
@@ -377,15 +392,22 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
         "${VENDORED_IB_API_DIR}"
         ${IB_API_EXTRA_INCLUDE_DIRS}
     )
+    target_include_directories(TapeScope PRIVATE
+        "${VENDORED_IB_API_DIR}"
+        ${IB_API_EXTRA_INCLUDE_DIRS}
+    )
     target_compile_definitions(tape_engine PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(tape_engine_ctl PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(tape_mcp PRIVATE ${IB_API_COMPILE_DEFINITIONS})
+    target_compile_definitions(TapeScope PRIVATE ${IB_API_COMPILE_DEFINITIONS})
+    target_link_libraries(TapeScope PRIVATE twsapi)
     message(STATUS "Using vendored Interactive Brokers API sources from ${VENDORED_IB_API_DIR}")
 elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
     target_include_directories(tws_gui PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_engine PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_engine_ctl PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_mcp PRIVATE "${IB_API_INCLUDE_DIR}")
+    target_include_directories(TapeScope PRIVATE "${IB_API_INCLUDE_DIR}")
     message(STATUS "Using Interactive Brokers API from ${IB_API_INCLUDE_DIR}")
 else()
     target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
@@ -431,6 +453,7 @@ target_link_libraries(tws_gui PRIVATE
 
 target_link_libraries(TapeScope PRIVATE
     ${APP_KIT_LIBRARY}
+    ${GAME_CONTROLLER_LIBRARY}
 )
 
 set_target_properties(tws_gui PROPERTIES
@@ -514,6 +537,7 @@ if(BUILD_TESTING)
         bridge_batch_transport.cpp
         phase3_analyzers.cpp
         runtime_qos.cpp
+        websocket_handlers.cpp
         tape_phase7_artifacts.cpp
         tape_bundle_inspection.cpp
         tape_engine.cpp
@@ -522,7 +546,10 @@ if(BUILD_TESTING)
         tapescope_bundle_preview.cpp
         tapescope_client.cpp
         tape_query_payloads.cpp
+        tape_phase7_runtime_bridge.cpp
         trace_exporter.cpp
+        controller_mac.mm
+        trading_runtime.cpp
         trading_ui_format.cpp
         mac_observability.mm
     )
@@ -542,6 +569,7 @@ if(BUILD_TESTING)
         Threads::Threads
         ixwebsocket::ixwebsocket
         ${APP_KIT_LIBRARY}
+        ${GAME_CONTROLLER_LIBRARY}
     )
 
     if(TARGET twsapi)
@@ -565,9 +593,12 @@ if(BUILD_TESTING)
 
     add_executable(tape_mcp_contract_tests
         tests/tape_mcp_contract_tests.cpp
+        app_shared.cpp
+        controller_claim.cpp
         tape_mcp_adapter.cpp
         tape_mcp_engine_rpc.cpp
         tape_phase7_artifacts.cpp
+        tape_phase7_runtime_bridge.cpp
         tape_query_payloads.cpp
         tape_bundle_inspection.cpp
         tape_engine.cpp
@@ -577,6 +608,12 @@ if(BUILD_TESTING)
         bridge_batch_codec.cpp
         bridge_batch_transport.cpp
         runtime_qos.cpp
+        websocket_handlers.cpp
+        trace_exporter.cpp
+        controller_mac.mm
+        trading_runtime.cpp
+        trading_ui_format.cpp
+        mac_observability.mm
     )
 
     target_include_directories(tape_mcp_contract_tests PRIVATE
@@ -592,6 +629,9 @@ if(BUILD_TESTING)
     )
     target_link_libraries(tape_mcp_contract_tests PRIVATE
         Threads::Threads
+        ixwebsocket::ixwebsocket
+        ${APP_KIT_LIBRARY}
+        ${GAME_CONTROLLER_LIBRARY}
     )
 
     if(TARGET twsapi)

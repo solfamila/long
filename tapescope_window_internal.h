@@ -2,6 +2,7 @@
 
 #import <AppKit/AppKit.h>
 
+#include "trading_runtime_host.h"
 #include "tapescope_client.h"
 #include "tapescope_investigation_pane.h"
 
@@ -253,7 +254,9 @@ struct ProbeSnapshot {
     NSPopUpButton* _phase7LedgerSortPopup;
     NSTextField* _phase7JournalLedgerFilterField;
     NSPopUpButton* _phase7JournalStatusFilterPopup;
+    NSPopUpButton* _phase7JournalRecoveryFilterPopup;
     NSPopUpButton* _phase7JournalSortPopup;
+    NSPopUpButton* _phase7ApplyRecoveryFilterPopup;
     NSButton* _phase7ClearFiltersButton;
     NSButton* _phase7ChooseBundleButton;
     NSButton* _phase7RunAnalysisButton;
@@ -271,6 +274,12 @@ struct ProbeSnapshot {
     NSButton* _phase7OpenLinkedLedgerButton;
     NSButton* _phase7OpenLinkedJournalButton;
     NSButton* _phase7DispatchJournalButton;
+    NSButton* _phase7RuntimeStartButton;
+    NSButton* _phase7RuntimeStopButton;
+    NSButton* _phase7RuntimeDispatchButton;
+    NSButton* _phase7RuntimeReconcileButton;
+    NSButton* _phase7RuntimeSweepButton;
+    NSButton* _phase7RuntimeSyncApplyButton;
     NSButton* _phase7LoadRangeButton;
     NSTextField* _phase7JournalActorField;
     NSTextField* _phase7ExecutionCapabilityField;
@@ -286,6 +295,7 @@ struct ProbeSnapshot {
     NSButton* _phase7RecordExecutionButton;
     NSButton* _phase7RecordApplyButton;
     NSTextField* _phase7StateLabel;
+    NSTextField* _phase7RuntimeStatusLabel;
     NSTableView* _phase7AnalysisTableView;
     NSTableView* _phase7PlaybookTableView;
     NSTableView* _phase7LedgerTableView;
@@ -318,6 +328,8 @@ struct ProbeSnapshot {
     std::vector<tapescope::Phase7ExecutionLedgerEntry> _phase7VisibleLedgerEntries;
     std::vector<tapescope::Phase7ExecutionJournalEntry> _phase7VisibleJournalEntries;
     std::vector<tapescope::Phase7ExecutionApplyEntry> _phase7VisibleApplyEntries;
+    std::unique_ptr<TradingRuntimeHost> _phase7RuntimeHost;
+    int _phase7RuntimeClientId;
 
     std::vector<std::pair<NSTableView*, tapescope::InvestigationPaneController*>> _evidencePaneBindings;
 }
@@ -474,6 +486,19 @@ struct ProbeSnapshot {
 - (void)recordSelectedPhase7JournalEvent:(id)sender;
 - (void)recordSelectedPhase7ApplyEvent:(id)sender;
 - (void)loadReplayRangeFromPhase7Selection:(id)sender;
+
+@end
+
+@interface TapeScopeWindowController (Phase7Runtime)
+
+- (void)startPhase7RuntimeHost:(id)sender;
+- (void)stopPhase7RuntimeHost:(id)sender;
+- (void)dispatchSelectedPhase7JournalEntriesViaRuntime:(id)sender;
+- (void)reconcileSelectedPhase7JournalEntriesViaRuntime:(id)sender;
+- (void)sweepPhase7ExecutionArtifactsViaRuntime:(id)sender;
+- (void)syncSelectedPhase7ApplyFromJournal:(id)sender;
+- (void)updatePhase7RuntimeControls;
+- (void)shutdownPhase7RuntimeHost;
 
 @end
 

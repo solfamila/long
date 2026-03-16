@@ -2172,6 +2172,2150 @@ void testTapeEnginePhase7ArtifactsReuseDeterministically() {
     server.stop();
 }
 
+void testTapePhase7RuntimeBridgeDispatchesAndReconcilesOrderAnchoredJournal() {
+    clearTestFiles();
+    std::error_code phase7Ec;
+    fs::remove_all(testDataDir() / "phase7_artifacts", phase7Ec);
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+
+        OrderInfo order;
+        order.orderId = 9101;
+        order.account = "U23154741";
+        order.symbol = "INTC";
+        order.side = "BUY";
+        order.quantity = 10.0;
+        order.remainingQty = 10.0;
+        order.limitPrice = 45.21;
+        order.status = "Submitted";
+        order.localState = LocalOrderState::Working;
+        g_data.orders[order.orderId] = order;
+
+        TradeTrace trace;
+        trace.traceId = 99101;
+        trace.orderId = order.orderId;
+        trace.permId = 5101;
+        trace.source = "phase7-runtime-bridge";
+        trace.symbol = order.symbol;
+        trace.side = order.side;
+        trace.account = order.account;
+        trace.requestedQty = static_cast<int>(order.quantity);
+        trace.limitPrice = order.limitPrice;
+        g_data.traces[trace.traceId] = trace;
+        g_data.traceRecency.push_back(trace.traceId);
+        g_data.latestTraceId = trace.traceId;
+    }
+    publishSharedDataSnapshot();
+
+    const fs::path rootDir = testDataDir() / "tape-engine-phase7-runtime-bridge";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase7-runtime-bridge.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for the phase 7 runtime bridge test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase7-runtime-bridge";
+    options.runtimeSessionId = "runtime-engine-phase7-runtime-bridge";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(9601, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      4101, 9101, 5101, "", "phase 7 runtime bridge order intent",
+                                                      "2026-03-16T10:12:00.100");
+    orderIntent.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+
+    BridgeOutboxRecord orderStatus = makeBridgeRecord(9602, "order_status", "BrokerOrderStatus", "INTC", "BUY",
+                                                      4101, 9101, 5101, "",
+                                                      "phase 7 runtime bridge submitted",
+                                                      "2026-03-16T10:12:00.200");
+    orderStatus.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+
+    BridgeOutboxRecord fillExecution = makeBridgeRecord(9603, "fill_execution", "BrokerExecution", "INTC", "BUY",
+                                                        4101, 9101, 5101, "E-PHASE7-BRIDGE-1",
+                                                        "phase 7 runtime bridge fill",
+                                                        "2026-03-16T10:12:00.300");
+    fillExecution.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+
+    options.batchSeq = 601;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "phase 7 runtime bridge fixture should accept the order intent batch: " + error);
+    options.batchSeq = 602;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderStatus}, options)), &error),
+           "phase 7 runtime bridge fixture should accept the order status batch: " + error);
+    options.batchSeq = 603;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({fillExecution}, options)), &error),
+           "phase 7 runtime bridge fixture should accept the fill batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() >= 3;
+    }, "phase 7 runtime bridge fixture should freeze the seeded batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest caseReportRequest;
+    caseReportRequest.requestId = "phase7-runtime-bridge-case-report";
+    caseReportRequest.operation = "scan_order_case_report";
+    caseReportRequest.orderId = 9101;
+    expect(client.query(caseReportRequest, &response, &error),
+           "phase 7 runtime bridge case report scan should succeed: " + error);
+    const std::uint64_t caseReportId =
+        response.summary.value("case_report_artifact", json::object()).value("report_id", 0ULL);
+    expect(caseReportId > 0, "phase 7 runtime bridge case report scan should persist a durable case report");
+
+    tape_engine::QueryRequest exportCaseBundleRequest;
+    exportCaseBundleRequest.requestId = "phase7-runtime-bridge-export-case-bundle";
+    exportCaseBundleRequest.operation = "export_case_bundle";
+    exportCaseBundleRequest.reportId = caseReportId;
+    expect(client.query(exportCaseBundleRequest, &response, &error),
+           "phase 7 runtime bridge case bundle export should succeed: " + error);
+    const std::string caseBundlePath =
+        response.summary.value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
+           "phase 7 runtime bridge case bundle export should write a portable case bundle");
+
+    tape_phase7::AnalysisArtifact orderImpactAnalysis;
+    bool analysisCreated = false;
+    std::string phase7Code;
+    std::string phase7Message;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  tape_phase7::kOrderImpactAnalyzerProfile,
+                                                  &orderImpactAnalysis,
+                                                  &analysisCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 runtime bridge order-impact analyzer should succeed: " + phase7Code + " " + phase7Message);
+    expect(!orderImpactAnalysis.findings.empty(),
+           "phase 7 runtime bridge analysis should emit findings");
+
+    const auto dispatchableFindingIt = std::find_if(orderImpactAnalysis.findings.begin(),
+                                                    orderImpactAnalysis.findings.end(),
+                                                    [](const tape_phase7::FindingRecord& finding) {
+                                                        return finding.category == "market_impact_risk" ||
+                                                            finding.category == "fill_quality_risk";
+                                                    });
+    expect(dispatchableFindingIt != orderImpactAnalysis.findings.end(),
+           "phase 7 runtime bridge analysis should emit at least one runtime-dispatchable finding");
+
+    tape_phase7::PlaybookArtifact playbook;
+    bool playbookCreated = false;
+    expect(tape_phase7::buildGuardedPlaybook({},
+                                             orderImpactAnalysis.analysisArtifact.artifactId,
+                                             {},
+                                             tape_phase7::kDefaultPlaybookMode,
+                                             &playbook,
+                                             &playbookCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 runtime bridge playbook build should succeed: " + phase7Code + " " + phase7Message);
+    expect(!playbook.plannedActions.empty(),
+           "phase 7 runtime bridge playbook should expose planned actions for the order-impact review profile");
+    const auto dispatchableActionIt = std::find_if(playbook.plannedActions.begin(),
+                                                   playbook.plannedActions.end(),
+                                                   [](const tape_phase7::PlaybookAction& action) {
+                                                       return action.executionRequest.is_object() &&
+                                                           !action.executionRequest.empty();
+                                                   });
+    expect(dispatchableActionIt != playbook.plannedActions.end(),
+           "phase 7 runtime bridge playbook should include a runtime-dispatchable action");
+    expect(dispatchableActionIt->executionRequest.value("operation", std::string()) ==
+               "request_order_reconciliation" &&
+               dispatchableActionIt->executionRequest.value("executor", std::string()) ==
+                   "trading_runtime",
+           "phase 7 runtime bridge playbook should carry the executable reconciliation request");
+    expect(dispatchableActionIt->executionRequest.value("requested_order_ids", json::array()).size() == 1 &&
+               dispatchableActionIt->executionRequest.value("requested_order_ids", json::array()).front().get<long long>() == 9101,
+           "phase 7 runtime bridge playbook should target the anchored order id");
+
+    tape_phase7::ExecutionLedgerArtifact ledger;
+    bool ledgerCreated = false;
+    expect(tape_phase7::buildExecutionLedger({},
+                                             playbook.playbookArtifact.artifactId,
+                                             &ledger,
+                                             &ledgerCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 runtime bridge execution ledger build should succeed: " + phase7Code + " " + phase7Message);
+    expect(ledgerCreated && !ledger.entries.empty(),
+           "phase 7 runtime bridge execution ledger should preserve the playbook entries");
+    const auto dispatchableLedgerEntryIt = std::find_if(ledger.entries.begin(),
+                                                        ledger.entries.end(),
+                                                        [&](const tape_phase7::ExecutionLedgerEntry& entry) {
+                                                            return entry.actionId == dispatchableActionIt->actionId &&
+                                                                entry.executionRequest.is_object() &&
+                                                                !entry.executionRequest.empty();
+                                                        });
+    expect(dispatchableLedgerEntryIt != ledger.entries.end(),
+           "phase 7 runtime bridge execution ledger should preserve the dispatchable action entry");
+
+    const std::vector<std::string> approvedLedgerEntryIds = {dispatchableLedgerEntryIt->entryId};
+    std::vector<std::string> nonApplicableLedgerEntryIds;
+    for (const auto& entry : ledger.entries) {
+        if (entry.entryId != dispatchableLedgerEntryIt->entryId) {
+            nonApplicableLedgerEntryIds.push_back(entry.entryId);
+        }
+    }
+    tape_phase7::ExecutionLedgerArtifact reviewedLedger;
+    std::vector<std::string> reviewedLedgerEntryIds;
+    std::string reviewedLedgerAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    ledger.ledgerArtifact.artifactId,
+                                                    approvedLedgerEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "bridge-reviewer-a",
+                                                    "First approval for the runtime-bridge journal.",
+                                                    &reviewedLedger,
+                                                    &reviewedLedgerEntryIds,
+                                                    &reviewedLedgerAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 runtime bridge first ledger approval should succeed: " + phase7Code + " " + phase7Message);
+    expect(reviewedLedgerEntryIds == approvedLedgerEntryIds,
+           "phase 7 runtime bridge first ledger approval should update the dispatchable ledger entry");
+
+    if (!nonApplicableLedgerEntryIds.empty()) {
+        tape_phase7::ExecutionLedgerArtifact narrowedLedger;
+        std::vector<std::string> narrowedLedgerEntryIds;
+        std::string narrowedLedgerAuditEventId;
+        expect(tape_phase7::recordExecutionLedgerReview({},
+                                                        ledger.ledgerArtifact.artifactId,
+                                                        nonApplicableLedgerEntryIds,
+                                                        tape_phase7::kLedgerEntryStatusNotApplicable,
+                                                        "bridge-reviewer-a",
+                                                        "Non-runtime actions stay outside the execution journal bridge.",
+                                                        &narrowedLedger,
+                                                        &narrowedLedgerEntryIds,
+                                                        &narrowedLedgerAuditEventId,
+                                                        &phase7Code,
+                                                        &phase7Message),
+               "phase 7 runtime bridge non-applicable ledger narrowing should succeed: " +
+                   phase7Code + " " + phase7Message);
+        expect(narrowedLedgerEntryIds == nonApplicableLedgerEntryIds,
+               "phase 7 runtime bridge non-applicable ledger narrowing should update the non-runtime entries");
+    }
+
+    tape_phase7::ExecutionLedgerArtifact readyLedger;
+    std::vector<std::string> readyLedgerEntryIds;
+    std::string readyLedgerAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    ledger.ledgerArtifact.artifactId,
+                                                    approvedLedgerEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "bridge-reviewer-b",
+                                                    "Second approval makes the journal ready.",
+                                                    &readyLedger,
+                                                    &readyLedgerEntryIds,
+                                                    &readyLedgerAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 runtime bridge second ledger approval should succeed: " + phase7Code + " " + phase7Message);
+    expect(readyLedger.ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution,
+           "phase 7 runtime bridge execution ledger should become ready for execution");
+
+    tape_phase7::ExecutionJournalArtifact journal;
+    bool journalCreated = false;
+    expect(tape_phase7::startExecutionJournal({},
+                                              readyLedger.ledgerArtifact.artifactId,
+                                              "bridge-executor",
+                                              "phase7.execution_operator.v1",
+                                              &journal,
+                                              &journalCreated,
+                                              &phase7Code,
+                                              &phase7Message),
+           "phase 7 runtime bridge journal start should succeed: " + phase7Code + " " + phase7Message);
+    expect(journalCreated && journal.entries.size() == 1 &&
+               journal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusQueued,
+           "phase 7 runtime bridge journal should start with one queued runtime-dispatchable entry");
+
+    const std::vector<std::string> journalEntryIds = {journal.entries.front().journalEntryId};
+    tape_phase7::ExecutionJournalArtifact dispatchedJournal;
+    std::vector<std::string> dispatchedJournalEntryIds;
+    std::string dispatchedJournalAuditEventId;
+    expect(tape_phase7::dispatchExecutionJournalEntriesViaRuntime(nullptr,
+                                                                  {},
+                                                                  journal.journalArtifact.artifactId,
+                                                                  journalEntryIds,
+                                                                  "bridge-executor",
+                                                                  "phase7.execution_operator.v1",
+                                                                  "Dispatch the order-anchored execution journal entry.",
+                                                                  &dispatchedJournal,
+                                                                  &dispatchedJournalEntryIds,
+                                                                  &dispatchedJournalAuditEventId,
+                                                                  &phase7Code,
+                                                                  &phase7Message),
+           "phase 7 runtime bridge journal dispatch should succeed: " + phase7Code + " " + phase7Message);
+    expect(dispatchedJournalEntryIds == journalEntryIds && !dispatchedJournalAuditEventId.empty(),
+           "phase 7 runtime bridge journal dispatch should report the updated journal entry and audit event");
+    expect(dispatchedJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSubmitted &&
+               dispatchedJournal.entries.front().attemptCount == 1 &&
+               dispatchedJournal.journalStatus == tape_phase7::kExecutionJournalStatusInProgress,
+           "phase 7 runtime bridge journal dispatch should move the entry into submitted in-progress state");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(dispatchedJournal);
+        expect(recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 1 &&
+                   !recoverySummary.staleRecoveryRequired,
+               "phase 7 runtime bridge dispatched journal should advertise pending runtime recovery");
+    }
+    expect(dispatchedJournal.entries.front().executionRequest.value("operation", std::string()) ==
+               "request_order_reconciliation" &&
+               dispatchedJournal.entries.front().executionResult.value("runtime_operation", std::string()) ==
+                   "request_order_reconciliation" &&
+               dispatchedJournal.entries.front().executionResult.value("accepted_order_ids", json::array()).size() == 1 &&
+               dispatchedJournal.entries.front().executionResult.value("accepted_order_ids", json::array()).front().get<long long>() == 9101,
+           "phase 7 runtime bridge journal dispatch should record runtime reconciliation metadata");
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        const auto it = g_data.orders.find(9101);
+        expect(it != g_data.orders.end(), "phase 7 runtime bridge dispatch order should still exist");
+        expect(it->second.localState == LocalOrderState::NeedsReconciliation,
+               "phase 7 runtime bridge dispatch should push the order into manual reconciliation");
+        expect(it->second.lastReconciliationReason == journal.entries.front().actionType,
+               "phase 7 runtime bridge dispatch should preserve the playbook action as reconciliation reason");
+    }
+
+    tape_phase7::ExecutionApplyArtifact apply;
+    bool applyCreated = false;
+    expect(tape_phase7::startExecutionApply({},
+                                            dispatchedJournal.journalArtifact.artifactId,
+                                            {},
+                                            "bridge-executor",
+                                            "phase7.execution_operator.v1",
+                                            "Create an apply artifact before runtime reconciliation completes.",
+                                            &apply,
+                                            &applyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 runtime bridge apply start should succeed: " + phase7Code + " " + phase7Message);
+    expect(applyCreated &&
+               apply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSubmitted &&
+               apply.applyStatus == tape_phase7::kExecutionJournalStatusInProgress,
+           "phase 7 runtime bridge apply start should mirror the submitted journal state");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(apply);
+        expect(recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 1 &&
+                   !recoverySummary.staleRecoveryRequired,
+               "phase 7 runtime bridge apply start should advertise pending runtime recovery");
+    }
+    {
+        tape_phase7::RuntimeRecoveryBacklogSummary backlog;
+        expect(tape_phase7::summarizeRuntimeRecoveryBacklog(&backlog, &phase7Code, &phase7Message),
+               "phase 7 runtime bridge backlog summary should succeed after dispatch/apply start: " +
+                   phase7Code + " " + phase7Message);
+        expect(backlog.journalArtifactCount >= 1 &&
+                   backlog.applyArtifactCount >= 1 &&
+                   backlog.recoveryRequiredJournalCount >= 1 &&
+                   backlog.recoveryRequiredApplyCount >= 1 &&
+                   backlog.runtimeBackedSubmittedJournalEntryCount >= 1 &&
+                   backlog.runtimeBackedSubmittedApplyEntryCount >= 1 &&
+                   backlog.recoveryRequired &&
+                   !backlog.staleRecoveryRequired,
+               "phase 7 runtime bridge backlog summary should report pending journal/apply recovery after dispatch");
+        const auto noActorPlan = tape_phase7::runtimeStartupRecoveryPlan(backlog, false);
+        expect(noActorPlan.startupAction == "await_actor" &&
+                   !noActorPlan.recoverySweepRecommended &&
+                   !noActorPlan.manualAttentionRecommended,
+               "phase 7 runtime bridge startup policy should wait for an actor when recovery is pending");
+        const auto actorPlan = tape_phase7::runtimeStartupRecoveryPlan(backlog, true);
+        expect(actorPlan.startupAction == "recover_pending" &&
+                   actorPlan.recoverySweepRecommended &&
+                   !actorPlan.manualAttentionRecommended,
+               "phase 7 runtime bridge startup policy should recommend recovery when an actor is present");
+    }
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        auto& order = g_data.orders[9101];
+        order.status = "Submitted";
+        order.filledQty = 10.0;
+        order.remainingQty = 20.0;
+        order.avgFillPrice = 46.11;
+        order.localState = LocalOrderState::PartiallyFilled;
+        order.seenExecIds.insert("E-PHASE7-BRIDGE-1");
+    }
+    publishSharedDataSnapshot();
+
+    tape_phase7::ExecutionJournalArtifact partiallyFilledJournal;
+    std::vector<std::string> partiallyFilledJournalEntryIds;
+    std::string partiallyFilledJournalAuditEventId;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   journal.journalArtifact.artifactId,
+                                                                   journalEntryIds,
+                                                                   "bridge-executor",
+                                                                   "Runtime reports the order as partially filled.",
+                                                                   &partiallyFilledJournal,
+                                                                   &partiallyFilledJournalEntryIds,
+                                                                   &partiallyFilledJournalAuditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime bridge partial-fill reconciliation should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(partiallyFilledJournalEntryIds == journalEntryIds && !partiallyFilledJournalAuditEventId.empty(),
+           "phase 7 runtime bridge partial-fill reconciliation should report the updated entry and audit event");
+    expect(partiallyFilledJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSubmitted &&
+               !partiallyFilledJournal.entries.front().terminal &&
+               partiallyFilledJournal.journalStatus == tape_phase7::kExecutionJournalStatusInProgress &&
+               partiallyFilledJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "resolved_partially_filled" &&
+               partiallyFilledJournal.entries.front().executionResult.value("fill_state", std::string()) ==
+                   "partial_fill_in_progress" &&
+               partiallyFilledJournal.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "continue_recovery" &&
+               partiallyFilledJournal.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "recoverable" &&
+               partiallyFilledJournal.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "partial_fill_active" &&
+               partiallyFilledJournal.entries.front().executionResult.value("filled_qty", 0.0) == 10.0 &&
+               partiallyFilledJournal.entries.front().executionResult.value("remaining_qty", 0.0) == 20.0 &&
+               partiallyFilledJournal.entries.front().executionResult.value("avg_fill_price", 0.0) == 46.11,
+           "phase 7 runtime bridge partial-fill reconciliation should keep the journal nonterminal while recording fill state");
+    expect(partiallyFilledJournal.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5101 &&
+               partiallyFilledJournal.entries.front().executionResult.value("broker_identity", json::object()).value("trace_id", 0ULL) != 0 &&
+               partiallyFilledJournal.entries.front().executionResult.value("trade_trace", json::object()).value("trace_id", 0ULL) != 0,
+           "phase 7 runtime bridge partial-fill reconciliation should preserve broker and trace linkage");
+    {
+        const json execIds = partiallyFilledJournal.entries.front().executionResult.value("broker_identity", json::object())
+                                  .value("exec_ids", json::array());
+        expect(execIds.is_array() &&
+                   std::find(execIds.begin(), execIds.end(), json("E-PHASE7-BRIDGE-1")) != execIds.end(),
+               "phase 7 runtime bridge partial-fill reconciliation should preserve execution ids");
+    }
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(partiallyFilledJournal);
+        expect(recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 1 &&
+                   !recoverySummary.staleRecoveryRequired,
+               "phase 7 runtime bridge partial-fill reconciliation should keep runtime recovery active without becoming stale");
+    }
+
+    tape_phase7::ExecutionJournalArtifact stalePartialJournal;
+    expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                     journal.journalArtifact.artifactId,
+                                                     &stalePartialJournal,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 runtime bridge should reload the partially-filled journal before stale refresh: " +
+               phase7Code + " " + phase7Message);
+    stalePartialJournal.entries.front().startedAtUtc = "2026-03-16T00:00:00.000Z";
+    stalePartialJournal.entries.front().lastUpdatedAtUtc = "2026-03-16T00:00:00.000Z";
+    expect(tape_phase7::persistExecutionJournalArtifact(stalePartialJournal, &phase7Code, &phase7Message),
+           "phase 7 runtime bridge should persist the stale partially-filled journal: " +
+               phase7Code + " " + phase7Message);
+
+    tape_phase7::ExecutionJournalArtifact resumedJournal;
+    std::vector<std::string> resumedJournalEntryIds;
+    std::string resumedJournalAuditEventId;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   journal.journalArtifact.artifactId,
+                                                                   journalEntryIds,
+                                                                   "bridge-executor",
+                                                                   "Refresh restart-resume state from a live partial fill.",
+                                                                   &resumedJournal,
+                                                                   &resumedJournalEntryIds,
+                                                                   &resumedJournalAuditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime bridge restart-resume reconciliation should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(resumedJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSubmitted &&
+               !resumedJournal.entries.front().terminal &&
+               resumedJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "resolved_partially_filled" &&
+               resumedJournal.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "recoverable" &&
+               resumedJournal.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "partial_fill_active",
+           "phase 7 runtime bridge restart-resume reconciliation should keep an active partial fill submitted");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(resumedJournal);
+        expect(recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 1 &&
+                   !recoverySummary.staleRecoveryRequired,
+               "phase 7 runtime bridge restart-resume reconciliation should clear stale pressure after refreshing a live partial fill");
+    }
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        auto& order = g_data.orders[9101];
+        order.status = "Filled";
+        order.filledQty = 30.0;
+        order.remainingQty = 0.0;
+        order.avgFillPrice = 46.15;
+        order.localState = LocalOrderState::Filled;
+        order.seenExecIds.insert("E-PHASE7-BRIDGE-2");
+
+        auto traceIt = g_data.traces.find(4101);
+        if (traceIt == g_data.traces.end()) {
+            TradeTrace trace;
+            trace.traceId = 4101;
+            trace.orderId = 9101;
+            trace.permId = 5101;
+            trace.source = "phase7-runtime-bridge";
+            trace.symbol = order.symbol;
+            trace.side = order.side;
+            trace.account = order.account;
+            trace.requestedQty = static_cast<int>(order.quantity);
+            trace.limitPrice = order.limitPrice;
+            traceIt = g_data.traces.emplace(trace.traceId, std::move(trace)).first;
+            g_data.traceRecency.push_back(traceIt->first);
+            g_data.latestTraceId = traceIt->first;
+            g_data.traceIdByOrderId[order.orderId] = traceIt->first;
+            g_data.traceIdByPermId[5101] = traceIt->first;
+        }
+        traceIt->second.fills.clear();
+        FillSlice firstFill;
+        firstFill.execId = "E-PHASE7-BRIDGE-1";
+        firstFill.shares = 10;
+        firstFill.price = 46.11;
+        firstFill.cumQty = 10.0;
+        firstFill.avgPrice = 46.11;
+        firstFill.exchange = "SIM";
+        traceIt->second.fills.push_back(firstFill);
+        FillSlice finalFill;
+        finalFill.execId = "E-PHASE7-BRIDGE-2";
+        finalFill.shares = 20;
+        finalFill.price = 46.17;
+        finalFill.cumQty = 30.0;
+        finalFill.avgPrice = 46.15;
+        finalFill.exchange = "SIM";
+        traceIt->second.fills.push_back(finalFill);
+        traceIt->second.latestStatus = "Filled";
+        traceIt->second.terminalStatus = "Filled";
+        g_data.traceIdByExecId[firstFill.execId] = 4101;
+        g_data.traceIdByExecId[finalFill.execId] = 4101;
+    }
+    publishSharedDataSnapshot();
+
+    tape_phase7::ExecutionJournalArtifact reconciledJournal;
+    std::vector<std::string> reconciledJournalEntryIds;
+    std::string reconciledJournalAuditEventId;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   journal.journalArtifact.artifactId,
+                                                                   journalEntryIds,
+                                                                   "bridge-executor",
+                                                                   "Runtime reports the order as filled.",
+                                                                   &reconciledJournal,
+                                                                   &reconciledJournalEntryIds,
+                                                                   &reconciledJournalAuditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime bridge journal reconciliation should succeed: " + phase7Code + " " + phase7Message);
+    expect(reconciledJournalEntryIds == journalEntryIds && !reconciledJournalAuditEventId.empty(),
+           "phase 7 runtime bridge journal reconciliation should report the updated entry and audit event");
+    expect(reconciledJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSucceeded &&
+               reconciledJournal.entries.front().terminal &&
+               reconciledJournal.journalStatus == tape_phase7::kExecutionJournalStatusSucceeded &&
+               reconciledJournal.entries.front().executionResult.value("order_status", std::string()) == "Filled" &&
+               reconciledJournal.entries.front().executionResult.value("fill_state", std::string()) == "filled" &&
+               reconciledJournal.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "completed" &&
+               reconciledJournal.entries.front().executionResult.value("filled_qty", 0.0) == 30.0 &&
+               reconciledJournal.entries.front().executionResult.value("remaining_qty", 1.0) == 0.0 &&
+               reconciledJournal.entries.front().executionResult.value("local_state", std::string()) ==
+                   localOrderStateToString(LocalOrderState::Filled) &&
+               reconciledJournal.entries.front().executionResult.value("latest_exec_id", std::string()) ==
+                   "E-PHASE7-BRIDGE-2" &&
+               reconciledJournal.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5101,
+           "phase 7 runtime bridge journal reconciliation should resolve the entry to terminal success from runtime state");
+    {
+        const json execIds = reconciledJournal.entries.front().executionResult.value("broker_identity", json::object())
+                                  .value("exec_ids", json::array());
+        expect(execIds.is_array() &&
+                   std::find(execIds.begin(), execIds.end(), json("E-PHASE7-BRIDGE-1")) != execIds.end() &&
+                   std::find(execIds.begin(), execIds.end(), json("E-PHASE7-BRIDGE-2")) != execIds.end() &&
+                   reconciledJournal.entries.front().executionResult.value("trade_trace", json::object()).value("fill_count", 0ULL) == 2,
+               "phase 7 runtime bridge journal reconciliation should preserve both execution ids and the final trade-trace fill count");
+    }
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(reconciledJournal);
+        expect(!recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 0,
+               "phase 7 runtime bridge reconciled journal should clear runtime recovery flags");
+    }
+
+    tape_phase7::ExecutionApplyArtifact synchronizedApply;
+    std::vector<std::string> synchronizedApplyEntryIds;
+    std::string synchronizedApplyAuditEventId;
+    expect(tape_phase7::synchronizeExecutionApplyFromJournal({},
+                                                             apply.applyArtifact.artifactId,
+                                                             "bridge-executor",
+                                                             "Synchronize the controlled apply artifact from the journal.",
+                                                             &synchronizedApply,
+                                                             &synchronizedApplyEntryIds,
+                                                             &synchronizedApplyAuditEventId,
+                                                             &phase7Code,
+                                                             &phase7Message),
+           "phase 7 runtime bridge apply synchronization should succeed: " + phase7Code + " " + phase7Message);
+    expect(synchronizedApply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSucceeded &&
+               synchronizedApply.entries.front().terminal &&
+               synchronizedApply.applyStatus == tape_phase7::kExecutionJournalStatusSucceeded &&
+               synchronizedApply.entries.front().executionResult.value("order_status", std::string()) == "Filled" &&
+               synchronizedApply.entries.front().executionResult.value("latest_exec_id", std::string()) ==
+                   "E-PHASE7-BRIDGE-2" &&
+               synchronizedApply.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5101 &&
+               synchronizedApply.journalArtifact.artifactId == journal.journalArtifact.artifactId,
+           "phase 7 runtime bridge apply synchronization should mirror the reconciled journal success state");
+    {
+        const json execIds = synchronizedApply.entries.front().executionResult.value("broker_identity", json::object())
+                                  .value("exec_ids", json::array());
+        expect(execIds.is_array() &&
+                   std::find(execIds.begin(), execIds.end(), json("E-PHASE7-BRIDGE-1")) != execIds.end() &&
+                   std::find(execIds.begin(), execIds.end(), json("E-PHASE7-BRIDGE-2")) != execIds.end(),
+               "phase 7 runtime bridge apply synchronization should preserve the reconciled broker execution identifiers");
+    }
+    {
+        const json journalEntrySummary =
+            tape_phase7::executionJournalEntryToJson(reconciledJournal.entries.front()).value("execution_result_summary",
+                                                                                               json::object());
+        const json applyEntrySummary =
+            tape_phase7::executionApplyEntryToJson(synchronizedApply.entries.front()).value("execution_result_summary",
+                                                                                            json::object());
+        expect(journalEntrySummary.value("latest_exec_id", std::string()) == "E-PHASE7-BRIDGE-2" &&
+                   journalEntrySummary.value("broker_identity", json::object()).value("exec_id_count", 0ULL) == 2 &&
+                   journalEntrySummary.value("trade_trace", json::object()).value("fill_count", 0ULL) == 2,
+               "phase 7 runtime bridge journal entry summary should expose the reconciled broker execution linkage");
+        expect(applyEntrySummary.value("latest_exec_id", std::string()) == "E-PHASE7-BRIDGE-2" &&
+                   applyEntrySummary.value("broker_identity", json::object()).value("exec_id_count", 0ULL) == 2 &&
+                   applyEntrySummary.value("trade_trace", json::object()).value("fill_count", 0ULL) == 2,
+               "phase 7 runtime bridge apply entry summary should expose the reconciled broker execution linkage");
+    }
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(synchronizedApply);
+        expect(!recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 0,
+               "phase 7 runtime bridge synchronized apply should clear runtime recovery flags");
+    }
+    {
+        tape_phase7::RuntimeRecoveryBacklogSummary backlog;
+        expect(tape_phase7::summarizeRuntimeRecoveryBacklog(&backlog, &phase7Code, &phase7Message),
+               "phase 7 runtime bridge backlog summary should succeed after reconciliation: " +
+                   phase7Code + " " + phase7Message);
+        expect(backlog.runtimeBackedSubmittedJournalEntryCount == 0 &&
+                   backlog.runtimeBackedSubmittedApplyEntryCount == 0 &&
+                   !backlog.recoveryRequired &&
+                   !backlog.staleRecoveryRequired,
+               "phase 7 runtime bridge backlog summary should clear after reconciliation succeeds");
+        const auto clearedPlan = tape_phase7::runtimeStartupRecoveryPlan(backlog, true);
+        expect(clearedPlan.startupAction == "none" &&
+                   !clearedPlan.recoverySweepRecommended &&
+                   !clearedPlan.manualAttentionRecommended,
+               "phase 7 runtime bridge startup policy should clear once recovery backlog is resolved");
+    }
+
+    server.stop();
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testTapePhase7RuntimeBridgeSweepMirrorsManualReviewIntoApplyArtifacts() {
+    clearTestFiles();
+    std::error_code phase7Ec;
+    fs::remove_all(testDataDir() / "phase7_artifacts", phase7Ec);
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+
+        OrderInfo order;
+        order.orderId = 9201;
+        order.account = "U23154741";
+        order.symbol = "INTC";
+        order.side = "BUY";
+        order.quantity = 25.0;
+        order.remainingQty = 25.0;
+        order.limitPrice = 46.10;
+        order.status = "Submitted";
+        order.localState = LocalOrderState::Working;
+        g_data.orders[order.orderId] = order;
+
+        TradeTrace trace;
+        trace.traceId = 99201;
+        trace.orderId = order.orderId;
+        trace.permId = 5201;
+        trace.source = "phase7-runtime-sweep";
+        trace.symbol = order.symbol;
+        trace.side = order.side;
+        trace.account = order.account;
+        trace.requestedQty = static_cast<int>(order.quantity);
+        trace.limitPrice = order.limitPrice;
+        g_data.traces[trace.traceId] = trace;
+        g_data.traceRecency.push_back(trace.traceId);
+        g_data.latestTraceId = trace.traceId;
+    }
+    publishSharedDataSnapshot();
+
+    const fs::path rootDir = testDataDir() / "tape-engine-phase7-runtime-sweep";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase7-runtime-sweep.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9601:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for the phase 7 runtime sweep test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase7-runtime-sweep";
+    options.runtimeSessionId = "runtime-engine-phase7-runtime-sweep";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(9701, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      4201, 9201, 5201, "", "phase 7 runtime sweep order intent",
+                                                      "2026-03-16T10:22:00.100");
+    orderIntent.instrumentId = "ib:conid:9601:STK:SMART:USD:INTC";
+
+    BridgeOutboxRecord orderStatus = makeBridgeRecord(9702, "order_status", "BrokerOrderStatus", "INTC", "BUY",
+                                                      4201, 9201, 5201, "",
+                                                      "phase 7 runtime sweep submitted",
+                                                      "2026-03-16T10:22:00.200");
+    orderStatus.instrumentId = "ib:conid:9601:STK:SMART:USD:INTC";
+
+    BridgeOutboxRecord fillExecution = makeBridgeRecord(9703, "fill_execution", "BrokerExecution", "INTC", "BUY",
+                                                        4201, 9201, 5201, "E-PHASE7-SWEEP-1",
+                                                        "phase 7 runtime sweep fill",
+                                                        "2026-03-16T10:22:00.300");
+    fillExecution.instrumentId = "ib:conid:9601:STK:SMART:USD:INTC";
+
+    options.batchSeq = 701;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "phase 7 runtime sweep fixture should accept the order intent batch: " + error);
+    options.batchSeq = 702;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderStatus}, options)), &error),
+           "phase 7 runtime sweep fixture should accept the order status batch: " + error);
+    options.batchSeq = 703;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({fillExecution}, options)), &error),
+           "phase 7 runtime sweep fixture should accept the fill batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() >= 3;
+    }, "phase 7 runtime sweep fixture should freeze the seeded batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest caseReportRequest;
+    caseReportRequest.requestId = "phase7-runtime-sweep-case-report";
+    caseReportRequest.operation = "scan_order_case_report";
+    caseReportRequest.orderId = 9201;
+    expect(client.query(caseReportRequest, &response, &error),
+           "phase 7 runtime sweep case report scan should succeed: " + error);
+    const std::uint64_t caseReportId =
+        response.summary.value("case_report_artifact", json::object()).value("report_id", 0ULL);
+    expect(caseReportId > 0, "phase 7 runtime sweep case report scan should persist a durable case report");
+
+    tape_engine::QueryRequest exportCaseBundleRequest;
+    exportCaseBundleRequest.requestId = "phase7-runtime-sweep-export-case-bundle";
+    exportCaseBundleRequest.operation = "export_case_bundle";
+    exportCaseBundleRequest.reportId = caseReportId;
+    expect(client.query(exportCaseBundleRequest, &response, &error),
+           "phase 7 runtime sweep case bundle export should succeed: " + error);
+    const std::string caseBundlePath =
+        response.summary.value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
+           "phase 7 runtime sweep case bundle export should write a portable case bundle");
+
+    tape_phase7::AnalysisArtifact analysis;
+    bool analysisCreated = false;
+    std::string phase7Code;
+    std::string phase7Message;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  tape_phase7::kOrderImpactAnalyzerProfile,
+                                                  &analysis,
+                                                  &analysisCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 runtime sweep order-impact analyzer should succeed: " + phase7Code + " " + phase7Message);
+    expect(!analysis.findings.empty(),
+           "phase 7 runtime sweep analysis should emit findings");
+    const auto dispatchableFindingIt = std::find_if(analysis.findings.begin(),
+                                                    analysis.findings.end(),
+                                                    [](const tape_phase7::FindingRecord& finding) {
+                                                        return finding.category == "market_impact_risk" ||
+                                                            finding.category == "fill_quality_risk";
+                                                    });
+    expect(dispatchableFindingIt != analysis.findings.end(),
+           "phase 7 runtime sweep analysis should emit at least one runtime-dispatchable finding");
+
+    tape_phase7::PlaybookArtifact playbook;
+    bool playbookCreated = false;
+    expect(tape_phase7::buildGuardedPlaybook({},
+                                             analysis.analysisArtifact.artifactId,
+                                             {dispatchableFindingIt->findingId},
+                                             tape_phase7::kDefaultPlaybookMode,
+                                             &playbook,
+                                             &playbookCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 runtime sweep playbook build should succeed: " + phase7Code + " " + phase7Message);
+    const auto dispatchableActionIt = std::find_if(playbook.plannedActions.begin(),
+                                                   playbook.plannedActions.end(),
+                                                   [](const tape_phase7::PlaybookAction& action) {
+                                                       return action.executionRequest.is_object() &&
+                                                           !action.executionRequest.empty();
+                                                   });
+    expect(dispatchableActionIt != playbook.plannedActions.end(),
+           "phase 7 runtime sweep playbook should include a runtime-dispatchable action");
+
+    tape_phase7::ExecutionLedgerArtifact ledger;
+    bool ledgerCreated = false;
+    expect(tape_phase7::buildExecutionLedger({},
+                                             playbook.playbookArtifact.artifactId,
+                                             &ledger,
+                                             &ledgerCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 runtime sweep execution ledger build should succeed: " + phase7Code + " " + phase7Message);
+    const auto dispatchableLedgerEntryIt = std::find_if(ledger.entries.begin(),
+                                                        ledger.entries.end(),
+                                                        [&](const tape_phase7::ExecutionLedgerEntry& entry) {
+                                                            return entry.actionId == dispatchableActionIt->actionId;
+                                                        });
+    expect(dispatchableLedgerEntryIt != ledger.entries.end(),
+           "phase 7 runtime sweep execution ledger should preserve the dispatchable action entry");
+
+    const std::vector<std::string> approvedLedgerEntryIds = {dispatchableLedgerEntryIt->entryId};
+    tape_phase7::ExecutionLedgerArtifact reviewedLedger;
+    std::vector<std::string> reviewedLedgerEntryIds;
+    std::string reviewedLedgerAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    ledger.ledgerArtifact.artifactId,
+                                                    approvedLedgerEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "bridge-reviewer-a",
+                                                    "First approval for the runtime sweep journal.",
+                                                    &reviewedLedger,
+                                                    &reviewedLedgerEntryIds,
+                                                    &reviewedLedgerAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 runtime sweep first ledger approval should succeed: " + phase7Code + " " + phase7Message);
+    tape_phase7::ExecutionLedgerArtifact readyLedger;
+    std::vector<std::string> readyLedgerEntryIds;
+    std::string readyLedgerAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    ledger.ledgerArtifact.artifactId,
+                                                    approvedLedgerEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "bridge-reviewer-b",
+                                                    "Second approval makes the runtime sweep journal ready.",
+                                                    &readyLedger,
+                                                    &readyLedgerEntryIds,
+                                                    &readyLedgerAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 runtime sweep second ledger approval should succeed: " + phase7Code + " " + phase7Message);
+    expect(readyLedger.ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution,
+           "phase 7 runtime sweep execution ledger should become ready for execution");
+
+    tape_phase7::ExecutionJournalArtifact journal;
+    bool journalCreated = false;
+    expect(tape_phase7::startExecutionJournal({},
+                                              readyLedger.ledgerArtifact.artifactId,
+                                              "bridge-executor",
+                                              "phase7.execution_operator.v1",
+                                              &journal,
+                                              &journalCreated,
+                                              &phase7Code,
+                                              &phase7Message),
+           "phase 7 runtime sweep journal start should succeed: " + phase7Code + " " + phase7Message);
+    expect(journalCreated && journal.entries.size() == 1,
+           "phase 7 runtime sweep should start one execution journal entry");
+
+    const std::vector<std::string> journalEntryIds = {journal.entries.front().journalEntryId};
+    tape_phase7::ExecutionJournalArtifact dispatchedJournal;
+    std::vector<std::string> dispatchedJournalEntryIds;
+    std::string dispatchedJournalAuditEventId;
+    expect(tape_phase7::dispatchExecutionJournalEntriesViaRuntime(nullptr,
+                                                                  {},
+                                                                  journal.journalArtifact.artifactId,
+                                                                  journalEntryIds,
+                                                                  "bridge-executor",
+                                                                  "phase7.execution_operator.v1",
+                                                                  "Dispatch the order-anchored execution journal entry.",
+                                                                  &dispatchedJournal,
+                                                                  &dispatchedJournalEntryIds,
+                                                                  &dispatchedJournalAuditEventId,
+                                                                  &phase7Code,
+                                                                  &phase7Message),
+           "phase 7 runtime sweep journal dispatch should succeed: " + phase7Code + " " + phase7Message);
+    expect(dispatchedJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSubmitted,
+           "phase 7 runtime sweep dispatch should move the journal into submitted state");
+
+    tape_phase7::ExecutionApplyArtifact apply;
+    bool applyCreated = false;
+    expect(tape_phase7::startExecutionApply({},
+                                            dispatchedJournal.journalArtifact.artifactId,
+                                            {},
+                                            "bridge-executor",
+                                            "phase7.execution_operator.v1",
+                                            "Create an apply artifact before the runtime sweep resolves.",
+                                            &apply,
+                                            &applyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 runtime sweep apply start should succeed: " + phase7Code + " " + phase7Message);
+    expect(applyCreated &&
+               apply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSubmitted,
+           "phase 7 runtime sweep apply start should mirror the submitted journal state");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(dispatchedJournal);
+        expect(recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 1,
+               "phase 7 runtime sweep dispatched journal should advertise pending runtime recovery");
+    }
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        auto& order = g_data.orders[9201];
+        order.status = "Inactive";
+        order.localState = LocalOrderState::NeedsManualReview;
+    }
+    publishSharedDataSnapshot();
+
+    tape_phase7::RuntimeBridgeSweepResult sweep;
+    expect(tape_phase7::reconcileExecutionArtifactsViaRuntime(nullptr,
+                                                              "bridge-executor",
+                                                              "Sweep runtime-backed execution artifacts after manual review escalation.",
+                                                              &sweep,
+                                                              &phase7Code,
+                                                              &phase7Message),
+           "phase 7 runtime sweep should reconcile runtime-backed artifacts: " + phase7Code + " " + phase7Message);
+    {
+        std::ostringstream sweepSummary;
+        sweepSummary << "scanned=" << sweep.scannedJournalCount
+                     << ", updated_journals=" << sweep.updatedJournalCount
+                     << ", updated_applies=" << sweep.updatedApplyCount;
+        expect(sweep.scannedJournalCount >= 1 &&
+                   sweep.updatedJournalCount >= 1 &&
+                   sweep.updatedApplyCount >= 1,
+               "phase 7 runtime sweep should update at least one journal/apply pair: " + sweepSummary.str());
+    }
+    expect(std::find(sweep.updatedJournalArtifactIds.begin(),
+                     sweep.updatedJournalArtifactIds.end(),
+                     journal.journalArtifact.artifactId) != sweep.updatedJournalArtifactIds.end(),
+           "phase 7 runtime sweep should include the updated execution journal artifact id");
+    expect(std::find(sweep.updatedApplyArtifactIds.begin(),
+                     sweep.updatedApplyArtifactIds.end(),
+                     apply.applyArtifact.artifactId) != sweep.updatedApplyArtifactIds.end(),
+           "phase 7 runtime sweep should include the updated execution apply artifact id");
+    expect(std::find(sweep.updatedJournalEntryIds.begin(),
+                     sweep.updatedJournalEntryIds.end(),
+                     journal.entries.front().journalEntryId) != sweep.updatedJournalEntryIds.end(),
+           "phase 7 runtime sweep should include the updated journal entry id");
+    expect(std::find(sweep.updatedApplyEntryIds.begin(),
+                     sweep.updatedApplyEntryIds.end(),
+                     apply.entries.front().applyEntryId) != sweep.updatedApplyEntryIds.end(),
+           "phase 7 runtime sweep should include the updated apply entry id");
+
+    tape_phase7::ExecutionJournalArtifact sweptJournal;
+    expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                     journal.journalArtifact.artifactId,
+                                                     &sweptJournal,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 runtime sweep should reload the updated journal: " + phase7Code + " " + phase7Message);
+    expect(sweptJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               sweptJournal.entries.front().terminal &&
+               sweptJournal.entries.front().failureCode == "manual_review_required" &&
+               sweptJournal.entries.front().executionResult.value("manual_review_required", false) &&
+               sweptJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "manual_review_required" &&
+               sweptJournal.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5201 &&
+               sweptJournal.entries.front().executionResult.value("trade_trace", json::object()).value("trace_id", 0ULL) != 0 &&
+               sweptJournal.journalStatus == tape_phase7::kExecutionJournalStatusFailed,
+           "phase 7 runtime sweep should resolve the journal to terminal manual-review failure");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(sweptJournal);
+        expect(!recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 0,
+               "phase 7 runtime sweep resolved journal should clear runtime recovery flags");
+    }
+
+    tape_phase7::ExecutionApplyArtifact sweptApply;
+    expect(tape_phase7::loadExecutionApplyArtifact({},
+                                                   apply.applyArtifact.artifactId,
+                                                   &sweptApply,
+                                                   &phase7Code,
+                                                   &phase7Message),
+           "phase 7 runtime sweep should reload the updated apply artifact: " + phase7Code + " " + phase7Message);
+    expect(sweptApply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               sweptApply.entries.front().terminal &&
+               sweptApply.entries.front().failureCode == "manual_review_required" &&
+               sweptApply.entries.front().executionResult.value("manual_review_required", false) &&
+               sweptApply.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5201 &&
+               sweptApply.applyStatus == tape_phase7::kExecutionJournalStatusFailed &&
+               sweptApply.journalArtifact.artifactId == journal.journalArtifact.artifactId,
+           "phase 7 runtime sweep should mirror the manual-review failure into the linked apply artifact");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(sweptApply);
+        expect(!recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 0,
+               "phase 7 runtime sweep resolved apply should clear runtime recovery flags");
+    }
+
+    server.stop();
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testTapePhase7RuntimeBridgeSweepEscalatesStaleMissingOrders() {
+    clearTestFiles();
+    std::error_code phase7Ec;
+    fs::remove_all(testDataDir() / "phase7_artifacts", phase7Ec);
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+
+        OrderInfo order;
+        order.orderId = 9301;
+        order.account = "U23154741";
+        order.symbol = "INTC";
+        order.side = "BUY";
+        order.quantity = 30.0;
+        order.remainingQty = 30.0;
+        order.limitPrice = 46.45;
+        order.status = "Submitted";
+        order.localState = LocalOrderState::Working;
+        g_data.orders[order.orderId] = order;
+
+        TradeTrace trace;
+        trace.traceId = 99301;
+        trace.orderId = order.orderId;
+        trace.permId = 5301;
+        trace.source = "phase7-runtime-recovery";
+        trace.symbol = order.symbol;
+        trace.side = order.side;
+        trace.account = order.account;
+        trace.requestedQty = static_cast<int>(order.quantity);
+        trace.limitPrice = order.limitPrice;
+        g_data.traces[trace.traceId] = trace;
+        g_data.traceRecency.push_back(trace.traceId);
+        g_data.latestTraceId = trace.traceId;
+    }
+    publishSharedDataSnapshot();
+
+    const fs::path rootDir = testDataDir() / "tape-engine-phase7-runtime-recovery";
+    const fs::path socketPath = testDataDir() / "tape-engine-phase7-runtime-recovery.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9701:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for the phase 7 runtime recovery test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-phase7-runtime-recovery";
+    options.runtimeSessionId = "runtime-engine-phase7-runtime-recovery";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(9801, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      4301, 9301, 5301, "", "phase 7 runtime recovery order intent",
+                                                      "2026-03-16T10:32:00.100");
+    orderIntent.instrumentId = "ib:conid:9701:STK:SMART:USD:INTC";
+
+    BridgeOutboxRecord orderStatus = makeBridgeRecord(9802, "order_status", "BrokerOrderStatus", "INTC", "BUY",
+                                                      4301, 9301, 5301, "",
+                                                      "phase 7 runtime recovery submitted",
+                                                      "2026-03-16T10:32:00.200");
+    orderStatus.instrumentId = "ib:conid:9701:STK:SMART:USD:INTC";
+
+    BridgeOutboxRecord fillExecution = makeBridgeRecord(9803, "fill_execution", "BrokerExecution", "INTC", "BUY",
+                                                        4301, 9301, 5301, "E-PHASE7-RECOVERY-1",
+                                                        "phase 7 runtime recovery fill",
+                                                        "2026-03-16T10:32:00.300");
+    fillExecution.instrumentId = "ib:conid:9701:STK:SMART:USD:INTC";
+
+    options.batchSeq = 801;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "phase 7 runtime recovery fixture should accept the order intent batch: " + error);
+    options.batchSeq = 802;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderStatus}, options)), &error),
+           "phase 7 runtime recovery fixture should accept the order status batch: " + error);
+    options.batchSeq = 803;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({fillExecution}, options)), &error),
+           "phase 7 runtime recovery fixture should accept the fill batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 3 && snapshot.segments.size() >= 3;
+    }, "phase 7 runtime recovery fixture should freeze the seeded batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    tape_engine::QueryRequest caseReportRequest;
+    caseReportRequest.requestId = "phase7-runtime-recovery-case-report";
+    caseReportRequest.operation = "scan_order_case_report";
+    caseReportRequest.orderId = 9301;
+    expect(client.query(caseReportRequest, &response, &error),
+           "phase 7 runtime recovery case report scan should succeed: " + error);
+    const std::uint64_t caseReportId =
+        response.summary.value("case_report_artifact", json::object()).value("report_id", 0ULL);
+    expect(caseReportId > 0, "phase 7 runtime recovery case report scan should persist a durable case report");
+
+    tape_engine::QueryRequest exportCaseBundleRequest;
+    exportCaseBundleRequest.requestId = "phase7-runtime-recovery-export-case-bundle";
+    exportCaseBundleRequest.operation = "export_case_bundle";
+    exportCaseBundleRequest.reportId = caseReportId;
+    expect(client.query(exportCaseBundleRequest, &response, &error),
+           "phase 7 runtime recovery case bundle export should succeed: " + error);
+    const std::string caseBundlePath =
+        response.summary.value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
+           "phase 7 runtime recovery case bundle export should write a portable case bundle");
+
+    tape_phase7::AnalysisArtifact analysis;
+    bool analysisCreated = false;
+    std::string phase7Code;
+    std::string phase7Message;
+    expect(tape_phase7::runAnalyzerFromBundlePath(caseBundlePath,
+                                                  tape_phase7::kOrderImpactAnalyzerProfile,
+                                                  &analysis,
+                                                  &analysisCreated,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 runtime recovery order-impact analyzer should succeed: " + phase7Code + " " + phase7Message);
+    const auto dispatchableFindingIt = std::find_if(analysis.findings.begin(),
+                                                    analysis.findings.end(),
+                                                    [](const tape_phase7::FindingRecord& finding) {
+                                                        return finding.category == "market_impact_risk" ||
+                                                            finding.category == "fill_quality_risk";
+                                                    });
+    expect(dispatchableFindingIt != analysis.findings.end(),
+           "phase 7 runtime recovery analysis should emit at least one runtime-dispatchable finding");
+
+    tape_phase7::PlaybookArtifact playbook;
+    bool playbookCreated = false;
+    expect(tape_phase7::buildGuardedPlaybook({},
+                                             analysis.analysisArtifact.artifactId,
+                                             {dispatchableFindingIt->findingId},
+                                             tape_phase7::kDefaultPlaybookMode,
+                                             &playbook,
+                                             &playbookCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 runtime recovery playbook build should succeed: " + phase7Code + " " + phase7Message);
+    const auto dispatchableActionIt = std::find_if(playbook.plannedActions.begin(),
+                                                   playbook.plannedActions.end(),
+                                                   [](const tape_phase7::PlaybookAction& action) {
+                                                       return action.executionRequest.is_object() &&
+                                                           !action.executionRequest.empty();
+                                                   });
+    expect(dispatchableActionIt != playbook.plannedActions.end(),
+           "phase 7 runtime recovery playbook should include a runtime-dispatchable action");
+
+    tape_phase7::ExecutionLedgerArtifact ledger;
+    bool ledgerCreated = false;
+    expect(tape_phase7::buildExecutionLedger({},
+                                             playbook.playbookArtifact.artifactId,
+                                             &ledger,
+                                             &ledgerCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 runtime recovery execution ledger build should succeed: " + phase7Code + " " + phase7Message);
+    const auto dispatchableLedgerEntryIt = std::find_if(ledger.entries.begin(),
+                                                        ledger.entries.end(),
+                                                        [&](const tape_phase7::ExecutionLedgerEntry& entry) {
+                                                            return entry.actionId == dispatchableActionIt->actionId;
+                                                        });
+    expect(dispatchableLedgerEntryIt != ledger.entries.end(),
+           "phase 7 runtime recovery execution ledger should preserve the dispatchable action entry");
+
+    const std::vector<std::string> approvedLedgerEntryIds = {dispatchableLedgerEntryIt->entryId};
+    tape_phase7::ExecutionLedgerArtifact reviewedLedger;
+    std::vector<std::string> reviewedLedgerEntryIds;
+    std::string reviewedLedgerAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    ledger.ledgerArtifact.artifactId,
+                                                    approvedLedgerEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "bridge-reviewer-a",
+                                                    "First approval for the runtime recovery journal.",
+                                                    &reviewedLedger,
+                                                    &reviewedLedgerEntryIds,
+                                                    &reviewedLedgerAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 runtime recovery first ledger approval should succeed: " + phase7Code + " " + phase7Message);
+    tape_phase7::ExecutionLedgerArtifact readyLedger;
+    std::vector<std::string> readyLedgerEntryIds;
+    std::string readyLedgerAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    ledger.ledgerArtifact.artifactId,
+                                                    approvedLedgerEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "bridge-reviewer-b",
+                                                    "Second approval makes the runtime recovery journal ready.",
+                                                    &readyLedger,
+                                                    &readyLedgerEntryIds,
+                                                    &readyLedgerAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 runtime recovery second ledger approval should succeed: " + phase7Code + " " + phase7Message);
+
+    tape_phase7::ExecutionJournalArtifact journal;
+    bool journalCreated = false;
+    expect(tape_phase7::startExecutionJournal({},
+                                              readyLedger.ledgerArtifact.artifactId,
+                                              "bridge-executor",
+                                              "phase7.execution_operator.v1",
+                                              &journal,
+                                              &journalCreated,
+                                              &phase7Code,
+                                              &phase7Message),
+           "phase 7 runtime recovery journal start should succeed: " + phase7Code + " " + phase7Message);
+
+    const std::vector<std::string> journalEntryIds = {journal.entries.front().journalEntryId};
+    tape_phase7::ExecutionJournalArtifact dispatchedJournal;
+    std::vector<std::string> dispatchedJournalEntryIds;
+    std::string dispatchedJournalAuditEventId;
+    expect(tape_phase7::dispatchExecutionJournalEntriesViaRuntime(nullptr,
+                                                                  {},
+                                                                  journal.journalArtifact.artifactId,
+                                                                  journalEntryIds,
+                                                                  "bridge-executor",
+                                                                  "phase7.execution_operator.v1",
+                                                                  "Dispatch the order-anchored execution journal entry.",
+                                                                  &dispatchedJournal,
+                                                                  &dispatchedJournalEntryIds,
+                                                                  &dispatchedJournalAuditEventId,
+                                                                  &phase7Code,
+                                                                  &phase7Message),
+           "phase 7 runtime recovery journal dispatch should succeed: " + phase7Code + " " + phase7Message);
+
+    tape_phase7::ExecutionApplyArtifact apply;
+    bool applyCreated = false;
+    expect(tape_phase7::startExecutionApply({},
+                                            dispatchedJournal.journalArtifact.artifactId,
+                                            {},
+                                            "bridge-executor",
+                                            "phase7.execution_operator.v1",
+                                            "Create an apply artifact before the runtime recovery sweep resolves.",
+                                            &apply,
+                                            &applyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 runtime recovery apply start should succeed: " + phase7Code + " " + phase7Message);
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(dispatchedJournal);
+        expect(recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 1,
+               "phase 7 runtime recovery dispatched journal should advertise pending runtime recovery");
+    }
+
+    tape_phase7::ExecutionJournalArtifact staleJournal;
+    expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                     journal.journalArtifact.artifactId,
+                                                     &staleJournal,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 runtime recovery should reload the dispatched journal: " + phase7Code + " " + phase7Message);
+    staleJournal.entries.front().startedAtUtc = "2026-03-16T00:00:00.000Z";
+    staleJournal.entries.front().lastUpdatedAtUtc = "2026-03-16T00:00:00.000Z";
+    expect(tape_phase7::persistExecutionJournalArtifact(staleJournal, &phase7Code, &phase7Message),
+           "phase 7 runtime recovery should persist the stale dispatched journal: " + phase7Code + " " + phase7Message);
+    {
+        tape_phase7::ExecutionJournalArtifact staleLoadedJournal;
+        expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                         journal.journalArtifact.artifactId,
+                                                         &staleLoadedJournal,
+                                                         &phase7Code,
+                                                         &phase7Message),
+               "phase 7 runtime recovery should reload the stale journal before sweep: " +
+                   phase7Code + " " + phase7Message);
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(staleLoadedJournal);
+        expect(recoverySummary.recoveryRequired &&
+                   recoverySummary.staleRecoveryRequired &&
+                   recoverySummary.staleRuntimeBackedCount == 1,
+               "phase 7 runtime recovery stale journal should advertise stale runtime recovery");
+    }
+    {
+        tape_phase7::RuntimeRecoveryBacklogSummary backlog;
+        expect(tape_phase7::summarizeRuntimeRecoveryBacklog(&backlog, &phase7Code, &phase7Message),
+               "phase 7 runtime recovery backlog summary should succeed before stale sweep: " +
+                   phase7Code + " " + phase7Message);
+        expect(backlog.recoveryRequiredJournalCount >= 1 &&
+                   backlog.recoveryRequiredApplyCount >= 1 &&
+                   backlog.staleRecoveryRequiredJournalCount >= 1 &&
+                   backlog.runtimeBackedSubmittedJournalEntryCount >= 1 &&
+                   backlog.runtimeBackedSubmittedApplyEntryCount >= 1 &&
+                   backlog.recoveryRequired &&
+                   backlog.staleRecoveryRequired,
+               "phase 7 runtime recovery backlog summary should expose stale recovery pressure before sweep");
+        const auto noActorPlan = tape_phase7::runtimeStartupRecoveryPlan(backlog, false);
+        expect(noActorPlan.startupAction == "await_actor" &&
+                   !noActorPlan.recoverySweepRecommended &&
+                   noActorPlan.manualAttentionRecommended,
+               "phase 7 runtime recovery startup policy should wait for an actor while highlighting stale pressure");
+        const auto actorPlan = tape_phase7::runtimeStartupRecoveryPlan(backlog, true);
+        expect(actorPlan.startupAction == "recover_pending" &&
+                   actorPlan.recoverySweepRecommended &&
+                   actorPlan.manualAttentionRecommended,
+               "phase 7 runtime recovery startup policy should recommend a sweep and manual attention when stale entries exist");
+    }
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+        g_data.orders.erase(9301);
+    }
+    publishSharedDataSnapshot();
+
+    tape_phase7::RuntimeBridgeSweepResult sweep;
+    expect(tape_phase7::reconcileExecutionArtifactsViaRuntime(nullptr,
+                                                              "bridge-executor",
+                                                              "Sweep stale runtime-backed execution artifacts after the order disappears.",
+                                                              &sweep,
+                                                              &phase7Code,
+                                                              &phase7Message),
+           "phase 7 runtime recovery sweep should reconcile stale artifacts: " + phase7Code + " " + phase7Message);
+    expect(std::find(sweep.updatedJournalArtifactIds.begin(),
+                     sweep.updatedJournalArtifactIds.end(),
+                     journal.journalArtifact.artifactId) != sweep.updatedJournalArtifactIds.end() &&
+               std::find(sweep.updatedApplyArtifactIds.begin(),
+                         sweep.updatedApplyArtifactIds.end(),
+                         apply.applyArtifact.artifactId) != sweep.updatedApplyArtifactIds.end(),
+           "phase 7 runtime recovery sweep should report both the journal and apply artifacts as updated");
+
+    tape_phase7::ExecutionJournalArtifact recoveredJournal;
+    expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                     journal.journalArtifact.artifactId,
+                                                     &recoveredJournal,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 runtime recovery sweep should reload the recovered journal: " + phase7Code + " " + phase7Message);
+    expect(recoveredJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               recoveredJournal.entries.front().terminal &&
+               recoveredJournal.entries.front().failureCode == "runtime_order_missing" &&
+               recoveredJournal.entries.front().executionResult.value("manual_review_required", false) &&
+               recoveredJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "manual_review_required" &&
+               recoveredJournal.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5301 &&
+               recoveredJournal.entries.front().executionResult.value("trade_trace", json::object()).value("trace_id", 0ULL) != 0 &&
+               recoveredJournal.journalStatus == tape_phase7::kExecutionJournalStatusFailed,
+           "phase 7 runtime recovery sweep should escalate a stale missing order into manual-review failure");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(recoveredJournal);
+        expect(!recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 0,
+               "phase 7 runtime recovery resolved journal should clear runtime recovery flags");
+    }
+
+    tape_phase7::ExecutionApplyArtifact recoveredApply;
+    expect(tape_phase7::loadExecutionApplyArtifact({},
+                                                   apply.applyArtifact.artifactId,
+                                                   &recoveredApply,
+                                                   &phase7Code,
+                                                   &phase7Message),
+           "phase 7 runtime recovery sweep should reload the recovered apply artifact: " + phase7Code + " " + phase7Message);
+    expect(recoveredApply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               recoveredApply.entries.front().terminal &&
+               recoveredApply.entries.front().failureCode == "runtime_order_missing" &&
+               recoveredApply.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5301 &&
+               recoveredApply.applyStatus == tape_phase7::kExecutionJournalStatusFailed,
+           "phase 7 runtime recovery sweep should mirror the stale missing-order failure into the apply artifact");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(recoveredApply);
+        expect(!recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 0,
+               "phase 7 runtime recovery resolved apply should clear runtime recovery flags");
+    }
+    {
+        tape_phase7::RuntimeRecoveryBacklogSummary backlog;
+        expect(tape_phase7::summarizeRuntimeRecoveryBacklog(&backlog, &phase7Code, &phase7Message),
+               "phase 7 runtime recovery backlog summary should succeed after stale sweep: " +
+                   phase7Code + " " + phase7Message);
+        expect(backlog.runtimeBackedSubmittedJournalEntryCount == 0 &&
+                   backlog.runtimeBackedSubmittedApplyEntryCount == 0 &&
+                   !backlog.recoveryRequired &&
+                   !backlog.staleRecoveryRequired,
+               "phase 7 runtime recovery backlog summary should clear after stale recovery sweep resolves");
+        const auto clearedPlan = tape_phase7::runtimeStartupRecoveryPlan(backlog, true);
+        expect(clearedPlan.startupAction == "none" &&
+                   !clearedPlan.recoverySweepRecommended &&
+                   !clearedPlan.manualAttentionRecommended,
+               "phase 7 runtime recovery startup policy should clear after stale recovery sweep resolves");
+    }
+
+    server.stop();
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
+void testTapePhase7RuntimeBridgeHandlesCancelAndRejectLifecycleStates() {
+    clearTestFiles();
+    std::error_code phase7Ec;
+    fs::remove_all(testDataDir() / "phase7_artifacts", phase7Ec);
+
+    SharedData owner;
+    bindSharedDataOwner(&owner);
+
+    auto makeArtifactRef = [&](const fs::path& root,
+                               const std::string& artifactType,
+                               const std::string& artifactId) {
+        fs::create_directories(root, phase7Ec);
+        return tape_phase7::ArtifactRef{
+            .artifactType = artifactType,
+            .contractVersion = tape_phase7::kContractVersion,
+            .artifactId = artifactId,
+            .manifestPath = (root / "manifest.json").string(),
+            .artifactRootDir = root.string()
+        };
+    };
+
+    auto seedRuntimeState = [&](OrderId orderId,
+                                std::uint64_t traceId,
+                                long long permId,
+                                const std::string& execId,
+                                LocalOrderState localState,
+                                const std::string& status,
+                                bool cancelPending,
+                                const std::string& latestError,
+                                double filledQty,
+                                double remainingQty,
+                                double avgFillPrice) {
+        std::lock_guard<std::recursive_mutex> lock(g_data.mutex);
+
+        OrderInfo order;
+        order.orderId = orderId;
+        order.account = "U23154741";
+        order.symbol = "INTC";
+        order.side = "BUY";
+        order.quantity = 30.0;
+        order.limitPrice = 46.40;
+        order.status = status;
+        order.filledQty = filledQty;
+        order.remainingQty = remainingQty;
+        order.avgFillPrice = avgFillPrice;
+        order.localState = localState;
+        order.cancelPending = cancelPending;
+        if (!execId.empty() && filledQty > 0.0) {
+            order.seenExecIds.insert(execId);
+        }
+        g_data.orders[orderId] = order;
+
+        TradeTrace trace;
+        trace.traceId = traceId;
+        trace.orderId = orderId;
+        trace.permId = permId;
+        trace.source = "phase7-runtime-lifecycle";
+        trace.symbol = order.symbol;
+        trace.side = order.side;
+        trace.account = order.account;
+        trace.requestedQty = static_cast<int>(order.quantity);
+        trace.limitPrice = order.limitPrice;
+        trace.latestStatus = status;
+        trace.latestError = latestError;
+        if (!execId.empty() && filledQty > 0.0) {
+            FillSlice fill;
+            fill.execId = execId;
+            fill.shares = static_cast<int>(filledQty);
+            fill.price = avgFillPrice > 0.0 ? avgFillPrice : order.limitPrice;
+            fill.cumQty = filledQty;
+            fill.avgPrice = avgFillPrice > 0.0 ? avgFillPrice : order.limitPrice;
+            fill.exchange = "SIM";
+            trace.fills.push_back(fill);
+            g_data.traceIdByExecId[execId] = traceId;
+        }
+        g_data.traces[traceId] = trace;
+        g_data.traceRecency.push_back(traceId);
+        g_data.latestTraceId = traceId;
+        g_data.traceIdByOrderId[orderId] = traceId;
+        g_data.traceIdByPermId[permId] = traceId;
+    };
+
+    auto persistSubmittedRuntimeJournal = [&](const std::string& suffix,
+                                              OrderId orderId,
+                                              std::uint64_t traceId,
+                                              long long permId,
+                                              const std::string& startedAtUtc) {
+        const fs::path phase7Root = testDataDir() / "phase7_artifacts";
+        const std::string sourceArtifactId = "phase7-source-" + suffix;
+        const std::string analysisArtifactId = "phase7-analysis-" + suffix;
+        const std::string playbookArtifactId = "phase7-playbook-" + suffix;
+        const std::string ledgerArtifactId = "phase7-ledger-" + suffix;
+        const std::string journalArtifactId = "phase7-journal-" + suffix;
+        tape_phase7::ExecutionJournalArtifact journal;
+        journal.sourceArtifact = makeArtifactRef(phase7Root / "sources" / sourceArtifactId,
+                                                 "phase6.case_bundle.v1",
+                                                 sourceArtifactId);
+        journal.analysisArtifact = makeArtifactRef(phase7Root / "analysis" / analysisArtifactId,
+                                                   tape_phase7::kAnalysisArtifactType,
+                                                   analysisArtifactId);
+        journal.playbookArtifact = makeArtifactRef(phase7Root / "playbooks" / playbookArtifactId,
+                                                   tape_phase7::kPlaybookArtifactType,
+                                                   playbookArtifactId);
+        journal.ledgerArtifact = makeArtifactRef(phase7Root / "ledgers" / ledgerArtifactId,
+                                                 tape_phase7::kExecutionLedgerArtifactType,
+                                                 ledgerArtifactId);
+        journal.journalArtifact = makeArtifactRef(phase7Root / "journals" / journalArtifactId,
+                                                  tape_phase7::kExecutionJournalArtifactType,
+                                                  journalArtifactId);
+        journal.mode = tape_phase7::kDefaultPlaybookMode;
+        journal.generatedAtUtc = "2026-03-16T20:00:00.000Z";
+        journal.initiatedBy = "bridge-executor";
+        journal.executionCapability = "phase7.execution_operator.v1";
+        journal.filteredFindingIds = {"phase7-finding:" + suffix};
+        journal.replayContext = {
+            {"trace_anchor",
+             {
+                 {"order_id", static_cast<long long>(orderId)},
+                 {"trace_id", traceId},
+                 {"perm_id", permId}
+             }}
+        };
+
+        tape_phase7::ExecutionJournalEntry entry;
+        entry.journalEntryId = "phase7-journal-entry:" + suffix;
+        entry.ledgerEntryId = "phase7-ledger-entry:" + suffix;
+        entry.actionId = "phase7-action:" + suffix;
+        entry.actionType = "phase7.review_order_impact_footprint.v1";
+        entry.findingId = "phase7-finding:" + suffix;
+        entry.executionStatus = tape_phase7::kExecutionEntryStatusSubmitted;
+        entry.idempotencyKey = "phase7-idempotency:" + suffix;
+        entry.requiresManualConfirmation = true;
+        entry.title = "Runtime lifecycle fixture";
+        entry.summary = "Exercise runtime bridge reconciliation semantics without a full bundle pipeline.";
+        entry.queuedAtUtc = "2026-03-16T19:59:59.000Z";
+        entry.startedAtUtc = startedAtUtc;
+        entry.lastUpdatedAtUtc = startedAtUtc;
+        entry.lastUpdatedBy = "bridge-executor";
+        entry.executionComment = "Submitted into the runtime bridge test fixture.";
+        entry.attemptCount = 1;
+        entry.executionRequest = {
+            {"operation", "request_order_reconciliation"},
+            {"executor", "trading_runtime"},
+            {"execution_capability", "phase7.execution_operator.v1"},
+            {"reason", entry.actionType},
+            {"anchor",
+             {
+                 {"order_id", static_cast<long long>(orderId)},
+                 {"trace_id", traceId},
+                 {"perm_id", permId}
+             }},
+            {"requested_order_ids", json::array({static_cast<long long>(orderId)})}
+        };
+        entry.executionResult = {
+            {"runtime_operation", "request_order_reconciliation"},
+            {"requested_order_ids", json::array({static_cast<long long>(orderId)})},
+            {"accepted_order_ids", json::array({static_cast<long long>(orderId)})},
+            {"trace_id", traceId},
+            {"broker_identity",
+             {
+                 {"order_id", static_cast<long long>(orderId)},
+                 {"trace_id", traceId},
+                 {"perm_id", permId}
+             }}
+        };
+        journal.entries.push_back(std::move(entry));
+        tape_phase7::annotateExecutionJournalArtifact(&journal);
+
+        std::string phase7Code;
+        std::string phase7Message;
+        expect(tape_phase7::persistExecutionJournalArtifact(journal, &phase7Code, &phase7Message),
+               "phase 7 runtime lifecycle fixture should persist the execution journal: " +
+                   phase7Code + " " + phase7Message);
+        return journal;
+    };
+
+    std::string phase7Code;
+    std::string phase7Message;
+
+    seedRuntimeState(9401,
+                     99401,
+                     5401,
+                     "E-PHASE7-CANCEL-1",
+                     LocalOrderState::Cancelled,
+                     "Cancelled",
+                     false,
+                     {},
+                     12.0,
+                     18.0,
+                     46.04);
+    publishSharedDataSnapshot();
+
+    const auto cancelJournal = persistSubmittedRuntimeJournal("cancel-runtime-resolution",
+                                                              9401,
+                                                              99401,
+                                                              5401,
+                                                              "2026-03-16T19:59:59.500Z");
+    tape_phase7::ExecutionApplyArtifact cancelApply;
+    bool cancelApplyCreated = false;
+    expect(tape_phase7::startExecutionApply({},
+                                            cancelJournal.journalArtifact.artifactId,
+                                            {},
+                                            "bridge-executor",
+                                            "phase7.execution_operator.v1",
+                                            "Create an apply artifact before cancel reconciliation.",
+                                            &cancelApply,
+                                            &cancelApplyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 runtime lifecycle cancel apply start should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(cancelApplyCreated,
+           "phase 7 runtime lifecycle cancel apply should be created from the submitted journal");
+
+    tape_phase7::ExecutionJournalArtifact reconciledCancelJournal;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   cancelJournal.journalArtifact.artifactId,
+                                                                   {},
+                                                                   "bridge-executor",
+                                                                   "Runtime acknowledged the cancellation.",
+                                                                   &reconciledCancelJournal,
+                                                                   &updatedEntryIds,
+                                                                   &auditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime lifecycle cancel reconciliation should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(reconciledCancelJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusCancelled &&
+               reconciledCancelJournal.entries.front().terminal &&
+               reconciledCancelJournal.journalStatus == tape_phase7::kExecutionJournalStatusCancelled &&
+               reconciledCancelJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "resolved_cancelled" &&
+               reconciledCancelJournal.entries.front().executionResult.value("fill_state", std::string()) ==
+                   "cancelled_after_partial_fill" &&
+               reconciledCancelJournal.entries.front().executionResult.value("partial_fill_before_terminal", false) &&
+               reconciledCancelJournal.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "completed" &&
+               reconciledCancelJournal.entries.front().executionResult.value("latest_exec_id", std::string()) ==
+                   "E-PHASE7-CANCEL-1" &&
+               !reconciledCancelJournal.entries.front().executionResult.value("cancel_ack_pending", true) &&
+               reconciledCancelJournal.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5401,
+           "phase 7 runtime lifecycle cancel reconciliation should resolve to terminal cancelled with broker identity intact");
+
+    tape_phase7::ExecutionApplyArtifact synchronizedCancelApply;
+    std::vector<std::string> synchronizedApplyEntryIds;
+    std::string synchronizedApplyAuditEventId;
+    expect(tape_phase7::synchronizeExecutionApplyFromJournal({},
+                                                             cancelApply.applyArtifact.artifactId,
+                                                             "bridge-executor",
+                                                             "Synchronize the apply from the cancelled journal.",
+                                                             &synchronizedCancelApply,
+                                                             &synchronizedApplyEntryIds,
+                                                             &synchronizedApplyAuditEventId,
+                                                             &phase7Code,
+                                                             &phase7Message),
+           "phase 7 runtime lifecycle cancel apply sync should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(synchronizedCancelApply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusCancelled &&
+               synchronizedCancelApply.applyStatus == tape_phase7::kExecutionJournalStatusCancelled &&
+               synchronizedCancelApply.entries.front().executionResult.value("fill_state", std::string()) ==
+                   "cancelled_after_partial_fill" &&
+               synchronizedCancelApply.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "terminal_completed" &&
+               synchronizedCancelApply.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "terminal_cancelled_after_partial_fill" &&
+               synchronizedCancelApply.entries.front().executionResult.value("latest_exec_id", std::string()) ==
+                   "E-PHASE7-CANCEL-1" &&
+               synchronizedCancelApply.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5401,
+           "phase 7 runtime lifecycle cancel apply should mirror the cancelled journal state");
+
+    seedRuntimeState(9405,
+                     99405,
+                     5405,
+                     "E-PHASE7-CANCEL-RESTART-1",
+                     LocalOrderState::AwaitingCancelAck,
+                     "Submitted",
+                     true,
+                     {},
+                     9.0,
+                     21.0,
+                     46.09);
+    publishSharedDataSnapshot();
+
+    const auto cancelRestartJournal = persistSubmittedRuntimeJournal("cancel-restart-resolution",
+                                                                     9405,
+                                                                     99405,
+                                                                     5405,
+                                                                     "2099-03-16T19:59:59.550Z");
+    tape_phase7::ExecutionJournalArtifact cancelPendingJournal;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   cancelRestartJournal.journalArtifact.artifactId,
+                                                                   {},
+                                                                   "bridge-executor",
+                                                                   "Runtime restart found the order waiting on a cancel acknowledgement.",
+                                                                   &cancelPendingJournal,
+                                                                   &updatedEntryIds,
+                                                                   &auditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime lifecycle cancel-pending reconciliation should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(cancelPendingJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSubmitted &&
+               !cancelPendingJournal.entries.front().terminal &&
+               cancelPendingJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "cancel_ack_pending" &&
+               cancelPendingJournal.entries.front().executionResult.value("fill_state", std::string()) ==
+                   "partial_fill_cancel_pending" &&
+               cancelPendingJournal.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "await_cancel_ack" &&
+               cancelPendingJournal.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "awaiting_cancel_ack" &&
+               cancelPendingJournal.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "cancel_ack_pending_after_partial_fill",
+           "phase 7 runtime lifecycle cancel-pending reconciliation should preserve the restart cancel-ack wait state");
+    {
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(cancelPendingJournal);
+        expect(recoverySummary.recoveryRequired &&
+                   recoverySummary.runtimeBackedSubmittedCount == 1 &&
+                   !recoverySummary.staleRecoveryRequired,
+               "phase 7 runtime lifecycle cancel-pending reconciliation should stay recoverable before the cancel acknowledgement arrives");
+    }
+
+    tape_phase7::ExecutionApplyArtifact cancelRestartApply;
+    bool cancelRestartApplyCreated = false;
+    expect(tape_phase7::startExecutionApply({},
+                                            cancelRestartJournal.journalArtifact.artifactId,
+                                            {},
+                                            "bridge-executor",
+                                            "phase7.execution_operator.v1",
+                                            "Create an apply artifact while the cancel acknowledgement is still pending.",
+                                            &cancelRestartApply,
+                                            &cancelRestartApplyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 runtime lifecycle cancel-pending apply start should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(cancelRestartApplyCreated,
+           "phase 7 runtime lifecycle cancel-pending apply should be created from the submitted journal");
+
+    tape_phase7::ExecutionJournalArtifact staleCancelPendingJournal;
+    expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                     cancelRestartJournal.journalArtifact.artifactId,
+                                                     &staleCancelPendingJournal,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 runtime lifecycle should reload the cancel-pending journal before the restart acknowledgement: " +
+               phase7Code + " " + phase7Message);
+    staleCancelPendingJournal.entries.front().startedAtUtc = "2000-01-01T00:00:00.000Z";
+    staleCancelPendingJournal.entries.front().lastUpdatedAtUtc = "2000-01-01T00:00:00.000Z";
+    expect(tape_phase7::persistExecutionJournalArtifact(staleCancelPendingJournal, &phase7Code, &phase7Message),
+           "phase 7 runtime lifecycle should persist the stale cancel-pending journal before the restart acknowledgement: " +
+               phase7Code + " " + phase7Message);
+
+    seedRuntimeState(9405,
+                     99405,
+                     5405,
+                     "E-PHASE7-CANCEL-RESTART-1",
+                     LocalOrderState::Cancelled,
+                     "Cancelled",
+                     false,
+                     "broker acknowledged the cancel after a partial fill",
+                     9.0,
+                     21.0,
+                     46.09);
+    publishSharedDataSnapshot();
+
+    tape_phase7::ExecutionJournalArtifact reconciledCancelRestartJournal;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   cancelRestartJournal.journalArtifact.artifactId,
+                                                                   {},
+                                                                   "bridge-executor",
+                                                                   "Runtime restart recovered the final cancel acknowledgement.",
+                                                                   &reconciledCancelRestartJournal,
+                                                                   &updatedEntryIds,
+                                                                   &auditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime lifecycle cancel restart reconciliation should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(reconciledCancelRestartJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusCancelled &&
+               reconciledCancelRestartJournal.entries.front().terminal &&
+               reconciledCancelRestartJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "resolved_cancelled" &&
+               reconciledCancelRestartJournal.entries.front().executionResult.value("fill_state", std::string()) ==
+                   "cancelled_after_partial_fill" &&
+               reconciledCancelRestartJournal.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "completed" &&
+               reconciledCancelRestartJournal.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "terminal_completed" &&
+               reconciledCancelRestartJournal.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "terminal_cancelled_after_partial_fill" &&
+               reconciledCancelRestartJournal.entries.front().executionResult.value("latest_exec_id", std::string()) ==
+                   "E-PHASE7-CANCEL-RESTART-1" &&
+               reconciledCancelRestartJournal.entries.front().executionResult.value("broker_status_detail", std::string()) ==
+                   "broker acknowledged the cancel after a partial fill",
+           "phase 7 runtime lifecycle cancel restart reconciliation should resolve a stale cancel wait once the broker acknowledgement arrives");
+
+    tape_phase7::ExecutionApplyArtifact synchronizedCancelRestartApply;
+    expect(tape_phase7::synchronizeExecutionApplyFromJournal({},
+                                                             cancelRestartApply.applyArtifact.artifactId,
+                                                             "bridge-executor",
+                                                             "Synchronize the apply after the restart cancel acknowledgement resolved.",
+                                                             &synchronizedCancelRestartApply,
+                                                             &synchronizedApplyEntryIds,
+                                                             &synchronizedApplyAuditEventId,
+                                                             &phase7Code,
+                                                             &phase7Message),
+           "phase 7 runtime lifecycle cancel restart apply sync should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(synchronizedCancelRestartApply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusCancelled &&
+               synchronizedCancelRestartApply.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "terminal_completed" &&
+               synchronizedCancelRestartApply.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "terminal_cancelled_after_partial_fill" &&
+               synchronizedCancelRestartApply.entries.front().executionResult.value("latest_exec_id", std::string()) ==
+                   "E-PHASE7-CANCEL-RESTART-1",
+           "phase 7 runtime lifecycle cancel restart apply should mirror the resolved partial-cancel state");
+
+    seedRuntimeState(9402,
+                     99402,
+                     5402,
+                     "E-PHASE7-REJECT-1",
+                     LocalOrderState::Rejected,
+                     "Rejected",
+                     false,
+                     "broker rejected the order after validation",
+                     0.0,
+                     30.0,
+                     0.0);
+    publishSharedDataSnapshot();
+
+    const auto rejectJournal = persistSubmittedRuntimeJournal("reject-runtime-resolution",
+                                                              9402,
+                                                              99402,
+                                                              5402,
+                                                              "2026-03-16T19:59:59.600Z");
+    tape_phase7::ExecutionApplyArtifact rejectApply;
+    bool rejectApplyCreated = false;
+    expect(tape_phase7::startExecutionApply({},
+                                            rejectJournal.journalArtifact.artifactId,
+                                            {},
+                                            "bridge-executor",
+                                            "phase7.execution_operator.v1",
+                                            "Create an apply artifact before reject reconciliation.",
+                                            &rejectApply,
+                                            &rejectApplyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 runtime lifecycle reject apply start should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(rejectApplyCreated,
+           "phase 7 runtime lifecycle reject apply should be created from the submitted journal");
+
+    tape_phase7::ExecutionJournalArtifact reconciledRejectJournal;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   rejectJournal.journalArtifact.artifactId,
+                                                                   {},
+                                                                   "bridge-executor",
+                                                                   "Runtime rejected the order.",
+                                                                   &reconciledRejectJournal,
+                                                                   &updatedEntryIds,
+                                                                   &auditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime lifecycle reject reconciliation should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(reconciledRejectJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               reconciledRejectJournal.entries.front().terminal &&
+               reconciledRejectJournal.entries.front().failureCode == "runtime_rejected" &&
+               reconciledRejectJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "resolved_rejected" &&
+               reconciledRejectJournal.entries.front().executionResult.value("fill_state", std::string()) ==
+                   "rejected_unfilled" &&
+               reconciledRejectJournal.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "terminal_no_resume" &&
+               reconciledRejectJournal.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "terminal_no_resume" &&
+               reconciledRejectJournal.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "terminal_rejected_unfilled" &&
+               reconciledRejectJournal.entries.front().executionResult.value("broker_status_detail", std::string()) ==
+                   "broker rejected the order after validation" &&
+               reconciledRejectJournal.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5402,
+           "phase 7 runtime lifecycle reject reconciliation should resolve to terminal failure with broker identity intact");
+    expectContains(reconciledRejectJournal.entries.front().failureMessage,
+                   "broker rejected the order after validation",
+                   "phase 7 runtime lifecycle reject reconciliation should preserve the latest broker detail");
+
+    tape_phase7::ExecutionApplyArtifact synchronizedRejectApply;
+    expect(tape_phase7::synchronizeExecutionApplyFromJournal({},
+                                                             rejectApply.applyArtifact.artifactId,
+                                                             "bridge-executor",
+                                                             "Synchronize the apply from the rejected journal.",
+                                                             &synchronizedRejectApply,
+                                                             &synchronizedApplyEntryIds,
+                                                             &synchronizedApplyAuditEventId,
+                                                             &phase7Code,
+                                                             &phase7Message),
+           "phase 7 runtime lifecycle reject apply sync should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(synchronizedRejectApply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               synchronizedRejectApply.entries.front().failureCode == "runtime_rejected" &&
+               synchronizedRejectApply.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "terminal_no_resume" &&
+               synchronizedRejectApply.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "terminal_no_resume" &&
+               synchronizedRejectApply.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "terminal_rejected_unfilled" &&
+               synchronizedRejectApply.entries.front().executionResult.value("broker_status_detail", std::string()) ==
+                   "broker rejected the order after validation",
+           "phase 7 runtime lifecycle reject apply should mirror the rejected no-resume broker detail");
+
+    seedRuntimeState(9404,
+                     99404,
+                     5404,
+                     "E-PHASE7-INACTIVE-1",
+                     LocalOrderState::Inactive,
+                     "Inactive",
+                     false,
+                     "broker marked the order inactive after validation",
+                     0.0,
+                     30.0,
+                     0.0);
+    publishSharedDataSnapshot();
+
+    const auto inactiveJournal = persistSubmittedRuntimeJournal("inactive-runtime-resolution",
+                                                                9404,
+                                                                99404,
+                                                                5404,
+                                                                "2026-03-16T19:59:59.650Z");
+    tape_phase7::ExecutionApplyArtifact inactiveApply;
+    bool inactiveApplyCreated = false;
+    expect(tape_phase7::startExecutionApply({},
+                                            inactiveJournal.journalArtifact.artifactId,
+                                            {},
+                                            "bridge-executor",
+                                            "phase7.execution_operator.v1",
+                                            "Create an apply artifact before inactive reconciliation.",
+                                            &inactiveApply,
+                                            &inactiveApplyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 runtime lifecycle inactive apply start should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(inactiveApplyCreated,
+           "phase 7 runtime lifecycle inactive apply should be created from the submitted journal");
+
+    tape_phase7::ExecutionJournalArtifact reconciledInactiveJournal;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   inactiveJournal.journalArtifact.artifactId,
+                                                                   {},
+                                                                   "bridge-executor",
+                                                                   "Runtime marked the order inactive.",
+                                                                   &reconciledInactiveJournal,
+                                                                   &updatedEntryIds,
+                                                                   &auditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime lifecycle inactive reconciliation should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(reconciledInactiveJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               reconciledInactiveJournal.entries.front().terminal &&
+               reconciledInactiveJournal.entries.front().failureCode == "runtime_inactive" &&
+               reconciledInactiveJournal.entries.front().executionResult.value("resolution", std::string()) ==
+                   "resolved_inactive" &&
+               reconciledInactiveJournal.entries.front().executionResult.value("fill_state", std::string()) ==
+                   "inactive_unfilled" &&
+               reconciledInactiveJournal.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "terminal_no_resume" &&
+               reconciledInactiveJournal.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "terminal_no_resume" &&
+               reconciledInactiveJournal.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "terminal_inactive_unfilled" &&
+               reconciledInactiveJournal.entries.front().executionResult.value("broker_status_detail", std::string()) ==
+                   "broker marked the order inactive after validation" &&
+               reconciledInactiveJournal.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5404,
+           "phase 7 runtime lifecycle inactive reconciliation should resolve to terminal inactive failure with broker detail intact");
+    expectContains(reconciledInactiveJournal.entries.front().failureMessage,
+                   "broker marked the order inactive after validation",
+                   "phase 7 runtime lifecycle inactive reconciliation should preserve the latest inactive broker detail");
+
+    tape_phase7::ExecutionApplyArtifact synchronizedInactiveApply;
+    expect(tape_phase7::synchronizeExecutionApplyFromJournal({},
+                                                             inactiveApply.applyArtifact.artifactId,
+                                                             "bridge-executor",
+                                                             "Synchronize the apply from the inactive journal.",
+                                                             &synchronizedInactiveApply,
+                                                             &synchronizedApplyEntryIds,
+                                                             &synchronizedApplyAuditEventId,
+                                                             &phase7Code,
+                                                             &phase7Message),
+           "phase 7 runtime lifecycle inactive apply sync should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(synchronizedInactiveApply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               synchronizedInactiveApply.entries.front().failureCode == "runtime_inactive" &&
+               synchronizedInactiveApply.entries.front().executionResult.value("restart_resume_policy", std::string()) ==
+                   "terminal_no_resume" &&
+               synchronizedInactiveApply.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "terminal_no_resume" &&
+               synchronizedInactiveApply.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "terminal_inactive_unfilled" &&
+               synchronizedInactiveApply.entries.front().executionResult.value("broker_status_detail", std::string()) ==
+                   "broker marked the order inactive after validation",
+           "phase 7 runtime lifecycle inactive apply should mirror the inactive no-resume broker detail");
+
+    seedRuntimeState(9403,
+                     99403,
+                     5403,
+                     "E-PHASE7-CANCEL-STUCK-1",
+                     LocalOrderState::AwaitingCancelAck,
+                     "Submitted",
+                     true,
+                     {},
+                     7.0,
+                     23.0,
+                     46.07);
+    publishSharedDataSnapshot();
+
+    const auto staleCancelJournal = persistSubmittedRuntimeJournal("cancel-ack-stale",
+                                                                   9403,
+                                                                   99403,
+                                                                   5403,
+                                                                   "2000-01-01T00:00:00.000Z");
+    tape_phase7::ExecutionJournalArtifact reconciledStaleCancelJournal;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   staleCancelJournal.journalArtifact.artifactId,
+                                                                   {},
+                                                                   "bridge-executor",
+                                                                   "Cancel acknowledgement never arrived.",
+                                                                   &reconciledStaleCancelJournal,
+                                                                   &updatedEntryIds,
+                                                                   &auditEventId,
+                                                                   &phase7Code,
+                                                                   &phase7Message),
+           "phase 7 runtime lifecycle stale cancel reconciliation should succeed: " +
+               phase7Code + " " + phase7Message);
+    expect(reconciledStaleCancelJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               reconciledStaleCancelJournal.entries.front().terminal &&
+               reconciledStaleCancelJournal.entries.front().failureCode == "runtime_cancel_ack_stale" &&
+               reconciledStaleCancelJournal.entries.front().executionResult.value("restart_recovery_state", std::string()) ==
+                   "manual_review_required" &&
+               reconciledStaleCancelJournal.entries.front().executionResult.value("restart_recovery_reason", std::string()) ==
+                   "cancel_ack_timeout_after_partial_fill" &&
+               reconciledStaleCancelJournal.entries.front().executionResult.value("manual_review_required", false) &&
+               reconciledStaleCancelJournal.entries.front().executionResult.value("cancel_ack_pending", false) &&
+               reconciledStaleCancelJournal.entries.front().executionResult.value("broker_identity", json::object()).value("perm_id", 0LL) == 5403,
+           "phase 7 runtime lifecycle stale cancel reconciliation should escalate a stuck cancel acknowledgement into manual-review failure");
+    expectContains(reconciledStaleCancelJournal.entries.front().failureMessage,
+                   "cancellation acknowledgement",
+                   "phase 7 runtime lifecycle stale cancel reconciliation should explain the cancel-ack timeout");
+
+    const auto projectExecutionResult = [](const json& executionResult) {
+        return json{
+            {"resolution", executionResult.value("resolution", std::string())},
+            {"fill_state", executionResult.value("fill_state", std::string())},
+            {"restart_resume_policy", executionResult.value("restart_resume_policy", std::string())},
+            {"restart_recovery_state", executionResult.value("restart_recovery_state", std::string())},
+            {"restart_recovery_reason", executionResult.value("restart_recovery_reason", std::string())},
+            {"partial_fill_before_terminal", executionResult.value("partial_fill_before_terminal", false)},
+            {"cancel_ack_pending", executionResult.value("cancel_ack_pending", false)},
+            {"latest_exec_id", executionResult.contains("latest_exec_id")
+                                   ? executionResult.at("latest_exec_id")
+                                   : json(nullptr)},
+            {"broker_status_detail", executionResult.contains("broker_status_detail")
+                                         ? executionResult.at("broker_status_detail")
+                                         : json(nullptr)},
+            {"broker_identity",
+             {
+                 {"order_id",
+                  executionResult.value("broker_identity", json::object()).contains("order_id")
+                      ? executionResult.value("broker_identity", json::object()).at("order_id")
+                      : json(nullptr)},
+                 {"trace_id",
+                  executionResult.value("broker_identity", json::object()).contains("trace_id")
+                      ? executionResult.value("broker_identity", json::object()).at("trace_id")
+                      : json(nullptr)},
+                 {"perm_id",
+                  executionResult.value("broker_identity", json::object()).contains("perm_id")
+                      ? executionResult.value("broker_identity", json::object()).at("perm_id")
+                      : json(nullptr)},
+                 {"latest_exec_id",
+                  executionResult.value("broker_identity", json::object()).contains("latest_exec_id")
+                      ? executionResult.value("broker_identity", json::object()).at("latest_exec_id")
+                      : json(nullptr)},
+                 {"exec_id_count",
+                  executionResult.value("broker_identity", json::object()).value("exec_ids", json::array()).size()}
+             }},
+            {"trade_trace",
+             {
+                 {"trace_found", executionResult.value("trade_trace", json::object()).value("trace_found", false)},
+                 {"fill_count", executionResult.value("trade_trace", json::object()).value("fill_count", 0ULL)},
+                 {"latest_status",
+                  executionResult.value("trade_trace", json::object()).contains("latest_status")
+                      ? executionResult.value("trade_trace", json::object()).at("latest_status")
+                      : json(nullptr)},
+                 {"terminal_status",
+                  executionResult.value("trade_trace", json::object()).contains("terminal_status")
+                      ? executionResult.value("trade_trace", json::object()).at("terminal_status")
+                      : json(nullptr)}
+             }}
+        };
+    };
+
+    const json bridgeLifecycleProjection = {
+        {"cancel_terminal", projectExecutionResult(reconciledCancelJournal.entries.front().executionResult)},
+        {"cancel_pending_restart_wait", projectExecutionResult(cancelPendingJournal.entries.front().executionResult)},
+        {"cancel_pending_restart_resolved", projectExecutionResult(reconciledCancelRestartJournal.entries.front().executionResult)},
+        {"cancel_pending_restart_apply_sync", projectExecutionResult(synchronizedCancelRestartApply.entries.front().executionResult)},
+        {"reject_terminal", projectExecutionResult(reconciledRejectJournal.entries.front().executionResult)},
+        {"inactive_terminal", projectExecutionResult(reconciledInactiveJournal.entries.front().executionResult)},
+        {"stale_cancel_ack_timeout", projectExecutionResult(reconciledStaleCancelJournal.entries.front().executionResult)}
+    };
+    const json lifecycleFixture = readJsonFixture("phase7_execution_bridge_contracts.json");
+    expect(bridgeLifecycleProjection == lifecycleFixture,
+           "phase 7 runtime lifecycle bridge projection should match the golden fixture\nactual fixture:\n" +
+               bridgeLifecycleProjection.dump(2));
+
+    unbindSharedDataOwner(&owner);
+    resetSharedDataForTesting();
+}
+
 void testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures() {
     const fs::path rootDir = testDataDir() / "tape-engine-phase3-contract-fixtures";
     const fs::path socketPath = testDataDir() / "tape-engine-phase3-contract-fixtures.sock";

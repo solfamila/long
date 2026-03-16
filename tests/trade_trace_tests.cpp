@@ -41,6 +41,10 @@ int main() {
         testTapeEnginePhase3PersistsIncidentAndOrderCaseReports();
         testTapeEnginePhase6ExportsAndImportsPortableBundles();
         testTapeEnginePhase7ArtifactsReuseDeterministically();
+        testTapePhase7RuntimeBridgeDispatchesAndReconcilesOrderAnchoredJournal();
+        testTapePhase7RuntimeBridgeSweepMirrorsManualReviewIntoApplyArtifacts();
+        testTapePhase7RuntimeBridgeSweepEscalatesStaleMissingOrders();
+        testTapePhase7RuntimeBridgeHandlesCancelAndRejectLifecycleStates();
         testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures();
         testTapeEngineTypedTransportResultsMatchGoldenFixtures();
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();

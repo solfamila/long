@@ -1,0 +1,266 @@
+{
+  "list_execution_applies_recoverable": {
+    "attempt_count": 1,
+    "entry_id_present": true,
+    "execution_status": "submitted",
+    "result": {
+      "broker_identity": {
+        "exec_id_count": 1,
+        "latest_exec_id": "E-PHASE7-MCP-1",
+        "order_id": 7401,
+        "perm_id": 57401,
+        "trace_id": 97401
+      },
+      "broker_status_detail": null,
+      "cancel_ack_pending": false,
+      "fill_state": "partial_fill_in_progress",
+      "latest_exec_id": "E-PHASE7-MCP-1",
+      "manual_review_required": false,
+      "partial_fill_before_terminal": false,
+      "resolution": "resolved_partially_filled",
+      "restart_recovery_reason": "partial_fill_active",
+      "restart_recovery_state": "recoverable",
+      "restart_resume_policy": "continue_recovery",
+      "trade_trace": {
+        "fill_count": 1,
+        "latest_status": "Submitted",
+        "perm_id": 57401,
+        "terminal_status": null,
+        "trace_found": true,
+        "trace_id": 97401
+      }
+    },
+    "terminal": false
+  },
+  "list_execution_applies_terminal": {
+    "attempt_count": 1,
+    "entry_id_present": true,
+    "execution_status": "succeeded",
+    "result": {
+      "broker_identity": {
+        "exec_id_count": 2,
+        "latest_exec_id": "E-PHASE7-MCP-2",
+        "order_id": 7401,
+        "perm_id": 57401,
+        "trace_id": 97401
+      },
+      "broker_status_detail": null,
+      "cancel_ack_pending": false,
+      "fill_state": "filled",
+      "latest_exec_id": "E-PHASE7-MCP-2",
+      "manual_review_required": false,
+      "partial_fill_before_terminal": true,
+      "resolution": "resolved_filled",
+      "restart_recovery_reason": "terminal_filled",
+      "restart_recovery_state": "terminal_completed",
+      "restart_resume_policy": "completed",
+      "trade_trace": {
+        "fill_count": 2,
+        "latest_status": "Filled",
+        "perm_id": 57401,
+        "terminal_status": "Filled",
+        "trace_found": true,
+        "trace_id": 97401
+      }
+    },
+    "terminal": true
+  },
+  "list_execution_journals_recoverable": {
+    "attempt_count": 1,
+    "entry_id_present": true,
+    "execution_status": "submitted",
+    "result": {
+      "broker_identity": {
+        "exec_id_count": 1,
+        "latest_exec_id": "E-PHASE7-MCP-1",
+        "order_id": 7401,
+        "perm_id": 57401,
+        "trace_id": 97401
+      },
+      "broker_status_detail": null,
+      "cancel_ack_pending": false,
+      "fill_state": "partial_fill_in_progress",
+      "latest_exec_id": "E-PHASE7-MCP-1",
+      "manual_review_required": false,
+      "partial_fill_before_terminal": false,
+      "resolution": "resolved_partially_filled",
+      "restart_recovery_reason": "partial_fill_active",
+      "restart_recovery_state": "recoverable",
+      "restart_resume_policy": "continue_recovery",
+      "trade_trace": {
+        "fill_count": 1,
+        "latest_status": "Submitted",
+        "perm_id": 57401,
+        "terminal_status": null,
+        "trace_found": true,
+        "trace_id": 97401
+      }
+    },
+    "terminal": false
+  },
+  "list_execution_journals_terminal": {
+    "attempt_count": 1,
+    "entry_id_present": true,
+    "execution_status": "succeeded",
+    "result": {
+      "broker_identity": {
+        "exec_id_count": 2,
+        "latest_exec_id": "E-PHASE7-MCP-2",
+        "order_id": 7401,
+        "perm_id": 57401,
+        "trace_id": 97401
+      },
+      "broker_status_detail": null,
+      "cancel_ack_pending": false,
+      "fill_state": "filled",
+      "latest_exec_id": "E-PHASE7-MCP-2",
+      "manual_review_required": false,
+      "partial_fill_before_terminal": true,
+      "resolution": "resolved_filled",
+      "restart_recovery_reason": "terminal_filled",
+      "restart_recovery_state": "terminal_completed",
+      "restart_resume_policy": "completed",
+      "trade_trace": {
+        "fill_count": 2,
+        "latest_status": "Filled",
+        "perm_id": 57401,
+        "terminal_status": "Filled",
+        "trace_found": true,
+        "trace_id": 97401
+      }
+    },
+    "terminal": true
+  },
+  "read_execution_apply_recoverable": {
+    "attempt_count": 1,
+    "entry_id_present": true,
+    "execution_status": "submitted",
+    "result": {
+      "broker_identity": {
+        "exec_id_count": 1,
+        "latest_exec_id": "E-PHASE7-MCP-1",
+        "order_id": 7401,
+        "perm_id": 57401,
+        "trace_id": 97401
+      },
+      "broker_status_detail": null,
+      "cancel_ack_pending": false,
+      "fill_state": "partial_fill_in_progress",
+      "latest_exec_id": "E-PHASE7-MCP-1",
+      "manual_review_required": false,
+      "partial_fill_before_terminal": false,
+      "resolution": "resolved_partially_filled",
+      "restart_recovery_reason": "partial_fill_active",
+      "restart_recovery_state": "recoverable",
+      "restart_resume_policy": "continue_recovery",
+      "trade_trace": {
+        "fill_count": 1,
+        "latest_status": "Submitted",
+        "perm_id": 57401,
+        "terminal_status": null,
+        "trace_found": true,
+        "trace_id": 97401
+      }
+    },
+    "terminal": false
+  },
+  "read_execution_apply_terminal": {
+    "attempt_count": 1,
+    "entry_id_present": true,
+    "execution_status": "succeeded",
+    "result": {
+      "broker_identity": {
+        "exec_id_count": 2,
+        "latest_exec_id": "E-PHASE7-MCP-2",
+        "order_id": 7401,
+        "perm_id": 57401,
+        "trace_id": 97401
+      },
+      "broker_status_detail": null,
+      "cancel_ack_pending": false,
+      "fill_state": "filled",
+      "latest_exec_id": "E-PHASE7-MCP-2",
+      "manual_review_required": false,
+      "partial_fill_before_terminal": true,
+      "resolution": "resolved_filled",
+      "restart_recovery_reason": "terminal_filled",
+      "restart_recovery_state": "terminal_completed",
+      "restart_resume_policy": "completed",
+      "trade_trace": {
+        "fill_count": 2,
+        "latest_status": "Filled",
+        "perm_id": 57401,
+        "terminal_status": "Filled",
+        "trace_found": true,
+        "trace_id": 97401
+      }
+    },
+    "terminal": true
+  },
+  "read_execution_journal_recoverable": {
+    "attempt_count": 1,
+    "entry_id_present": true,
+    "execution_status": "submitted",
+    "result": {
+      "broker_identity": {
+        "exec_id_count": 1,
+        "latest_exec_id": "E-PHASE7-MCP-1",
+        "order_id": 7401,
+        "perm_id": 57401,
+        "trace_id": 97401
+      },
+      "broker_status_detail": null,
+      "cancel_ack_pending": false,
+      "fill_state": "partial_fill_in_progress",
+      "latest_exec_id": "E-PHASE7-MCP-1",
+      "manual_review_required": false,
+      "partial_fill_before_terminal": false,
+      "resolution": "resolved_partially_filled",
+      "restart_recovery_reason": "partial_fill_active",
+      "restart_recovery_state": "recoverable",
+      "restart_resume_policy": "continue_recovery",
+      "trade_trace": {
+        "fill_count": 1,
+        "latest_status": "Submitted",
+        "perm_id": 57401,
+        "terminal_status": null,
+        "trace_found": true,
+        "trace_id": 97401
+      }
+    },
+    "terminal": false
+  },
+  "read_execution_journal_terminal": {
+    "attempt_count": 1,
+    "entry_id_present": true,
+    "execution_status": "succeeded",
+    "result": {
+      "broker_identity": {
+        "exec_id_count": 2,
+        "latest_exec_id": "E-PHASE7-MCP-2",
+        "order_id": 7401,
+        "perm_id": 57401,
+        "trace_id": 97401
+      },
+      "broker_status_detail": null,
+      "cancel_ack_pending": false,
+      "fill_state": "filled",
+      "latest_exec_id": "E-PHASE7-MCP-2",
+      "manual_review_required": false,
+      "partial_fill_before_terminal": true,
+      "resolution": "resolved_filled",
+      "restart_recovery_reason": "terminal_filled",
+      "restart_recovery_state": "terminal_completed",
+      "restart_resume_policy": "completed",
+      "trade_trace": {
+        "fill_count": 2,
+        "latest_status": "Filled",
+        "perm_id": 57401,
+        "terminal_status": "Filled",
+        "trace_found": true,
+        "trace_id": 97401
+      }
+    },
+    "terminal": true
+  }
+}

@@ -356,6 +356,12 @@
         "artifact_type": "phase6.case_bundle.v1",
         "contract_version": "phase6-portable-bundle-v1",
         "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 0,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": false,
+        "stale_recovery_required": false
       }
     },
     "uri": "tape://phase7/apply/<id>"
@@ -547,6 +553,12 @@
         "artifact_type": "phase6.case_bundle.v1",
         "contract_version": "phase6-portable-bundle-v1",
         "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 0,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": false,
+        "stale_recovery_required": false
       }
     },
     "uri": "tape://phase7/journal/<id>"
@@ -1470,7 +1482,13 @@
       },
       "updated_entry_ids": [
         "phase7-journal-entry-6e36b323f27eb238"
-      ]
+      ],
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 1,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": true,
+        "stale_recovery_required": false
+      }
     },
     "revision": {
       "first_session_seq": 1,
@@ -1947,6 +1965,7 @@
         "limit": 10,
         "matched_count": 1,
         "playbook_artifact_id": null,
+        "recovery_state": null,
         "sort_by": "generated_at_desc",
         "source_artifact_id": null
       },
@@ -2021,6 +2040,127 @@
             "artifact_type": "phase6.case_bundle.v1",
             "contract_version": "phase6-portable-bundle-v1",
             "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "runtime_recovery_summary": {
+            "runtime_backed_submitted_count": 1,
+            "stale_runtime_backed_count": 0,
+            "recovery_required": true,
+            "stale_recovery_required": false
+          }
+        }
+      ],
+      "returned_count": 1
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_execution_applies_recovery_required": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_execution_applies_local",
+      "result_schema": "phase7.execution-apply-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_execution_applies"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "analysis_artifact_id": null,
+        "apply_status": null,
+        "execution_journal_artifact_id": "phase7-journal-8c41540e965b745f",
+        "execution_ledger_artifact_id": null,
+        "limit": 10,
+        "matched_count": 1,
+        "playbook_artifact_id": null,
+        "recovery_state": "recovery_required",
+        "sort_by": "attention_desc",
+        "source_artifact_id": null
+      },
+      "execution_applies": [
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "apply_status": "execution_in_progress",
+          "entry_count": 1,
+          "execution_apply": {
+            "artifact_id": "phase7-apply-b28d58f1d3a48b6d",
+            "artifact_type": "phase7.execution_apply.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/applies/phase7-apply-b28d58f1d3a48b6d/manifest.json"
+          },
+          "execution_journal": {
+            "artifact_id": "phase7-journal-8c41540e965b745f",
+            "artifact_type": "phase7.execution_journal.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/journals/phase7-journal-8c41540e965b745f/manifest.json"
+          },
+          "execution_ledger": {
+            "artifact_id": "phase7-ledger:<id>",
+            "artifact_type": "phase7.execution_ledger.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json"
+          },
+          "execution_summary": {
+            "actionable_entry_count": 1,
+            "all_terminal": false,
+            "cancelled_count": 0,
+            "failed_count": 0,
+            "queued_count": 0,
+            "submitted_count": 1,
+            "succeeded_count": 0,
+            "terminal_count": 0
+          },
+          "has_generated_at_utc": true,
+          "latest_audit_event": {
+            "actor": "mcp-executor-dispatch",
+            "apply_status": "execution_in_progress",
+            "event_type": "execution_apply_created",
+            "execution_status": null,
+            "has_generated_at_utc": true,
+            "message": "Execution apply artifact created from submitted journal entries for controlled execution."
+          },
+          "mode": "dry_run",
+          "playbook_artifact": {
+            "artifact_id": "phase7-playbook:<id>",
+            "artifact_type": "phase7.playbook_plan.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+          },
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "runtime_recovery_summary": {
+            "runtime_backed_submitted_count": 1,
+            "stale_runtime_backed_count": 0,
+            "recovery_required": true,
+            "stale_recovery_required": false
           }
         }
       ],
@@ -2055,6 +2195,7 @@
         "limit": 25,
         "matched_count": 1,
         "playbook_artifact_id": null,
+        "recovery_state": null,
         "sort_by": "generated_at_desc",
         "source_artifact_id": null
       },
@@ -2129,6 +2270,12 @@
             "artifact_type": "phase6.case_bundle.v1",
             "contract_version": "phase6-portable-bundle-v1",
             "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "runtime_recovery_summary": {
+            "runtime_backed_submitted_count": 0,
+            "stale_runtime_backed_count": 0,
+            "recovery_required": false,
+            "stale_recovery_required": false
           }
         }
       ],
@@ -2162,6 +2309,7 @@
         "limit": 10,
         "matched_count": 1,
         "playbook_artifact_id": null,
+        "recovery_state": null,
         "sort_by": "generated_at_desc",
         "source_artifact_id": null
       },
@@ -2230,6 +2378,120 @@
             "artifact_type": "phase6.case_bundle.v1",
             "contract_version": "phase6-portable-bundle-v1",
             "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "runtime_recovery_summary": {
+            "runtime_backed_submitted_count": 0,
+            "stale_runtime_backed_count": 0,
+            "recovery_required": false,
+            "stale_recovery_required": false
+          }
+        }
+      ],
+      "returned_count": 1
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_execution_journals_recovery_required": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase7_list_execution_journals_local",
+      "result_schema": "phase7.execution-journal-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_execution_journals"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "analysis_artifact_id": null,
+        "execution_ledger_artifact_id": "phase7-ledger:<id>",
+        "journal_status": null,
+        "limit": 10,
+        "matched_count": 1,
+        "playbook_artifact_id": null,
+        "recovery_state": "recovery_required",
+        "sort_by": "attention_desc",
+        "source_artifact_id": null
+      },
+      "execution_journals": [
+        {
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "entry_count": 1,
+          "execution_journal": {
+            "artifact_id": "phase7-journal-8c41540e965b745f",
+            "artifact_type": "phase7.execution_journal.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/journals/phase7-journal-8c41540e965b745f/manifest.json"
+          },
+          "execution_ledger": {
+            "artifact_id": "phase7-ledger:<id>",
+            "artifact_type": "phase7.execution_ledger.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json"
+          },
+          "execution_summary": {
+            "actionable_entry_count": 1,
+            "all_terminal": false,
+            "cancelled_count": 0,
+            "failed_count": 0,
+            "queued_count": 0,
+            "submitted_count": 1,
+            "succeeded_count": 0,
+            "terminal_count": 0
+          },
+          "has_generated_at_utc": true,
+          "journal_status": "execution_in_progress",
+          "latest_audit_event": {
+            "actor": "mcp-executor-dispatch",
+            "event_type": "execution_status_recorded",
+            "execution_status": "submitted",
+            "has_generated_at_utc": true,
+            "journal_status": "execution_in_progress",
+            "message": "Recorded 1 execution entry as `submitted` by `mcp-executor-dispatch`. Comment: Dispatching queued entries through the controlled path."
+          },
+          "mode": "dry_run",
+          "playbook_artifact": {
+            "artifact_id": "phase7-playbook:<id>",
+            "artifact_type": "phase7.playbook_plan.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-appdata/phase7_artifacts/playbooks/phase7-playbook:<id>/manifest.json"
+          },
+          "replay_context": {
+            "has_trace_anchor": true,
+            "requested_window": {
+              "first_session_seq": 1,
+              "has_last_session_seq": true,
+              "keys": [
+                "first_session_seq",
+                "last_session_seq"
+              ]
+            },
+            "source_bundle_type": "case_bundle"
+          },
+          "runtime_recovery_summary": {
+            "recovery_required": true,
+            "runtime_backed_submitted_count": 1,
+            "stale_recovery_required": false,
+            "stale_runtime_backed_count": 0
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
           }
         }
       ],
@@ -2263,6 +2525,7 @@
         "limit": 25,
         "matched_count": 1,
         "playbook_artifact_id": null,
+        "recovery_state": null,
         "sort_by": "generated_at_desc",
         "source_artifact_id": null
       },
@@ -2331,6 +2594,12 @@
             "artifact_type": "phase6.case_bundle.v1",
             "contract_version": "phase6-portable-bundle-v1",
             "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "runtime_recovery_summary": {
+            "runtime_backed_submitted_count": 0,
+            "stale_runtime_backed_count": 0,
+            "recovery_required": false,
+            "stale_recovery_required": false
           }
         }
       ],
@@ -4146,6 +4415,12 @@
         "artifact_type": "phase6.case_bundle.v1",
         "contract_version": "phase6-portable-bundle-v1",
         "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 1,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": true,
+        "stale_recovery_required": false
       }
     },
     "revision": {
@@ -4310,6 +4585,12 @@
         "artifact_type": "phase6.case_bundle.v1",
         "contract_version": "phase6-portable-bundle-v1",
         "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 0,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": false,
+        "stale_recovery_required": false
       }
     },
     "revision": {
@@ -4744,7 +5025,13 @@
       },
       "updated_entry_ids": [
         "phase7-apply-entry-e9a6552751541078"
-      ]
+      ],
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 0,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": false,
+        "stale_recovery_required": false
+      }
     },
     "revision": {
       "first_session_seq": 1,
@@ -4998,7 +5285,13 @@
       },
       "updated_entry_ids": [
         "phase7-journal-entry-a7a303b11c6351f7"
-      ]
+      ],
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 0,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": false,
+        "stale_recovery_required": false
+      }
     },
     "revision": {
       "first_session_seq": 1,
@@ -5194,7 +5487,13 @@
       },
       "updated_entry_ids": [
         "phase7-journal-entry-a7a303b11c6351f7"
-      ]
+      ],
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 0,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": false,
+        "stale_recovery_required": false
+      }
     },
     "revision": {
       "first_session_seq": 1,
@@ -5933,6 +6232,12 @@
         "artifact_type": "phase6.case_bundle.v1",
         "contract_version": "phase6-portable-bundle-v1",
         "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 1,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": true,
+        "stale_recovery_required": false
       }
     },
     "revision": {
@@ -6113,6 +6418,12 @@
         "artifact_type": "phase6.case_bundle.v1",
         "contract_version": "phase6-portable-bundle-v1",
         "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 1,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": true,
+        "stale_recovery_required": false
       }
     },
     "revision": {
@@ -6278,6 +6589,12 @@
         "artifact_type": "phase6.case_bundle.v1",
         "contract_version": "phase6-portable-bundle-v1",
         "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 0,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": false,
+        "stale_recovery_required": false
       }
     },
     "revision": {
@@ -6443,6 +6760,12 @@
         "artifact_type": "phase6.case_bundle.v1",
         "contract_version": "phase6-portable-bundle-v1",
         "manifest_path": "<tmp>/tape-mcp-phase7-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "runtime_recovery_summary": {
+        "runtime_backed_submitted_count": 0,
+        "stale_runtime_backed_count": 0,
+        "recovery_required": false,
+        "stale_recovery_required": false
       }
     },
     "revision": {

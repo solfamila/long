@@ -105,7 +105,7 @@ json phase7ExecutionLedgerAppliedFilters(const Phase7ExecutionLedgerInventorySel
 
 json phase7ExecutionJournalAppliedFilters(const Phase7ExecutionJournalInventorySelection& selection,
                                           std::size_t matchedCount) {
-    return json{
+    json filters = json{
         {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
         {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
         {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
@@ -115,11 +115,15 @@ json phase7ExecutionJournalAppliedFilters(const Phase7ExecutionJournalInventoryS
         {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
         {"matched_count", matchedCount}
     };
+    if (!selection.recoveryState.empty()) {
+        filters["recovery_state"] = selection.recoveryState;
+    }
+    return filters;
 }
 
 json phase7ExecutionApplyAppliedFilters(const Phase7ExecutionApplyInventorySelection& selection,
                                         std::size_t matchedCount) {
-    return json{
+    json filters = json{
         {"execution_journal_artifact_id", selection.journalArtifactId.empty() ? json(nullptr) : json(selection.journalArtifactId)},
         {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
         {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
@@ -130,6 +134,24 @@ json phase7ExecutionApplyAppliedFilters(const Phase7ExecutionApplyInventorySelec
         {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
         {"matched_count", matchedCount}
     };
+    if (!selection.recoveryState.empty()) {
+        filters["recovery_state"] = selection.recoveryState;
+    }
+    return filters;
+}
+
+template <typename RecoverySummary>
+bool matchesPhase7RecoveryState(std::string_view recoveryState, const RecoverySummary& recovery) {
+    if (recoveryState.empty()) {
+        return true;
+    }
+    if (recoveryState == "recovery_required") {
+        return recovery.recoveryRequired;
+    }
+    if (recoveryState == "stale_recovery_required") {
+        return recovery.staleRecoveryRequired;
+    }
+    return false;
 }
 
 void sortPhase7Analyses(std::vector<Phase7AnalysisArtifact>* artifacts, std::string_view sortBy) {
@@ -385,6 +407,10 @@ Phase7ExecutionJournalInventoryPayload selectPhase7ExecutionJournals(
         if (!selection.journalStatus.empty() && artifact.journalStatus != selection.journalStatus) {
             return false;
         }
+        if (!matchesPhase7RecoveryState(selection.recoveryState,
+                                        tape_phase7::summarizeExecutionJournalRecovery(artifact))) {
+            return false;
+        }
         return true;
     };
 
@@ -421,6 +447,14 @@ Phase7ExecutionJournalInventoryPayload selectPhase7ExecutionJournals(
               filtered.end(),
               [&](const Phase7ExecutionJournalArtifact& lhs, const Phase7ExecutionJournalArtifact& rhs) {
                   if (sortMode == "attention_desc") {
+                      const auto lhsRecovery = tape_phase7::summarizeExecutionJournalRecovery(lhs);
+                      const auto rhsRecovery = tape_phase7::summarizeExecutionJournalRecovery(rhs);
+                      if (lhsRecovery.staleRecoveryRequired != rhsRecovery.staleRecoveryRequired) {
+                          return lhsRecovery.staleRecoveryRequired && !rhsRecovery.staleRecoveryRequired;
+                      }
+                      if (lhsRecovery.recoveryRequired != rhsRecovery.recoveryRequired) {
+                          return lhsRecovery.recoveryRequired && !rhsRecovery.recoveryRequired;
+                      }
                       const int lhsRank = statusRank(lhs.journalStatus);
                       const int rhsRank = statusRank(rhs.journalStatus);
                       if (lhsRank != rhsRank) {
@@ -472,6 +506,10 @@ Phase7ExecutionApplyInventoryPayload selectPhase7ExecutionApplies(
         if (!selection.applyStatus.empty() && artifact.applyStatus != selection.applyStatus) {
             return false;
         }
+        if (!matchesPhase7RecoveryState(selection.recoveryState,
+                                        tape_phase7::summarizeExecutionApplyRecovery(artifact))) {
+            return false;
+        }
         return true;
     };
 
@@ -508,6 +546,14 @@ Phase7ExecutionApplyInventoryPayload selectPhase7ExecutionApplies(
               filtered.end(),
               [&](const Phase7ExecutionApplyArtifact& lhs, const Phase7ExecutionApplyArtifact& rhs) {
                   if (sortMode == "attention_desc") {
+                      const auto lhsRecovery = tape_phase7::summarizeExecutionApplyRecovery(lhs);
+                      const auto rhsRecovery = tape_phase7::summarizeExecutionApplyRecovery(rhs);
+                      if (lhsRecovery.staleRecoveryRequired != rhsRecovery.staleRecoveryRequired) {
+                          return lhsRecovery.staleRecoveryRequired && !rhsRecovery.staleRecoveryRequired;
+                      }
+                      if (lhsRecovery.recoveryRequired != rhsRecovery.recoveryRequired) {
+                          return lhsRecovery.recoveryRequired && !rhsRecovery.recoveryRequired;
+                      }
                       const int lhsRank = statusRank(lhs.applyStatus);
                       const int rhsRank = statusRank(rhs.applyStatus);
                       if (lhsRank != rhsRank) {

@@ -119,6 +119,7 @@ std::string DescribePhase7ExecutionLedgerArtifact(const tapescope::Phase7Executi
 
 std::string DescribePhase7ExecutionJournalArtifact(const tapescope::Phase7ExecutionJournalArtifact& artifact) {
     const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(artifact);
+    const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(artifact);
     const auto latestAudit = tape_phase7::latestExecutionJournalAuditSummary(artifact);
     std::ostringstream out;
     out << tape_phase7::executionJournalArtifactMarkdown(artifact);
@@ -132,7 +133,11 @@ std::string DescribePhase7ExecutionJournalArtifact(const tapescope::Phase7Execut
         << ", all_terminal=" << (executionSummary.allTerminal ? "true" : "false") << "\n";
     out << "Initiated by: " << artifact.initiatedBy
         << "\nExecution capability: " << artifact.executionCapability
-        << "\nJournal status: " << artifact.journalStatus << "\n";
+        << "\nJournal status: " << artifact.journalStatus
+        << "\nRuntime recovery: required=" << (recoverySummary.recoveryRequired ? "true" : "false")
+        << ", stale=" << (recoverySummary.staleRecoveryRequired ? "true" : "false")
+        << ", submitted_runtime_entries=" << recoverySummary.runtimeBackedSubmittedCount
+        << ", stale_runtime_entries=" << recoverySummary.staleRuntimeBackedCount << "\n";
     if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
         out << "Latest audit note: " << latestAudit.at("message").get<std::string>() << "\n";
     }
@@ -147,6 +152,7 @@ std::string DescribePhase7ExecutionJournalArtifact(const tapescope::Phase7Execut
 
 std::string DescribePhase7ExecutionApplyArtifact(const tapescope::Phase7ExecutionApplyArtifact& artifact) {
     const auto applySummary = tape_phase7::summarizeExecutionApplySummary(artifact);
+    const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(artifact);
     const auto latestAudit = tape_phase7::latestExecutionApplyAuditSummary(artifact);
     std::ostringstream out;
     out << tape_phase7::executionApplyArtifactMarkdown(artifact);
@@ -159,7 +165,11 @@ std::string DescribePhase7ExecutionApplyArtifact(const tapescope::Phase7Executio
         << ", all_terminal=" << (applySummary.allTerminal ? "true" : "false") << "\n";
     out << "Initiated by: " << artifact.initiatedBy
         << "\nExecution capability: " << artifact.executionCapability
-        << "\nApply status: " << artifact.applyStatus << "\n";
+        << "\nApply status: " << artifact.applyStatus
+        << "\nRuntime recovery: required=" << (recoverySummary.recoveryRequired ? "true" : "false")
+        << ", stale=" << (recoverySummary.staleRecoveryRequired ? "true" : "false")
+        << ", submitted_runtime_entries=" << recoverySummary.runtimeBackedSubmittedCount
+        << ", stale_runtime_entries=" << recoverySummary.staleRuntimeBackedCount << "\n";
     if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
         out << "Latest audit note: " << latestAudit.at("message").get<std::string>() << "\n";
     }
@@ -852,6 +862,20 @@ std::string SelectedPhase7JournalSort(NSPopUpButton* popup) {
     return "generated_at_desc";
 }
 
+std::string SelectedPhase7RecoveryFilter(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return {};
+    }
+    const std::string value = ToStdString(popup.titleOfSelectedItem);
+    if (value == "Needs Recovery") {
+        return "recovery_required";
+    }
+    if (value == "Stale Recovery") {
+        return "stale_recovery_required";
+    }
+    return {};
+}
+
 std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInventoryPayload& analyses,
                                           const tapescope::Phase7PlaybookInventoryPayload& playbooks,
                                           const tapescope::Phase7ExecutionLedgerInventoryPayload& ledgers,
@@ -877,7 +901,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     NSStackView* stack = paneWithStack.stack;
     NSView* pane = paneWithStack.view;
 
-    [stack addArrangedSubview:MakeIntroLabel(@"Phase 7 artifact inventory: reopen durable local analysis and playbook artifacts created from Phase 6 bundles, prepare review-only execution ledgers from guarded playbooks, then move through append-only execution journals and controlled apply artifacts once review thresholds are satisfied.",
+    [stack addArrangedSubview:MakeIntroLabel(@"Phase 7 artifact inventory: reopen durable local analysis and playbook artifacts created from Phase 6 bundles, prepare review-only execution ledgers from guarded playbooks, then move through append-only execution journals and controlled apply artifacts once review thresholds are satisfied. TapeScope can also start an isolated local runtime bridge for live journal dispatch and reconciliation.",
                                              2)];
 
     NSStackView* controls = MakeControlRow();
@@ -1061,10 +1085,50 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     [executionControls addArrangedSubview:_phase7RecordApplyButton];
     [stack addArrangedSubview:executionControls];
 
+    NSStackView* runtimeControls = MakeControlRow();
+    [runtimeControls addArrangedSubview:MakeLabel(@"runtime bridge",
+                                                  [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                  [NSColor secondaryLabelColor])];
+    _phase7RuntimeStartButton = [NSButton buttonWithTitle:@"Start Local Runtime"
+                                                   target:self
+                                                   action:@selector(startPhase7RuntimeHost:)];
+    [runtimeControls addArrangedSubview:_phase7RuntimeStartButton];
+    _phase7RuntimeStopButton = [NSButton buttonWithTitle:@"Stop Runtime"
+                                                  target:self
+                                                  action:@selector(stopPhase7RuntimeHost:)];
+    _phase7RuntimeStopButton.enabled = NO;
+    [runtimeControls addArrangedSubview:_phase7RuntimeStopButton];
+    _phase7RuntimeDispatchButton = [NSButton buttonWithTitle:@"Runtime Dispatch"
+                                                      target:self
+                                                      action:@selector(dispatchSelectedPhase7JournalEntriesViaRuntime:)];
+    _phase7RuntimeDispatchButton.enabled = NO;
+    [runtimeControls addArrangedSubview:_phase7RuntimeDispatchButton];
+    _phase7RuntimeReconcileButton = [NSButton buttonWithTitle:@"Runtime Reconcile"
+                                                       target:self
+                                                       action:@selector(reconcileSelectedPhase7JournalEntriesViaRuntime:)];
+    _phase7RuntimeReconcileButton.enabled = NO;
+    [runtimeControls addArrangedSubview:_phase7RuntimeReconcileButton];
+    _phase7RuntimeSweepButton = [NSButton buttonWithTitle:@"Runtime Sweep"
+                                                   target:self
+                                                   action:@selector(sweepPhase7ExecutionArtifactsViaRuntime:)];
+    _phase7RuntimeSweepButton.enabled = NO;
+    [runtimeControls addArrangedSubview:_phase7RuntimeSweepButton];
+    _phase7RuntimeSyncApplyButton = [NSButton buttonWithTitle:@"Sync Apply From Journal"
+                                                       target:self
+                                                       action:@selector(syncSelectedPhase7ApplyFromJournal:)];
+    _phase7RuntimeSyncApplyButton.enabled = NO;
+    [runtimeControls addArrangedSubview:_phase7RuntimeSyncApplyButton];
+    [stack addArrangedSubview:runtimeControls];
+
     _phase7StateLabel = MakeLabel(@"No Phase 7 artifacts loaded yet.",
                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
                                   [NSColor secondaryLabelColor]);
     [stack addArrangedSubview:_phase7StateLabel];
+
+    _phase7RuntimeStatusLabel = MakeLabel(@"Local runtime bridge is stopped. Starting it uses a TapeScope-specific client id with controller and websocket disabled.",
+                                          [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                          TapeInkMutedColor());
+    [stack addArrangedSubview:_phase7RuntimeStatusLabel];
 
     NSStackView* analysisFilters = MakeControlRow();
     [analysisFilters addArrangedSubview:MakeLabel(@"analysis filters",
@@ -1134,10 +1198,28 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                                                           @"execution_failed",
                                                           @"execution_cancelled"]];
     [journalFilters addArrangedSubview:_phase7JournalStatusFilterPopup];
+    _phase7JournalRecoveryFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24)
+                                                                  pullsDown:NO];
+    [_phase7JournalRecoveryFilterPopup addItemsWithTitles:@[@"All Recovery",
+                                                            @"Needs Recovery",
+                                                            @"Stale Recovery"]];
+    [journalFilters addArrangedSubview:_phase7JournalRecoveryFilterPopup];
     _phase7JournalSortPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24) pullsDown:NO];
     [_phase7JournalSortPopup addItemsWithTitles:@[@"Newest First", @"Needs Attention", @"Source Artifact"]];
     [journalFilters addArrangedSubview:_phase7JournalSortPopup];
     [stack addArrangedSubview:journalFilters];
+
+    NSStackView* applyFilters = MakeControlRow();
+    [applyFilters addArrangedSubview:MakeLabel(@"apply filters",
+                                               [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                               [NSColor secondaryLabelColor])];
+    _phase7ApplyRecoveryFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24)
+                                                                pullsDown:NO];
+    [_phase7ApplyRecoveryFilterPopup addItemsWithTitles:@[@"All Recovery",
+                                                          @"Needs Recovery",
+                                                          @"Stale Recovery"]];
+    [applyFilters addArrangedSubview:_phase7ApplyRecoveryFilterPopup];
+    [stack addArrangedSubview:applyFilters];
 
     [stack addArrangedSubview:MakeSectionLabel(@"Analyzer Profiles")];
 
@@ -1271,6 +1353,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     journalSelection.analysisArtifactId = playbookSelection.analysisArtifactId;
     journalSelection.sourceArtifactId = playbookSelection.sourceArtifactId;
     journalSelection.journalStatus = SelectedPhase7JournalStatusFilter(_phase7JournalStatusFilterPopup);
+    journalSelection.recoveryState = SelectedPhase7RecoveryFilter(_phase7JournalRecoveryFilterPopup);
     journalSelection.sortBy = SelectedPhase7JournalSort(_phase7JournalSortPopup);
     journalSelection.limit = 20;
 
@@ -1280,6 +1363,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     applySelection.playbookArtifactId.clear();
     applySelection.analysisArtifactId = playbookSelection.analysisArtifactId;
     applySelection.sourceArtifactId = playbookSelection.sourceArtifactId;
+    applySelection.recoveryState = SelectedPhase7RecoveryFilter(_phase7ApplyRecoveryFilterPopup);
     applySelection.sortBy = "generated_at_desc";
     applySelection.limit = 20;
 
@@ -1303,6 +1387,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7DispatchJournalButton.enabled = NO;
     _phase7RecordExecutionButton.enabled = NO;
     _phase7RecordApplyButton.enabled = NO;
+    [self updatePhase7RuntimeControls];
     _phase7StateLabel.stringValue = @"Refreshing Phase 7 artifact inventory…";
     _phase7StateLabel.textColor = [NSColor systemOrangeColor];
     _phase7TextView.string = @"Refreshing durable Phase 7 analyses, playbooks, ledgers, journals, and controlled apply artifacts…";
@@ -1447,7 +1532,9 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                          playbookSelection.mode.empty() &&
                          ledgerSelection.ledgerStatus.empty() &&
                          journalSelection.ledgerArtifactId.empty() &&
-                         journalSelection.journalStatus.empty())
+                         journalSelection.journalStatus.empty() &&
+                         journalSelection.recoveryState.empty() &&
+                         applySelection.recoveryState.empty())
                             ? @"No Phase 7 analysis, playbook, ledger, execution-journal, or controlled-apply artifacts are available yet."
                             : @"Phase 7 filters matched no analysis, playbook, ledger, execution-journal, or controlled-apply artifacts.";
                     innerSelf->_phase7StateLabel.textColor = TapeInkMutedColor();
@@ -1474,7 +1561,9 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     [_phase7LedgerSortPopup selectItemWithTitle:@"Newest First"];
     _phase7JournalLedgerFilterField.stringValue = @"";
     [_phase7JournalStatusFilterPopup selectItemWithTitle:@"All Journals"];
+    [_phase7JournalRecoveryFilterPopup selectItemWithTitle:@"All Recovery"];
     [_phase7JournalSortPopup selectItemWithTitle:@"Newest First"];
+    [_phase7ApplyRecoveryFilterPopup selectItemWithTitle:@"All Recovery"];
     [self refreshPhase7Artifacts:nil];
 }
 
@@ -1552,6 +1641,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         _phase7DispatchJournalButton.enabled = NO;
         _phase7RecordExecutionButton.enabled = NO;
         _phase7RecordApplyButton.enabled = NO;
+        [self updatePhase7RuntimeControls];
         [_phase7FindingTableView reloadData];
         [_phase7ActionTableView reloadData];
         NSIndexSet* findingSelection = IndexSetForPhase7FindingIds(selectedFindingIds, _phase7VisibleFindings);
@@ -1612,6 +1702,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         _phase7DispatchJournalButton.enabled = NO;
         _phase7RecordExecutionButton.enabled = NO;
         _phase7RecordApplyButton.enabled = NO;
+        [self updatePhase7RuntimeControls];
         [_phase7FindingTableView reloadData];
         [_phase7ActionTableView reloadData];
         [_phase7FindingTableView deselectAll:nil];
@@ -1673,6 +1764,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         _phase7DispatchJournalButton.enabled = NO;
         _phase7RecordExecutionButton.enabled = NO;
         _phase7RecordApplyButton.enabled = NO;
+        [self updatePhase7RuntimeControls];
         _phase7TextView.string = ToNSString(_phase7DetailBody + "\n\n" +
                                             DescribeSelectedPhase7LedgerEntries(_phase7VisibleLedgerEntries,
                                                                                _phase7ActionTableView.selectedRowIndexes));
@@ -1739,6 +1831,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
             !SelectedPhase7QueuedJournalEntryIds(_phase7ActionTableView, _phase7VisibleJournalEntries).empty();
         _phase7RecordExecutionButton.enabled = (_phase7ActionTableView.selectedRowIndexes.count > 0);
         _phase7RecordApplyButton.enabled = NO;
+        [self updatePhase7RuntimeControls];
         _phase7TextView.string = ToNSString(_phase7DetailBody + "\n\n" +
                                             DescribeSelectedPhase7JournalEntries(_phase7VisibleJournalEntries,
                                                                                 _phase7ActionTableView.selectedRowIndexes));
@@ -1781,6 +1874,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         _phase7RecordReviewButton.enabled = NO;
         _phase7DispatchJournalButton.enabled = NO;
         _phase7RecordExecutionButton.enabled = NO;
+        [self updatePhase7RuntimeControls];
         [_phase7FindingTableView reloadData];
         [_phase7ActionTableView reloadData];
         [_phase7FindingTableView deselectAll:nil];
@@ -1818,6 +1912,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7DispatchJournalButton.enabled = NO;
     _phase7RecordExecutionButton.enabled = NO;
     _phase7RecordApplyButton.enabled = NO;
+    [self updatePhase7RuntimeControls];
     [_phase7FindingTableView reloadData];
     [_phase7ActionTableView reloadData];
     _phase7TextView.string = ToNSString(_phase7DetailBody);

@@ -7,6 +7,7 @@
 #include "tape_engine_client.h"
 #include "tape_engine_protocol.h"
 #include "tape_phase7_artifacts.h"
+#include "tape_phase7_runtime_bridge.h"
 
 #include <algorithm>
 #include <array>
@@ -966,6 +967,99 @@ json projectPhase7ExecutionJournalSummary(const json& summary) {
     };
 }
 
+json projectPhase7ExecutionRecoverySummary(const json& summary) {
+    if (!summary.is_object()) {
+        return json::object();
+    }
+    return {
+        {"runtime_backed_submitted_count", summary.value("runtime_backed_submitted_count", 0ULL)},
+        {"stale_runtime_backed_count", summary.value("stale_runtime_backed_count", 0ULL)},
+        {"recovery_required", summary.value("recovery_required", false)},
+        {"stale_recovery_required", summary.value("stale_recovery_required", false)}
+    };
+}
+
+json projectPhase7LatestExecutionResultSummary(const json& summary) {
+    if (!summary.is_object()) {
+        return nullptr;
+    }
+    const json executionResultSummary = summary.value("execution_result_summary", json::object());
+    const json brokerIdentity = executionResultSummary.value("broker_identity", json::object());
+    const json tradeTrace = executionResultSummary.value("trade_trace", json::object());
+    return {
+        {"entry_id_present", !stringValueOrEmpty(summary, "entry_id").empty()},
+        {"execution_status", stringValueOrNull(summary, "execution_status")},
+        {"terminal", summary.contains("terminal") ? summary.at("terminal") : json(nullptr)},
+        {"attempt_count", summary.contains("attempt_count") ? summary.at("attempt_count") : json(nullptr)},
+        {"result", {
+            {"resolution", stringValueOrNull(executionResultSummary, "resolution")},
+            {"fill_state", stringValueOrNull(executionResultSummary, "fill_state")},
+            {"restart_resume_policy", stringValueOrNull(executionResultSummary, "restart_resume_policy")},
+            {"restart_recovery_state", stringValueOrNull(executionResultSummary, "restart_recovery_state")},
+            {"restart_recovery_reason", stringValueOrNull(executionResultSummary, "restart_recovery_reason")},
+            {"partial_fill_before_terminal", executionResultSummary.value("partial_fill_before_terminal", false)},
+            {"cancel_ack_pending", executionResultSummary.contains("cancel_ack_pending")
+                                       ? executionResultSummary.at("cancel_ack_pending")
+                                       : json(nullptr)},
+            {"manual_review_required", executionResultSummary.value("manual_review_required", false)},
+            {"broker_status_detail", stringValueOrNull(executionResultSummary, "broker_status_detail")},
+            {"latest_exec_id", stringValueOrNull(executionResultSummary, "latest_exec_id")},
+            {"broker_identity", {
+                {"order_id", brokerIdentity.value("order_id", json(nullptr))},
+                {"trace_id", brokerIdentity.value("trace_id", json(nullptr))},
+                {"perm_id", brokerIdentity.value("perm_id", json(nullptr))},
+                {"latest_exec_id", brokerIdentity.value("latest_exec_id", json(nullptr))},
+                {"exec_id_count", brokerIdentity.value("exec_id_count", 0ULL)}
+            }},
+            {"trade_trace", {
+                {"trace_found", tradeTrace.value("trace_found", false)},
+                {"trace_id", tradeTrace.value("trace_id", json(nullptr))},
+                {"perm_id", tradeTrace.value("perm_id", json(nullptr))},
+                {"fill_count", tradeTrace.value("fill_count", 0ULL)},
+                {"latest_status", tradeTrace.value("latest_status", json(nullptr))},
+                {"terminal_status", tradeTrace.value("terminal_status", json(nullptr))}
+            }}
+        }}
+    };
+}
+
+json projectPhase7ExecutionPolicy(const json& policy) {
+    if (!policy.is_object()) {
+        return json::object();
+    }
+    json projection{
+        {"actor_required", policy.value("actor_required", false)},
+        {"apply_supported", policy.value("apply_supported", false)},
+        {"capability_required", stringValueOrNull(policy, "capability_required")},
+        {"comment_required_statuses", policy.value("comment_required_statuses", json::array())},
+        {"execution_state", {
+            {"aggregate_status", stringValueOrNull(policy.value("execution_state", json::object()), "aggregate_status")},
+            {"all_terminal", policy.value("execution_state", json::object()).value("all_terminal", false)},
+            {"cancelled_count", policy.value("execution_state", json::object()).value("cancelled_count", 0ULL)},
+            {"failed_count", policy.value("execution_state", json::object()).value("failed_count", 0ULL)},
+            {"queued_count", policy.value("execution_state", json::object()).value("queued_count", 0ULL)},
+            {"submitted_count", policy.value("execution_state", json::object()).value("submitted_count", 0ULL)},
+            {"succeeded_count", policy.value("execution_state", json::object()).value("succeeded_count", 0ULL)}
+        }},
+        {"idempotency_scope", stringValueOrNull(policy, "idempotency_scope")},
+        {"lifecycle_states", policy.value("lifecycle_states", json::array())},
+        {"start_requires_ready_ledger", policy.value("start_requires_ready_ledger", false)},
+        {"terminal_statuses", policy.value("terminal_statuses", json::array())}
+    };
+    if (policy.contains("apply_state") && policy.at("apply_state").is_object()) {
+        projection["apply_state"] = {
+            {"aggregate_status", stringValueOrNull(policy.at("apply_state"), "aggregate_status")},
+            {"all_terminal", policy.at("apply_state").value("all_terminal", false)},
+            {"cancelled_count", policy.at("apply_state").value("cancelled_count", 0ULL)},
+            {"failed_count", policy.at("apply_state").value("failed_count", 0ULL)},
+            {"queued_count", policy.at("apply_state").value("queued_count", 0ULL)},
+            {"submitted_count", policy.at("apply_state").value("submitted_count", 0ULL)},
+            {"succeeded_count", policy.at("apply_state").value("succeeded_count", 0ULL)}
+        };
+    }
+    return projection;
+}
+
 json projectPhase7ExecutionJournalAuditSummary(const json& event) {
     if (!event.is_object()) {
         return json::object();
@@ -1049,10 +1143,11 @@ json projectPhase7ExecutionJournalResult(const json& result) {
         {"initiated_by", stringValueOrNull(result, "initiated_by")},
         {"execution_capability", stringValueOrNull(result, "execution_capability")},
         {"journal_status", stringValueOrEmpty(result, "journal_status")},
-        {"execution_policy", result.value("execution_policy", json::object())},
+        {"execution_policy", projectPhase7ExecutionPolicy(result.value("execution_policy", json::object()))},
         {"filtered_finding_ids", result.value("filtered_finding_ids", json::array())},
         {"entry_count", result.value("entry_count", 0ULL)},
         {"execution_summary", projectPhase7ExecutionJournalSummary(result.value("execution_summary", json::object()))},
+        {"runtime_recovery_summary", projectPhase7ExecutionRecoverySummary(result.value("runtime_recovery_summary", json::object()))},
         {"latest_audit_event", projectPhase7ExecutionJournalAuditSummary(result.value("latest_audit_event", json::object()))},
         {"entries", projectPhase7ExecutionJournalEntries(result.value("entries", json::array()))},
         {"audit_trail", std::move(auditTrail)},
@@ -1084,6 +1179,7 @@ json projectPhase7ExecutionJournalInventoryResult(const json& result) {
             {"journal_status", stringValueOrEmpty(row, "journal_status")},
             {"entry_count", row.value("entry_count", 0ULL)},
             {"execution_summary", projectPhase7ExecutionJournalSummary(row.value("execution_summary", json::object()))},
+            {"runtime_recovery_summary", projectPhase7ExecutionRecoverySummary(row.value("runtime_recovery_summary", json::object()))},
             {"latest_audit_event", projectPhase7ExecutionJournalAuditSummary(row.value("latest_audit_event", json::object()))},
             {"replay_context", projectPhase7ReplayContext(row.value("replay_context", json::object()))}
         });
@@ -1125,6 +1221,9 @@ json projectPhase7ExecutionJournalInventoryResult(const json& result) {
             }()},
             {"journal_status", result.value("applied_filters", json::object()).contains("journal_status")
                                    ? result.value("applied_filters", json::object()).at("journal_status")
+                                   : json(nullptr)},
+            {"recovery_state", result.value("applied_filters", json::object()).contains("recovery_state")
+                                   ? result.value("applied_filters", json::object()).at("recovery_state")
                                    : json(nullptr)},
             {"sort_by", result.value("applied_filters", json::object()).contains("sort_by")
                             ? result.value("applied_filters", json::object()).at("sort_by")
@@ -1222,10 +1321,11 @@ json projectPhase7ExecutionApplyResult(const json& result) {
         {"initiated_by", stringValueOrNull(result, "initiated_by")},
         {"execution_capability", stringValueOrNull(result, "execution_capability")},
         {"apply_status", stringValueOrEmpty(result, "apply_status")},
-        {"execution_policy", result.value("execution_policy", json::object())},
+        {"execution_policy", projectPhase7ExecutionPolicy(result.value("execution_policy", json::object()))},
         {"filtered_finding_ids", result.value("filtered_finding_ids", json::array())},
         {"entry_count", result.value("entry_count", 0ULL)},
         {"execution_summary", projectPhase7ExecutionJournalSummary(result.value("execution_summary", json::object()))},
+        {"runtime_recovery_summary", projectPhase7ExecutionRecoverySummary(result.value("runtime_recovery_summary", json::object()))},
         {"latest_audit_event", projectPhase7ExecutionApplyAuditSummary(result.value("latest_audit_event", json::object()))},
         {"entries", projectPhase7ExecutionApplyEntries(result.value("entries", json::array()))},
         {"audit_trail", std::move(auditTrail)},
@@ -1258,6 +1358,7 @@ json projectPhase7ExecutionApplyInventoryResult(const json& result) {
             {"apply_status", stringValueOrEmpty(row, "apply_status")},
             {"entry_count", row.value("entry_count", 0ULL)},
             {"execution_summary", projectPhase7ExecutionJournalSummary(row.value("execution_summary", json::object()))},
+            {"runtime_recovery_summary", projectPhase7ExecutionRecoverySummary(row.value("runtime_recovery_summary", json::object()))},
             {"latest_audit_event", projectPhase7ExecutionApplyAuditSummary(row.value("latest_audit_event", json::object()))},
             {"replay_context", projectPhase7ReplayContext(row.value("replay_context", json::object()))}
         });
@@ -1307,6 +1408,9 @@ json projectPhase7ExecutionApplyInventoryResult(const json& result) {
             {"apply_status", result.value("applied_filters", json::object()).contains("apply_status")
                                  ? result.value("applied_filters", json::object()).at("apply_status")
                                  : json(nullptr)},
+            {"recovery_state", result.value("applied_filters", json::object()).contains("recovery_state")
+                                   ? result.value("applied_filters", json::object()).at("recovery_state")
+                                   : json(nullptr)},
             {"sort_by", result.value("applied_filters", json::object()).contains("sort_by")
                             ? result.value("applied_filters", json::object()).at("sort_by")
                             : json("generated_at_desc")},
@@ -3208,6 +3312,16 @@ void testTapeMcpPhase7Contracts() {
     })));
     expect(executionJournalInventoryEnvelope.value("ok", false),
            "phase7 list_execution_journals should return ok=true\nactual:\n" + executionJournalInventoryEnvelope.dump(2));
+    const json recoveryExecutionJournalInventoryEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_list_execution_journals", json{
+            {"execution_ledger_artifact_id", dispatchLedgerArtifactId},
+            {"recovery_state", "recovery_required"},
+            {"sort_by", "attention_desc"},
+            {"limit", 10}
+        })));
+    expect(recoveryExecutionJournalInventoryEnvelope.value("ok", false),
+           "phase7 recovery list_execution_journals should return ok=true\nactual:\n" +
+               recoveryExecutionJournalInventoryEnvelope.dump(2));
     const json readExecutionJournalEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_read_execution_journal", json{
         {"execution_journal_artifact_id", executionJournalArtifactId}
     })));
@@ -3289,6 +3403,16 @@ void testTapeMcpPhase7Contracts() {
     })));
     expect(executionApplyInventoryEnvelope.value("ok", false),
            "phase7 list_execution_applies should return ok=true\nactual:\n" + executionApplyInventoryEnvelope.dump(2));
+    const json recoveryExecutionApplyInventoryEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_list_execution_applies", json{
+            {"execution_journal_artifact_id", dispatchJournalArtifactId},
+            {"recovery_state", "recovery_required"},
+            {"sort_by", "attention_desc"},
+            {"limit", 10}
+        })));
+    expect(recoveryExecutionApplyInventoryEnvelope.value("ok", false),
+           "phase7 recovery list_execution_applies should return ok=true\nactual:\n" +
+               recoveryExecutionApplyInventoryEnvelope.dump(2));
     const json readExecutionApplyEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_read_execution_apply", json{
         {"execution_apply_artifact_id", executionApplyArtifactId}
     })));
@@ -3341,6 +3465,10 @@ void testTapeMcpPhase7Contracts() {
                fixture.value("tapescript_list_execution_journals", json::object()),
            "phase7 list_execution_journals envelope should match golden fixture\nactual:\n" +
                executionJournalInventoryEnvelope.dump(2));
+    expect(recoveryExecutionJournalInventoryEnvelope ==
+               fixture.value("tapescript_list_execution_journals_recovery_required", json::object()),
+           "phase7 recovery list_execution_journals envelope should match golden fixture\nactual:\n" +
+               recoveryExecutionJournalInventoryEnvelope.dump(2));
     expect(readExecutionJournalEnvelope ==
                fixture.value("tapescript_read_execution_journal", json::object()),
            "phase7 read_execution_journal envelope should match golden fixture\nactual:\n" +
@@ -3385,6 +3513,10 @@ void testTapeMcpPhase7Contracts() {
                fixture.value("tapescript_list_execution_applies", json::object()),
            "phase7 list_execution_applies envelope should match golden fixture\nactual:\n" +
                executionApplyInventoryEnvelope.dump(2));
+    expect(recoveryExecutionApplyInventoryEnvelope ==
+               fixture.value("tapescript_list_execution_applies_recovery_required", json::object()),
+           "phase7 recovery list_execution_applies envelope should match golden fixture\nactual:\n" +
+               recoveryExecutionApplyInventoryEnvelope.dump(2));
     expect(readExecutionApplyEnvelope ==
                fixture.value("tapescript_read_execution_apply", json::object()),
            "phase7 read_execution_apply envelope should match golden fixture\nactual:\n" +
@@ -3417,6 +3549,268 @@ void testTapeMcpPhase7Contracts() {
                fixture.value("resource_read_phase7_execution_apply_markdown", json::object()),
            "phase7 execution apply markdown resource should match golden fixture\nactual:\n" +
                executionApplyMarkdownResource.dump(2));
+
+    auto phase7InventoryRowByArtifactId = [](const json& envelope,
+                                             const char* rowKey,
+                                             const char* artifactKey,
+                                             const std::string& artifactId) -> json {
+        const json rows = envelope.value("result", json::object()).value(rowKey, json::array());
+        for (const auto& row : rows) {
+            if (row.value(artifactKey, json::object()).value("artifact_id", std::string()) == artifactId) {
+                return row;
+            }
+        }
+        return json(nullptr);
+    };
+
+    std::string runtimeBridgeCode;
+    std::string runtimeBridgeMessage;
+    tape_phase7::ExecutionJournalArtifact runtimeBridgeJournal;
+    expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                     dispatchJournalArtifactId,
+                                                     &runtimeBridgeJournal,
+                                                     &runtimeBridgeCode,
+                                                     &runtimeBridgeMessage),
+           "phase7 runtime bridge should load the dispatch journal for focused MCP projection: " +
+               runtimeBridgeCode + " " + runtimeBridgeMessage);
+    expect(!runtimeBridgeJournal.entries.empty() &&
+               runtimeBridgeJournal.entries.front().executionRequest.value("requested_order_ids", json::array()).is_array() &&
+               !runtimeBridgeJournal.entries.front().executionRequest.value("requested_order_ids", json::array()).empty(),
+           "phase7 runtime bridge focused MCP projection should have a runtime-backed journal entry");
+    const std::string runtimeJournalEntryId = runtimeBridgeJournal.entries.front().journalEntryId;
+    expect(!runtimeJournalEntryId.empty(),
+           "phase7 runtime bridge focused MCP projection should expose a journal entry id");
+    const OrderId runtimeOrderId = static_cast<OrderId>(
+        runtimeBridgeJournal.entries.front().executionRequest.value("requested_order_ids", json::array()).front().get<long long>());
+    constexpr std::uint64_t runtimeTraceId = 97401;
+    constexpr long long runtimePermId = 57401;
+    {
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        auto& order = state.orders[runtimeOrderId];
+        order.orderId = runtimeOrderId;
+        order.symbol = "INTC";
+        order.side = "BUY";
+        order.account = "DU900001";
+        order.quantity = 30.0;
+        order.limitPrice = 46.11;
+        order.status = "Submitted";
+        order.filledQty = 10.0;
+        order.remainingQty = 20.0;
+        order.avgFillPrice = 46.11;
+        order.localState = LocalOrderState::PartiallyFilled;
+        order.seenExecIds.clear();
+        order.seenExecIds.insert("E-PHASE7-MCP-1");
+
+        TradeTrace trace;
+        trace.traceId = runtimeTraceId;
+        trace.orderId = runtimeOrderId;
+        trace.permId = runtimePermId;
+        trace.source = "phase7-mcp-runtime-bridge";
+        trace.symbol = order.symbol;
+        trace.side = order.side;
+        trace.account = order.account;
+        trace.requestedQty = static_cast<int>(order.quantity);
+        trace.limitPrice = order.limitPrice;
+        trace.latestStatus = "Submitted";
+        trace.terminalStatus.clear();
+        FillSlice firstFill;
+        firstFill.execId = "E-PHASE7-MCP-1";
+        firstFill.shares = 10;
+        firstFill.price = 46.11;
+        firstFill.cumQty = 10.0;
+        firstFill.avgPrice = 46.11;
+        firstFill.exchange = "SIM";
+        trace.fills.push_back(firstFill);
+        state.traces[trace.traceId] = trace;
+        state.traceRecency.push_back(trace.traceId);
+        state.latestTraceId = trace.traceId;
+        state.traceIdByOrderId[runtimeOrderId] = trace.traceId;
+        state.traceIdByPermId[runtimePermId] = trace.traceId;
+        state.traceIdByExecId[firstFill.execId] = trace.traceId;
+    }
+    publishSharedDataSnapshot();
+
+    tape_phase7::ExecutionJournalArtifact recoverableRuntimeJournal;
+    std::vector<std::string> recoverableRuntimeJournalEntryIds;
+    std::string recoverableRuntimeJournalAuditEventId;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   dispatchJournalArtifactId,
+                                                                   {runtimeJournalEntryId},
+                                                                   "mcp-runtime-bridge",
+                                                                   "Runtime recovered a live partial fill.",
+                                                                   &recoverableRuntimeJournal,
+                                                                   &recoverableRuntimeJournalEntryIds,
+                                                                   &recoverableRuntimeJournalAuditEventId,
+                                                                   &runtimeBridgeCode,
+                                                                   &runtimeBridgeMessage),
+           "phase7 runtime bridge partial-fill reconciliation for focused MCP projection should succeed: " +
+               runtimeBridgeCode + " " + runtimeBridgeMessage);
+
+    tape_phase7::ExecutionApplyArtifact recoverableRuntimeApply;
+    std::vector<std::string> recoverableRuntimeApplyEntryIds;
+    std::string recoverableRuntimeApplyAuditEventId;
+    expect(tape_phase7::synchronizeExecutionApplyFromJournal({},
+                                                             executionApplyArtifactId,
+                                                             "mcp-runtime-bridge",
+                                                             "Mirror the recoverable runtime reconciliation into apply.",
+                                                             &recoverableRuntimeApply,
+                                                             &recoverableRuntimeApplyEntryIds,
+                                                             &recoverableRuntimeApplyAuditEventId,
+                                                             &runtimeBridgeCode,
+                                                             &runtimeBridgeMessage),
+           "phase7 runtime bridge apply synchronization for focused MCP projection should succeed: " +
+               runtimeBridgeCode + " " + runtimeBridgeMessage);
+
+    const json runtimeRecoverableReadJournalRaw = envelopeFromToolResult(adapter.callTool("tapescript_read_execution_journal", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId}
+    }));
+    expect(runtimeRecoverableReadJournalRaw.value("ok", false),
+           "phase7 runtime bridge focused read_execution_journal should return ok=true");
+    const json runtimeRecoverableJournalInventoryRaw = envelopeFromToolResult(adapter.callTool("tapescript_list_execution_journals", json{
+        {"execution_ledger_artifact_id", dispatchLedgerArtifactId},
+        {"limit", 10}
+    }));
+    expect(runtimeRecoverableJournalInventoryRaw.value("ok", false),
+           "phase7 runtime bridge focused list_execution_journals should return ok=true");
+    const json runtimeRecoverableReadApplyRaw = envelopeFromToolResult(adapter.callTool("tapescript_read_execution_apply", json{
+        {"execution_apply_artifact_id", executionApplyArtifactId}
+    }));
+    expect(runtimeRecoverableReadApplyRaw.value("ok", false),
+           "phase7 runtime bridge focused read_execution_apply should return ok=true");
+    const json runtimeRecoverableApplyInventoryRaw = envelopeFromToolResult(adapter.callTool("tapescript_list_execution_applies", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId},
+        {"limit", 10}
+    }));
+    expect(runtimeRecoverableApplyInventoryRaw.value("ok", false),
+           "phase7 runtime bridge focused list_execution_applies should return ok=true");
+
+    {
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        auto& order = state.orders[runtimeOrderId];
+        order.status = "Filled";
+        order.filledQty = 30.0;
+        order.remainingQty = 0.0;
+        order.avgFillPrice = 46.15;
+        order.localState = LocalOrderState::Filled;
+        order.seenExecIds.insert("E-PHASE7-MCP-2");
+
+        auto traceIt = state.traces.find(runtimeTraceId);
+        expect(traceIt != state.traces.end(),
+               "phase7 runtime bridge focused MCP projection should keep the seeded trace available");
+        traceIt->second.latestStatus = "Filled";
+        traceIt->second.terminalStatus = "Filled";
+        FillSlice finalFill;
+        finalFill.execId = "E-PHASE7-MCP-2";
+        finalFill.shares = 20;
+        finalFill.price = 46.17;
+        finalFill.cumQty = 30.0;
+        finalFill.avgPrice = 46.15;
+        finalFill.exchange = "SIM";
+        traceIt->second.fills.push_back(finalFill);
+        state.traceIdByExecId[finalFill.execId] = runtimeTraceId;
+    }
+    publishSharedDataSnapshot();
+
+    tape_phase7::ExecutionJournalArtifact terminalRuntimeJournal;
+    std::vector<std::string> terminalRuntimeJournalEntryIds;
+    std::string terminalRuntimeJournalAuditEventId;
+    expect(tape_phase7::reconcileExecutionJournalEntriesViaRuntime(nullptr,
+                                                                   {},
+                                                                   dispatchJournalArtifactId,
+                                                                   {runtimeJournalEntryId},
+                                                                   "mcp-runtime-bridge",
+                                                                   "Runtime resolved the order as filled.",
+                                                                   &terminalRuntimeJournal,
+                                                                   &terminalRuntimeJournalEntryIds,
+                                                                   &terminalRuntimeJournalAuditEventId,
+                                                                   &runtimeBridgeCode,
+                                                                   &runtimeBridgeMessage),
+           "phase7 runtime bridge terminal reconciliation for focused MCP projection should succeed: " +
+               runtimeBridgeCode + " " + runtimeBridgeMessage);
+
+    tape_phase7::ExecutionApplyArtifact terminalRuntimeApply;
+    std::vector<std::string> terminalRuntimeApplyEntryIds;
+    std::string terminalRuntimeApplyAuditEventId;
+    expect(tape_phase7::synchronizeExecutionApplyFromJournal({},
+                                                             executionApplyArtifactId,
+                                                             "mcp-runtime-bridge",
+                                                             "Mirror the terminal runtime reconciliation into apply.",
+                                                             &terminalRuntimeApply,
+                                                             &terminalRuntimeApplyEntryIds,
+                                                             &terminalRuntimeApplyAuditEventId,
+                                                             &runtimeBridgeCode,
+                                                             &runtimeBridgeMessage),
+           "phase7 runtime bridge terminal apply synchronization for focused MCP projection should succeed: " +
+               runtimeBridgeCode + " " + runtimeBridgeMessage);
+
+    const json runtimeTerminalReadJournalRaw = envelopeFromToolResult(adapter.callTool("tapescript_read_execution_journal", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId}
+    }));
+    expect(runtimeTerminalReadJournalRaw.value("ok", false),
+           "phase7 runtime bridge focused terminal read_execution_journal should return ok=true");
+    const json runtimeTerminalJournalInventoryRaw = envelopeFromToolResult(adapter.callTool("tapescript_list_execution_journals", json{
+        {"execution_ledger_artifact_id", dispatchLedgerArtifactId},
+        {"limit", 10}
+    }));
+    expect(runtimeTerminalJournalInventoryRaw.value("ok", false),
+           "phase7 runtime bridge focused terminal list_execution_journals should return ok=true");
+    const json runtimeTerminalReadApplyRaw = envelopeFromToolResult(adapter.callTool("tapescript_read_execution_apply", json{
+        {"execution_apply_artifact_id", executionApplyArtifactId}
+    }));
+    expect(runtimeTerminalReadApplyRaw.value("ok", false),
+           "phase7 runtime bridge focused terminal read_execution_apply should return ok=true");
+    const json runtimeTerminalApplyInventoryRaw = envelopeFromToolResult(adapter.callTool("tapescript_list_execution_applies", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId},
+        {"limit", 10}
+    }));
+    expect(runtimeTerminalApplyInventoryRaw.value("ok", false),
+           "phase7 runtime bridge focused terminal list_execution_applies should return ok=true");
+
+    const json runtimeRecoverableJournalRow = phase7InventoryRowByArtifactId(
+        runtimeRecoverableJournalInventoryRaw, "execution_journals", "execution_journal", dispatchJournalArtifactId);
+    const json runtimeRecoverableApplyRow = phase7InventoryRowByArtifactId(
+        runtimeRecoverableApplyInventoryRaw, "execution_applies", "execution_apply", executionApplyArtifactId);
+    const json runtimeTerminalJournalRow = phase7InventoryRowByArtifactId(
+        runtimeTerminalJournalInventoryRaw, "execution_journals", "execution_journal", dispatchJournalArtifactId);
+    const json runtimeTerminalApplyRow = phase7InventoryRowByArtifactId(
+        runtimeTerminalApplyInventoryRaw, "execution_applies", "execution_apply", executionApplyArtifactId);
+    expect(runtimeRecoverableJournalRow.is_object() && runtimeRecoverableApplyRow.is_object() &&
+               runtimeTerminalJournalRow.is_object() && runtimeTerminalApplyRow.is_object(),
+           "phase7 runtime bridge focused MCP projection should find the dispatch journal/apply rows in inventory results");
+
+    const json runtimeProjection = {
+        {"read_execution_journal_recoverable",
+         projectPhase7LatestExecutionResultSummary(
+             runtimeRecoverableReadJournalRaw.value("result", json::object()).value("latest_execution_result_summary", json(nullptr)))},
+        {"list_execution_journals_recoverable",
+         projectPhase7LatestExecutionResultSummary(
+             runtimeRecoverableJournalRow.value("latest_execution_result_summary", json(nullptr)))},
+        {"read_execution_apply_recoverable",
+         projectPhase7LatestExecutionResultSummary(
+             runtimeRecoverableReadApplyRaw.value("result", json::object()).value("latest_execution_result_summary", json(nullptr)))},
+        {"list_execution_applies_recoverable",
+         projectPhase7LatestExecutionResultSummary(
+             runtimeRecoverableApplyRow.value("latest_execution_result_summary", json(nullptr)))},
+        {"read_execution_journal_terminal",
+         projectPhase7LatestExecutionResultSummary(
+             runtimeTerminalReadJournalRaw.value("result", json::object()).value("latest_execution_result_summary", json(nullptr)))},
+        {"list_execution_journals_terminal",
+         projectPhase7LatestExecutionResultSummary(
+             runtimeTerminalJournalRow.value("latest_execution_result_summary", json(nullptr)))},
+        {"read_execution_apply_terminal",
+         projectPhase7LatestExecutionResultSummary(
+             runtimeTerminalReadApplyRaw.value("result", json::object()).value("latest_execution_result_summary", json(nullptr)))},
+        {"list_execution_applies_terminal",
+         projectPhase7LatestExecutionResultSummary(
+             runtimeTerminalApplyRow.value("latest_execution_result_summary", json(nullptr)))}
+    };
+    const json runtimeFixture = readJsonFixture("phase7_execution_runtime_mcp_contracts.json");
+    expect(runtimeProjection == runtimeFixture,
+           "phase7 runtime bridge MCP execution summary projection should match the focused golden fixture\nactual:\n" +
+               runtimeProjection.dump(2));
 
     server->stop();
 }

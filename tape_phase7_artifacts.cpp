@@ -78,6 +78,109 @@ std::string utcTimestampIso8601Now() {
     return out.str();
 }
 
+std::optional<std::chrono::system_clock::time_point> parseUtcTimestampIso8601(std::string_view text) {
+    std::size_t begin = 0;
+    while (begin < text.size() && static_cast<unsigned char>(text[begin]) <= 0x20) {
+        ++begin;
+    }
+    std::size_t end = text.size();
+    while (end > begin && static_cast<unsigned char>(text[end - 1]) <= 0x20) {
+        --end;
+    }
+    const std::string trimmed(text.substr(begin, end - begin));
+    if (trimmed.empty()) {
+        return std::nullopt;
+    }
+
+    std::tm tm{};
+    std::istringstream input(trimmed);
+    input >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    if (input.fail()) {
+        return std::nullopt;
+    }
+
+    int millis = 0;
+    if (input.peek() == '.') {
+        input.get();
+        std::string digits;
+        while (std::isdigit(input.peek())) {
+            digits.push_back(static_cast<char>(input.get()));
+        }
+        while (digits.size() < 3) {
+            digits.push_back('0');
+        }
+        if (!digits.empty()) {
+            millis = std::stoi(digits.substr(0, 3));
+        }
+    }
+    if (input.peek() == 'Z') {
+        input.get();
+    }
+    if (input.peek() != std::char_traits<char>::eof()) {
+        return std::nullopt;
+    }
+
+#if defined(_WIN32)
+    const std::time_t seconds = _mkgmtime(&tm);
+#else
+    const std::time_t seconds = timegm(&tm);
+#endif
+    if (seconds < 0) {
+        return std::nullopt;
+    }
+    return std::chrono::system_clock::from_time_t(seconds) + std::chrono::milliseconds(millis);
+}
+
+std::optional<std::chrono::system_clock::time_point> executionEntryTimestamp(const ExecutionJournalEntry& entry) {
+    if (const auto parsed = parseUtcTimestampIso8601(entry.lastUpdatedAtUtc)) {
+        return parsed;
+    }
+    if (const auto parsed = parseUtcTimestampIso8601(entry.startedAtUtc)) {
+        return parsed;
+    }
+    if (const auto parsed = parseUtcTimestampIso8601(entry.queuedAtUtc)) {
+        return parsed;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::chrono::system_clock::time_point> executionEntryTimestamp(const ExecutionApplyEntry& entry) {
+    if (const auto parsed = parseUtcTimestampIso8601(entry.lastUpdatedAtUtc)) {
+        return parsed;
+    }
+    if (const auto parsed = parseUtcTimestampIso8601(entry.submittedAtUtc)) {
+        return parsed;
+    }
+    return std::nullopt;
+}
+
+bool isRuntimeReconciliationRequest(const json& executionRequest) {
+    return executionRequest.is_object() &&
+        normalizeToken(executionRequest.value("operation", std::string())) ==
+            normalizeToken("request_order_reconciliation");
+}
+
+template <typename Entry>
+ExecutionRecoverySummary summarizeExecutionRecoveryEntries(const std::vector<Entry>& entries) {
+    constexpr auto kRuntimeRecoveryGracePeriod = std::chrono::seconds(30);
+    const auto now = std::chrono::system_clock::now();
+
+    ExecutionRecoverySummary summary;
+    for (const auto& entry : entries) {
+        if (entry.executionStatus != kExecutionEntryStatusSubmitted || !isRuntimeReconciliationRequest(entry.executionRequest)) {
+            continue;
+        }
+        ++summary.runtimeBackedSubmittedCount;
+        const auto timestamp = executionEntryTimestamp(entry);
+        if (timestamp.has_value() && now - *timestamp >= kRuntimeRecoveryGracePeriod) {
+            ++summary.staleRuntimeBackedCount;
+        }
+    }
+    summary.recoveryRequired = summary.runtimeBackedSubmittedCount > 0;
+    summary.staleRecoveryRequired = summary.staleRuntimeBackedCount > 0;
+    return summary;
+}
+
 fs::path phase7RootDir() {
     fs::path basePath;
     if (const char* overridePath = std::getenv("TWS_GUI_DATA_DIR");
@@ -1096,6 +1199,7 @@ bool parsePlaybookAction(const json& payload, PlaybookAction* out) {
     out->title = payload.value("title", std::string());
     out->summary = payload.value("summary", std::string());
     out->suggestedTools = payload.value("suggested_tools", json::array());
+    out->executionRequest = payload.value("execution_request", json::object());
     return !out->actionId.empty() && !out->actionType.empty() && !out->findingId.empty();
 }
 
@@ -1322,6 +1426,50 @@ json playbookActionTools(std::string_view analysisProfile, std::string_view cate
     return json::array({"tapescript_read_artifact", "tapescript_read_session_overview"});
 }
 
+bool actionTypeSupportsRuntimeReconciliation(std::string_view actionType) {
+    const std::string normalized = normalizeToken(actionType);
+    return normalized == normalizeToken("phase7.review_fill_quality.v1") ||
+        normalized == normalizeToken("phase7.review_fill_context_before_adverse_selection.v1") ||
+        normalized == normalizeToken("phase7.review_fill_context_before_order_impact.v1") ||
+        normalized == normalizeToken("phase7.review_post_fill_adverse_selection.v1") ||
+        normalized == normalizeToken("phase7.review_adverse_selection.v1") ||
+        normalized == normalizeToken("phase7.review_order_impact_footprint.v1") ||
+        normalized == normalizeToken("phase7.review_market_impact.v1");
+}
+
+long long positiveOrderIdFromTraceAnchor(const json& traceAnchor) {
+    if (!traceAnchor.is_object() || !traceAnchor.contains("order_id")) {
+        return 0;
+    }
+    const json& value = traceAnchor.at("order_id");
+    if (value.is_number_integer()) {
+        const auto parsed = value.get<long long>();
+        return parsed > 0 ? parsed : 0;
+    }
+    if (value.is_number_unsigned()) {
+        const auto parsed = value.get<unsigned long long>();
+        return parsed > 0 ? static_cast<long long>(parsed) : 0;
+    }
+    return 0;
+}
+
+json executionRequestForAction(const AnalysisArtifact& analysis, const PlaybookAction& action) {
+    const json traceAnchor = analysis.replayContext.value("trace_anchor", json::object());
+    if (!actionTypeSupportsRuntimeReconciliation(action.actionType) ||
+        positiveOrderIdFromTraceAnchor(traceAnchor) <= 0) {
+        return json::object();
+    }
+
+    return {
+        {"operation", "request_order_reconciliation"},
+        {"executor", "trading_runtime"},
+        {"execution_capability", "phase7.execution_operator.v1"},
+        {"reason", action.actionType},
+        {"anchor", traceAnchor},
+        {"requested_order_ids", json::array({positiveOrderIdFromTraceAnchor(traceAnchor)})}
+    };
+}
+
 PlaybookAction playbookActionForFinding(const AnalysisArtifact& analysis, const FindingRecord& finding) {
     PlaybookAction action;
     if (finding.category == "trace_integrity") {
@@ -1387,6 +1535,7 @@ PlaybookAction playbookActionForFinding(const AnalysisArtifact& analysis, const 
     action.suggestedTools = playbookActionTools(analysis.analysisProfile, finding.category);
     action.actionId = "phase7-action-" + fnv1aHex(
         analysis.analysisArtifact.artifactId + "|" + finding.findingId + "|" + action.actionType);
+    action.executionRequest = executionRequestForAction(analysis, action);
     return action;
 }
 
@@ -1794,6 +1943,7 @@ void annotateExecutionJournalState(ExecutionJournalArtifact* artifact) {
     }
     artifact->journalStatus = summarizeExecutionJournalStatus(artifact->entries);
     const auto summary = summarizeExecutionJournalSummaryEntries(artifact->entries, artifact->journalStatus);
+    const auto recovery = summarizeExecutionRecoveryEntries(artifact->entries);
     artifact->executionPolicy["execution_state"] = {
         {"aggregate_status", artifact->journalStatus},
         {"all_terminal", summary.allTerminal},
@@ -1803,6 +1953,11 @@ void annotateExecutionJournalState(ExecutionJournalArtifact* artifact) {
         {"failed_count", summary.failedCount},
         {"cancelled_count", summary.cancelledCount}
     };
+    artifact->executionPolicy["runtime_recovery_state"] = executionRecoverySummaryToJson(recovery);
+}
+
+void annotateExecutionJournalArtifact(ExecutionJournalArtifact* artifact) {
+    annotateExecutionJournalState(artifact);
 }
 
 ExecutionJournalEntry executionJournalEntryForLedgerEntry(const ExecutionLedgerArtifact& ledger,
@@ -1827,6 +1982,8 @@ ExecutionJournalEntry executionJournalEntryForLedgerEntry(const ExecutionLedgerA
     journalEntry.lastUpdatedBy = actor;
     journalEntry.executionComment = "Queued from a review-approved execution ledger entry.";
     journalEntry.suggestedTools = entry.suggestedTools;
+    journalEntry.executionRequest = entry.executionRequest;
+    journalEntry.executionResult = json::object();
     journalEntry.attemptCount = 0;
     journalEntry.terminal = false;
     return journalEntry;
@@ -1934,6 +2091,8 @@ void synchronizeExecutionApplyEntriesFromJournal(ExecutionApplyArtifact* artifac
         entry.attemptCount = it->attemptCount;
         entry.terminal = it->terminal;
         entry.suggestedTools = it->suggestedTools;
+        entry.executionRequest = it->executionRequest;
+        entry.executionResult = it->executionResult;
     }
 }
 
@@ -1964,6 +2123,8 @@ ExecutionApplyEntry executionApplyEntryForJournalEntry(const ExecutionApplyArtif
     entry.attemptCount = journalEntry.attemptCount;
     entry.terminal = journalEntry.terminal;
     entry.suggestedTools = journalEntry.suggestedTools;
+    entry.executionRequest = journalEntry.executionRequest;
+    entry.executionResult = journalEntry.executionResult;
     return entry;
 }
 
@@ -2002,6 +2163,7 @@ void annotateExecutionApplyState(ExecutionApplyArtifact* artifact) {
             return mirrored;
         }(),
         artifact->applyStatus);
+    const auto recovery = summarizeExecutionRecoveryEntries(artifact->entries);
     artifact->executionPolicy["apply_state"] = {
         {"aggregate_status", artifact->applyStatus},
         {"all_terminal", summary.allTerminal},
@@ -2011,6 +2173,16 @@ void annotateExecutionApplyState(ExecutionApplyArtifact* artifact) {
         {"cancelled_count", summary.cancelledCount},
         {"queued_count", summary.queuedCount}
     };
+    artifact->executionPolicy["runtime_recovery_state"] = executionRecoverySummaryToJson(recovery);
+}
+
+void annotateExecutionApplyArtifact(ExecutionApplyArtifact* artifact) {
+    annotateExecutionApplyState(artifact);
+}
+
+void synchronizeExecutionApplyArtifactFromJournal(ExecutionApplyArtifact* artifact,
+                                                  const ExecutionJournalArtifact& journal) {
+    synchronizeExecutionApplyEntriesFromJournal(artifact, journal);
 }
 
 json auditTrailForExecutionApplyCreation(const ExecutionJournalArtifact& journal,
@@ -2103,6 +2275,7 @@ ExecutionLedgerEntry executionLedgerEntryForAction(const PlaybookArtifact& playb
     entry.approvalReviewerCount = 0;
     entry.approvalThresholdMet = false;
     entry.suggestedTools = action.suggestedTools;
+    entry.executionRequest = action.executionRequest;
     return entry;
 }
 
@@ -2213,6 +2386,7 @@ bool parseExecutionLedgerEntry(const json& payload, ExecutionLedgerEntry* out) {
         ? payload.at("review_comment").get<std::string>()
         : std::string();
     out->suggestedTools = payload.value("suggested_tools", json::array());
+    out->executionRequest = payload.value("execution_request", json::object());
     return !out->entryId.empty() && !out->actionId.empty() && !out->actionType.empty();
 }
 
@@ -2289,6 +2463,8 @@ bool parseExecutionJournalEntry(const json& payload, ExecutionJournalEntry* out)
     }
     out->terminal = payload.value("terminal", isTerminalExecutionEntryStatus(out->executionStatus));
     out->suggestedTools = payload.value("suggested_tools", json::array());
+    out->executionRequest = payload.value("execution_request", json::object());
+    out->executionResult = payload.value("execution_result", json::object());
     return !out->journalEntryId.empty() && !out->ledgerEntryId.empty() && !out->actionId.empty() &&
         !out->actionType.empty() && !out->idempotencyKey.empty() &&
         isSupportedExecutionEntryStatus(out->executionStatus);
@@ -2337,6 +2513,8 @@ bool parseExecutionApplyEntry(const json& payload, ExecutionApplyEntry* out) {
     }
     out->terminal = payload.value("terminal", isTerminalExecutionEntryStatus(out->executionStatus));
     out->suggestedTools = payload.value("suggested_tools", json::array());
+    out->executionRequest = payload.value("execution_request", json::object());
+    out->executionResult = payload.value("execution_result", json::object());
     return !out->applyEntryId.empty() && !out->journalEntryId.empty() && !out->ledgerEntryId.empty() &&
         !out->actionId.empty() && !out->actionType.empty() && !out->idempotencyKey.empty() &&
         isSupportedExecutionEntryStatus(out->executionStatus);
@@ -2409,6 +2587,50 @@ json manifestForExecutionApply(const ExecutionApplyArtifact& apply) {
         {"entries", std::move(entries)},
         {"audit_trail", apply.auditTrail}
     };
+}
+
+bool persistExecutionJournalArtifact(const ExecutionJournalArtifact& artifact,
+                                     std::string* errorCode,
+                                     std::string* errorMessage) {
+    std::string writeError;
+    if (!writeJsonTextFile(artifact.journalArtifact.manifestPath, manifestForExecutionJournal(artifact), &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+bool persistExecutionApplyArtifact(const ExecutionApplyArtifact& artifact,
+                                   std::string* errorCode,
+                                   std::string* errorMessage) {
+    std::string writeError;
+    if (!writeJsonTextFile(artifact.applyArtifact.manifestPath, manifestForExecutionApply(artifact), &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
 }
 
 bool loadExecutionLedgerFromManifestJson(const json& manifest,
@@ -2584,6 +2806,7 @@ bool loadExecutionJournalFromManifestJson(const json& manifest,
 }
 
 bool loadExecutionApplyFromManifestJson(const json& manifest,
+                                        bool synchronizeFromJournal,
                                         ExecutionApplyArtifact* out,
                                         std::string* errorCode,
                                         std::string* errorMessage) {
@@ -2668,7 +2891,8 @@ bool loadExecutionApplyFromManifestJson(const json& manifest,
     annotateExecutionApplyState(&artifact);
 
     ExecutionJournalArtifact journal;
-    if (loadExecutionJournalArtifact(artifact.journalArtifact.manifestPath, {}, &journal, nullptr, nullptr)) {
+    if (synchronizeFromJournal &&
+        loadExecutionJournalArtifact(artifact.journalArtifact.manifestPath, {}, &journal, nullptr, nullptr)) {
         synchronizeExecutionApplyEntriesFromJournal(&artifact, journal);
         annotateExecutionApplyState(&artifact);
         artifact.manifest = manifestForExecutionApply(artifact);
@@ -2735,6 +2959,7 @@ bool loadExecutionJournalFromPath(const fs::path& manifestPath,
 }
 
 bool loadExecutionApplyFromPath(const fs::path& manifestPath,
+                                bool synchronizeFromJournal,
                                 ExecutionApplyArtifact* out,
                                 std::string* errorCode,
                                 std::string* errorMessage) {
@@ -2758,10 +2983,76 @@ bool loadExecutionApplyFromPath(const fs::path& manifestPath,
         }
         return false;
     }
-    return loadExecutionApplyFromManifestJson(manifest, out, errorCode, errorMessage);
+    return loadExecutionApplyFromManifestJson(manifest, synchronizeFromJournal, out, errorCode, errorMessage);
 }
 
 } // namespace
+
+void annotateExecutionJournalArtifact(ExecutionJournalArtifact* artifact) {
+    if (artifact == nullptr) {
+        return;
+    }
+    annotateExecutionJournalState(artifact);
+}
+
+void annotateExecutionApplyArtifact(ExecutionApplyArtifact* artifact) {
+    if (artifact == nullptr) {
+        return;
+    }
+    annotateExecutionApplyState(artifact);
+}
+
+void synchronizeExecutionApplyArtifactFromJournal(ExecutionApplyArtifact* artifact,
+                                                  const ExecutionJournalArtifact& journal) {
+    if (artifact == nullptr) {
+        return;
+    }
+    synchronizeExecutionApplyEntriesFromJournal(artifact, journal);
+}
+
+bool persistExecutionJournalArtifact(const ExecutionJournalArtifact& artifact,
+                                     std::string* errorCode,
+                                     std::string* errorMessage) {
+    std::string writeError;
+    if (!writeJsonTextFile(artifact.journalArtifact.manifestPath, manifestForExecutionJournal(artifact), &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+bool persistExecutionApplyArtifact(const ExecutionApplyArtifact& artifact,
+                                   std::string* errorCode,
+                                   std::string* errorMessage) {
+    std::string writeError;
+    if (!writeJsonTextFile(artifact.applyArtifact.manifestPath, manifestForExecutionApply(artifact), &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
 
 json artifactRefToJson(const ArtifactRef& artifact) {
     return {
@@ -2790,7 +3081,8 @@ json playbookActionToJson(const PlaybookAction& action) {
         {"finding_id", action.findingId},
         {"title", action.title},
         {"summary", action.summary},
-        {"suggested_tools", action.suggestedTools}
+        {"suggested_tools", action.suggestedTools},
+        {"execution_request", action.executionRequest}
     };
 }
 
@@ -2810,7 +3102,124 @@ json executionLedgerEntryToJson(const ExecutionLedgerEntry& entry) {
         {"distinct_reviewer_count", entry.distinctReviewerCount},
         {"approval_reviewer_count", entry.approvalReviewerCount},
         {"approval_threshold_met", entry.approvalThresholdMet},
-        {"suggested_tools", entry.suggestedTools}
+        {"suggested_tools", entry.suggestedTools},
+        {"execution_request", entry.executionRequest}
+    };
+}
+
+json executionResultSummaryToJson(const json& executionResult) {
+    if (!executionResult.is_object()) {
+        return json::object();
+    }
+    const json brokerIdentity = executionResult.value("broker_identity", json::object());
+    const json execIds = brokerIdentity.is_object() ? brokerIdentity.value("exec_ids", json::array()) : json::array();
+    const json tradeTrace = executionResult.value("trade_trace", json::object());
+    return {
+        {"resolution", executionResult.value("resolution", json(nullptr))},
+        {"fill_state", executionResult.value("fill_state", json(nullptr))},
+        {"restart_resume_policy", executionResult.value("restart_resume_policy", json(nullptr))},
+        {"restart_recovery_state", executionResult.value("restart_recovery_state", json(nullptr))},
+        {"restart_recovery_reason", executionResult.value("restart_recovery_reason", json(nullptr))},
+        {"partial_fill_before_terminal", executionResult.value("partial_fill_before_terminal", false)},
+        {"cancel_ack_pending", executionResult.value("cancel_ack_pending", json(nullptr))},
+        {"manual_review_required", executionResult.value("manual_review_required", false)},
+        {"broker_status_detail", executionResult.value("broker_status_detail", json(nullptr))},
+        {"latest_exec_id", executionResult.value("latest_exec_id", json(nullptr))},
+        {"broker_identity",
+         {
+             {"order_id", brokerIdentity.is_object() ? brokerIdentity.value("order_id", json(nullptr)) : json(nullptr)},
+             {"trace_id", brokerIdentity.is_object() ? brokerIdentity.value("trace_id", json(nullptr)) : json(nullptr)},
+             {"perm_id", brokerIdentity.is_object() ? brokerIdentity.value("perm_id", json(nullptr)) : json(nullptr)},
+             {"latest_exec_id", brokerIdentity.is_object() ? brokerIdentity.value("latest_exec_id", json(nullptr)) : json(nullptr)},
+             {"exec_id_count", execIds.is_array() ? execIds.size() : 0U}
+         }},
+        {"trade_trace",
+         {
+             {"trace_found", tradeTrace.is_object() ? tradeTrace.value("trace_found", false) : false},
+             {"trace_id", tradeTrace.is_object() ? tradeTrace.value("trace_id", json(nullptr)) : json(nullptr)},
+             {"perm_id", tradeTrace.is_object() ? tradeTrace.value("perm_id", json(nullptr)) : json(nullptr)},
+             {"fill_count", tradeTrace.is_object() ? tradeTrace.value("fill_count", 0U) : 0U},
+             {"latest_status", tradeTrace.is_object() ? tradeTrace.value("latest_status", json(nullptr)) : json(nullptr)},
+             {"terminal_status", tradeTrace.is_object() ? tradeTrace.value("terminal_status", json(nullptr)) : json(nullptr)}
+         }}
+    };
+}
+
+std::string executionEntryPublicId(const ExecutionJournalEntry& entry) {
+    return entry.journalEntryId;
+}
+
+std::string executionEntryPublicId(const ExecutionApplyEntry& entry) {
+    return entry.applyEntryId;
+}
+
+template <typename Entry>
+int latestExecutionResultPriority(const Entry& entry) {
+    if (entry.executionStatus == kExecutionEntryStatusSubmitted) {
+        return 0;
+    }
+    if (!entry.terminal) {
+        return 1;
+    }
+    if (entry.executionStatus == kExecutionEntryStatusFailed) {
+        return 2;
+    }
+    if (entry.executionStatus == kExecutionEntryStatusCancelled) {
+        return 3;
+    }
+    if (entry.executionStatus == kExecutionEntryStatusSucceeded) {
+        return 4;
+    }
+    return 5;
+}
+
+template <typename Entry>
+bool preferLatestExecutionResultEntry(const Entry& candidate, const Entry& currentBest) {
+    const int candidatePriority = latestExecutionResultPriority(candidate);
+    const int currentPriority = latestExecutionResultPriority(currentBest);
+    if (candidatePriority != currentPriority) {
+        return candidatePriority < currentPriority;
+    }
+
+    const auto candidateTimestamp = executionEntryTimestamp(candidate);
+    const auto currentTimestamp = executionEntryTimestamp(currentBest);
+    if (candidateTimestamp.has_value() != currentTimestamp.has_value()) {
+        return candidateTimestamp.has_value();
+    }
+    if (candidateTimestamp.has_value() && currentTimestamp.has_value() &&
+        *candidateTimestamp != *currentTimestamp) {
+        return *candidateTimestamp > *currentTimestamp;
+    }
+
+    if (candidate.attemptCount != currentBest.attemptCount) {
+        return candidate.attemptCount > currentBest.attemptCount;
+    }
+
+    return executionEntryPublicId(candidate) < executionEntryPublicId(currentBest);
+}
+
+template <typename Entry>
+json latestExecutionResultSummaryForEntries(const std::vector<Entry>& entries) {
+    const Entry* latest = nullptr;
+    for (const auto& entry : entries) {
+        if (!entry.executionResult.is_object() || entry.executionResult.empty()) {
+            continue;
+        }
+        if (latest == nullptr || preferLatestExecutionResultEntry(entry, *latest)) {
+            latest = &entry;
+        }
+    }
+    if (latest == nullptr) {
+        return json(nullptr);
+    }
+    return {
+        {"entry_id", executionEntryPublicId(*latest)},
+        {"execution_status", latest->executionStatus},
+        {"terminal", latest->terminal},
+        {"action_type", latest->actionType},
+        {"title", latest->title},
+        {"attempt_count", latest->attemptCount},
+        {"execution_result_summary", executionResultSummaryToJson(latest->executionResult)}
     };
 }
 
@@ -2836,7 +3245,10 @@ json executionJournalEntryToJson(const ExecutionJournalEntry& entry) {
         {"failure_message", entry.failureMessage.empty() ? json(nullptr) : json(entry.failureMessage)},
         {"attempt_count", entry.attemptCount},
         {"terminal", entry.terminal},
-        {"suggested_tools", entry.suggestedTools}
+        {"suggested_tools", entry.suggestedTools},
+        {"execution_request", entry.executionRequest},
+        {"execution_result", entry.executionResult},
+        {"execution_result_summary", executionResultSummaryToJson(entry.executionResult)}
     };
 }
 
@@ -2862,7 +3274,10 @@ json executionApplyEntryToJson(const ExecutionApplyEntry& entry) {
         {"failure_message", entry.failureMessage.empty() ? json(nullptr) : json(entry.failureMessage)},
         {"attempt_count", entry.attemptCount},
         {"terminal", entry.terminal},
-        {"suggested_tools", entry.suggestedTools}
+        {"suggested_tools", entry.suggestedTools},
+        {"execution_request", entry.executionRequest},
+        {"execution_result", entry.executionResult},
+        {"execution_result_summary", executionResultSummaryToJson(entry.executionResult)}
     };
 }
 
@@ -2872,6 +3287,10 @@ ExecutionLedgerReviewSummary summarizeExecutionLedgerReviewSummary(const Executi
         reviewPolicyDistinctApprovalCount(artifact.reviewPolicy),
         distinctLedgerReviewActors(artifact).size(),
         artifact.ledgerStatus);
+}
+
+json latestExecutionJournalResultSummary(const ExecutionJournalArtifact& artifact) {
+    return latestExecutionResultSummaryForEntries(artifact.entries);
 }
 
 json executionLedgerReviewSummaryToJson(const ExecutionLedgerReviewSummary& summary) {
@@ -2931,6 +3350,10 @@ ExecutionJournalSummary summarizeExecutionJournalSummary(const ExecutionJournalA
     return summarizeExecutionJournalSummaryEntries(artifact.entries, artifact.journalStatus);
 }
 
+ExecutionRecoverySummary summarizeExecutionJournalRecovery(const ExecutionJournalArtifact& artifact) {
+    return summarizeExecutionRecoveryEntries(artifact.entries);
+}
+
 json executionJournalSummaryToJson(const ExecutionJournalSummary& summary) {
     return {
         {"queued_count", summary.queuedCount},
@@ -2941,6 +3364,15 @@ json executionJournalSummaryToJson(const ExecutionJournalSummary& summary) {
         {"terminal_count", summary.terminalCount},
         {"actionable_entry_count", summary.actionableEntryCount},
         {"all_terminal", summary.allTerminal}
+    };
+}
+
+json executionRecoverySummaryToJson(const ExecutionRecoverySummary& summary) {
+    return {
+        {"runtime_backed_submitted_count", summary.runtimeBackedSubmittedCount},
+        {"stale_runtime_backed_count", summary.staleRuntimeBackedCount},
+        {"recovery_required", summary.recoveryRequired},
+        {"stale_recovery_required", summary.staleRecoveryRequired}
     };
 }
 
@@ -2978,6 +3410,10 @@ json latestExecutionJournalAuditSummary(const ExecutionJournalArtifact& artifact
     };
 }
 
+json latestExecutionApplyResultSummary(const ExecutionApplyArtifact& artifact) {
+    return latestExecutionResultSummaryForEntries(artifact.entries);
+}
+
 ExecutionApplySummary summarizeExecutionApplySummary(const ExecutionApplyArtifact& artifact) {
     std::vector<ExecutionJournalEntry> mirrored;
     mirrored.reserve(artifact.entries.size());
@@ -2988,6 +3424,10 @@ ExecutionApplySummary summarizeExecutionApplySummary(const ExecutionApplyArtifac
         mirrored.push_back(std::move(mirror));
     }
     return summarizeExecutionJournalSummaryEntries(mirrored, artifact.applyStatus);
+}
+
+ExecutionRecoverySummary summarizeExecutionApplyRecovery(const ExecutionApplyArtifact& artifact) {
+    return summarizeExecutionRecoveryEntries(artifact.entries);
 }
 
 json executionApplySummaryToJson(const ExecutionApplySummary& summary) {
@@ -4179,7 +4619,7 @@ bool startExecutionApply(const std::string& manifestPath,
         if (created != nullptr) {
             *created = false;
         }
-        return loadExecutionApplyFromPath(manifestFile, out, errorCode, errorMessage);
+        return loadExecutionApplyFromPath(manifestFile, true, out, errorCode, errorMessage);
     }
 
     std::vector<std::string> applyEntryIds;
@@ -4271,7 +4711,30 @@ bool loadExecutionApplyArtifact(const std::string& manifestPath,
     const fs::path resolvedPath = hasManifest
         ? fs::path(manifestPath)
         : phase7RootDir() / "applies" / artifactId / "manifest.json";
-    return loadExecutionApplyFromPath(resolvedPath, out, errorCode, errorMessage);
+    return loadExecutionApplyFromPath(resolvedPath, true, out, errorCode, errorMessage);
+}
+
+bool loadExecutionApplyArtifactStored(const std::string& manifestPath,
+                                      const std::string& artifactId,
+                                      ExecutionApplyArtifact* out,
+                                      std::string* errorCode,
+                                      std::string* errorMessage) {
+    const bool hasManifest = !manifestPath.empty();
+    const bool hasArtifactId = !artifactId.empty();
+    if (hasManifest == hasArtifactId) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "exactly one of execution_apply_manifest_path or execution_apply_artifact_id is required";
+        }
+        return false;
+    }
+
+    const fs::path resolvedPath = hasManifest
+        ? fs::path(manifestPath)
+        : phase7RootDir() / "applies" / artifactId / "manifest.json";
+    return loadExecutionApplyFromPath(resolvedPath, false, out, errorCode, errorMessage);
 }
 
 bool listExecutionApplies(std::size_t limit,
@@ -4285,7 +4748,7 @@ bool listExecutionApplies(std::size_t limit,
         errorCode,
         errorMessage,
         [](const fs::path& manifestPath, ExecutionApplyArtifact* artifact, std::string* code, std::string* message) {
-            return loadExecutionApplyFromPath(manifestPath, artifact, code, message);
+            return loadExecutionApplyFromPath(manifestPath, true, artifact, code, message);
         });
 }
 
@@ -4525,6 +4988,80 @@ std::string executionLedgerArtifactMarkdown(const ExecutionLedgerArtifact& artif
     return out.str();
 }
 
+void appendExecutionResultSummary(std::ostringstream& out, const json& executionResult) {
+    if (!executionResult.is_object()) {
+        return;
+    }
+    const json brokerIdentity = executionResult.value("broker_identity", json::object());
+    const auto renderNullable = [](const json& value) -> std::string {
+        if (value.is_string()) {
+            return value.get<std::string>();
+        }
+        if (value.is_number_integer()) {
+            return std::to_string(value.get<long long>());
+        }
+        if (value.is_number_unsigned()) {
+            return std::to_string(value.get<unsigned long long>());
+        }
+        if (value.is_number_float()) {
+            std::ostringstream numeric;
+            numeric << std::fixed << std::setprecision(4) << value.get<double>();
+            return numeric.str();
+        }
+        return {};
+    };
+
+    const std::string orderId = brokerIdentity.is_object() ? renderNullable(brokerIdentity.value("order_id", json(nullptr))) : std::string();
+    const std::string traceId = brokerIdentity.is_object() ? renderNullable(brokerIdentity.value("trace_id", json(nullptr))) : std::string();
+    const std::string permId = brokerIdentity.is_object() ? renderNullable(brokerIdentity.value("perm_id", json(nullptr))) : std::string();
+    const std::string latestExecId = executionResult.contains("latest_exec_id")
+        ? renderNullable(executionResult.at("latest_exec_id"))
+        : brokerIdentity.is_object() ? renderNullable(brokerIdentity.value("latest_exec_id", json(nullptr))) : std::string();
+    const std::string fillState = renderNullable(executionResult.value("fill_state", json(nullptr)));
+    const std::string restartPolicy = renderNullable(executionResult.value("restart_resume_policy", json(nullptr)));
+    const std::string restartRecoveryState =
+        renderNullable(executionResult.value("restart_recovery_state", json(nullptr)));
+    const std::string restartRecoveryReason =
+        renderNullable(executionResult.value("restart_recovery_reason", json(nullptr)));
+    const std::string brokerDetail = renderNullable(executionResult.value("broker_status_detail", json(nullptr)));
+
+    if (!orderId.empty() || !traceId.empty() || !permId.empty() || !latestExecId.empty()) {
+        out << "  broker_identity:";
+        if (!orderId.empty()) {
+            out << " order_id=`" << orderId << "`";
+        }
+        if (!traceId.empty()) {
+            out << " trace_id=`" << traceId << "`";
+        }
+        if (!permId.empty()) {
+            out << " perm_id=`" << permId << "`";
+        }
+        if (!latestExecId.empty()) {
+            out << " latest_exec_id=`" << latestExecId << "`";
+        }
+        out << "\n";
+    }
+    if (!fillState.empty() || !restartPolicy.empty() || !restartRecoveryState.empty() || !restartRecoveryReason.empty()) {
+        out << "  runtime_state:";
+        if (!fillState.empty()) {
+            out << " fill_state=`" << fillState << "`";
+        }
+        if (!restartPolicy.empty()) {
+            out << " restart_resume_policy=`" << restartPolicy << "`";
+        }
+        if (!restartRecoveryState.empty()) {
+            out << " restart_recovery_state=`" << restartRecoveryState << "`";
+        }
+        if (!restartRecoveryReason.empty()) {
+            out << " restart_recovery_reason=`" << restartRecoveryReason << "`";
+        }
+        out << "\n";
+    }
+    if (!brokerDetail.empty()) {
+        out << "  broker_detail: " << brokerDetail << "\n";
+    }
+}
+
 std::string executionJournalArtifactMarkdown(const ExecutionJournalArtifact& artifact) {
     const ExecutionJournalSummary summary = summarizeExecutionJournalSummary(artifact);
     const json latestAudit = latestExecutionJournalAuditSummary(artifact);
@@ -4572,6 +5109,7 @@ std::string executionJournalArtifactMarkdown(const ExecutionJournalArtifact& art
         if (!entry.executionComment.empty()) {
             out << "  comment: " << entry.executionComment << "\n";
         }
+        appendExecutionResultSummary(out, entry.executionResult);
         if (!entry.failureCode.empty() || !entry.failureMessage.empty()) {
             out << "  failure: `" << entry.failureCode << "`";
             if (!entry.failureMessage.empty()) {
@@ -4647,6 +5185,7 @@ std::string executionApplyArtifactMarkdown(const ExecutionApplyArtifact& artifac
         if (!entry.executionComment.empty()) {
             out << "  comment: " << entry.executionComment << "\n";
         }
+        appendExecutionResultSummary(out, entry.executionResult);
         if (!entry.failureCode.empty() || !entry.failureMessage.empty()) {
             out << "  failure: `" << entry.failureCode << "`";
             if (!entry.failureMessage.empty()) {

@@ -1,0 +1,170 @@
+{
+  "cancel_pending_restart_apply_sync": {
+    "broker_identity": {
+      "exec_id_count": 1,
+      "latest_exec_id": "E-PHASE7-CANCEL-RESTART-1",
+      "order_id": 9405,
+      "perm_id": 5405,
+      "trace_id": 99405
+    },
+    "broker_status_detail": "broker acknowledged the cancel after a partial fill",
+    "cancel_ack_pending": false,
+    "fill_state": "cancelled_after_partial_fill",
+    "latest_exec_id": "E-PHASE7-CANCEL-RESTART-1",
+    "partial_fill_before_terminal": true,
+    "resolution": "resolved_cancelled",
+    "restart_recovery_reason": "terminal_cancelled_after_partial_fill",
+    "restart_recovery_state": "terminal_completed",
+    "restart_resume_policy": "completed",
+    "trade_trace": {
+      "fill_count": 1,
+      "latest_status": "Cancelled",
+      "terminal_status": null,
+      "trace_found": true
+    }
+  },
+  "cancel_pending_restart_resolved": {
+    "broker_identity": {
+      "exec_id_count": 1,
+      "latest_exec_id": "E-PHASE7-CANCEL-RESTART-1",
+      "order_id": 9405,
+      "perm_id": 5405,
+      "trace_id": 99405
+    },
+    "broker_status_detail": "broker acknowledged the cancel after a partial fill",
+    "cancel_ack_pending": false,
+    "fill_state": "cancelled_after_partial_fill",
+    "latest_exec_id": "E-PHASE7-CANCEL-RESTART-1",
+    "partial_fill_before_terminal": true,
+    "resolution": "resolved_cancelled",
+    "restart_recovery_reason": "terminal_cancelled_after_partial_fill",
+    "restart_recovery_state": "terminal_completed",
+    "restart_resume_policy": "completed",
+    "trade_trace": {
+      "fill_count": 1,
+      "latest_status": "Cancelled",
+      "terminal_status": null,
+      "trace_found": true
+    }
+  },
+  "cancel_pending_restart_wait": {
+    "broker_identity": {
+      "exec_id_count": 1,
+      "latest_exec_id": "E-PHASE7-CANCEL-RESTART-1",
+      "order_id": 9405,
+      "perm_id": 5405,
+      "trace_id": 99405
+    },
+    "broker_status_detail": null,
+    "cancel_ack_pending": true,
+    "fill_state": "partial_fill_cancel_pending",
+    "latest_exec_id": "E-PHASE7-CANCEL-RESTART-1",
+    "partial_fill_before_terminal": false,
+    "resolution": "cancel_ack_pending",
+    "restart_recovery_reason": "cancel_ack_pending_after_partial_fill",
+    "restart_recovery_state": "awaiting_cancel_ack",
+    "restart_resume_policy": "await_cancel_ack",
+    "trade_trace": {
+      "fill_count": 1,
+      "latest_status": "Submitted",
+      "terminal_status": null,
+      "trace_found": true
+    }
+  },
+  "cancel_terminal": {
+    "broker_identity": {
+      "exec_id_count": 1,
+      "latest_exec_id": "E-PHASE7-CANCEL-1",
+      "order_id": 9401,
+      "perm_id": 5401,
+      "trace_id": 99401
+    },
+    "broker_status_detail": null,
+    "cancel_ack_pending": false,
+    "fill_state": "cancelled_after_partial_fill",
+    "latest_exec_id": "E-PHASE7-CANCEL-1",
+    "partial_fill_before_terminal": true,
+    "resolution": "resolved_cancelled",
+    "restart_recovery_reason": "terminal_cancelled_after_partial_fill",
+    "restart_recovery_state": "terminal_completed",
+    "restart_resume_policy": "completed",
+    "trade_trace": {
+      "fill_count": 1,
+      "latest_status": "Cancelled",
+      "terminal_status": null,
+      "trace_found": true
+    }
+  },
+  "inactive_terminal": {
+    "broker_identity": {
+      "exec_id_count": 0,
+      "latest_exec_id": null,
+      "order_id": 9404,
+      "perm_id": 5404,
+      "trace_id": 99404
+    },
+    "broker_status_detail": "broker marked the order inactive after validation",
+    "cancel_ack_pending": false,
+    "fill_state": "inactive_unfilled",
+    "latest_exec_id": null,
+    "partial_fill_before_terminal": false,
+    "resolution": "resolved_inactive",
+    "restart_recovery_reason": "terminal_inactive_unfilled",
+    "restart_recovery_state": "terminal_no_resume",
+    "restart_resume_policy": "terminal_no_resume",
+    "trade_trace": {
+      "fill_count": 0,
+      "latest_status": "Inactive",
+      "terminal_status": null,
+      "trace_found": true
+    }
+  },
+  "reject_terminal": {
+    "broker_identity": {
+      "exec_id_count": 0,
+      "latest_exec_id": null,
+      "order_id": 9402,
+      "perm_id": 5402,
+      "trace_id": 99402
+    },
+    "broker_status_detail": "broker rejected the order after validation",
+    "cancel_ack_pending": false,
+    "fill_state": "rejected_unfilled",
+    "latest_exec_id": null,
+    "partial_fill_before_terminal": false,
+    "resolution": "resolved_rejected",
+    "restart_recovery_reason": "terminal_rejected_unfilled",
+    "restart_recovery_state": "terminal_no_resume",
+    "restart_resume_policy": "terminal_no_resume",
+    "trade_trace": {
+      "fill_count": 0,
+      "latest_status": "Rejected",
+      "terminal_status": null,
+      "trace_found": true
+    }
+  },
+  "stale_cancel_ack_timeout": {
+    "broker_identity": {
+      "exec_id_count": 1,
+      "latest_exec_id": "E-PHASE7-CANCEL-STUCK-1",
+      "order_id": 9403,
+      "perm_id": 5403,
+      "trace_id": 99403
+    },
+    "broker_status_detail": null,
+    "cancel_ack_pending": true,
+    "fill_state": "partial_fill_cancel_pending",
+    "latest_exec_id": "E-PHASE7-CANCEL-STUCK-1",
+    "partial_fill_before_terminal": true,
+    "resolution": "manual_review_required",
+    "restart_recovery_reason": "cancel_ack_timeout_after_partial_fill",
+    "restart_recovery_state": "manual_review_required",
+    "restart_resume_policy": "manual_review_required",
+    "trade_trace": {
+      "fill_count": 1,
+      "latest_status": "Submitted",
+      "terminal_status": null,
+      "trace_found": true
+    }
+  }
+}

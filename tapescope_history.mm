@@ -193,7 +193,9 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         {"ledger_sort", ToStdString(_phase7LedgerSortPopup.titleOfSelectedItem)},
         {"journal_ledger_filter", ToStdString(_phase7JournalLedgerFilterField.stringValue)},
         {"journal_status_filter", ToStdString(_phase7JournalStatusFilterPopup.titleOfSelectedItem)},
+        {"journal_recovery_filter", ToStdString(_phase7JournalRecoveryFilterPopup.titleOfSelectedItem)},
         {"journal_sort", ToStdString(_phase7JournalSortPopup.titleOfSelectedItem)},
+        {"apply_recovery_filter", ToStdString(_phase7ApplyRecoveryFilterPopup.titleOfSelectedItem)},
         {"journal_actor", ToStdString(_phase7JournalActorField.stringValue)},
         {"execution_capability", ToStdString(_phase7ExecutionCapabilityField.stringValue)},
         {"execution_status", ToStdString(_phase7ExecutionStatusPopup.titleOfSelectedItem)},
@@ -313,9 +315,17 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     if (!phase7JournalStatusFilter.empty()) {
         [_phase7JournalStatusFilterPopup selectItemWithTitle:ToNSString(phase7JournalStatusFilter)];
     }
+    const std::string phase7JournalRecoveryFilter = phase7.value("journal_recovery_filter", std::string());
+    if (!phase7JournalRecoveryFilter.empty()) {
+        [_phase7JournalRecoveryFilterPopup selectItemWithTitle:ToNSString(phase7JournalRecoveryFilter)];
+    }
     const std::string phase7JournalSort = phase7.value("journal_sort", std::string());
     if (!phase7JournalSort.empty()) {
         [_phase7JournalSortPopup selectItemWithTitle:ToNSString(phase7JournalSort)];
+    }
+    const std::string phase7ApplyRecoveryFilter = phase7.value("apply_recovery_filter", std::string());
+    if (!phase7ApplyRecoveryFilter.empty()) {
+        [_phase7ApplyRecoveryFilterPopup selectItemWithTitle:ToNSString(phase7ApplyRecoveryFilter)];
     }
     _phase7JournalActorField.stringValue = ToNSString(phase7.value("journal_actor", std::string("tapescope")));
     _phase7ExecutionCapabilityField.stringValue =

@@ -105,6 +105,7 @@ struct Phase7ExecutionApplyInventorySelection {
     std::string analysisArtifactId;
     std::string sourceArtifactId;
     std::string applyStatus;
+    std::string recoveryState;
     std::string sortBy = "generated_at_desc";
     std::size_t limit = 20;
 };
@@ -163,6 +164,7 @@ struct Phase7ExecutionJournalInventorySelection {
     std::string analysisArtifactId;
     std::string sourceArtifactId;
     std::string journalStatus;
+    std::string recoveryState;
     std::string sortBy = "generated_at_desc";
     std::size_t limit = 20;
 };

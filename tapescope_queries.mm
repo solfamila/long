@@ -107,6 +107,7 @@ using namespace tapescope_support;
     [self persistApplicationState];
     [_pollTimer invalidate];
     _pollTimer = nil;
+    [self shutdownPhase7RuntimeHost];
 }
 
 - (void)refresh:(id)sender {

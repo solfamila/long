@@ -90,6 +90,7 @@ struct PlaybookAction {
     std::string title;
     std::string summary;
     json suggestedTools = json::array();
+    json executionRequest = json::object();
 };
 
 struct PlaybookArtifact {
@@ -119,6 +120,7 @@ struct ExecutionLedgerEntry {
     std::size_t approvalReviewerCount = 0;
     bool approvalThresholdMet = false;
     json suggestedTools = json::array();
+    json executionRequest = json::object();
 };
 
 struct ExecutionLedgerArtifact {
@@ -175,6 +177,8 @@ struct ExecutionJournalEntry {
     std::size_t attemptCount = 0;
     bool terminal = false;
     json suggestedTools = json::array();
+    json executionRequest = json::object();
+    json executionResult = json::object();
 };
 
 struct ExecutionJournalArtifact {
@@ -207,6 +211,13 @@ struct ExecutionJournalSummary {
     bool allTerminal = false;
 };
 
+struct ExecutionRecoverySummary {
+    std::size_t runtimeBackedSubmittedCount = 0;
+    std::size_t staleRuntimeBackedCount = 0;
+    bool recoveryRequired = false;
+    bool staleRecoveryRequired = false;
+};
+
 struct ExecutionApplyEntry {
     std::string applyEntryId;
     std::string journalEntryId;
@@ -229,6 +240,8 @@ struct ExecutionApplyEntry {
     std::size_t attemptCount = 0;
     bool terminal = false;
     json suggestedTools = json::array();
+    json executionRequest = json::object();
+    json executionResult = json::object();
 };
 
 struct ExecutionApplyArtifact {
@@ -393,6 +406,12 @@ bool loadExecutionApplyArtifact(const std::string& manifestPath,
                                 std::string* errorCode,
                                 std::string* errorMessage);
 
+bool loadExecutionApplyArtifactStored(const std::string& manifestPath,
+                                      const std::string& artifactId,
+                                      ExecutionApplyArtifact* out,
+                                      std::string* errorCode,
+                                      std::string* errorMessage);
+
 bool listExecutionApplies(std::size_t limit,
                           std::vector<ExecutionApplyArtifact>* out,
                           std::string* errorCode,
@@ -412,6 +431,17 @@ bool recordExecutionApplyEvent(const std::string& manifestPath,
                                std::string* errorCode,
                                std::string* errorMessage);
 
+void annotateExecutionJournalArtifact(ExecutionJournalArtifact* artifact);
+void annotateExecutionApplyArtifact(ExecutionApplyArtifact* artifact);
+void synchronizeExecutionApplyArtifactFromJournal(ExecutionApplyArtifact* artifact,
+                                                  const ExecutionJournalArtifact& journal);
+bool persistExecutionJournalArtifact(const ExecutionJournalArtifact& artifact,
+                                     std::string* errorCode,
+                                     std::string* errorMessage);
+bool persistExecutionApplyArtifact(const ExecutionApplyArtifact& artifact,
+                                   std::string* errorCode,
+                                   std::string* errorMessage);
+
 json artifactRefToJson(const ArtifactRef& artifact);
 json findingToJson(const FindingRecord& finding);
 json playbookActionToJson(const PlaybookAction& action);
@@ -420,11 +450,17 @@ ExecutionLedgerReviewSummary summarizeExecutionLedgerReviewSummary(const Executi
 json executionLedgerReviewSummaryToJson(const ExecutionLedgerReviewSummary& summary);
 json latestExecutionLedgerAuditSummary(const ExecutionLedgerArtifact& artifact);
 json executionJournalEntryToJson(const ExecutionJournalEntry& entry);
+json executionResultSummaryToJson(const json& executionResult);
+json latestExecutionJournalResultSummary(const ExecutionJournalArtifact& artifact);
 ExecutionJournalSummary summarizeExecutionJournalSummary(const ExecutionJournalArtifact& artifact);
+ExecutionRecoverySummary summarizeExecutionJournalRecovery(const ExecutionJournalArtifact& artifact);
 json executionJournalSummaryToJson(const ExecutionJournalSummary& summary);
+json executionRecoverySummaryToJson(const ExecutionRecoverySummary& summary);
 json latestExecutionJournalAuditSummary(const ExecutionJournalArtifact& artifact);
 json executionApplyEntryToJson(const ExecutionApplyEntry& entry);
+json latestExecutionApplyResultSummary(const ExecutionApplyArtifact& artifact);
 ExecutionApplySummary summarizeExecutionApplySummary(const ExecutionApplyArtifact& artifact);
+ExecutionRecoverySummary summarizeExecutionApplyRecovery(const ExecutionApplyArtifact& artifact);
 json executionApplySummaryToJson(const ExecutionApplySummary& summary);
 json latestExecutionApplyAuditSummary(const ExecutionApplyArtifact& artifact);
 std::string analysisArtifactMarkdown(const AnalysisArtifact& artifact);

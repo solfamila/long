@@ -1044,6 +1044,32 @@ json phase7ExecutionJournalAggregateStatusSchema() {
     });
 }
 
+json phase7ExecutionRecoveryStateSchema() {
+    return stringEnumSchema({"recovery_required", "stale_recovery_required"});
+}
+
+json phase7ExecutionRecoverySummarySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"runtime_backed_submitted_count", nonNegativeIntegerSchema()},
+            {"stale_runtime_backed_count", nonNegativeIntegerSchema()},
+            {"recovery_required", booleanSchema()},
+            {"stale_recovery_required", booleanSchema()}
+        }},
+        {"required", json::array({
+            "runtime_backed_submitted_count",
+            "stale_runtime_backed_count",
+            "recovery_required",
+            "stale_recovery_required"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionResultSummarySchema();
+json phase7LatestExecutionResultSummarySchema();
+
 json phase7ExecutionJournalFiltersSchema() {
     return json{
         {"type", "object"},
@@ -1054,6 +1080,10 @@ json phase7ExecutionJournalFiltersSchema() {
             {"source_artifact_id", nullableStringSchema()},
             {"journal_status", json{{"oneOf", json::array({
                 phase7ExecutionJournalAggregateStatusSchema(),
+                json{{"type", "null"}}
+            })}}},
+            {"recovery_state", json{{"oneOf", json::array({
+                phase7ExecutionRecoveryStateSchema(),
                 json{{"type", "null"}}
             })}}},
             {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})},
@@ -1098,7 +1128,10 @@ json phase7ExecutionJournalEntrySchema() {
             {"failure_message", nullableStringSchema()},
             {"attempt_count", nonNegativeIntegerSchema()},
             {"terminal", booleanSchema()},
-            {"suggested_tools", json{{"type", "array"}, {"items", stringSchema()}}}
+            {"suggested_tools", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"execution_request", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_result", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_result_summary", phase7ExecutionResultSummarySchema()}
         }},
         {"required", json::array({
             "journal_entry_id",
@@ -1121,7 +1154,10 @@ json phase7ExecutionJournalEntrySchema() {
             "failure_message",
             "attempt_count",
             "terminal",
-            "suggested_tools"
+            "suggested_tools",
+            "execution_request",
+            "execution_result",
+            "execution_result_summary"
         })},
         {"additionalProperties", false}
     };
@@ -1151,6 +1187,71 @@ json phase7ExecutionJournalSummarySchema() {
             "all_terminal"
         })},
         {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionResultSummarySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"resolution", nullableStringSchema()},
+            {"fill_state", nullableStringSchema()},
+            {"restart_resume_policy", nullableStringSchema()},
+            {"restart_recovery_state", nullableStringSchema()},
+            {"restart_recovery_reason", nullableStringSchema()},
+            {"partial_fill_before_terminal", booleanSchema()},
+            {"cancel_ack_pending", json{{"oneOf", json::array({booleanSchema(), json{{"type", "null"}}})}}},
+            {"manual_review_required", booleanSchema()},
+            {"broker_status_detail", nullableStringSchema()},
+            {"latest_exec_id", nullableStringSchema()},
+            {"broker_identity", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"trade_trace", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "resolution",
+            "fill_state",
+            "restart_resume_policy",
+            "restart_recovery_state",
+            "restart_recovery_reason",
+            "partial_fill_before_terminal",
+            "cancel_ack_pending",
+            "manual_review_required",
+            "broker_status_detail",
+            "latest_exec_id",
+            "broker_identity",
+            "trade_trace"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7LatestExecutionResultSummarySchema() {
+    return json{
+        {"oneOf", json::array({
+            json{
+                {"type", "object"},
+                {"properties", {
+                    {"entry_id", stringSchema()},
+                    {"execution_status", phase7ExecutionJournalEntryStatusSchema()},
+                    {"terminal", booleanSchema()},
+                    {"action_type", stringSchema()},
+                    {"title", stringSchema()},
+                    {"attempt_count", nonNegativeIntegerSchema()},
+                    {"execution_result_summary", phase7ExecutionResultSummarySchema()}
+                }},
+                {"required", json::array({
+                    "entry_id",
+                    "execution_status",
+                    "terminal",
+                    "action_type",
+                    "title",
+                    "attempt_count",
+                    "execution_result_summary"
+                })},
+                {"additionalProperties", false}
+            },
+            json{{"type", "null"}}
+        })}
     };
 }
 
@@ -1195,7 +1296,9 @@ json phase7ExecutionJournalResultSchema() {
             {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
             {"entry_count", nonNegativeIntegerSchema()},
             {"execution_summary", phase7ExecutionJournalSummarySchema()},
+            {"runtime_recovery_summary", phase7ExecutionRecoverySummarySchema()},
             {"latest_audit_event", phase7ExecutionJournalAuditSummarySchema()},
+            {"latest_execution_result_summary", phase7LatestExecutionResultSummarySchema()},
             {"entries", json{{"type", "array"}, {"items", phase7ExecutionJournalEntrySchema()}}},
             {"audit_trail", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
@@ -1215,7 +1318,9 @@ json phase7ExecutionJournalResultSchema() {
             "filtered_finding_ids",
             "entry_count",
             "execution_summary",
+            "runtime_recovery_summary",
             "latest_audit_event",
+            "latest_execution_result_summary",
             "entries",
             "audit_trail",
             "replay_context"
@@ -1254,7 +1359,9 @@ json phase7ExecutionJournalRowSchema() {
             {"journal_status", phase7ExecutionJournalAggregateStatusSchema()},
             {"entry_count", nonNegativeIntegerSchema()},
             {"execution_summary", phase7ExecutionJournalSummarySchema()},
+            {"runtime_recovery_summary", phase7ExecutionRecoverySummarySchema()},
             {"latest_audit_event", phase7ExecutionJournalAuditSummarySchema()},
+            {"latest_execution_result_summary", phase7LatestExecutionResultSummarySchema()},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
         }},
         {"required", json::array({
@@ -1268,7 +1375,9 @@ json phase7ExecutionJournalRowSchema() {
             "journal_status",
             "entry_count",
             "execution_summary",
+            "runtime_recovery_summary",
             "latest_audit_event",
+            "latest_execution_result_summary",
             "replay_context"
         })},
         {"additionalProperties", false}
@@ -1299,6 +1408,10 @@ json phase7ExecutionApplyFiltersSchema() {
             {"source_artifact_id", nullableStringSchema()},
             {"apply_status", json{{"oneOf", json::array({
                 phase7ExecutionJournalAggregateStatusSchema(),
+                json{{"type", "null"}}
+            })}}},
+            {"recovery_state", json{{"oneOf", json::array({
+                phase7ExecutionRecoveryStateSchema(),
                 json{{"type", "null"}}
             })}}},
             {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})},
@@ -1344,7 +1457,10 @@ json phase7ExecutionApplyEntrySchema() {
             {"failure_message", nullableStringSchema()},
             {"attempt_count", nonNegativeIntegerSchema()},
             {"terminal", booleanSchema()},
-            {"suggested_tools", json{{"type", "array"}, {"items", stringSchema()}}}
+            {"suggested_tools", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"execution_request", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_result", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_result_summary", phase7ExecutionResultSummarySchema()}
         }},
         {"required", json::array({
             "apply_entry_id",
@@ -1367,7 +1483,10 @@ json phase7ExecutionApplyEntrySchema() {
             "failure_message",
             "attempt_count",
             "terminal",
-            "suggested_tools"
+            "suggested_tools",
+            "execution_request",
+            "execution_result",
+            "execution_result_summary"
         })},
         {"additionalProperties", false}
     };
@@ -1415,7 +1534,9 @@ json phase7ExecutionApplyResultSchema() {
             {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
             {"entry_count", nonNegativeIntegerSchema()},
             {"execution_summary", phase7ExecutionJournalSummarySchema()},
+            {"runtime_recovery_summary", phase7ExecutionRecoverySummarySchema()},
             {"latest_audit_event", phase7ExecutionApplyAuditSummarySchema()},
+            {"latest_execution_result_summary", phase7LatestExecutionResultSummarySchema()},
             {"entries", json{{"type", "array"}, {"items", phase7ExecutionApplyEntrySchema()}}},
             {"audit_trail", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
@@ -1436,7 +1557,9 @@ json phase7ExecutionApplyResultSchema() {
             "filtered_finding_ids",
             "entry_count",
             "execution_summary",
+            "runtime_recovery_summary",
             "latest_audit_event",
+            "latest_execution_result_summary",
             "entries",
             "audit_trail",
             "replay_context"
@@ -1476,7 +1599,9 @@ json phase7ExecutionApplyRowSchema() {
             {"apply_status", phase7ExecutionJournalAggregateStatusSchema()},
             {"entry_count", nonNegativeIntegerSchema()},
             {"execution_summary", phase7ExecutionJournalSummarySchema()},
+            {"runtime_recovery_summary", phase7ExecutionRecoverySummarySchema()},
             {"latest_audit_event", phase7ExecutionApplyAuditSummarySchema()},
+            {"latest_execution_result_summary", phase7LatestExecutionResultSummarySchema()},
             {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
         }},
         {"required", json::array({
@@ -1491,7 +1616,9 @@ json phase7ExecutionApplyRowSchema() {
             "apply_status",
             "entry_count",
             "execution_summary",
+            "runtime_recovery_summary",
             "latest_audit_event",
+            "latest_execution_result_summary",
             "replay_context"
         })},
         {"additionalProperties", false}
@@ -2814,6 +2941,7 @@ json phase7ExecutionJournalInventoryInputSchema() {
             {"analysis_artifact_id", stringSchema()},
             {"source_artifact_id", stringSchema()},
             {"journal_status", phase7ExecutionJournalAggregateStatusSchema()},
+            {"recovery_state", phase7ExecutionRecoveryStateSchema()},
             {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})}
         }},
         {"additionalProperties", false}
@@ -2905,6 +3033,7 @@ json phase7ExecutionApplyInventoryInputSchema() {
             {"analysis_artifact_id", stringSchema()},
             {"source_artifact_id", stringSchema()},
             {"apply_status", phase7ExecutionJournalAggregateStatusSchema()},
+            {"recovery_state", phase7ExecutionRecoveryStateSchema()},
             {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})}
         }},
         {"additionalProperties", false}
@@ -3721,6 +3850,7 @@ struct Phase7ExecutionJournalInventorySelection {
     std::string analysisArtifactId;
     std::string sourceArtifactId;
     std::string journalStatus;
+    std::string recoveryState;
     std::string sortBy = "generated_at_desc";
 };
 
@@ -3761,6 +3891,7 @@ struct Phase7ExecutionApplyInventorySelection {
     std::string analysisArtifactId;
     std::string sourceArtifactId;
     std::string applyStatus;
+    std::string recoveryState;
     std::string sortBy = "generated_at_desc";
 };
 
@@ -4779,9 +4910,10 @@ bool parsePhase7ExecutionJournalInventoryArgs(const json& args,
                            "analysis_artifact_id",
                            "source_artifact_id",
                            "journal_status",
+                           "recovery_state",
                            "sort_by"})) {
         return fail("invalid_arguments",
-                    "execution journal inventory arguments support only limit, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, journal_status, and sort_by");
+                    "execution journal inventory arguments support only limit, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, journal_status, recovery_state, and sort_by");
     }
 
     Phase7ExecutionJournalInventorySelection selection;
@@ -4834,6 +4966,16 @@ bool parsePhase7ExecutionJournalInventoryArgs(const json& args,
         }
         selection.journalStatus = *journalStatus;
     }
+    if (args.contains("recovery_state")) {
+        const auto recoveryState = asNonEmptyString(args.at("recovery_state"));
+        if (!recoveryState.has_value() ||
+            (*recoveryState != "recovery_required" &&
+             *recoveryState != "stale_recovery_required")) {
+            return fail("invalid_arguments",
+                        "recovery_state must be one of recovery_required or stale_recovery_required");
+        }
+        selection.recoveryState = *recoveryState;
+    }
     if (args.contains("sort_by")) {
         const auto sortBy = asNonEmptyString(args.at("sort_by"));
         if (!sortBy.has_value() ||
@@ -4875,9 +5017,10 @@ bool parsePhase7ExecutionApplyInventoryArgs(const json& args,
                            "analysis_artifact_id",
                            "source_artifact_id",
                            "apply_status",
+                           "recovery_state",
                            "sort_by"})) {
         return fail("invalid_arguments",
-                    "execution apply inventory arguments support only limit, execution_journal_artifact_id, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, apply_status, and sort_by");
+                    "execution apply inventory arguments support only limit, execution_journal_artifact_id, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, apply_status, recovery_state, and sort_by");
     }
 
     Phase7ExecutionApplyInventorySelection selection;
@@ -4936,6 +5079,16 @@ bool parsePhase7ExecutionApplyInventoryArgs(const json& args,
                         "apply_status must be one of execution_queued, execution_in_progress, execution_succeeded, execution_partially_succeeded, execution_failed, or execution_cancelled");
         }
         selection.applyStatus = *applyStatus;
+    }
+    if (args.contains("recovery_state")) {
+        const auto recoveryState = asNonEmptyString(args.at("recovery_state"));
+        if (!recoveryState.has_value() ||
+            (*recoveryState != "recovery_required" &&
+             *recoveryState != "stale_recovery_required")) {
+            return fail("invalid_arguments",
+                        "recovery_state must be one of recovery_required or stale_recovery_required");
+        }
+        selection.recoveryState = *recoveryState;
     }
     if (args.contains("sort_by")) {
         const auto sortBy = asNonEmptyString(args.at("sort_by"));
@@ -5314,6 +5467,7 @@ json phase7ExecutionJournalPayload(const tape_phase7::ExecutionJournalArtifact& 
         entries.push_back(tape_phase7::executionJournalEntryToJson(entry));
     }
     const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(journal);
+    const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(journal);
     json payload = {
         {"source_artifact", tape_phase7::artifactRefToJson(journal.sourceArtifact)},
         {"analysis_artifact", tape_phase7::artifactRefToJson(journal.analysisArtifact)},
@@ -5329,7 +5483,9 @@ json phase7ExecutionJournalPayload(const tape_phase7::ExecutionJournalArtifact& 
         {"filtered_finding_ids", journal.filteredFindingIds},
         {"entry_count", journal.entries.size()},
         {"execution_summary", tape_phase7::executionJournalSummaryToJson(executionSummary)},
+        {"runtime_recovery_summary", tape_phase7::executionRecoverySummaryToJson(recoverySummary)},
         {"latest_audit_event", tape_phase7::latestExecutionJournalAuditSummary(journal)},
+        {"latest_execution_result_summary", tape_phase7::latestExecutionJournalResultSummary(journal)},
         {"entries", std::move(entries)},
         {"audit_trail", journal.auditTrail},
         {"replay_context", journal.replayContext}
@@ -5355,6 +5511,7 @@ json phase7ExecutionJournalInventoryPayload(const std::vector<tape_phase7::Execu
     json rows = json::array();
     for (const auto& artifact : artifacts) {
         const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(artifact);
+        const auto recoverySummary = tape_phase7::summarizeExecutionJournalRecovery(artifact);
         rows.push_back({
             {"execution_journal", tape_phase7::artifactRefToJson(artifact.journalArtifact)},
             {"execution_ledger", tape_phase7::artifactRefToJson(artifact.ledgerArtifact)},
@@ -5366,22 +5523,28 @@ json phase7ExecutionJournalInventoryPayload(const std::vector<tape_phase7::Execu
             {"journal_status", artifact.journalStatus},
             {"entry_count", artifact.entries.size()},
             {"execution_summary", tape_phase7::executionJournalSummaryToJson(executionSummary)},
+            {"runtime_recovery_summary", tape_phase7::executionRecoverySummaryToJson(recoverySummary)},
             {"latest_audit_event", tape_phase7::latestExecutionJournalAuditSummary(artifact)},
+            {"latest_execution_result_summary", tape_phase7::latestExecutionJournalResultSummary(artifact)},
             {"replay_context", artifact.replayContext}
         });
     }
+    json appliedFilters = {
+        {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
+        {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
+        {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
+        {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+        {"journal_status", selection.journalStatus.empty() ? json(nullptr) : json(selection.journalStatus)},
+        {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
+        {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+        {"matched_count", matchedCount}
+    };
+    if (!selection.recoveryState.empty()) {
+        appliedFilters["recovery_state"] = selection.recoveryState;
+    }
     return {
         {"returned_count", rows.size()},
-        {"applied_filters", {
-            {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
-            {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
-            {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
-            {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
-            {"journal_status", selection.journalStatus.empty() ? json(nullptr) : json(selection.journalStatus)},
-            {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
-            {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
-            {"matched_count", matchedCount}
-        }},
+        {"applied_filters", std::move(appliedFilters)},
         {"execution_journals", std::move(rows)}
     };
 }
@@ -5393,6 +5556,7 @@ json phase7ExecutionApplyPayload(const tape_phase7::ExecutionApplyArtifact& appl
         entries.push_back(tape_phase7::executionApplyEntryToJson(entry));
     }
     const auto executionSummary = tape_phase7::summarizeExecutionApplySummary(apply);
+    const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(apply);
     json payload = {
         {"source_artifact", tape_phase7::artifactRefToJson(apply.sourceArtifact)},
         {"analysis_artifact", tape_phase7::artifactRefToJson(apply.analysisArtifact)},
@@ -5409,7 +5573,9 @@ json phase7ExecutionApplyPayload(const tape_phase7::ExecutionApplyArtifact& appl
         {"filtered_finding_ids", apply.filteredFindingIds},
         {"entry_count", apply.entries.size()},
         {"execution_summary", tape_phase7::executionApplySummaryToJson(executionSummary)},
+        {"runtime_recovery_summary", tape_phase7::executionRecoverySummaryToJson(recoverySummary)},
         {"latest_audit_event", tape_phase7::latestExecutionApplyAuditSummary(apply)},
+        {"latest_execution_result_summary", tape_phase7::latestExecutionApplyResultSummary(apply)},
         {"entries", std::move(entries)},
         {"audit_trail", apply.auditTrail},
         {"replay_context", apply.replayContext}
@@ -5435,6 +5601,7 @@ json phase7ExecutionApplyInventoryPayload(const std::vector<tape_phase7::Executi
     json rows = json::array();
     for (const auto& artifact : artifacts) {
         const auto executionSummary = tape_phase7::summarizeExecutionApplySummary(artifact);
+        const auto recoverySummary = tape_phase7::summarizeExecutionApplyRecovery(artifact);
         rows.push_back({
             {"execution_apply", tape_phase7::artifactRefToJson(artifact.applyArtifact)},
             {"execution_journal", tape_phase7::artifactRefToJson(artifact.journalArtifact)},
@@ -5447,25 +5614,45 @@ json phase7ExecutionApplyInventoryPayload(const std::vector<tape_phase7::Executi
             {"apply_status", artifact.applyStatus},
             {"entry_count", artifact.entries.size()},
             {"execution_summary", tape_phase7::executionApplySummaryToJson(executionSummary)},
+            {"runtime_recovery_summary", tape_phase7::executionRecoverySummaryToJson(recoverySummary)},
             {"latest_audit_event", tape_phase7::latestExecutionApplyAuditSummary(artifact)},
+            {"latest_execution_result_summary", tape_phase7::latestExecutionApplyResultSummary(artifact)},
             {"replay_context", artifact.replayContext}
         });
     }
+    json appliedFilters = {
+        {"execution_journal_artifact_id", selection.journalArtifactId.empty() ? json(nullptr) : json(selection.journalArtifactId)},
+        {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
+        {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
+        {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
+        {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+        {"apply_status", selection.applyStatus.empty() ? json(nullptr) : json(selection.applyStatus)},
+        {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
+        {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+        {"matched_count", matchedCount}
+    };
+    if (!selection.recoveryState.empty()) {
+        appliedFilters["recovery_state"] = selection.recoveryState;
+    }
     return {
         {"returned_count", rows.size()},
-        {"applied_filters", {
-            {"execution_journal_artifact_id", selection.journalArtifactId.empty() ? json(nullptr) : json(selection.journalArtifactId)},
-            {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
-            {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
-            {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
-            {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
-            {"apply_status", selection.applyStatus.empty() ? json(nullptr) : json(selection.applyStatus)},
-            {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
-            {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
-            {"matched_count", matchedCount}
-        }},
+        {"applied_filters", std::move(appliedFilters)},
         {"execution_applies", std::move(rows)}
     };
+}
+
+template <typename RecoverySummary>
+bool matchesPhase7RecoveryState(std::string_view recoveryState, const RecoverySummary& recovery) {
+    if (recoveryState.empty()) {
+        return true;
+    }
+    if (recoveryState == "recovery_required") {
+        return recovery.recoveryRequired;
+    }
+    if (recoveryState == "stale_recovery_required") {
+        return recovery.staleRecoveryRequired;
+    }
+    return false;
 }
 
 std::string toolContractVersion(const ToolSpec& tool) {
@@ -8845,6 +9032,10 @@ json Adapter::invokeListExecutionJournalsTool(const ToolSpec& tool, const json& 
                                            artifact.journalStatus != selection.journalStatus) {
                                            return true;
                                        }
+                                       if (!matchesPhase7RecoveryState(selection.recoveryState,
+                                                                       tape_phase7::summarizeExecutionJournalRecovery(artifact))) {
+                                           return true;
+                                       }
                                        return false;
                                    }),
                     artifacts.end());
@@ -8874,6 +9065,14 @@ json Adapter::invokeListExecutionJournalsTool(const ToolSpec& tool, const json& 
               [&](const tape_phase7::ExecutionJournalArtifact& lhs,
                   const tape_phase7::ExecutionJournalArtifact& rhs) {
                   if (selection.sortBy == "attention_desc") {
+                      const auto lhsRecovery = tape_phase7::summarizeExecutionJournalRecovery(lhs);
+                      const auto rhsRecovery = tape_phase7::summarizeExecutionJournalRecovery(rhs);
+                      if (lhsRecovery.staleRecoveryRequired != rhsRecovery.staleRecoveryRequired) {
+                          return lhsRecovery.staleRecoveryRequired && !rhsRecovery.staleRecoveryRequired;
+                      }
+                      if (lhsRecovery.recoveryRequired != rhsRecovery.recoveryRequired) {
+                          return lhsRecovery.recoveryRequired && !rhsRecovery.recoveryRequired;
+                      }
                       const int lhsRank = statusRank(lhs.journalStatus);
                       const int rhsRank = statusRank(rhs.journalStatus);
                       if (lhsRank != rhsRank) {
@@ -9138,6 +9337,10 @@ json Adapter::invokeListExecutionAppliesTool(const ToolSpec& tool, const json& a
                                            artifact.applyStatus != selection.applyStatus) {
                                            return true;
                                        }
+                                       if (!matchesPhase7RecoveryState(selection.recoveryState,
+                                                                       tape_phase7::summarizeExecutionApplyRecovery(artifact))) {
+                                           return true;
+                                       }
                                        return false;
                                    }),
                     artifacts.end());
@@ -9168,6 +9371,14 @@ json Adapter::invokeListExecutionAppliesTool(const ToolSpec& tool, const json& a
               [&](const tape_phase7::ExecutionApplyArtifact& lhs,
                   const tape_phase7::ExecutionApplyArtifact& rhs) {
                   if (sortMode == "attention_desc") {
+                      const auto lhsRecovery = tape_phase7::summarizeExecutionApplyRecovery(lhs);
+                      const auto rhsRecovery = tape_phase7::summarizeExecutionApplyRecovery(rhs);
+                      if (lhsRecovery.staleRecoveryRequired != rhsRecovery.staleRecoveryRequired) {
+                          return lhsRecovery.staleRecoveryRequired && !rhsRecovery.staleRecoveryRequired;
+                      }
+                      if (lhsRecovery.recoveryRequired != rhsRecovery.recoveryRequired) {
+                          return lhsRecovery.recoveryRequired && !rhsRecovery.recoveryRequired;
+                      }
                       const int lhsRank = statusRank(lhs.applyStatus);
                       const int rhsRank = statusRank(rhs.applyStatus);
                       if (lhsRank != rhsRank) {

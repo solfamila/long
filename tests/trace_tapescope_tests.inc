@@ -842,6 +842,24 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                                return entry.executionStatus == tape_phase7::kExecutionEntryStatusSubmitted;
                            }),
            "TapeScope typed execution journal dispatch should move queued entries into the submitted in-progress state");
+    tapescope::Phase7ExecutionJournalInventorySelection recoveryJournalSelection;
+    recoveryJournalSelection.ledgerArtifactId =
+        dispatchReadyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId;
+    recoveryJournalSelection.recoveryState = "recovery_required";
+    recoveryJournalSelection.sortBy = "attention_desc";
+    recoveryJournalSelection.limit = 10;
+    const auto recoveryPhase7ExecutionJournals = client.listExecutionJournalArtifactsPayload(recoveryJournalSelection);
+    expect(recoveryPhase7ExecutionJournals.ok(),
+           "TapeScope recovery-filtered phase7 execution journal inventory should succeed: " +
+               tapescope::QueryClient::describeError(recoveryPhase7ExecutionJournals.error));
+    expect(recoveryPhase7ExecutionJournals.value.matchedCount >= 1 &&
+               !recoveryPhase7ExecutionJournals.value.artifacts.empty() &&
+               recoveryPhase7ExecutionJournals.value.artifacts.front().journalArtifact.artifactId ==
+                   dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+           "TapeScope recovery-filtered phase7 execution journal inventory should return the dispatched in-progress journal");
+    expect(recoveryPhase7ExecutionJournals.value.appliedFilters.value("recovery_state", std::string()) ==
+               "recovery_required",
+           "TapeScope recovery-filtered phase7 execution journal inventory should preserve the requested recovery-state filter");
 
     const std::vector<std::string> journalEntryIds = {
         phase7ExecutionJournalStart.value.artifact.entries.front().journalEntryId
@@ -995,6 +1013,24 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(typedPhase7ExecutionApply.value.journalArtifact.artifactId ==
                dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
            "TapeScope typed phase7 execution apply read should preserve the linked journal artifact id");
+    tapescope::Phase7ExecutionApplyInventorySelection recoveryApplySelection;
+    recoveryApplySelection.journalArtifactId =
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId;
+    recoveryApplySelection.recoveryState = "recovery_required";
+    recoveryApplySelection.sortBy = "attention_desc";
+    recoveryApplySelection.limit = 10;
+    const auto recoveryPhase7ExecutionApplies = client.listExecutionApplyArtifactsPayload(recoveryApplySelection);
+    expect(recoveryPhase7ExecutionApplies.ok(),
+           "TapeScope recovery-filtered phase7 execution apply inventory should succeed: " +
+               tapescope::QueryClient::describeError(recoveryPhase7ExecutionApplies.error));
+    expect(recoveryPhase7ExecutionApplies.value.matchedCount >= 1 &&
+               !recoveryPhase7ExecutionApplies.value.artifacts.empty() &&
+               recoveryPhase7ExecutionApplies.value.artifacts.front().applyArtifact.artifactId ==
+                   phase7ExecutionApplyStart.value.artifact.applyArtifact.artifactId,
+           "TapeScope recovery-filtered phase7 execution apply inventory should return the in-progress controlled apply");
+    expect(recoveryPhase7ExecutionApplies.value.appliedFilters.value("recovery_state", std::string()) ==
+               "recovery_required",
+           "TapeScope recovery-filtered phase7 execution apply inventory should preserve the requested recovery-state filter");
 
     const std::vector<std::string> applyEntryIds = {
         phase7ExecutionApplyStart.value.artifact.entries.front().applyEntryId
