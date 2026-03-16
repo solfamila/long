@@ -6,16 +6,23 @@
 
 #include "app_shared.h"
 
+#include <IOKit/hid/IOHIDDeviceKeys.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <chrono>
 #include <iostream>
 #include <mutex>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <objc/message.h>
 
 namespace {
 
@@ -25,6 +32,206 @@ constexpr float kLockedControllerGreen = 0.0f;
 // A small blue bias keeps the short app's lock light reading as red on-device.
 constexpr float kLockedControllerBlue = 0.12f;
 constexpr const char* kControllerIdentityMappingClaimKey = "controller_player_index_mapping";
+
+struct ResolvedControllerIdentity {
+    std::string claimKey;
+    std::string physicalIdentity;
+    std::string source;
+    std::string diagnostics;
+};
+
+std::string nsStringToStd(NSString* value);
+std::string toUpperAscii(std::string value);
+bool controllerHasStablePlayerIndex(GCController* controller);
+
+id safeValueForKey(id object, NSString* key) {
+    if (object == nil || key == nil) {
+        return nil;
+    }
+    @try {
+        return [object valueForKey:key];
+    } @catch (NSException*) {
+        return nil;
+    }
+}
+
+id callValueForHIDDeviceKey(id hidDevice, NSString* key) {
+    if (hidDevice == nil || key == nil) {
+        return nil;
+    }
+    const SEL selector = NSSelectorFromString(@"valueForHIDDeviceKey:");
+    if (![hidDevice respondsToSelector:selector]) {
+        return nil;
+    }
+    using MessageSendFn = id (*)(id, SEL, id);
+    return ((MessageSendFn)objc_msgSend)(hidDevice, selector, key);
+}
+
+std::string objectToString(id value) {
+    if (value == nil) {
+        return {};
+    }
+    if ([value isKindOfClass:[NSString class]]) {
+        return nsStringToStd((NSString*)value);
+    }
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return std::to_string([(NSNumber*)value longLongValue]);
+    }
+    return nsStringToStd([[value description] copy]);
+}
+
+std::optional<uint64_t> objectToUInt64(id value) {
+    if (value == nil) {
+        return std::nullopt;
+    }
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return static_cast<uint64_t>([(NSNumber*)value unsignedLongLongValue]);
+    }
+    if ([value isKindOfClass:[NSString class]]) {
+        const std::string text = nsStringToStd((NSString*)value);
+        if (text.empty()) {
+            return std::nullopt;
+        }
+        try {
+            std::size_t offset = 0;
+            const unsigned long long parsed = std::stoull(text, &offset, 0);
+            if (offset == text.size()) {
+                return static_cast<uint64_t>(parsed);
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    return std::nullopt;
+}
+
+std::string formatHex(uint64_t value) {
+    std::ostringstream stream;
+    stream << "0x" << std::hex << std::nouppercase << value;
+    return stream.str();
+}
+
+std::string joinSet(const std::set<std::string>& values) {
+    if (values.empty()) {
+        return "none";
+    }
+    std::string joined;
+    bool first = true;
+    for (const std::string& value : values) {
+        if (!first) {
+            joined += ",";
+        }
+        joined += value;
+        first = false;
+    }
+    return joined;
+}
+
+ResolvedControllerIdentity resolveControllerIdentity(GCController* controller) {
+    ResolvedControllerIdentity resolved;
+    if (controller == nil) {
+        return resolved;
+    }
+
+    std::set<std::string> usbLocations;
+    std::set<std::string> hidPhysicalUniqueIds;
+    std::set<std::string> hidServiceIdentifiers;
+    std::set<std::string> hidRegistryIds;
+    std::set<std::string> hidSerials;
+    std::set<std::string> hidTransports;
+
+    id hidServices = safeValueForKey(controller, @"hidServices");
+    NSMutableArray* serviceArray = [NSMutableArray array];
+    if ([hidServices isKindOfClass:[NSSet class]]) {
+        [serviceArray addObjectsFromArray:[(NSSet*)hidServices allObjects]];
+    } else if ([hidServices isKindOfClass:[NSArray class]]) {
+        [serviceArray addObjectsFromArray:(NSArray*)hidServices];
+    }
+
+    for (id serviceInfo in serviceArray) {
+        const std::string serviceIdentifier = objectToString(safeValueForKey(serviceInfo, @"identifier"));
+        if (!serviceIdentifier.empty()) {
+            hidServiceIdentifiers.insert(serviceIdentifier);
+        }
+
+        const auto registryId = objectToUInt64(safeValueForKey(serviceInfo, @"registryID"));
+        if (registryId.has_value()) {
+            hidRegistryIds.insert(formatHex(*registryId));
+        }
+
+        id hidDevice = safeValueForKey(serviceInfo, @"service");
+        const std::string transport = objectToString(
+            callValueForHIDDeviceKey(hidDevice, [NSString stringWithUTF8String:kIOHIDTransportKey]));
+        if (!transport.empty()) {
+            hidTransports.insert(transport);
+        }
+
+        const auto locationId = objectToUInt64(
+            callValueForHIDDeviceKey(hidDevice, [NSString stringWithUTF8String:kIOHIDLocationIDKey]));
+        if (locationId.has_value() && toUpperAscii(transport) == "USB") {
+            usbLocations.insert(formatHex(*locationId));
+        }
+
+        const std::string physicalUniqueId = objectToString(
+            callValueForHIDDeviceKey(hidDevice, [NSString stringWithUTF8String:kIOHIDPhysicalDeviceUniqueIDKey]));
+        if (!physicalUniqueId.empty()) {
+            hidPhysicalUniqueIds.insert(physicalUniqueId);
+        }
+
+        const std::string serial = objectToString(
+            callValueForHIDDeviceKey(hidDevice, [NSString stringWithUTF8String:kIOHIDSerialNumberKey]));
+        if (!serial.empty()) {
+            hidSerials.insert(serial);
+        }
+    }
+
+    const std::string controllerPhysicalUniqueId = objectToString(safeValueForKey(controller, @"physicalDeviceUniqueID"));
+    const std::string controllerPersistentId = objectToString(safeValueForKey(controller, @"persistentIdentifier"));
+    const std::string controllerIdentifier = objectToString(safeValueForKey(controller, @"identifier"));
+    const std::string controllerUniqueIdentifier = objectToString(safeValueForKey(controller, @"uniqueIdentifier"));
+
+    if (!usbLocations.empty()) {
+        resolved.source = "hid.usb.location";
+        resolved.physicalIdentity = "usb_location_" + joinSet(usbLocations);
+    } else if (!hidPhysicalUniqueIds.empty()) {
+        resolved.source = "hid.physical_device_unique_id";
+        resolved.physicalIdentity = "hid_physical_unique_" + joinSet(hidPhysicalUniqueIds);
+    } else if (!controllerPhysicalUniqueId.empty()) {
+        resolved.source = "controller.physicalDeviceUniqueID";
+        resolved.physicalIdentity = "controller_physical_unique_" + controllerPhysicalUniqueId;
+    } else if (!controllerPersistentId.empty()) {
+        resolved.source = "controller.persistentIdentifier";
+        resolved.physicalIdentity = "controller_persistent_" + controllerPersistentId;
+    } else if (!hidServiceIdentifiers.empty()) {
+        resolved.source = "hid.service.identifier";
+        resolved.physicalIdentity = "hid_service_identifier_" + joinSet(hidServiceIdentifiers);
+    } else if (controllerHasStablePlayerIndex(controller)) {
+        const int playerIndex = static_cast<int>(controller.playerIndex);
+        resolved.source = "legacy.player_index";
+        resolved.physicalIdentity = "player_index_" + std::to_string(playerIndex);
+    }
+
+    if (!resolved.physicalIdentity.empty()) {
+        if (resolved.source == "legacy.player_index") {
+            resolved.claimKey = controllerClaimKeyForPlayerIndex(static_cast<int>(controller.playerIndex));
+        } else {
+            resolved.claimKey = controllerClaimKeyForPhysicalIdentity(resolved.physicalIdentity);
+        }
+    }
+
+    resolved.diagnostics =
+        "source=" + (resolved.source.empty() ? "none" : resolved.source) +
+        ", usbLocation=" + joinSet(usbLocations) +
+        ", hidPhysicalUnique=" + joinSet(hidPhysicalUniqueIds) +
+        ", hidServiceIdentifier=" + joinSet(hidServiceIdentifiers) +
+        ", hidRegistryId=" + joinSet(hidRegistryIds) +
+        ", hidSerial=" + joinSet(hidSerials) +
+        ", hidTransport=" + joinSet(hidTransports) +
+        ", controllerPhysicalDeviceUniqueID=" + (controllerPhysicalUniqueId.empty() ? "none" : controllerPhysicalUniqueId) +
+        ", controllerPersistentIdentifier=" + (controllerPersistentId.empty() ? "none" : controllerPersistentId) +
+        ", controllerIdentifier=" + (controllerIdentifier.empty() ? "none" : controllerIdentifier) +
+        ", controllerUniqueIdentifier=" + (controllerUniqueIdentifier.empty() ? "none" : controllerUniqueIdentifier);
+    return resolved;
+}
 
 std::string nsStringToStd(NSString* value) {
     if (value == nil) {
@@ -140,13 +347,6 @@ bool ensureStableControllerPlayerIndices() {
     return controllers.count == 0 || !controllersNeedStablePlayerIndices(controllers);
 }
 
-std::string controllerClaimKey(GCController* controller) {
-    if (controller == nil || !controllerHasStablePlayerIndex(controller)) {
-        return {};
-    }
-    return controllerClaimKeyForPlayerIndex(static_cast<int>(controller.playerIndex));
-}
-
 bool controllerHasAnyLightColor(GCController* controller) {
     if (controller == nil || controller.light == nil || controller.light.color == nil) {
         return false;
@@ -161,17 +361,20 @@ std::string describeControllerIdentity(GCController* controller) {
         return "unknown controller";
     }
 
+    const ResolvedControllerIdentity resolvedIdentity = resolveControllerIdentity(controller);
     const std::string vendorName = nsStringToStd(controller.vendorName ?: @"Game Controller");
     const std::string productCategory = nsStringToStd(controller.productCategory);
     const int playerIndex = static_cast<int>(controller.playerIndex);
-    const std::string claimKey = controllerClaimKey(controller);
     const bool lightOn = controllerHasAnyLightColor(controller);
     std::string description = vendorName +
                               " [productCategory=" + (productCategory.empty() ? "unknown" : productCategory) +
                               ", playerIndex=" + std::to_string(playerIndex) +
-                              ", claimKey=" + (claimKey.empty() ? "none" : claimKey) +
+                              ", physicalIdentity=" + (resolvedIdentity.physicalIdentity.empty() ? "none" : resolvedIdentity.physicalIdentity) +
+                              ", identitySource=" + (resolvedIdentity.source.empty() ? "none" : resolvedIdentity.source) +
+                              ", claimKey=" + (resolvedIdentity.claimKey.empty() ? "none" : resolvedIdentity.claimKey) +
                               ", light=" + (lightOn ? "on" : "off") +
-                              ", attached=" + (controller.isAttachedToDevice ? "yes" : "no") + "]";
+                              ", attached=" + (controller.isAttachedToDevice ? "yes" : "no") +
+                              ", identityDiagnostics=" + resolvedIdentity.diagnostics + "]";
     return description;
 }
 
@@ -450,9 +653,9 @@ void postControllerMessage(const std::string& message) {
     }
 
     const std::string deviceName = nsStringToStd(controller.vendorName ?: @"Game Controller");
-    const int playerIndex = static_cast<int>(controller.playerIndex);
     const bool controllerLightOn = controllerHasAnyLightColor(controller);
-    const std::string preferredClaimKey = controllerClaimKey(controller);
+    const ResolvedControllerIdentity resolvedIdentity = resolveControllerIdentity(controller);
+    const std::string preferredClaimKey = resolvedIdentity.claimKey;
     std::string claimKeyInUse = preferredClaimKey;
     bool alreadyLockedToController = false;
     {
@@ -466,17 +669,13 @@ void postControllerMessage(const std::string& message) {
             std::string claimError;
             if (!tryAcquireControllerClaim(preferredClaimKey, newClaim, &claimError)) {
                 if (announce) {
-                    if (!controllerLightOn && isStableControllerPlayerIndex(playerIndex)) {
-                        std::string alternateKey;
-                        if (findFirstAvailableAlternateControllerClaimKey(playerIndex, &alternateKey, nullptr)) {
-                            postControllerMessage("Controller: Identity mismatch candidate " +
-                                                  describeControllerIdentity(controller) +
-                                                  " (authoritative key " + preferredClaimKey +
-                                                  " is claimed, alternate key " + alternateKey +
-                                                  " is free; refusing alternate claim)");
-                        }
-                    }
-                    postControllerMessage("Controller: Skipping " + deviceName + " (" + claimError + ")");
+                    postControllerMessage("Controller: Skipping " + deviceName +
+                                          " (" + claimError +
+                                          "; physicalIdentity=" +
+                                          (resolvedIdentity.physicalIdentity.empty() ? "none" : resolvedIdentity.physicalIdentity) +
+                                          "; identitySource=" +
+                                          (resolvedIdentity.source.empty() ? "none" : resolvedIdentity.source) +
+                                          "; " + resolvedIdentity.diagnostics + ")");
                 }
                 return NO;
             }
@@ -484,7 +683,8 @@ void postControllerMessage(const std::string& message) {
         } else {
             if (announce) {
                 postControllerMessage("Controller: Skipping " + deviceName +
-                                      " (missing authoritative player-index claim key)");
+                                      " (missing authoritative physical claim key; " +
+                                      resolvedIdentity.diagnostics + ")");
             }
             return NO;
         }
@@ -577,6 +777,13 @@ void postControllerMessage(const std::string& message) {
             message += " (limited mapping)";
         }
         postControllerMessage(message);
+        postControllerMessage("Controller: Claimed physical identity " +
+                              (resolvedIdentity.physicalIdentity.empty() ? "none" : resolvedIdentity.physicalIdentity) +
+                              " (source=" +
+                              (resolvedIdentity.source.empty() ? "none" : resolvedIdentity.source) +
+                              ", claimKey=" +
+                              (claimKeyInUse.empty() ? "none" : claimKeyInUse) +
+                              ", " + resolvedIdentity.diagnostics + ")");
         if (lightUpdated) {
             postControllerMessage("Controller: " + deviceName + " lock light set to red");
         }

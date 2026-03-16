@@ -139,6 +139,13 @@ std::string controllerClaimKeyForPlayerIndex(int playerIndex) {
     return "controller_player_index_" + std::to_string(playerIndex);
 }
 
+std::string controllerClaimKeyForPhysicalIdentity(const std::string& physicalIdentity) {
+    if (physicalIdentity.empty()) {
+        return {};
+    }
+    return "controller_physical_" + sanitizeClaimKey(physicalIdentity);
+}
+
 std::vector<std::string> controllerClaimKeyFallbackOrderForPlayerIndex(int preferredPlayerIndex) {
     if (!isStableControllerPlayerIndex(preferredPlayerIndex)) {
         return {};

@@ -18,6 +18,7 @@ bool shouldUseControllerLightOwnershipFallback(const std::string& claimKey,
                                                const ControllerClaimLease& lease);
 bool isStableControllerPlayerIndex(int playerIndex);
 std::string controllerClaimKeyForPlayerIndex(int playerIndex);
+std::string controllerClaimKeyForPhysicalIdentity(const std::string& physicalIdentity);
 std::vector<std::string> controllerClaimKeyFallbackOrderForPlayerIndex(int preferredPlayerIndex);
 bool findFirstAvailableAlternateControllerClaimKey(int preferredPlayerIndex,
                                                    std::string* alternateKey,

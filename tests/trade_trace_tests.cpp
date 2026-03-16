@@ -374,6 +374,20 @@ void testControllerClaimDetectsAlternateStableKeyWithoutClaimingIt() {
     releaseControllerClaim(alternateClaim);
 }
 
+void testControllerClaimKeyUsesPhysicalIdentity() {
+    const std::string firstIdentity = "usb_location_0x14520000";
+    const std::string secondIdentity = "usb_location_0x14310000";
+    const std::string firstKey = controllerClaimKeyForPhysicalIdentity(firstIdentity);
+    const std::string firstKeyAgain = controllerClaimKeyForPhysicalIdentity(firstIdentity);
+    const std::string secondKey = controllerClaimKeyForPhysicalIdentity(secondIdentity);
+
+    expect(!firstKey.empty(), "physical identity should produce a claim key");
+    expect(firstKey == firstKeyAgain, "same physical identity should produce a stable claim key");
+    expect(firstKey != secondKey, "different physical identities should produce distinct claim keys");
+    expect(controllerClaimKeyForPhysicalIdentity("").empty(),
+           "empty physical identity should not produce a claim key");
+}
+
 void testRecoverySnapshotReportsAbnormalShutdown() {
     clearTestFiles();
 
@@ -1462,6 +1476,7 @@ int main() {
         testControllerLightFallbackBypassesStaleLightWhenClaimHeld();
         testControllerClaimKeyUsesStablePlayerIndexIdentity();
         testControllerClaimDetectsAlternateStableKeyWithoutClaimingIt();
+        testControllerClaimKeyUsesPhysicalIdentity();
         testRecoverySnapshotReportsAbnormalShutdown();
         testTradingWrapperSessionReadyAndReconnect();
         testTradingWrapperIgnoresDuplicateOrderStatus();
