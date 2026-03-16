@@ -1156,9 +1156,6 @@ void StylePanel(NSView* view) {
     (void)sender;
     const bool enabled = ![self currentRiskControls].tradingKillSwitch;
     [self setTradingKillSwitchEnabled:enabled];
-    if (enabled) {
-        [self setControllerArmedEnabled:NO];
-    }
     [self appendAppMessage:(enabled ? "Kill switch enabled: trading halted" : "Kill switch disabled: trading may resume")];
     [self scheduleRefresh];
 }
