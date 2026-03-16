@@ -94,6 +94,7 @@ endif()
 set(APP_SOURCES
     main.mm
     app_shared.cpp
+    controller_claim.cpp
     bridge_batch_codec.cpp
     bridge_batch_transport.cpp
     runtime_qos.cpp
@@ -502,6 +503,7 @@ if(BUILD_TESTING)
     add_executable(tws_gui_tests
         tests/trade_trace_tests.cpp
         app_shared.cpp
+        controller_claim.cpp
         bridge_batch_codec.cpp
         bridge_batch_transport.cpp
         phase3_analyzers.cpp

@@ -2,16 +2,27 @@
 #import <GameController/GameController.h>
 
 #include "controller_mac.h"
+#include "controller_claim.h"
 
 #include "app_shared.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <chrono>
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
+
+constexpr float kLockedControllerRed = 0.0f;
+constexpr float kLockedControllerGreen = 1.0f;
+constexpr float kLockedControllerBlue = 0.0f;
+constexpr const char* kControllerIdentityMappingClaimKey = "controller_player_index_mapping";
 
 std::string nsStringToStd(NSString* value) {
     if (value == nil) {
@@ -32,6 +43,115 @@ bool controllerMatchesPreferredName(const std::string& name) {
     return upper.find("DUALSENSE") != std::string::npos ||
            upper.find("WIRELESS CONTROLLER") != std::string::npos ||
            upper.find("PLAYSTATION") != std::string::npos;
+}
+
+bool controllerHasStablePlayerIndex(GCController* controller) {
+    if (controller == nil) {
+        return false;
+    }
+    return isStableControllerPlayerIndex(static_cast<int>(controller.playerIndex));
+}
+
+bool controllersNeedStablePlayerIndices(NSArray<GCController*>* controllers) {
+    std::array<bool, 4> usedIndices = {false, false, false, false};
+    for (GCController* controller in controllers) {
+        if (!controllerHasStablePlayerIndex(controller)) {
+            return true;
+        }
+
+        const std::size_t offset = static_cast<std::size_t>(static_cast<int>(controller.playerIndex));
+        if (usedIndices[offset]) {
+            return true;
+        }
+        usedIndices[offset] = true;
+    }
+    return false;
+}
+
+void normalizeControllerPlayerIndicesLocked(NSArray<GCController*>* controllers) {
+    std::array<bool, 4> usedIndices = {false, false, false, false};
+    std::vector<GCController*> needsAssignment;
+
+    for (GCController* candidate in controllers) {
+        if (!controllerHasStablePlayerIndex(candidate)) {
+            needsAssignment.push_back(candidate);
+            continue;
+        }
+
+        const std::size_t offset = static_cast<std::size_t>(static_cast<int>(candidate.playerIndex));
+        if (usedIndices[offset]) {
+            candidate.playerIndex = GCControllerPlayerIndexUnset;
+            needsAssignment.push_back(candidate);
+            continue;
+        }
+
+        usedIndices[offset] = true;
+    }
+
+    std::size_t nextAvailable = 0;
+    for (GCController* candidate : needsAssignment) {
+        while (nextAvailable < usedIndices.size() && usedIndices[nextAvailable]) {
+            ++nextAvailable;
+        }
+        if (nextAvailable >= usedIndices.size()) {
+            candidate.playerIndex = GCControllerPlayerIndexUnset;
+            continue;
+        }
+
+        candidate.playerIndex = static_cast<GCControllerPlayerIndex>(static_cast<int>(nextAvailable));
+        usedIndices[nextAvailable] = true;
+    }
+}
+
+bool ensureStableControllerPlayerIndices() {
+    NSArray<GCController*>* controllers = [GCController controllers];
+    if (controllers.count == 0 || !controllersNeedStablePlayerIndices(controllers)) {
+        return true;
+    }
+
+    ControllerClaimLease mappingLease;
+    std::string error;
+    for (int attempt = 0; attempt < 25; ++attempt) {
+        if (tryAcquireControllerClaim(kControllerIdentityMappingClaimKey, mappingLease, &error)) {
+            break;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        controllers = [GCController controllers];
+        if (controllers.count == 0 || !controllersNeedStablePlayerIndices(controllers)) {
+            return true;
+        }
+    }
+
+    if (!hasControllerClaim(mappingLease)) {
+        controllers = [GCController controllers];
+        return controllers.count == 0 || !controllersNeedStablePlayerIndices(controllers);
+    }
+
+    controllers = [GCController controllers];
+    if (controllersNeedStablePlayerIndices(controllers)) {
+        normalizeControllerPlayerIndicesLocked(controllers);
+    }
+    releaseControllerClaim(mappingLease);
+
+    controllers = [GCController controllers];
+    return controllers.count == 0 || !controllersNeedStablePlayerIndices(controllers);
+}
+
+std::string controllerClaimKey(GCController* controller) {
+    if (controller == nil || !controllerHasStablePlayerIndex(controller)) {
+        return {};
+    }
+    return controllerClaimKeyForPlayerIndex(static_cast<int>(controller.playerIndex));
+}
+
+bool controllerHasAnyLightColor(GCController* controller) {
+    if (controller == nil || controller.light == nil || controller.light.color == nil) {
+        return false;
+    }
+    const GCColor* color = controller.light.color;
+    constexpr float kLightEpsilon = 0.01f;
+    return color.red > kLightEpsilon || color.green > kLightEpsilon || color.blue > kLightEpsilon;
 }
 
 int controllerScore(GCController* controller) {
@@ -85,6 +205,7 @@ void postControllerMessage(const std::string& message) {
     std::mutex _mutex;
     GCController* _activeController;
     GCController* _lockedController;
+    ControllerClaimLease _lockedControllerClaim;
     id _connectObserver;
     id _disconnectObserver;
     bool _supportsInput;
@@ -102,12 +223,13 @@ void postControllerMessage(const std::string& message) {
 @interface LongMacControllerManager ()
 
 - (void)setPressed:(BOOL)pressed forButtonIndex:(int)buttonIndex;
-- (void)attachController:(GCController*)controller announce:(BOOL)announce;
+- (BOOL)attachController:(GCController*)controller announce:(BOOL)announce;
+- (BOOL)attachBestAvailableControllerAnnounce:(BOOL)announce;
 - (void)detachActiveControllerAnnounce:(BOOL)announce;
 - (void)handleControllerConnected:(GCController*)controller;
 - (void)handleControllerDisconnected:(GCController*)controller;
 - (BOOL)shouldAcceptController:(GCController*)controller ignoredMessage:(std::string*)ignoredMessage;
-- (GCController*)bestAvailableController;
+- (BOOL)isControllerClaimedByOtherAppViaLight:(GCController*)controller;
 
 @end
 
@@ -139,6 +261,7 @@ void postControllerMessage(const std::string& message) {
     }
 
     [self detachActiveControllerAnnounce:NO];
+    releaseControllerClaim(_lockedControllerClaim);
 }
 
 - (BOOL)startWithError:(std::string*)error {
@@ -175,10 +298,9 @@ void postControllerMessage(const std::string& message) {
         }
     }];
 
-    GCController* controller = [self bestAvailableController];
-    if (controller != nil) {
-        [self attachController:controller announce:YES];
-    } else {
+    (void)ensureStableControllerPlayerIndices();
+
+    if (![self attachBestAvailableControllerAnnounce:YES]) {
         updateControllerSharedState(false, "");
     }
 
@@ -232,25 +354,81 @@ void postControllerMessage(const std::string& message) {
     _buttonStates[buttonIndex] = pressed;
 }
 
-- (GCController*)bestAvailableController {
-    NSArray<GCController*>* controllers = [GCController controllers];
-    GCController* bestController = nil;
-    int bestScore = -1;
+- (BOOL)isControllerClaimedByOtherAppViaLight:(GCController*)controller {
+    bool lockedToController = false;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        lockedToController = (_lockedController == controller);
+    }
+    if (lockedToController) {
+        return NO;
+    }
+    return controllerHasAnyLightColor(controller);
+}
 
+- (BOOL)attachBestAvailableControllerAnnounce:(BOOL)announce {
+    (void)ensureStableControllerPlayerIndices();
+
+    NSArray<GCController*>* controllers = [GCController controllers];
+    if (controllers.count == 0) {
+        return NO;
+    }
+
+    std::vector<GCController*> candidates;
+    candidates.reserve(static_cast<std::size_t>(controllers.count));
     for (GCController* controller in controllers) {
-        const int score = controllerScore(controller);
-        if (score > bestScore) {
-            bestScore = score;
-            bestController = controller;
+        candidates.push_back(controller);
+    }
+    std::stable_sort(candidates.begin(), candidates.end(), [](GCController* lhs, GCController* rhs) {
+        return controllerScore(lhs) > controllerScore(rhs);
+    });
+
+    for (GCController* controller : candidates) {
+        std::string ignoredMessage;
+        if (![self shouldAcceptController:controller ignoredMessage:&ignoredMessage]) {
+            continue;
+        }
+        if ([self attachController:controller announce:announce]) {
+            return YES;
         }
     }
 
-    return bestController;
+    return NO;
 }
 
-- (void)attachController:(GCController*)controller announce:(BOOL)announce {
+- (BOOL)attachController:(GCController*)controller announce:(BOOL)announce {
     if (controller == nil) {
-        return;
+        return NO;
+    }
+
+    const std::string deviceName = nsStringToStd(controller.vendorName ?: @"Game Controller");
+    const std::string claimKey = controllerClaimKey(controller);
+    bool alreadyLockedToController = false;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        alreadyLockedToController = (_lockedController == controller);
+    }
+
+    ControllerClaimLease newClaim;
+    if (!alreadyLockedToController) {
+        if (!claimKey.empty()) {
+            std::string claimError;
+            if (!tryAcquireControllerClaim(claimKey, newClaim, &claimError)) {
+                if (announce) {
+                    postControllerMessage("Controller: Skipping " + deviceName + " (" + claimError + ")");
+                }
+                return NO;
+            }
+        }
+
+        if (shouldUseControllerLightOwnershipFallback(claimKey, newClaim) &&
+            [self isControllerClaimedByOtherAppViaLight:controller]) {
+            releaseControllerClaim(newClaim);
+            if (announce) {
+                postControllerMessage("Controller: Skipping " + deviceName + " (lock light already owned by another app)");
+            }
+            return NO;
+        }
     }
 
     bool lockedControllerChanged = false;
@@ -260,8 +438,16 @@ void postControllerMessage(const std::string& message) {
         if (_lockedController == nil) {
             _lockedController = controller;
             lockedControllerChanged = true;
-            lockedDeviceName = nsStringToStd(controller.vendorName ?: @"Game Controller");
+            lockedDeviceName = deviceName;
         }
+
+        if (_lockedController == controller && hasControllerClaim(newClaim)) {
+            releaseControllerClaim(_lockedControllerClaim);
+            _lockedControllerClaim = std::move(newClaim);
+        }
+    }
+    if (hasControllerClaim(newClaim)) {
+        releaseControllerClaim(newClaim);
     }
     if (lockedControllerChanged) {
         updateControllerLockedState(lockedDeviceName);
@@ -269,7 +455,6 @@ void postControllerMessage(const std::string& message) {
 
     [self detachActiveControllerAnnounce:NO];
 
-    const std::string deviceName = nsStringToStd(controller.vendorName ?: @"Game Controller");
     const bool supportsInput = (controller.extendedGamepad != nil);
 
     {
@@ -312,7 +497,10 @@ void postControllerMessage(const std::string& message) {
         };
     }
 
-    const bool lightUpdated = setControllerLightColor(controller, 0.0f, 1.0f, 0.0f);
+    const bool lightUpdated = setControllerLightColor(controller,
+                                                      kLockedControllerRed,
+                                                      kLockedControllerGreen,
+                                                      kLockedControllerBlue);
     updateControllerSharedState(true, deviceName);
 
     if (announce) {
@@ -325,6 +513,7 @@ void postControllerMessage(const std::string& message) {
             postControllerMessage("Controller: " + deviceName + " lock light set to green");
         }
     }
+    return YES;
 }
 
 - (void)detachActiveControllerAnnounce:(BOOL)announce {
@@ -361,6 +550,8 @@ void postControllerMessage(const std::string& message) {
         return;
     }
 
+    (void)ensureStableControllerPlayerIndices();
+
     std::string ignoredMessage;
     if (![self shouldAcceptController:controller ignoredMessage:&ignoredMessage]) {
         postControllerMessage(ignoredMessage);
@@ -374,7 +565,9 @@ void postControllerMessage(const std::string& message) {
     }
 
     if (needsAttach) {
-        [self attachController:controller announce:YES];
+        if (![self attachController:controller announce:YES]) {
+            [self attachBestAvailableControllerAnnounce:YES];
+        }
     }
 }
 

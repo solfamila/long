@@ -2,6 +2,7 @@
 // so phase-specific coverage can evolve without turning this file back into a monolith.
 #include "trace_test_support.inc"
 #include "trace_core_tests.inc"
+#include "trace_controller_claim_tests.inc"
 #include "trace_tapescope_tests.inc"
 #include "trace_engine_core_tests.inc"
 #include "trace_engine_analyzer_tests.inc"
@@ -16,6 +17,9 @@ int main() {
         testReplayPrefersRichLiveTrace();
         testTraceIdFloorRecoversFromLog();
         testReplayHandlesPartialFillsAndCommission();
+        testControllerClaimLeaseBlocksReclaimUntilRelease();
+        testControllerLightFallbackBypassesStaleLightWhenClaimHeld();
+        testControllerClaimKeyUsesStablePlayerIndexIdentity();
         testWebSocketRuntimeGuards();
         testRecoverySnapshotReportsAbnormalShutdown();
         testBridgeOutboxSourceSeqPreservesAcceptanceOrderingAndAnchors();

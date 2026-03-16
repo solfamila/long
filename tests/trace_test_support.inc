@@ -1,6 +1,7 @@
 #include "app_shared.h"
 #include "bridge_batch_codec.h"
 #include "bridge_batch_transport.h"
+#include "controller_claim.h"
 #include "runtime_registry.h"
 #include "tape_bundle_inspection.h"
 #include "tapescope_bundle_preview.h"
