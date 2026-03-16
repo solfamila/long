@@ -1565,6 +1565,8 @@ void testTapeEngineReplaySnapshotRebuildsFrozenMarketState() {
     expect(response.summary.value("checkpoint_session_seq", 0ULL) == 7, "replay snapshot should report the checkpoint session_seq it resumed from");
     expect(response.summary.value("checkpoint_revision_id", 0ULL) == 1, "replay snapshot should report the checkpoint revision it resumed from");
     expect(response.summary.value("applied_event_count", 0ULL) == 7, "replay snapshot should count the applied market events");
+    expect(response.result.value("schema", std::string()) == tape_engine::kReplaySnapshotResultSchema,
+           "replay snapshot should publish a typed transport result");
     expect(std::fabs(response.summary.value("bid_price", 0.0) - 45.10) < 0.0001, "replay snapshot should rebuild the inside bid");
     expect(std::fabs(response.summary.value("ask_price", 0.0) - 45.13) < 0.0001, "replay snapshot should rebuild the inside ask from depth updates");
     expect(std::fabs(response.summary.value("last_price", 0.0) - 45.11) < 0.0001, "replay snapshot should rebuild the last trade price");
@@ -1857,4 +1859,3 @@ void testRecoverySnapshotReportsBridgeContinuityLossAfterAbnormalShutdown() {
     expectContains(snapshot.bannerText, "1 loss marker", "bridge recovery banner should mention explicit continuity loss");
     expectContains(snapshot.bannerText, "last source_seq=43", "bridge recovery banner should report the last accepted source_seq");
 }
-

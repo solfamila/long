@@ -108,27 +108,11 @@ QueryResult<json> QueryClient::packSummaryAndEvents(const QueryResult<tape_engin
 
 QueryResult<StatusSnapshot> QueryClient::status() const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::Status, "tapescope-status");
-
-    const QueryResult<tape_engine::QueryResponse> response = performQuery(request);
-    if (!response.ok()) {
-        return propagateError<StatusSnapshot>(response.error);
+    QueryResult<StatusSnapshot> result = packStatusPayload(performQuery(request));
+    if (result.ok() && result.value.socketPath.empty()) {
+        result.value.socketPath = config_.socketPath;
     }
-
-    const json& summary = response.value.summary;
-    if (!summary.is_object()) {
-        return makeError<StatusSnapshot>(QueryErrorKind::MalformedResponse,
-                                         "status summary must be an object");
-    }
-
-    StatusSnapshot snapshot;
-    snapshot.socketPath = summary.value("socket_path", config_.socketPath);
-    snapshot.dataDir = summary.value("data_dir", std::string());
-    snapshot.instrumentId = summary.value("instrument_id", std::string());
-    snapshot.latestSessionSeq = summary.value("latest_session_seq", 0ULL);
-    snapshot.liveEventCount = summary.value("live_event_count", 0ULL);
-    snapshot.segmentCount = summary.value("segment_count", 0ULL);
-    snapshot.manifestHash = summary.value("last_manifest_hash", std::string());
-    return makeSuccess(std::move(snapshot));
+    return result;
 }
 
 QueryResult<std::vector<json>> QueryClient::readLiveTail(std::size_t limit) const {

@@ -191,6 +191,9 @@ std::string normalizeArtifactId(std::string artifactId) {
     };
     replaceSuffix("session-report:", "<id>");
     replaceSuffix("case-report:", "<id>");
+    replaceSuffix("session-bundle:report:", "<id>");
+    replaceSuffix("case-bundle:report:", "<id>");
+    replaceSuffix("imported-case:", "<id>");
     replaceSuffix("incident:", "<id>");
     replaceSuffix("window:", "<id>");
     replaceSuffix("finding:", "<id>");
@@ -352,6 +355,332 @@ json projectContractResponse(const tape_engine::QueryResponse& response) {
         };
     }
     return projected;
+}
+
+json normalizeHash(const json& value) {
+    if (!value.is_string()) {
+        return nullptr;
+    }
+    return value.get<std::string>().empty() ? json(nullptr) : json("<hash>");
+}
+
+json normalizePositiveId(std::uint64_t value) {
+    return value == 0 ? json(nullptr) : json("<id>");
+}
+
+json normalizeTestPath(const json& value) {
+    if (!value.is_string()) {
+        return nullptr;
+    }
+    const std::string path = value.get<std::string>();
+    const std::string root = testDataDir().string();
+    if (path.rfind(root, 0) == 0) {
+        return "<tmp>" + path.substr(root.size());
+    }
+    return path;
+}
+
+json projectReplayRangeSummary(const json& replayRange) {
+    if (!replayRange.is_object()) {
+        return nullptr;
+    }
+    return {
+        {"first_session_seq", replayRange.value("first_session_seq", 0ULL)},
+        {"last_session_seq", replayRange.value("last_session_seq", 0ULL)}
+    };
+}
+
+json projectEventSummary(const json& event) {
+    if (!event.is_object()) {
+        return json::object();
+    }
+    json projected{
+        {"session_seq", event.value("session_seq", 0ULL)},
+        {"event_kind", event.value("event_kind", std::string())},
+        {"symbol", event.value("symbol", std::string())}
+    };
+    if (event.contains("instrument_id")) {
+        projected["instrument_id"] = event.value("instrument_id", std::string());
+    }
+    return projected;
+}
+
+json projectInvestigationCitations(const json& citations) {
+    std::vector<json> rows;
+    for (const auto& citation : citations) {
+        rows.push_back({
+            {"artifact_id", normalizeArtifactId(citation.value("artifact_id", std::string()))},
+            {"type", citation.value("type", std::string())}
+        });
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& lhs, const json& rhs) {
+        return lhs.dump() < rhs.dump();
+    });
+    json projected = json::array();
+    for (auto& row : rows) {
+        projected.push_back(std::move(row));
+    }
+    return projected;
+}
+
+json projectInvestigationIncidentKinds(const json& incidentRows) {
+    std::vector<json> rows;
+    for (const auto& row : incidentRows) {
+        rows.push_back({
+            {"logical_incident_id", normalizePositiveId(row.value("logical_incident_id", 0ULL))},
+            {"kind", row.value("kind", std::string())}
+        });
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& lhs, const json& rhs) {
+        return lhs.dump() < rhs.dump();
+    });
+    json projected = json::array();
+    for (auto& row : rows) {
+        projected.push_back(std::move(row));
+    }
+    return projected;
+}
+
+json projectCollectionRow(const std::string& collectionKind, const json& row) {
+    if (!row.is_object()) {
+        return json::object();
+    }
+    if (collectionKind == "order_anchors") {
+        const json anchor = row.value("anchor", json::object());
+        return {
+            {"anchor_id", normalizePositiveId(row.value("anchor_id", 0ULL))},
+            {"trace_id", anchor.value("trace_id", row.value("trace_id", 0ULL))},
+            {"order_id", anchor.value("order_id", row.value("order_id", 0LL))},
+            {"artifact_id", normalizeArtifactId(row.value("artifact_id", std::string()))},
+            {"instrument_id", row.value("instrument_id", std::string())}
+        };
+    }
+    if (collectionKind == "protected_windows") {
+        return {
+            {"window_id", normalizePositiveId(row.value("window_id", 0ULL))},
+            {"reason", row.value("reason", std::string())},
+            {"artifact_id", normalizeArtifactId(row.value("artifact_id", std::string()))}
+        };
+    }
+    if (collectionKind == "findings") {
+        return {
+            {"finding_id", normalizePositiveId(row.value("finding_id", 0ULL))},
+            {"kind", row.value("kind", std::string())},
+            {"severity", row.value("severity", std::string())},
+            {"artifact_id", normalizeArtifactId(row.value("artifact_id", std::string()))}
+        };
+    }
+    if (collectionKind == "incidents") {
+        return {
+            {"logical_incident_id", normalizePositiveId(row.value("logical_incident_id", 0ULL))},
+            {"kind", row.value("kind", std::string())},
+            {"title", row.value("title", std::string())}
+        };
+    }
+    return row;
+}
+
+json projectImportedCaseSummary(const json& row) {
+    if (!row.is_object()) {
+        return json::object();
+    }
+    return {
+        {"imported_case_id", normalizePositiveId(row.value("imported_case_id", 0ULL))},
+        {"artifact_id", normalizeArtifactId(row.value("artifact_id", std::string()))},
+        {"bundle_type", row.value("bundle_type", std::string())},
+        {"source_artifact_id", normalizeArtifactId(row.value("source_artifact_id", std::string()))},
+        {"source_bundle_path", normalizeTestPath(row.contains("source_bundle_path")
+                                                     ? row.at("source_bundle_path")
+                                                     : json(nullptr))},
+        {"payload_sha256", normalizeHash(row.contains("payload_sha256")
+                                             ? row.at("payload_sha256")
+                                             : json(nullptr))}
+    };
+}
+
+json projectTransportResultBody(const tape_engine::QueryResponse& response) {
+    const json& result = response.result;
+    if (!result.is_object()) {
+        return json::object();
+    }
+    const std::string schema = result.value("schema", std::string());
+    if (schema == tape_engine::kStatusResultSchema) {
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"socket_path", normalizeTestPath(result.contains("socket_path") ? result.at("socket_path") : json(nullptr))},
+            {"data_dir", normalizeTestPath(result.contains("data_dir") ? result.at("data_dir") : json(nullptr))},
+            {"latest_frozen_revision_id", normalizePositiveId(result.value("latest_frozen_revision_id", 0ULL))},
+            {"latest_session_seq", result.value("latest_session_seq", 0ULL)},
+            {"manifest_hash", normalizeHash(result.contains("manifest_hash") ? result.at("manifest_hash") : json(nullptr))}
+        };
+    }
+    if (schema == tape_engine::kEventListResultSchema) {
+        const json events = result.value("events", json::array());
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"served_revision_id", normalizePositiveId(result.value("served_revision_id", 0ULL))},
+            {"from_session_seq", result.value("from_session_seq", 0ULL)},
+            {"to_session_seq", result.value("to_session_seq", 0ULL)},
+            {"returned_count", result.value("returned_count", 0U)},
+            {"first_event", events.is_array() && !events.empty() ? projectEventSummary(events.front()) : json(nullptr)},
+            {"last_event", events.is_array() && !events.empty() ? projectEventSummary(events.back()) : json(nullptr)}
+        };
+    }
+    if (schema == tape_engine::kSessionQualityResultSchema) {
+        const json quality = result.value("data_quality", json::object());
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"served_revision_id", normalizePositiveId(result.value("served_revision_id", 0ULL))},
+            {"first_session_seq", result.value("first_session_seq", 0ULL)},
+            {"last_session_seq", result.value("last_session_seq", 0ULL)},
+            {"score", quality.value("score", 0.0)},
+            {"issue_count", quality.value("issues", json::array()).size()}
+        };
+    }
+    if (schema == tape_engine::kInvestigationResultSchema) {
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"served_revision_id", normalizePositiveId(result.value("served_revision_id", 0ULL))},
+            {"artifact_id", normalizeArtifactId(result.value("artifact_id", std::string()))},
+            {"artifact_kind", result.value("artifact_kind", std::string())},
+            {"headline", result.value("headline", std::string())},
+            {"entity_type", result.value("entity", json::object()).value("entity_type", std::string())},
+            {"report_type", result.value("report", json::object()).value("report_type", std::string())},
+            {"citation_rows", projectInvestigationCitations(result.value("citation_rows", json::array()))},
+            {"incident_rows", projectInvestigationIncidentKinds(result.value("incident_rows", json::array()))},
+            {"replay_range", projectReplayRangeSummary(result.value("replay_range", json(nullptr)))}
+        };
+    }
+    if (schema == tape_engine::kCollectionResultSchema) {
+        const std::string collectionKind = result.value("collection_kind", std::string());
+        json rows = json::array();
+        for (const auto& row : result.value("rows", json::array())) {
+            rows.push_back(projectCollectionRow(collectionKind, row));
+        }
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"collection_kind", collectionKind},
+            {"served_revision_id", normalizePositiveId(result.value("served_revision_id", 0ULL))},
+            {"returned_count", result.value("returned_count", 0U)},
+            {"rows", std::move(rows)}
+        };
+    }
+    if (schema == tape_engine::kSeekOrderResultSchema) {
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"served_revision_id", normalizePositiveId(result.value("served_revision_id", 0ULL))},
+            {"replay_target_session_seq", result.value("replay_target_session_seq", 0ULL)},
+            {"first_session_seq", result.value("first_session_seq", 0ULL)},
+            {"last_session_seq", result.value("last_session_seq", 0ULL)},
+            {"last_fill_session_seq", result.value("last_fill_session_seq", 0ULL)},
+            {"replay_range", projectReplayRangeSummary(result.value("replay_range", json(nullptr)))},
+            {"anchor", {
+                {"trace_id", result.value("anchor", json::object()).value("trace_id", 0ULL)},
+                {"order_id", result.value("anchor", json::object()).value("order_id", 0LL)},
+                {"perm_id", result.value("anchor", json::object()).value("perm_id", 0LL)},
+                {"exec_id", result.value("anchor", json::object()).value("exec_id", std::string())}
+            }}
+        };
+    }
+    if (schema == tape_engine::kArtifactExportResultSchema) {
+        const json artifactExport = result.value("artifact_export", json::object());
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"artifact_id", normalizeArtifactId(result.value("artifact_id", std::string()))},
+            {"format", result.value("format", std::string())},
+            {"served_revision_id", normalizePositiveId(result.value("served_revision_id", 0ULL))},
+            {"artifact_export", {
+                {"schema", artifactExport.value("schema", std::string())},
+                {"version", artifactExport.value("version", 0U)}
+            }}
+        };
+    }
+    if (schema == tape_engine::kReplaySnapshotResultSchema) {
+        const json quality = result.value("data_quality", json::object());
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"served_revision_id", normalizePositiveId(result.value("served_revision_id", 0ULL))},
+            {"target_session_seq", result.value("target_session_seq", 0ULL)},
+            {"replayed_through_session_seq", result.value("replayed_through_session_seq", 0ULL)},
+            {"applied_event_count", result.value("applied_event_count", 0ULL)},
+            {"checkpoint_used", result.value("checkpoint_used", false)},
+            {"checkpoint_revision_id", normalizePositiveId(result.value("checkpoint_revision_id", 0ULL))},
+            {"bid_price", result.value("bid_price", json(nullptr))},
+            {"ask_price", result.value("ask_price", json(nullptr))},
+            {"data_quality_score", quality.value("score", 0.0)}
+        };
+    }
+    if (schema == tape_engine::kBundleExportResultSchema) {
+        const json artifact = result.value("artifact", json::object());
+        const json bundle = result.value("bundle", json::object());
+        const json sourceArtifact = result.value("source_artifact", json::object());
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"artifact_id", normalizeArtifactId(artifact.value("artifact_id", std::string()))},
+            {"bundle_type", bundle.value("bundle_type", std::string())},
+            {"bundle_path", normalizeTestPath(bundle.contains("bundle_path") ? bundle.at("bundle_path") : json(nullptr))},
+            {"served_revision_id", normalizePositiveId(result.value("served_revision_id", 0ULL))},
+            {"source_artifact_id", normalizeArtifactId(sourceArtifact.value("artifact_id", std::string()))}
+        };
+    }
+    if (schema == tape_engine::kBundleVerifyResultSchema) {
+        const json bundle = result.value("bundle", json::object());
+        const json importedCase = result.value("imported_case", json(nullptr));
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"artifact_id", normalizeArtifactId(result.value("artifact", json::object()).value("artifact_id", std::string()))},
+            {"bundle_type", bundle.value("bundle_type", std::string())},
+            {"bundle_path", normalizeTestPath(bundle.contains("bundle_path") ? bundle.at("bundle_path") : json(nullptr))},
+            {"payload_sha256", normalizeHash(bundle.contains("payload_sha256") ? bundle.at("payload_sha256") : json(nullptr))},
+            {"verify_status", result.value("verify_status", std::string())},
+            {"import_supported", result.value("import_supported", false)},
+            {"already_imported", result.value("already_imported", false)},
+            {"can_import", result.value("can_import", false)},
+            {"import_reason", result.value("import_reason", std::string())},
+            {"imported_case", importedCase.is_object() ? projectImportedCaseSummary(importedCase) : json(nullptr)}
+        };
+    }
+    if (schema == tape_engine::kCaseBundleImportResultSchema) {
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"artifact_id", normalizeArtifactId(result.value("artifact", json::object()).value("artifact_id", std::string()))},
+            {"import_status", result.value("import_status", std::string())},
+            {"duplicate_import", result.value("duplicate_import", false)},
+            {"imported_case", projectImportedCaseSummary(result.value("imported_case", json::object()))}
+        };
+    }
+    if (schema == tape_engine::kImportedCaseInventoryResultSchema) {
+        json importedCases = json::array();
+        for (const auto& row : result.value("imported_cases", json::array())) {
+            importedCases.push_back(projectImportedCaseSummary(row));
+        }
+        return {
+            {"schema", schema},
+            {"version", result.value("version", 0U)},
+            {"returned_count", result.value("returned_count", 0U)},
+            {"imported_cases", std::move(importedCases)}
+        };
+    }
+    return result;
+}
+
+json projectTransportResult(const tape_engine::QueryResponse& response) {
+    return {
+        {"operation", response.operation},
+        {"status", response.status},
+        {"result", projectTransportResultBody(response)}
+    };
 }
 
 BridgeOutboxRecord makeBridgeRecord(std::uint64_t sourceSeq,

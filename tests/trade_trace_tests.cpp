@@ -41,6 +41,7 @@ int main() {
         testTapeEnginePhase3PersistsIncidentAndOrderCaseReports();
         testTapeEnginePhase6ExportsAndImportsPortableBundles();
         testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures();
+        testTapeEngineTypedTransportResultsMatchGoldenFixtures();
         testTapeEnginePhase3CollapsesRepeatedFindingsIntoRankedIncidents();
         testTapeEnginePhase3DetectsInsideLiquiditySignals();
         testTapeEnginePhase3DetectsDisplayInstabilitySignals();

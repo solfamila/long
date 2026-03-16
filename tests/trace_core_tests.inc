@@ -740,6 +740,8 @@ void testTapeEngineQueryStatusAndReads() {
     expect(response.summary.value("segment_count", 0ULL) >= 2, "status query should report at least the written segment count");
     expect(response.summary.value("latest_frozen_revision_id", 0ULL) >= 2, "status query should expose a frozen revision at or beyond the ingest batches");
     expect(response.summary.value("latest_session_seq", 0ULL) == 4, "status query should report the latest accepted session_seq");
+    expect(response.result.value("schema", std::string()) == tape_engine::kStatusResultSchema,
+           "status query should publish a typed transport result");
 
     tape_engine::QueryRequest rangeRequest;
     rangeRequest.requestId = "range-1";
@@ -752,6 +754,8 @@ void testTapeEngineQueryStatusAndReads() {
     expect(response.events.at(0).value("event_kind", std::string()) == "order_status", "range query should include the original order status event");
     expect(response.events.at(1).value("event_kind", std::string()) == "gap_marker", "range query should expose the explicit gap marker");
     expect(response.events.at(2).value("event_kind", std::string()) == "fill_execution", "range query should expose the later fill event");
+    expect(response.result.value("schema", std::string()) == tape_engine::kEventListResultSchema,
+           "range query should publish a typed event-list transport result");
 
     tape_engine::QueryRequest liveTailRequest;
     liveTailRequest.requestId = "tail-1";
@@ -761,6 +765,8 @@ void testTapeEngineQueryStatusAndReads() {
     expect(response.events.is_array() && response.events.size() == 2, "live tail query should honor the requested limit");
     expect(response.events.at(0).value("event_kind", std::string()) == "gap_marker", "live tail query should expose the penultimate live event");
     expect(response.events.at(1).value("event_kind", std::string()) == "fill_execution", "live tail query should expose the latest live event");
+    expect(response.result.value("schema", std::string()) == tape_engine::kEventListResultSchema,
+           "live tail query should publish a typed event-list transport result");
 
     tape_engine::QueryRequest liveTailAliasRequest;
     liveTailAliasRequest.requestId = "tail-alias-1";
@@ -781,6 +787,8 @@ void testTapeEngineQueryStatusAndReads() {
     expect(response.events.is_array() && response.events.size() == 3, "anchor query should return the order-anchored lifecycle events");
     expect(response.events.at(0).value("event_kind", std::string()) == "order_intent", "anchor query should begin with the queued order intent");
     expect(response.events.at(2).value("event_kind", std::string()) == "fill_execution", "anchor query should include the fill execution");
+    expect(response.result.value("schema", std::string()) == tape_engine::kEventListResultSchema,
+           "anchor query should publish a typed event-list transport result");
 
     tape_engine::QueryRequest seekRequest;
     seekRequest.requestId = "seek-1";
@@ -792,6 +800,8 @@ void testTapeEngineQueryStatusAndReads() {
     expect(response.summary.value("last_fill_session_seq", 0ULL) == 4, "seek-order should identify the fill session_seq as the replay target");
     expect(response.summary.value("replay_target_session_seq", 0ULL) == 4, "seek-order should point replay at the fill when one exists");
     expect(response.summary.contains("protected_window"), "seek-order should include protected-window context");
+    expect(response.result.value("schema", std::string()) == tape_engine::kSeekOrderResultSchema,
+           "seek-order should publish a typed seek transport result");
 
     tape_engine::QueryRequest qualityRequest;
     qualityRequest.requestId = "quality-1";
@@ -804,6 +814,8 @@ void testTapeEngineQueryStatusAndReads() {
            "session-quality query should count explicit gap markers");
     expect(response.summary.value("data_quality", json::object()).value("weak_instrument_identity_count", 0ULL) >= 1ULL,
            "session-quality query should flag weak identity fallback when only symbol-style identity is available");
+    expect(response.result.value("schema", std::string()) == tape_engine::kSessionQualityResultSchema,
+           "session-quality query should publish a typed transport result");
 
     server.stop();
 }
@@ -835,4 +847,3 @@ void testTapeEngineQueryOperationRegistryCanonicalizesAliases() {
     expect(decoded.operationKind == tape_engine::QueryOperation::ReadArtifact,
            "query request decoding should recover the typed operation kind");
 }
-

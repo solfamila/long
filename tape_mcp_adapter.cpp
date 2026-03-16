@@ -2159,11 +2159,11 @@ json findingRowToJson(const json& row) {
     };
 }
 
-json listRowsResultFromResponse(const tape_engine::QueryResponse& response,
-                                const char* rowKey,
-                                const std::function<json(const json&)>& projectRow) {
+json listRowsResultFromPayload(const tape_payloads::CollectionRowsPayload& payload,
+                               const char* rowKey,
+                               const std::function<json(const json&)>& projectRow) {
     json rows = json::array();
-    for (const auto& row : response.events) {
+    for (const auto& row : payload.rows) {
         rows.push_back(projectRow(row));
     }
     return json{
@@ -2172,24 +2172,23 @@ json listRowsResultFromResponse(const tape_engine::QueryResponse& response,
     };
 }
 
-json replaySnapshotResultFromResponse(const tape_engine::QueryResponse& response) {
-    const json& summary = response.summary;
+json replaySnapshotResultFromPayload(const tape_payloads::ReplaySnapshotPayload& payload) {
     return json{
-        {"served_revision_id", summary.contains("served_revision_id") ? summary.at("served_revision_id") : json(nullptr)},
-        {"includes_mutable_tail", summary.value("includes_mutable_tail", false)},
-        {"target_session_seq", summary.value("target_session_seq", 0ULL)},
-        {"replayed_through_session_seq", summary.value("replayed_through_session_seq", 0ULL)},
-        {"applied_event_count", summary.value("applied_event_count", 0ULL)},
-        {"gap_markers_encountered", summary.value("gap_markers_encountered", 0ULL)},
-        {"checkpoint_used", summary.value("checkpoint_used", false)},
-        {"checkpoint_revision_id", summary.value("checkpoint_revision_id", 0ULL)},
-        {"checkpoint_session_seq", summary.value("checkpoint_session_seq", 0ULL)},
-        {"bid_price", summary.contains("bid_price") ? summary.at("bid_price") : json(nullptr)},
-        {"ask_price", summary.contains("ask_price") ? summary.at("ask_price") : json(nullptr)},
-        {"last_price", summary.contains("last_price") ? summary.at("last_price") : json(nullptr)},
-        {"bid_book", summary.value("bid_book", json::array())},
-        {"ask_book", summary.value("ask_book", json::array())},
-        {"data_quality", summary.value("data_quality", json::object())}
+        {"served_revision_id", payload.servedRevisionId == 0 ? json(nullptr) : json(payload.servedRevisionId)},
+        {"includes_mutable_tail", payload.includesMutableTail},
+        {"target_session_seq", payload.targetSessionSeq},
+        {"replayed_through_session_seq", payload.replayedThroughSessionSeq},
+        {"applied_event_count", payload.appliedEventCount},
+        {"gap_markers_encountered", payload.gapMarkersEncountered},
+        {"checkpoint_used", payload.checkpointUsed},
+        {"checkpoint_revision_id", payload.checkpointRevisionId},
+        {"checkpoint_session_seq", payload.checkpointSessionSeq},
+        {"bid_price", payload.bidPrice},
+        {"ask_price", payload.askPrice},
+        {"last_price", payload.lastPrice},
+        {"bid_book", payload.bidBook},
+        {"ask_book", payload.askBook},
+        {"data_quality", payload.dataQuality}
     };
 }
 
@@ -2234,46 +2233,54 @@ json importedCaseRowToJson(const json& row) {
     };
 }
 
-json bundleExportResultFromResponse(const tape_engine::QueryResponse& response) {
-    const json& summary = response.summary;
+json importedCaseListResultFromPayload(const tape_payloads::ImportedCaseListPayload& payload) {
+    json rows = json::array();
+    for (const auto& row : payload.importedCases) {
+        rows.push_back(importedCaseRowToJson(row.raw));
+    }
     return json{
-        {"artifact", summary.value("artifact", json::object())},
-        {"bundle", summary.value("bundle", json::object())},
-        {"source_artifact", summary.value("source_artifact", json::object())},
-        {"source_report", summary.value("source_report", json::object())},
-        {"served_revision_id", summary.contains("served_revision_id") ? summary.at("served_revision_id") : json(nullptr)},
-        {"export_status", summary.value("export_status", std::string())}
+        {"returned_count", rows.size()},
+        {"imported_cases", std::move(rows)}
     };
 }
 
-json bundleImportResultFromResponse(const tape_engine::QueryResponse& response) {
-    const json& summary = response.summary;
+json bundleExportResultFromPayload(const tape_payloads::BundleExportPayload& payload) {
     return json{
-        {"artifact", summary.value("artifact", json::object())},
-        {"imported_case", importedCaseRowToJson(summary.value("imported_case", json::object()))},
-        {"import_status", summary.value("import_status", std::string())},
-        {"duplicate_import", summary.value("duplicate_import", false)}
+        {"artifact", payload.artifact},
+        {"bundle", payload.bundle},
+        {"source_artifact", payload.sourceArtifact},
+        {"source_report", payload.sourceReport},
+        {"served_revision_id", payload.servedRevisionId == 0 ? json(nullptr) : json(payload.servedRevisionId)},
+        {"export_status", payload.raw.value("result", json::object()).value("export_status", std::string())}
     };
 }
 
-json bundleVerifyResultFromResponse(const tape_engine::QueryResponse& response) {
-    const json& summary = response.summary;
+json bundleImportResultFromPayload(const tape_payloads::CaseBundleImportPayload& payload) {
     return json{
-        {"artifact", summary.value("artifact", json::object())},
-        {"bundle", summary.value("bundle", json::object())},
-        {"source_artifact", summary.value("source_artifact", json::object())},
-        {"source_report", summary.value("source_report", json::object())},
-        {"report_summary", summary.value("report_summary", json::object())},
-        {"report_markdown", summary.value("report_markdown", std::string())},
-        {"verify_status", summary.value("verify_status", std::string())},
-        {"import_supported", summary.value("import_supported", false)},
-        {"already_imported", summary.value("already_imported", false)},
-        {"can_import", summary.value("can_import", false)},
-        {"import_reason", summary.value("import_reason", std::string())},
-        {"imported_case", summary.contains("imported_case")
-                              ? importedCaseRowToJson(summary.value("imported_case", json::object()))
+        {"artifact", payload.artifact},
+        {"imported_case", importedCaseRowToJson(payload.importedCase.raw)},
+        {"import_status", payload.importStatus},
+        {"duplicate_import", payload.duplicateImport}
+    };
+}
+
+json bundleVerifyResultFromPayload(const tape_payloads::BundleVerifyPayload& payload) {
+    return json{
+        {"artifact", payload.artifact},
+        {"bundle", payload.bundle},
+        {"source_artifact", payload.sourceArtifact},
+        {"source_report", payload.sourceReport},
+        {"report_summary", payload.reportSummary},
+        {"report_markdown", payload.reportMarkdown},
+        {"verify_status", payload.verifyStatus},
+        {"import_supported", payload.importSupported},
+        {"already_imported", payload.alreadyImported},
+        {"can_import", payload.canImport},
+        {"import_reason", payload.importReason},
+        {"imported_case", payload.hasImportedCase
+                              ? importedCaseRowToJson(payload.importedCase.raw)
                               : json(nullptr)},
-        {"served_revision_id", summary.contains("served_revision_id") ? summary.at("served_revision_id") : json(nullptr)}
+        {"served_revision_id", payload.servedRevisionId == 0 ? json(nullptr) : json(payload.servedRevisionId)}
     };
 }
 
@@ -3453,9 +3460,9 @@ json Adapter::invokeListOrderAnchorsTool(const ToolSpec& tool, const json& args)
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              listRowsResultFromResponse(result.value,
-                                                                         "order_anchors",
-                                                                         orderAnchorRowToJson),
+                                              listRowsResultFromPayload(result.value,
+                                                                        "order_anchors",
+                                                                        orderAnchorRowToJson),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -3487,9 +3494,9 @@ json Adapter::invokeListProtectedWindowsTool(const ToolSpec& tool, const json& a
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              listRowsResultFromResponse(result.value,
-                                                                         "protected_windows",
-                                                                         protectedWindowRowToJson),
+                                              listRowsResultFromPayload(result.value,
+                                                                        "protected_windows",
+                                                                        protectedWindowRowToJson),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -3521,9 +3528,9 @@ json Adapter::invokeListFindingsTool(const ToolSpec& tool, const json& args) con
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              listRowsResultFromResponse(result.value,
-                                                                         "findings",
-                                                                         findingRowToJson),
+                                              listRowsResultFromPayload(result.value,
+                                                                        "findings",
+                                                                        findingRowToJson),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -3938,21 +3945,8 @@ json Adapter::invokeReadProtectedWindowTool(const ToolSpec& tool, const json& ar
                                                 result.error.retryable,
                                                 revisionUnavailable()));
     }
-    const auto packed = tape_payloads::packInvestigationPayload(
-        tape_payloads::makeSuccess(result.value));
-    if (!packed.ok()) {
-        return makeToolResult(makeErrorEnvelope(tool.name,
-                                                tape_engine::queryOperationName(tool.engineOperation),
-                                                tool.outputSchemaId,
-                                                true,
-                                                false,
-                                                "malformed_response",
-                                                packed.error.message,
-                                                false,
-                                                revisionUnavailable()));
-    }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              investigationResultFromPayload(packed.value),
+                                              investigationResultFromPayload(result.value),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -3984,7 +3978,7 @@ json Adapter::invokeReplaySnapshotTool(const ToolSpec& tool, const json& args) c
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              replaySnapshotResultFromResponse(result.value),
+                                              replaySnapshotResultFromPayload(result.value),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -4112,7 +4106,7 @@ json Adapter::invokeExportSessionBundleTool(const ToolSpec& tool, const json& ar
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              bundleExportResultFromResponse(result.value),
+                                              bundleExportResultFromPayload(result.value),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -4144,7 +4138,7 @@ json Adapter::invokeExportCaseBundleTool(const ToolSpec& tool, const json& args)
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              bundleExportResultFromResponse(result.value),
+                                              bundleExportResultFromPayload(result.value),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -4185,7 +4179,7 @@ json Adapter::invokeVerifyBundleTool(const ToolSpec& tool, const json& args) con
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              bundleVerifyResultFromResponse(result.value),
+                                              bundleVerifyResultFromPayload(result.value),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -4226,7 +4220,7 @@ json Adapter::invokeImportCaseBundleTool(const ToolSpec& tool, const json& args)
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              bundleImportResultFromResponse(result.value),
+                                              bundleImportResultFromPayload(result.value),
                                               revisionFromSummary(result.value.summary)));
 }
 
@@ -4258,9 +4252,7 @@ json Adapter::invokeListImportedCasesTool(const ToolSpec& tool, const json& args
                                                 revisionUnavailable()));
     }
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              listRowsResultFromResponse(result.value,
-                                                                         "imported_cases",
-                                                                         importedCaseRowToJson),
+                                              importedCaseListResultFromPayload(result.value),
                                               revisionUnavailable()));
 }
 

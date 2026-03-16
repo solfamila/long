@@ -474,6 +474,8 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
         expectContains(response.summary.value("api", json::object()).value("envelope_schema", std::string()),
                        "com.foxy.tape-engine.investigation-envelope",
                        "session overview should expose the investigation envelope schema");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "session overview should publish a typed investigation transport result");
 
         tape_engine::QueryRequest scanRequest;
         scanRequest.requestId = "scan-phase3-session-report";
@@ -499,6 +501,8 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
                "session report scan should summarize at least one major incident");
         expect(response.summary.value("report_summary", json::object()).contains("top_incident_why_it_matters"),
                "session report scan should include top-incident explanations");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "session report scans should publish a typed investigation transport result");
 
         tape_engine::QueryRequest rescanRequest = scanRequest;
         rescanRequest.requestId = "scan-phase3-session-report-again";
@@ -513,6 +517,9 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
         expect(response.events.is_array() && !response.events.empty(), "session report listing should return the durable artifact");
         expect(response.events.at(0).value("report_id", 0ULL) == reportId,
                "session report listing should include the newly scanned report");
+        expect(response.result.value("schema", std::string()) == tape_engine::kCollectionResultSchema &&
+                   response.result.value("collection_kind", std::string()) == "session_reports",
+               "session report listing should publish a typed collection transport result");
 
         expect(fs::exists(rootDir / "session-reports.jsonl"), "session report scanning should persist a report manifest");
         expect(fs::exists(rootDir / "artifact-lookup.msgpack"),
@@ -553,6 +560,8 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
         expect(response.summary.contains("data_quality"), "restored session report should keep the data-quality block");
         expect(response.events.is_array() && !response.events.empty(),
                "restored session report should retain ranked incident rows");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "restored session report reads should publish a typed investigation transport result");
 
         tape_engine::QueryRequest readArtifactRequest;
         readArtifactRequest.requestId = "read-artifact-session-report";
@@ -563,6 +572,8 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
                "read_artifact should echo the resolved durable artifact id");
         expect(response.summary.value("api", json::object()).value("response_kind", std::string()) == "artifact_read",
                "read_artifact should expose a stable artifact-read response kind");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "read_artifact should publish a typed investigation transport result");
 
         tape_engine::QueryRequest readOverviewArtifactRequest;
         readOverviewArtifactRequest.requestId = "read-artifact-session-overview";
@@ -583,6 +594,8 @@ void testTapeEnginePhase3ScansSessionIntoDurableReportArtifact() {
         expect(response.summary.value("artifact_export", json::object()).value("schema", std::string()) ==
                    "com.foxy.tape-engine.artifact-export",
                "artifact exports should expose a stable export schema identifier");
+        expect(response.result.value("schema", std::string()) == tape_engine::kArtifactExportResultSchema,
+               "artifact exports should publish a typed transport result");
 
         restarted.stop();
     }
@@ -669,6 +682,9 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(response.events.is_array() && !response.events.empty(), "case-report setup should create a ranked incident");
         logicalIncidentId = response.events.at(0).value("logical_incident_id", 0ULL);
         expect(logicalIncidentId > 0, "case-report setup should expose a logical incident id");
+        expect(response.result.value("schema", std::string()) == tape_engine::kCollectionResultSchema &&
+                   response.result.value("collection_kind", std::string()) == "incidents",
+               "incident listing should publish a typed collection transport result");
 
         tape_engine::QueryRequest incidentReportRequest;
         incidentReportRequest.requestId = "scan-incident-case-report";
@@ -683,6 +699,8 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(response.summary.value("source_artifact", json::object()).value("artifact_id", std::string()) ==
                    "incident:" + std::to_string(logicalIncidentId),
                "incident case-report scans should preserve the source incident artifact id");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "incident report scans should publish a typed investigation transport result");
 
         tape_engine::QueryRequest orderReportRequest;
         orderReportRequest.requestId = "scan-order-case-report";
@@ -696,6 +714,8 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(response.summary.value("artifact", json::object()).value("artifact_id", std::string()) ==
                    "case-report:" + std::to_string(orderCaseReportId),
                "order case-report scans should promote the durable case-report artifact to the primary artifact envelope");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "order case-report scans should publish a typed investigation transport result");
 
         tape_engine::QueryRequest listReportsRequest;
         listReportsRequest.requestId = "list-case-reports";
@@ -703,6 +723,9 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(listReportsRequest, &response, &error), "case-report listing should succeed: " + error);
         expect(response.events.is_array() && response.events.size() >= 2, "case-report listing should include both durable report artifacts");
         expect(fs::exists(rootDir / "case-reports.jsonl"), "case-report scanning should persist a case report manifest");
+        expect(response.result.value("schema", std::string()) == tape_engine::kCollectionResultSchema &&
+                   response.result.value("collection_kind", std::string()) == "case_reports",
+               "case-report listing should publish a typed collection transport result");
 
         tape_engine::QueryRequest findingsRequest;
         findingsRequest.requestId = "list-findings-case-reports";
@@ -710,6 +733,9 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(findingsRequest, &response, &error), "case-report finding list query should succeed: " + error);
         expect(response.events.is_array() && !response.events.empty(), "case-report setup should produce at least one finding");
         firstFindingId = response.events.at(0).value("finding_id", 0ULL);
+        expect(response.result.value("schema", std::string()) == tape_engine::kCollectionResultSchema &&
+                   response.result.value("collection_kind", std::string()) == "findings",
+               "finding listing should publish a typed collection transport result");
 
         tape_engine::QueryRequest anchorsRequest;
         anchorsRequest.requestId = "list-anchors-case-reports";
@@ -717,6 +743,9 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(anchorsRequest, &response, &error), "case-report anchor list query should succeed: " + error);
         expect(response.events.is_array() && !response.events.empty(), "case-report setup should persist at least one anchor");
         firstAnchorId = response.events.at(0).value("anchor_id", 0ULL);
+        expect(response.result.value("schema", std::string()) == tape_engine::kCollectionResultSchema &&
+                   response.result.value("collection_kind", std::string()) == "order_anchors",
+               "order-anchor listing should publish a typed collection transport result");
 
         expect(fs::exists(rootDir / "artifact-lookup.msgpack"),
                "case-report scanning should persist the artifact lookup index");
@@ -769,6 +798,8 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
                "restored incident case-report should preserve its durable report id");
         expect(response.summary.value("case_report_artifact", json::object()).value("report_type", std::string()) == "incident_case",
                "restored incident case-report should keep its report type");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "restored incident case-report reads should publish a typed investigation transport result");
 
         tape_engine::QueryRequest readOrderReportRequest;
         readOrderReportRequest.requestId = "read-order-case-report";
@@ -780,6 +811,8 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(response.summary.value("case_report_artifact", json::object()).value("report_type", std::string()) == "order_case",
                "restored order case-report should keep its report type");
         expect(response.summary.contains("case_report"), "restored order case-report should still expose the case summary");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "restored order case-report reads should publish a typed investigation transport result");
 
         tape_engine::QueryRequest readOrderCaseArtifactRequest;
         readOrderCaseArtifactRequest.requestId = "read-order-case-artifact";
@@ -788,6 +821,8 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(readOrderCaseArtifactRequest, &response, &error), "read_artifact should reopen the order-case selector artifact: " + error);
         expect(response.summary.value("resolved_artifact_id", std::string()) == orderCaseArtifactId,
                "read_artifact should resolve selector-style order-case artifacts directly");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "order-case artifact reads should publish a typed investigation transport result");
 
         tape_engine::QueryRequest readFindingArtifactRequest;
         readFindingArtifactRequest.requestId = "read-finding-artifact";
@@ -796,6 +831,8 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(readFindingArtifactRequest, &response, &error), "read_artifact should reopen finding artifacts directly: " + error);
         expect(response.summary.value("finding", json::object()).value("finding_id", 0ULL) == firstFindingId,
                "finding artifact reads should resolve the requested finding");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "finding artifact reads should publish a typed investigation transport result");
 
         tape_engine::QueryRequest readAnchorArtifactRequest;
         readAnchorArtifactRequest.requestId = "read-anchor-artifact";
@@ -804,6 +841,8 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(readAnchorArtifactRequest, &response, &error), "read_artifact should reopen anchor artifacts directly: " + error);
         expect(response.summary.value("order_anchor", json::object()).value("anchor_id", 0ULL) == firstAnchorId,
                "anchor artifact reads should resolve the requested anchor");
+        expect(response.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema,
+               "anchor artifact reads should publish a typed investigation transport result");
 
         tape_engine::QueryRequest exportCaseArtifactRequest;
         exportCaseArtifactRequest.requestId = "export-case-artifact";
@@ -813,6 +852,8 @@ void testTapeEnginePhase3PersistsIncidentAndOrderCaseReports() {
         expect(client.query(exportCaseArtifactRequest, &response, &error), "export_artifact should export a case report bundle: " + error);
         expect(response.summary.value("bundle", json::object()).value("summary", json::object()).contains("case_report"),
                "case report export bundle should preserve the case-report payload");
+        expect(response.result.value("schema", std::string()) == tape_engine::kArtifactExportResultSchema,
+               "case-report export_artifact should publish a typed transport result");
 
         restarted.stop();
     }
@@ -934,6 +975,35 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
                "phase 6 session bundle verify should not mark the session bundle imported");
         expect(!response.summary.value("can_import", true),
                "phase 6 session bundle verify should not allow importing a session bundle");
+        expect(response.result.value("schema", std::string()) == tape_engine::kBundleVerifyResultSchema,
+               "phase 6 session bundle verify should publish a typed bundle verify transport result");
+
+        const fs::path corruptBundlePath = rootDir / "corrupt-case-bundle.msgpack";
+        {
+            std::ofstream out(corruptBundlePath, std::ios::binary);
+            expect(out.is_open(), "phase 6 corrupt bundle fixture should open for write");
+            out << "not-msgpack";
+        }
+
+        tape_engine::QueryRequest verifyCorruptBundleRequest;
+        verifyCorruptBundleRequest.requestId = "phase6-verify-corrupt-bundle";
+        verifyCorruptBundleRequest.operation = "verify_bundle";
+        verifyCorruptBundleRequest.bundlePath = corruptBundlePath.string();
+        expect(!client.query(verifyCorruptBundleRequest, &response, &error),
+               "phase 6 corrupt bundle verify should fail");
+        expectContains(error, "bundle is not valid MessagePack JSON",
+                       "phase 6 corrupt bundle verify should expose a stable parse error");
+
+        tape_engine::QueryRequest importCorruptBundleRequest;
+        importCorruptBundleRequest.requestId = "phase6-import-corrupt-bundle";
+        importCorruptBundleRequest.operation = "import_case_bundle";
+        importCorruptBundleRequest.bundlePath = corruptBundlePath.string();
+        expect(!client.query(importCorruptBundleRequest, &response, &error),
+               "phase 6 corrupt bundle import should fail");
+        expectContains(error, "bundle is not valid MessagePack JSON",
+                       "phase 6 corrupt bundle import should expose a stable parse error");
+        expect(!fs::exists(rootDir / "imported-case-bundles.jsonl"),
+               "phase 6 corrupt bundle import should not create an imported-case manifest");
 
         tape_engine::QueryRequest exportCaseBundleRequest;
         exportCaseBundleRequest.requestId = "phase6-export-case-bundle";
@@ -943,6 +1013,8 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
         caseBundlePath = response.summary.value("bundle", json::object()).value("bundle_path", std::string());
         expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
                "phase 6 case bundle export should write a portable case bundle");
+        expect(response.result.value("schema", std::string()) == tape_engine::kBundleExportResultSchema,
+               "phase 6 case bundle export should publish a typed bundle export transport result");
         const json caseBundle = readMsgpackFile(caseBundlePath);
         expect(caseBundle.value("bundle_type", std::string()) == "case_bundle",
                "phase 6 case bundle should record the case bundle type");
@@ -977,6 +1049,8 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
         expect(response.summary.value("bundle", json::object()).value("payload_sha256", std::string()) ==
                    renamedBundleInspection.payloadSha256,
                "phase 6 case bundle verify should preserve payload hash after rename");
+        expect(response.result.value("schema", std::string()) == tape_engine::kBundleVerifyResultSchema,
+               "phase 6 case bundle verify should publish a typed bundle verify transport result");
 
         tape_engine::QueryRequest importRequest;
         importRequest.requestId = "phase6-import-case-bundle";
@@ -989,6 +1063,8 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
         expect(importedCaseId > 0, "phase 6 case bundle import should assign an imported case id");
         expect(fs::exists(rootDir / "imported-case-bundles.jsonl"),
                "phase 6 case bundle import should persist an imported-case manifest");
+        expect(response.result.value("schema", std::string()) == tape_engine::kCaseBundleImportResultSchema,
+               "phase 6 case bundle import should publish a typed import transport result");
 
         tape_engine::QueryRequest listImportedCasesRequest;
         listImportedCasesRequest.requestId = "phase6-list-imported-cases";
@@ -1002,6 +1078,8 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
                "phase 6 imported-case listing should preserve renamed-bundle recognition by payload hash");
         expect(response.events.at(0).value("source_bundle_path", std::string()) == caseBundlePath,
                "phase 6 imported-case listing should preserve the renamed bundle path");
+        expect(response.result.value("schema", std::string()) == tape_engine::kImportedCaseInventoryResultSchema,
+               "phase 6 imported-case listing should publish a typed inventory transport result");
 
         tape_engine::QueryRequest readImportedArtifactRequest;
         readImportedArtifactRequest.requestId = "phase6-read-imported-artifact";
@@ -1049,6 +1127,16 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
     }
 
     {
+        json staleLookup = readMsgpackFile(rootDir / "artifact-lookup.msgpack");
+        staleLookup["imported_cases"] = json::array();
+        std::ofstream out(rootDir / "artifact-lookup.msgpack", std::ios::binary | std::ios::trunc);
+        expect(out.is_open(), "phase 6 stale lookup fixture should open for write");
+        const std::vector<std::uint8_t> payload = json::to_msgpack(staleLookup);
+        out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
+        expect(out.good(), "phase 6 stale lookup fixture should write");
+    }
+
+    {
         tape_engine::Server restarted(config);
         std::string startError;
         expect(restarted.start(&startError), "tape-engine should restart and restore imported case bundles: " + startError);
@@ -1076,6 +1164,15 @@ void testTapeEnginePhase6ExportsAndImportsPortableBundles() {
         expect(response.summary.value("artifact", json::object()).value("artifact_id", std::string()) ==
                    "imported-case:" + std::to_string(importedCaseId),
                "phase 6 restored imported case should preserve the imported artifact id");
+        {
+            const json lookup = readMsgpackFile(rootDir / "artifact-lookup.msgpack");
+            bool foundImportedCase = false;
+            for (const auto& item : lookup.value("imported_cases", json::array())) {
+                foundImportedCase = foundImportedCase || item.value("imported_case_id", 0ULL) == importedCaseId;
+            }
+            expect(foundImportedCase,
+                   "phase 6 restart should rebuild a stale imported-case lookup index from the manifest");
+        }
 
         restarted.stop();
     }
@@ -1234,6 +1331,251 @@ void testTapeEnginePhase3InvestigationContractMatchesGoldenFixtures() {
            "artifact-read contract projection should match the golden fixture\nactual:\n" + readArtifactProjection.dump(2));
     expect(exportArtifactProjection == fixture.value("export_artifact_order_case_bundle", json::object()),
            "artifact-export contract projection should match the golden fixture\nactual:\n" + exportArtifactProjection.dump(2));
+
+    server.stop();
+}
+
+void testTapeEngineTypedTransportResultsMatchGoldenFixtures() {
+    const fs::path rootDir = testDataDir() / "tape-engine-transport-contract-fixtures";
+    const fs::path socketPath = testDataDir() / "tape-engine-transport-contract-fixtures.sock";
+    std::error_code ec;
+    fs::remove_all(rootDir, ec);
+    fs::remove(socketPath, ec);
+
+    tape_engine::EngineConfig config;
+    config.socketPath = socketPath.string();
+    config.dataDir = rootDir;
+    config.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+    config.ringCapacity = 32;
+
+    tape_engine::Server server(config);
+    std::string startError;
+    expect(server.start(&startError), "tape-engine should start for transport contract fixture test: " + startError);
+
+    bridge_batch::BuildOptions options;
+    options.appSessionId = "app-engine-transport-contract-fixtures";
+    options.runtimeSessionId = "runtime-engine-transport-contract-fixtures";
+    options.flushReason = bridge_batch::FlushReason::ImmediateLifecycle;
+
+    bridge_batch::UnixDomainSocketTransport transport(socketPath.string());
+    std::string error;
+
+    BridgeOutboxRecord orderIntent = makeBridgeRecord(8701, "order_intent", "WebSocket", "INTC", "BUY",
+                                                      712, 3401, 0, "", "transport fixture anchor",
+                                                      "2026-03-15T09:42:20.100");
+    orderIntent.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+    options.batchSeq = 701;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({orderIntent}, options)), &error),
+           "tape-engine should accept the transport fixture anchor batch: " + error);
+
+    BridgeOutboxRecord bidTick = makeBridgeRecord(8702, "market_tick", "BrokerMarketData", "INTC", "BID",
+                                                  0, 0, 0, "", "transport fixture bid", "2026-03-15T09:42:20.120");
+    bidTick.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+    bidTick.marketField = 1;
+    bidTick.price = 45.20;
+
+    BridgeOutboxRecord askTick = makeBridgeRecord(8703, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                  0, 0, 0, "", "transport fixture ask", "2026-03-15T09:42:20.130");
+    askTick.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+    askTick.marketField = 2;
+    askTick.price = 45.21;
+
+    options.batchSeq = 702;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({bidTick, askTick}, options)), &error),
+           "tape-engine should accept the transport fixture seed batch: " + error);
+
+    BridgeOutboxRecord widenedAsk = makeBridgeRecord(8704, "market_tick", "BrokerMarketData", "INTC", "ASK",
+                                                     0, 0, 0, "", "transport fixture widened ask",
+                                                     "2026-03-15T09:42:20.150");
+    widenedAsk.instrumentId = "ib:conid:9501:STK:SMART:USD:INTC";
+    widenedAsk.marketField = 2;
+    widenedAsk.price = 45.24;
+
+    options.batchSeq = 703;
+    expect(transport.sendFrame(bridge_batch::encodeFrame(bridge_batch::buildBatch({widenedAsk}, options)), &error),
+           "tape-engine should accept the transport fixture widening batch: " + error);
+
+    waitUntil([&]() {
+        const auto snapshot = server.snapshot();
+        return snapshot.latestFrozenRevisionId >= 4 && snapshot.segments.size() >= 4;
+    }, "tape-engine should freeze transport contract fixture batches");
+
+    tape_engine::Client client(socketPath.string());
+    tape_engine::QueryResponse response;
+
+    waitUntil([&]() {
+        tape_engine::QueryRequest readyRequest;
+        readyRequest.requestId = "transport-order-case-ready";
+        readyRequest.operation = "read_order_case";
+        readyRequest.orderId = 3401;
+        if (!client.query(readyRequest, &response, &error)) {
+            return false;
+        }
+        return response.summary.value("related_finding_count", 0ULL) >= 4ULL &&
+               response.summary.value("timeline_summary", json::object()).value("timeline_entry_count", 0ULL) >= 16ULL;
+    }, "transport contract fixture setup should wait for deferred findings to settle");
+
+    auto queryProjection = [&](tape_engine::QueryRequest request,
+                               const std::string& message) -> json {
+        expect(client.query(request, &response, &error), message + ": " + error);
+        return projectTransportResult(response);
+    };
+
+    tape_engine::QueryRequest statusRequest;
+    statusRequest.requestId = "transport-status";
+    statusRequest.operation = "status";
+    const json statusProjection = queryProjection(statusRequest, "transport status query should succeed");
+
+    tape_engine::QueryRequest rangeRequest;
+    rangeRequest.requestId = "transport-read-range";
+    rangeRequest.operation = "read_range";
+    rangeRequest.fromSessionSeq = 1;
+    rangeRequest.toSessionSeq = 4;
+    const json rangeProjection = queryProjection(rangeRequest, "transport read_range query should succeed");
+
+    tape_engine::QueryRequest qualityRequest;
+    qualityRequest.requestId = "transport-read-session-quality";
+    qualityRequest.operation = "read_session_quality";
+    qualityRequest.fromSessionSeq = 1;
+    qualityRequest.toSessionSeq = 4;
+    const json sessionQualityProjection = queryProjection(qualityRequest, "transport session quality query should succeed");
+
+    tape_engine::QueryRequest sessionReportRequest;
+    sessionReportRequest.requestId = "transport-scan-session-report";
+    sessionReportRequest.operation = "scan_session_report";
+    expect(client.query(sessionReportRequest, &response, &error),
+           "transport session report scan should succeed: " + error);
+    const std::uint64_t sessionReportId = response.summary.value("session_report", json::object()).value("report_id", 0ULL);
+    expect(sessionReportId > 0, "transport session report scan should persist a durable report id");
+    const json sessionReportProjection = projectTransportResult(response);
+
+    tape_engine::QueryRequest listAnchorsRequest;
+    listAnchorsRequest.requestId = "transport-list-order-anchors";
+    listAnchorsRequest.operation = "list_order_anchors";
+    const json listAnchorsProjection = queryProjection(listAnchorsRequest, "transport list_order_anchors query should succeed");
+
+    tape_engine::QueryRequest seekOrderRequest;
+    seekOrderRequest.requestId = "transport-seek-order-anchor";
+    seekOrderRequest.operation = "seek_order_anchor";
+    seekOrderRequest.orderId = 3401;
+    const json seekOrderProjection = queryProjection(seekOrderRequest, "transport seek_order_anchor query should succeed");
+
+    tape_engine::QueryRequest replayRequest;
+    replayRequest.requestId = "transport-replay-snapshot";
+    replayRequest.operation = "replay_snapshot";
+    replayRequest.targetSessionSeq = 4;
+    const json replayProjection = queryProjection(replayRequest, "transport replay_snapshot query should succeed");
+
+    tape_engine::QueryRequest exportArtifactRequest;
+    exportArtifactRequest.requestId = "transport-export-artifact";
+    exportArtifactRequest.operation = "export_artifact";
+    exportArtifactRequest.artifactId = "session-report:" + std::to_string(sessionReportId);
+    exportArtifactRequest.exportFormat = "markdown";
+    const json exportArtifactProjection = queryProjection(exportArtifactRequest, "transport export_artifact query should succeed");
+
+    tape_engine::QueryRequest exportSessionBundleRequest;
+    exportSessionBundleRequest.requestId = "transport-export-session-bundle";
+    exportSessionBundleRequest.operation = "export_session_bundle";
+    exportSessionBundleRequest.reportId = sessionReportId;
+    expect(client.query(exportSessionBundleRequest, &response, &error),
+           "transport export_session_bundle query should succeed: " + error);
+    const std::string sessionBundlePath =
+        response.summary.value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!sessionBundlePath.empty(), "transport session bundle export should return a bundle path");
+    const json exportSessionBundleProjection = projectTransportResult(response);
+
+    tape_engine::QueryRequest verifySessionBundleRequest;
+    verifySessionBundleRequest.requestId = "transport-verify-session-bundle";
+    verifySessionBundleRequest.operation = "verify_bundle";
+    verifySessionBundleRequest.bundlePath = sessionBundlePath;
+    const json verifySessionBundleProjection = queryProjection(verifySessionBundleRequest,
+                                                               "transport verify session bundle query should succeed");
+
+    tape_engine::QueryRequest caseReportRequest;
+    caseReportRequest.requestId = "transport-scan-order-case-report";
+    caseReportRequest.operation = "scan_order_case_report";
+    caseReportRequest.orderId = 3401;
+    expect(client.query(caseReportRequest, &response, &error),
+           "transport order-case report scan should succeed: " + error);
+    const std::uint64_t caseReportId = response.summary.value("case_report_artifact", json::object()).value("report_id", 0ULL);
+    expect(caseReportId > 0, "transport order-case report scan should persist a durable report id");
+
+    tape_engine::QueryRequest exportCaseBundleRequest;
+    exportCaseBundleRequest.requestId = "transport-export-case-bundle";
+    exportCaseBundleRequest.operation = "export_case_bundle";
+    exportCaseBundleRequest.reportId = caseReportId;
+    expect(client.query(exportCaseBundleRequest, &response, &error),
+           "transport export_case_bundle query should succeed: " + error);
+    const std::string caseBundlePath =
+        response.summary.value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!caseBundlePath.empty(), "transport case bundle export should return a bundle path");
+    const json exportCaseBundleProjection = projectTransportResult(response);
+
+    tape_engine::QueryRequest verifyCaseBundleRequest;
+    verifyCaseBundleRequest.requestId = "transport-verify-case-bundle";
+    verifyCaseBundleRequest.operation = "verify_bundle";
+    verifyCaseBundleRequest.bundlePath = caseBundlePath;
+    const json verifyCaseBundleProjection = queryProjection(verifyCaseBundleRequest,
+                                                            "transport verify case bundle query should succeed");
+
+    tape_engine::QueryRequest importCaseBundleRequest;
+    importCaseBundleRequest.requestId = "transport-import-case-bundle";
+    importCaseBundleRequest.operation = "import_case_bundle";
+    importCaseBundleRequest.bundlePath = caseBundlePath;
+    const json importCaseBundleProjection = queryProjection(importCaseBundleRequest,
+                                                            "transport import_case_bundle query should succeed");
+
+    tape_engine::QueryRequest listImportedCasesRequest;
+    listImportedCasesRequest.requestId = "transport-list-imported-cases";
+    listImportedCasesRequest.operation = "list_imported_cases";
+    const json listImportedCasesProjection = queryProjection(listImportedCasesRequest,
+                                                             "transport list_imported_cases query should succeed");
+
+    const json actualFixture = {
+        {"status", statusProjection},
+        {"read_range", rangeProjection},
+        {"read_session_quality", sessionQualityProjection},
+        {"scan_session_report", sessionReportProjection},
+        {"list_order_anchors", listAnchorsProjection},
+        {"seek_order_anchor", seekOrderProjection},
+        {"replay_snapshot", replayProjection},
+        {"export_artifact", exportArtifactProjection},
+        {"export_session_bundle", exportSessionBundleProjection},
+        {"verify_session_bundle", verifySessionBundleProjection},
+        {"export_case_bundle", exportCaseBundleProjection},
+        {"verify_case_bundle", verifyCaseBundleProjection},
+        {"import_case_bundle", importCaseBundleProjection},
+        {"list_imported_cases", listImportedCasesProjection}
+    };
+    const json fixture = readJsonFixture("phase6_engine_transport_contracts.json");
+    expect(statusProjection == fixture.value("status", json::object()),
+           "status transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(rangeProjection == fixture.value("read_range", json::object()),
+           "read_range transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(sessionQualityProjection == fixture.value("read_session_quality", json::object()),
+           "read_session_quality transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(sessionReportProjection == fixture.value("scan_session_report", json::object()),
+           "scan_session_report transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(listAnchorsProjection == fixture.value("list_order_anchors", json::object()),
+           "list_order_anchors transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(seekOrderProjection == fixture.value("seek_order_anchor", json::object()),
+           "seek_order_anchor transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(replayProjection == fixture.value("replay_snapshot", json::object()),
+           "replay_snapshot transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(exportArtifactProjection == fixture.value("export_artifact", json::object()),
+           "export_artifact transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(exportSessionBundleProjection == fixture.value("export_session_bundle", json::object()),
+           "export_session_bundle transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(verifySessionBundleProjection == fixture.value("verify_session_bundle", json::object()),
+           "verify_session_bundle transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(exportCaseBundleProjection == fixture.value("export_case_bundle", json::object()),
+           "export_case_bundle transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(verifyCaseBundleProjection == fixture.value("verify_case_bundle", json::object()),
+           "verify_case_bundle transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(importCaseBundleProjection == fixture.value("import_case_bundle", json::object()),
+           "import_case_bundle transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
+    expect(listImportedCasesProjection == fixture.value("list_imported_cases", json::object()),
+           "list_imported_cases transport result should match the golden fixture\nactual fixture:\n" + actualFixture.dump(2));
 
     server.stop();
 }

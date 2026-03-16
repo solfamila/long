@@ -120,11 +120,11 @@ public:
         const OrderCaseQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::IncidentListPayload> listIncidents(
         const ListQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listOrderAnchors(
+    [[nodiscard]] EngineRpcResult<tape_payloads::CollectionRowsPayload> listOrderAnchors(
         const ListQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listProtectedWindows(
+    [[nodiscard]] EngineRpcResult<tape_payloads::CollectionRowsPayload> listProtectedWindows(
         const ListQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listFindings(
+    [[nodiscard]] EngineRpcResult<tape_payloads::CollectionRowsPayload> listFindings(
         const ListQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readSessionOverview(
         const SessionWindowQuery& query) const;
@@ -152,23 +152,23 @@ public:
         const IncidentQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readOrderAnchor(
         const NumericIdQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> readProtectedWindow(
+    [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readProtectedWindow(
         const NumericIdQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> replaySnapshot(
+    [[nodiscard]] EngineRpcResult<tape_payloads::ReplaySnapshotPayload> replaySnapshot(
         const ReplaySnapshotQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readArtifact(
         const ArtifactQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::ArtifactExportPayload> exportArtifact(
         const ArtifactExportQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> exportSessionBundle(
+    [[nodiscard]] EngineRpcResult<tape_payloads::BundleExportPayload> exportSessionBundle(
         const BundleExportQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> exportCaseBundle(
+    [[nodiscard]] EngineRpcResult<tape_payloads::BundleExportPayload> exportCaseBundle(
         const BundleExportQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> verifyBundle(
+    [[nodiscard]] EngineRpcResult<tape_payloads::BundleVerifyPayload> verifyBundle(
         const BundleImportQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> importCaseBundle(
+    [[nodiscard]] EngineRpcResult<tape_payloads::CaseBundleImportPayload> importCaseBundle(
         const BundleImportQuery& query) const;
-    [[nodiscard]] EngineRpcResult<tape_engine::QueryResponse> listImportedCases(
+    [[nodiscard]] EngineRpcResult<tape_payloads::ImportedCaseListPayload> listImportedCases(
         const ListQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::SessionQualityPayload> readSessionQuality(
         const SessionWindowQuery& query) const;

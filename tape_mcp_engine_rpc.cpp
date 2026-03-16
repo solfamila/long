@@ -131,20 +131,6 @@ EngineRpcResult<T> convertPackedResult(const tape_payloads::QueryResult<T>& resu
         result.error.message));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> convertRawResult(
-    const tape_payloads::QueryResult<tape_engine::QueryResponse>& result) {
-    if (result.ok()) {
-        return makeRpcSuccess(result.value);
-    }
-    return makeRpcFailure<tape_engine::QueryResponse>(makeRpcError(
-        result.error.kind == tape_payloads::QueryErrorKind::Transport
-            ? EngineRpcErrorKind::Transport
-            : result.error.kind == tape_payloads::QueryErrorKind::Remote
-                ? EngineRpcErrorKind::Remote
-                : EngineRpcErrorKind::MalformedResponse,
-        result.error.message));
-}
-
 } // namespace
 
 EngineRpcClient::EngineRpcClient(EngineRpcClientConfig config)
@@ -197,26 +183,11 @@ EngineRpcError EngineRpcClient::classifyFailure(const std::string& errorMessage)
 
 EngineRpcResult<tape_payloads::StatusSnapshot> EngineRpcClient::status() const {
     const auto response = performRawQuery(makeRequest(tape_engine::QueryOperation::Status, "tape-mcp-status"));
-    if (!response.ok()) {
-        return convertPackedResult<tape_payloads::StatusSnapshot>(
-            makeError<tape_payloads::StatusSnapshot>(response.error.kind, response.error.message));
+    auto result = convertPackedResult(tape_payloads::packStatusPayload(response));
+    if (result.ok() && result.value.socketPath.empty()) {
+        result.value.socketPath = config_.socketPath;
     }
-
-    const auto& summary = response.value.summary;
-    if (!summary.is_object()) {
-        return makeRpcFailure<tape_payloads::StatusSnapshot>(
-            makeRpcError(EngineRpcErrorKind::MalformedResponse, "status summary must be an object"));
-    }
-
-    tape_payloads::StatusSnapshot snapshot;
-    snapshot.socketPath = summary.value("socket_path", config_.socketPath);
-    snapshot.dataDir = summary.value("data_dir", std::string());
-    snapshot.instrumentId = summary.value("instrument_id", std::string());
-    snapshot.latestSessionSeq = summary.value("latest_session_seq", 0ULL);
-    snapshot.liveEventCount = summary.value("live_event_count", 0ULL);
-    snapshot.segmentCount = summary.value("segment_count", 0ULL);
-    snapshot.manifestHash = summary.value("last_manifest_hash", std::string());
-    return makeRpcSuccess(std::move(snapshot));
+    return result;
 }
 
 EngineRpcResult<tape_payloads::EventListPayload> EngineRpcClient::readLiveTail(std::size_t limit) const {
@@ -246,55 +217,25 @@ EngineRpcResult<tape_payloads::IncidentListPayload> EngineRpcClient::listInciden
     return convertPackedResult(tape_payloads::packIncidentListPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listOrderAnchors(
+EngineRpcResult<tape_payloads::CollectionRowsPayload> EngineRpcClient::listOrderAnchors(
     const ListQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ListOrderAnchors, "tape-mcp-list-order-anchors");
     applyListQuery(&request, query);
-    const auto response = performRawQuery(request);
-    if (!response.ok()) {
-        return makeRpcFailure<tape_engine::QueryResponse>(makeRpcError(
-            response.error.kind == tape_payloads::QueryErrorKind::Transport
-                ? EngineRpcErrorKind::Transport
-                : response.error.kind == tape_payloads::QueryErrorKind::Remote
-                    ? EngineRpcErrorKind::Remote
-                    : EngineRpcErrorKind::MalformedResponse,
-            response.error.message));
-    }
-    return makeRpcSuccess(response.value);
+    return convertPackedResult(tape_payloads::packCollectionRowsPayload(performRawQuery(request), "order_anchors"));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listProtectedWindows(
+EngineRpcResult<tape_payloads::CollectionRowsPayload> EngineRpcClient::listProtectedWindows(
     const ListQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ListProtectedWindows, "tape-mcp-list-protected-windows");
     applyListQuery(&request, query);
-    const auto response = performRawQuery(request);
-    if (!response.ok()) {
-        return makeRpcFailure<tape_engine::QueryResponse>(makeRpcError(
-            response.error.kind == tape_payloads::QueryErrorKind::Transport
-                ? EngineRpcErrorKind::Transport
-                : response.error.kind == tape_payloads::QueryErrorKind::Remote
-                    ? EngineRpcErrorKind::Remote
-                    : EngineRpcErrorKind::MalformedResponse,
-            response.error.message));
-    }
-    return makeRpcSuccess(response.value);
+    return convertPackedResult(tape_payloads::packCollectionRowsPayload(performRawQuery(request), "protected_windows"));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listFindings(
+EngineRpcResult<tape_payloads::CollectionRowsPayload> EngineRpcClient::listFindings(
     const ListQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ListFindings, "tape-mcp-list-findings");
     applyListQuery(&request, query);
-    const auto response = performRawQuery(request);
-    if (!response.ok()) {
-        return makeRpcFailure<tape_engine::QueryResponse>(makeRpcError(
-            response.error.kind == tape_payloads::QueryErrorKind::Transport
-                ? EngineRpcErrorKind::Transport
-                : response.error.kind == tape_payloads::QueryErrorKind::Remote
-                    ? EngineRpcErrorKind::Remote
-                    : EngineRpcErrorKind::MalformedResponse,
-            response.error.message));
-    }
-    return makeRpcSuccess(response.value);
+    return convertPackedResult(tape_payloads::packCollectionRowsPayload(performRawQuery(request), "findings"));
 }
 
 EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readSessionOverview(
@@ -402,19 +343,19 @@ EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readOrderA
     return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::readProtectedWindow(
+EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readProtectedWindow(
     const NumericIdQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadProtectedWindow, "tape-mcp-read-protected-window");
     applyNumericIdQuery(&request, query);
     request.windowId = query.id;
-    return convertRawResult(performRawQuery(request));
+    return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::replaySnapshot(
+EngineRpcResult<tape_payloads::ReplaySnapshotPayload> EngineRpcClient::replaySnapshot(
     const ReplaySnapshotQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReplaySnapshot, "tape-mcp-replay-snapshot");
     applyReplaySnapshotQuery(&request, query);
-    return convertRawResult(performRawQuery(request));
+    return convertPackedResult(tape_payloads::packReplaySnapshotPayload(performRawQuery(request)));
 }
 
 EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readArtifact(
@@ -431,39 +372,39 @@ EngineRpcResult<tape_payloads::ArtifactExportPayload> EngineRpcClient::exportArt
     return convertPackedResult(tape_payloads::packArtifactExportPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::exportSessionBundle(
+EngineRpcResult<tape_payloads::BundleExportPayload> EngineRpcClient::exportSessionBundle(
     const BundleExportQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ExportSessionBundle, "tape-mcp-export-session-bundle");
     request.reportId = query.reportId;
-    return convertRawResult(performRawQuery(request));
+    return convertPackedResult(tape_payloads::packBundleExportPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::exportCaseBundle(
+EngineRpcResult<tape_payloads::BundleExportPayload> EngineRpcClient::exportCaseBundle(
     const BundleExportQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ExportCaseBundle, "tape-mcp-export-case-bundle");
     request.reportId = query.reportId;
-    return convertRawResult(performRawQuery(request));
+    return convertPackedResult(tape_payloads::packBundleExportPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::verifyBundle(
+EngineRpcResult<tape_payloads::BundleVerifyPayload> EngineRpcClient::verifyBundle(
     const BundleImportQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::VerifyBundle, "tape-mcp-verify-bundle");
     request.bundlePath = query.bundlePath;
-    return convertRawResult(performRawQuery(request));
+    return convertPackedResult(tape_payloads::packBundleVerifyPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::importCaseBundle(
+EngineRpcResult<tape_payloads::CaseBundleImportPayload> EngineRpcClient::importCaseBundle(
     const BundleImportQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ImportCaseBundle, "tape-mcp-import-case-bundle");
     request.bundlePath = query.bundlePath;
-    return convertRawResult(performRawQuery(request));
+    return convertPackedResult(tape_payloads::packCaseBundleImportPayload(performRawQuery(request)));
 }
 
-EngineRpcResult<tape_engine::QueryResponse> EngineRpcClient::listImportedCases(
+EngineRpcResult<tape_payloads::ImportedCaseListPayload> EngineRpcClient::listImportedCases(
     const ListQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ListImportedCases, "tape-mcp-list-imported-cases");
     applyListQuery(&request, query);
-    return convertRawResult(performRawQuery(request));
+    return convertPackedResult(tape_payloads::packImportedCaseListPayload(performRawQuery(request)));
 }
 
 EngineRpcResult<tape_payloads::SessionQualityPayload> EngineRpcClient::readSessionQuality(

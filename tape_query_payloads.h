@@ -119,6 +119,16 @@ struct IncidentListPayload {
     std::vector<IncidentListRow> incidents;
 };
 
+struct CollectionRowsPayload {
+    json raw;
+    json summary;
+    std::string collectionKind;
+    std::uint64_t servedRevisionId = 0;
+    bool includesMutableTail = false;
+    std::size_t totalCount = 0;
+    std::vector<json> rows;
+};
+
 struct ReportInventoryRow {
     std::uint64_t reportId = 0;
     std::uint64_t revisionId = 0;
@@ -216,6 +226,26 @@ struct ArtifactExportPayload {
     json bundle = json::object();
 };
 
+struct ReplaySnapshotPayload {
+    json raw;
+    json summary;
+    std::uint64_t servedRevisionId = 0;
+    bool includesMutableTail = false;
+    std::uint64_t targetSessionSeq = 0;
+    std::uint64_t replayedThroughSessionSeq = 0;
+    std::uint64_t appliedEventCount = 0;
+    std::uint64_t gapMarkersEncountered = 0;
+    bool checkpointUsed = false;
+    std::uint64_t checkpointRevisionId = 0;
+    std::uint64_t checkpointSessionSeq = 0;
+    json bidPrice = nullptr;
+    json askPrice = nullptr;
+    json lastPrice = nullptr;
+    json bidBook = json::array();
+    json askBook = json::array();
+    json dataQuality = json::object();
+};
+
 template <typename T>
 QueryResult<T> makeError(QueryErrorKind kind, std::string message) {
     QueryResult<T> result;
@@ -248,11 +278,14 @@ std::vector<EventRow> parseEventRows(const json& events);
 std::vector<IncidentListRow> parseIncidentRows(const json& events);
 std::vector<ReportInventoryRow> parseReportRows(const json& events);
 
+QueryResult<StatusSnapshot> packStatusPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<InvestigationPayload> packInvestigationPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<EventListPayload> packEventListPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<SessionQualityPayload> packSessionQualityPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<SeekOrderPayload> packSeekOrderPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<IncidentListPayload> packIncidentListPayload(const QueryResult<tape_engine::QueryResponse>& response);
+QueryResult<CollectionRowsPayload> packCollectionRowsPayload(const QueryResult<tape_engine::QueryResponse>& response,
+                                                             const char* expectedKind);
 QueryResult<ReportInventoryPayload> packReportInventoryPayload(const QueryResult<tape_engine::QueryResponse>& response,
                                                                bool sessionReports);
 QueryResult<BundleExportPayload> packBundleExportPayload(const QueryResult<tape_engine::QueryResponse>& response);
@@ -260,5 +293,6 @@ QueryResult<BundleVerifyPayload> packBundleVerifyPayload(const QueryResult<tape_
 QueryResult<ImportedCaseListPayload> packImportedCaseListPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<CaseBundleImportPayload> packCaseBundleImportPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<ArtifactExportPayload> packArtifactExportPayload(const QueryResult<tape_engine::QueryResponse>& response);
+QueryResult<ReplaySnapshotPayload> packReplaySnapshotPayload(const QueryResult<tape_engine::QueryResponse>& response);
 
 } // namespace tape_payloads

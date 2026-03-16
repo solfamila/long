@@ -371,6 +371,7 @@ json queryResponseToJson(const QueryResponse& response) {
         {"events", response.events},
         {"operation", response.operation},
         {"request_id", response.requestId},
+        {"result", response.result},
         {"schema", response.schema},
         {"status", response.status},
         {"summary", response.summary},
@@ -390,6 +391,7 @@ QueryResponse queryResponseFromJson(const json& payload) {
     response.operation = payload.value("operation", std::string());
     response.status = payload.value("status", std::string("ok"));
     response.error = payload.value("error", std::string());
+    response.result = payload.value("result", json::object());
     response.summary = payload.value("summary", json::object());
     response.events = payload.value("events", json::array());
     return response;

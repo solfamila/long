@@ -48,6 +48,10 @@ void expect(bool condition, const std::string& message) {
     }
 }
 
+void expectContains(const std::string& text, const std::string& needle, const std::string& message) {
+    expect(text.find(needle) != std::string::npos, message + " (missing: " + needle + ")");
+}
+
 template <typename Fn>
 void waitUntil(Fn&& predicate,
                const std::string& message,
@@ -1586,6 +1590,37 @@ void testTapeMcpPhase6BundleTools() {
            "phase6 verify-bundle for a session bundle should mark it non-importable");
     expect(!verifySessionBundleEnvelope.value("result", json::object()).value("can_import", true),
            "phase6 verify-bundle for a session bundle should not offer import");
+
+    const fs::path corruptBundlePath = rootDir / "corrupt-case-bundle.msgpack";
+    {
+        std::ofstream out(corruptBundlePath, std::ios::binary);
+        expect(out.is_open(), "phase6 MCP corrupt bundle fixture should open for write");
+        out << "not-msgpack";
+    }
+
+    const json verifyCorruptResult = adapter.callTool("tapescript_verify_bundle", json{
+        {"bundle_path", corruptBundlePath.string()}
+    });
+    expect(verifyCorruptResult.value("isError", false),
+           "phase6 verify-bundle for a corrupt bundle should return isError=true");
+    const json verifyCorruptEnvelope = envelopeFromToolResult(verifyCorruptResult);
+    expect(verifyCorruptEnvelope.value("error", json::object()).value("code", std::string()) == "engine_query_failed",
+           "phase6 verify-bundle for a corrupt bundle should surface engine_query_failed");
+    expectContains(verifyCorruptEnvelope.value("error", json::object()).value("message", std::string()),
+                   "bundle is not valid MessagePack JSON",
+                   "phase6 verify-bundle for a corrupt bundle should surface the parse failure");
+
+    const json importCorruptResult = adapter.callTool("tapescript_import_case_bundle", json{
+        {"bundle_path", corruptBundlePath.string()}
+    });
+    expect(importCorruptResult.value("isError", false),
+           "phase6 import-case-bundle for a corrupt bundle should return isError=true");
+    const json importCorruptEnvelope = envelopeFromToolResult(importCorruptResult);
+    expect(importCorruptEnvelope.value("error", json::object()).value("code", std::string()) == "engine_query_failed",
+           "phase6 import-case-bundle for a corrupt bundle should surface engine_query_failed");
+    expectContains(importCorruptEnvelope.value("error", json::object()).value("message", std::string()),
+                   "bundle is not valid MessagePack JSON",
+                   "phase6 import-case-bundle for a corrupt bundle should surface the parse failure");
 
     const json exportCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_export_case_bundle", json{
         {"report_id", caseReportId}

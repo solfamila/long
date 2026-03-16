@@ -1,0 +1,298 @@
+{
+  "status": {
+    "operation": "status",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.status-result",
+      "version": 1,
+      "socket_path": "<tmp>/tape-engine-transport-contract-fixtures.sock",
+      "data_dir": "<tmp>/tape-engine-transport-contract-fixtures",
+      "latest_frozen_revision_id": "<id>",
+      "latest_session_seq": 4,
+      "manifest_hash": null
+    }
+  },
+  "read_range": {
+    "operation": "read_range",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.event-list-result",
+      "version": 1,
+      "served_revision_id": "<id>",
+      "from_session_seq": 1,
+      "to_session_seq": 4,
+      "returned_count": 4,
+      "first_event": {
+        "session_seq": 1,
+        "event_kind": "order_intent",
+        "symbol": "INTC",
+        "instrument_id": "ib:conid:9501:STK:SMART:USD:INTC"
+      },
+      "last_event": {
+        "session_seq": 4,
+        "event_kind": "market_tick",
+        "symbol": "INTC",
+        "instrument_id": "ib:conid:9501:STK:SMART:USD:INTC"
+      }
+    }
+  },
+  "read_session_quality": {
+    "operation": "read_session_quality",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.session-quality-result",
+      "version": 1,
+      "served_revision_id": "<id>",
+      "first_session_seq": 1,
+      "last_session_seq": 4,
+      "score": 60.0,
+      "issue_count": 3
+    }
+  },
+  "scan_session_report": {
+    "operation": "scan_session_report",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.investigation-result",
+      "version": 1,
+      "served_revision_id": "<id>",
+      "artifact_id": "session-report:<id>",
+      "artifact_kind": "session_report",
+      "headline": "Session overview",
+      "entity_type": "session_range",
+      "report_type": "session_overview",
+      "citation_rows": [
+        {
+          "artifact_id": "finding:<id>",
+          "type": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "type": "finding"
+        },
+        {
+          "artifact_id": "finding:<id>",
+          "type": "finding"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "type": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "type": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "type": "incident"
+        },
+        {
+          "artifact_id": "incident:<id>",
+          "type": "incident"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "type": "protected_window"
+        },
+        {
+          "artifact_id": "window:<id>",
+          "type": "protected_window"
+        }
+      ],
+      "incident_rows": [
+        {
+          "logical_incident_id": "<id>",
+          "kind": "order_fill_context"
+        },
+        {
+          "logical_incident_id": "<id>",
+          "kind": "order_flow_timeline"
+        },
+        {
+          "logical_incident_id": "<id>",
+          "kind": "order_window_market_impact"
+        },
+        {
+          "logical_incident_id": "<id>",
+          "kind": "spread_widened"
+        }
+      ],
+      "replay_range": null
+    }
+  },
+  "list_order_anchors": {
+    "operation": "list_order_anchors",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.collection-result",
+      "version": 1,
+      "collection_kind": "order_anchors",
+      "served_revision_id": "<id>",
+      "returned_count": 1,
+      "rows": [
+        {
+          "anchor_id": "<id>",
+          "trace_id": 712,
+          "order_id": 3401,
+          "artifact_id": "anchor:<id>",
+          "instrument_id": "ib:conid:9501:STK:SMART:USD:INTC"
+        }
+      ]
+    }
+  },
+  "seek_order_anchor": {
+    "operation": "seek_order_anchor",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.seek-order-result",
+      "version": 1,
+      "served_revision_id": "<id>",
+      "replay_target_session_seq": 1,
+      "first_session_seq": 1,
+      "last_session_seq": 1,
+      "last_fill_session_seq": 0,
+      "replay_range": {
+        "first_session_seq": 1,
+        "last_session_seq": 6
+      },
+      "anchor": {
+        "trace_id": 712,
+        "order_id": 3401,
+        "perm_id": 0,
+        "exec_id": ""
+      }
+    }
+  },
+  "replay_snapshot": {
+    "operation": "replay_snapshot",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.replay-snapshot-result",
+      "version": 1,
+      "served_revision_id": "<id>",
+      "target_session_seq": 4,
+      "replayed_through_session_seq": 4,
+      "applied_event_count": 3,
+      "checkpoint_used": true,
+      "checkpoint_revision_id": "<id>",
+      "bid_price": 45.2,
+      "ask_price": 45.24,
+      "data_quality_score": 100.0
+    }
+  },
+  "export_artifact": {
+    "operation": "export_artifact",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.artifact-export-result",
+      "version": 1,
+      "artifact_id": "session-report:<id>",
+      "format": "markdown",
+      "served_revision_id": "<id>",
+      "artifact_export": {
+        "schema": "com.foxy.tape-engine.artifact-export",
+        "version": 1
+      }
+    }
+  },
+  "export_session_bundle": {
+    "operation": "export_session_bundle",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.bundle-export-result",
+      "version": 1,
+      "artifact_id": "session-bundle:report:<id>",
+      "bundle_type": "session_bundle",
+      "bundle_path": "<tmp>/tape-engine-transport-contract-fixtures/bundles/session-bundle-report-000001.msgpack",
+      "served_revision_id": "<id>",
+      "source_artifact_id": "session-report:<id>"
+    }
+  },
+  "verify_session_bundle": {
+    "operation": "verify_bundle",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.bundle-verify-result",
+      "version": 1,
+      "artifact_id": "session-bundle:report:<id>",
+      "bundle_type": "session_bundle",
+      "bundle_path": "<tmp>/tape-engine-transport-contract-fixtures/bundles/session-bundle-report-000001.msgpack",
+      "payload_sha256": "<hash>",
+      "verify_status": "valid",
+      "import_supported": false,
+      "already_imported": false,
+      "can_import": false,
+      "import_reason": "bundle_type_not_importable",
+      "imported_case": null
+    }
+  },
+  "export_case_bundle": {
+    "operation": "export_case_bundle",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.bundle-export-result",
+      "version": 1,
+      "artifact_id": "case-bundle:report:<id>",
+      "bundle_type": "case_bundle",
+      "bundle_path": "<tmp>/tape-engine-transport-contract-fixtures/bundles/case-bundle-report-000001.msgpack",
+      "served_revision_id": "<id>",
+      "source_artifact_id": "case-report:<id>"
+    }
+  },
+  "verify_case_bundle": {
+    "operation": "verify_bundle",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.bundle-verify-result",
+      "version": 1,
+      "artifact_id": "case-bundle:report:<id>",
+      "bundle_type": "case_bundle",
+      "bundle_path": "<tmp>/tape-engine-transport-contract-fixtures/bundles/case-bundle-report-000001.msgpack",
+      "payload_sha256": "<hash>",
+      "verify_status": "valid",
+      "import_supported": true,
+      "already_imported": false,
+      "can_import": true,
+      "import_reason": "case_bundle_can_be_imported",
+      "imported_case": null
+    }
+  },
+  "import_case_bundle": {
+    "operation": "import_case_bundle",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.case-bundle-import-result",
+      "version": 1,
+      "artifact_id": "imported-case:<id>",
+      "import_status": "imported",
+      "duplicate_import": false,
+      "imported_case": {
+        "imported_case_id": "<id>",
+        "artifact_id": "imported-case:<id>",
+        "bundle_type": "case_bundle",
+        "source_artifact_id": "case-report:<id>",
+        "source_bundle_path": "<tmp>/tape-engine-transport-contract-fixtures/bundles/case-bundle-report-000001.msgpack",
+        "payload_sha256": "<hash>"
+      }
+    }
+  },
+  "list_imported_cases": {
+    "operation": "list_imported_cases",
+    "status": "ok",
+    "result": {
+      "schema": "com.foxy.tape-engine.imported-case-inventory-result",
+      "version": 1,
+      "returned_count": 1,
+      "imported_cases": [
+        {
+          "imported_case_id": "<id>",
+          "artifact_id": "imported-case:<id>",
+          "bundle_type": "case_bundle",
+          "source_artifact_id": "case-report:<id>",
+          "source_bundle_path": "<tmp>/tape-engine-transport-contract-fixtures/bundles/case-bundle-report-000001.msgpack",
+          "payload_sha256": "<hash>"
+        }
+      ]
+    }
+  }
+}

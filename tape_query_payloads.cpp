@@ -211,48 +211,347 @@ std::vector<ImportedCaseRow> parseImportedCaseRows(const json& events) {
     return rows;
 }
 
+const json* typedResultOrNull(const tape_engine::QueryResponse& response,
+                              const char* expectedSchema) {
+    if (!response.result.is_object()) {
+        return nullptr;
+    }
+    if (response.result.value("schema", std::string()) != expectedSchema) {
+        return nullptr;
+    }
+    return &response.result;
+}
+
+const json* typedCollectionResultOrNull(const tape_engine::QueryResponse& response,
+                                        const char* expectedKind) {
+    const json* result = typedResultOrNull(response, tape_engine::kCollectionResultSchema);
+    if (result == nullptr) {
+        return nullptr;
+    }
+    if (result->value("collection_kind", std::string()) != expectedKind) {
+        return nullptr;
+    }
+    return result;
+}
+
+json legacyStatusResult(const tape_engine::QueryResponse& response) {
+    json result = response.summary.is_object() ? response.summary : json::object();
+    result["schema"] = tape_engine::kStatusResultSchema;
+    result["version"] = tape_engine::kStatusResultVersion;
+    return result;
+}
+
+json legacyEventListResult(const tape_engine::QueryResponse& response) {
+    return {
+        {"schema", tape_engine::kEventListResultSchema},
+        {"version", tape_engine::kEventListResultVersion},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", response.summary.value("includes_mutable_tail", false)},
+        {"returned_count", response.events.is_array() ? response.events.size() : 0},
+        {"base_revision_id", response.summary.value("base_revision_id", 0ULL)},
+        {"live_tail_high_water_seq", response.summary.value("live_tail_high_water_seq", 0ULL)},
+        {"from_session_seq", response.summary.value("from_session_seq", 0ULL)},
+        {"to_session_seq", response.summary.value("to_session_seq", 0ULL)},
+        {"trace_id", response.summary.value("trace_id", 0ULL)},
+        {"order_id", response.summary.value("order_id", 0LL)},
+        {"perm_id", response.summary.value("perm_id", 0LL)},
+        {"exec_id", response.summary.value("exec_id", std::string())},
+        {"events", response.events}
+    };
+}
+
+json legacySessionQualityResult(const tape_engine::QueryResponse& response) {
+    return {
+        {"schema", tape_engine::kSessionQualityResultSchema},
+        {"version", tape_engine::kSessionQualityResultVersion},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", response.summary.value("includes_mutable_tail", false)},
+        {"first_session_seq", response.summary.value("from_session_seq", 0ULL)},
+        {"last_session_seq", response.summary.value("to_session_seq", 0ULL)},
+        {"data_quality", response.summary.value("data_quality", json::object())}
+    };
+}
+
+json legacyInvestigationIncidentRows(const tape_engine::QueryResponse& response) {
+    const json& summary = response.summary;
+    if (summary.contains("related_incidents") && summary["related_incidents"].is_array()) {
+        return summary["related_incidents"];
+    }
+    if (summary.contains("top_incidents") && summary["top_incidents"].is_array()) {
+        return summary["top_incidents"];
+    }
+    if (summary.contains("incident_revisions") && summary["incident_revisions"].is_array()) {
+        return summary["incident_revisions"];
+    }
+    if (summary.contains("latest_incident") && summary["latest_incident"].is_object() && !summary["latest_incident"].empty()) {
+        return json::array({summary["latest_incident"]});
+    }
+    if (summary.contains("incident") && summary["incident"].is_object() && !summary["incident"].empty()) {
+        return json::array({summary["incident"]});
+    }
+    if (response.events.is_array()) {
+        bool allIncidents = !response.events.empty();
+        for (const auto& item : response.events) {
+            if (!item.is_object() || !item.contains("logical_incident_id")) {
+                allIncidents = false;
+                break;
+            }
+        }
+        if (allIncidents) {
+            return response.events;
+        }
+    }
+    return json::array();
+}
+
+json legacyInvestigationResult(const tape_engine::QueryResponse& response) {
+    const json artifact = response.summary.value("artifact", json::object());
+    const json report = response.summary.value("report",
+        response.summary.value("report_summary", json::object()));
+    const json evidence = response.summary.value("evidence", json::object());
+    RangeQuery replayRange;
+    const bool hasReplayRange = parseSeekReplayRange(response.summary, &replayRange) ||
+                                parseReplayRange(response.summary, &replayRange);
+    json replayRangeJson = nullptr;
+    if (hasReplayRange) {
+        replayRangeJson = {
+            {"first_session_seq", replayRange.firstSessionSeq},
+            {"last_session_seq", replayRange.lastSessionSeq}
+        };
+    }
+    std::string detail = firstPresentString(report, {"summary", "why_it_matters"});
+    if (detail.empty()) {
+        detail = firstPresentString(response.summary, {"what_changed_first", "why_it_matters", "headline"});
+    }
+    return {
+        {"schema", tape_engine::kInvestigationResultSchema},
+        {"version", tape_engine::kInvestigationResultVersion},
+        {"artifact_id", artifact.value("artifact_id", std::string())},
+        {"artifact_kind", artifact.value("artifact_type", artifact.value("artifact_kind", std::string()))},
+        {"headline", firstPresentString(report, {"headline", "title", "summary"})},
+        {"detail", detail},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", response.summary.value("includes_mutable_tail", false)},
+        {"artifact", artifact},
+        {"entity", response.summary.value("entity", json::object())},
+        {"report", report},
+        {"evidence", evidence},
+        {"data_quality", response.summary.value("data_quality", json::object())},
+        {"replay_range", replayRangeJson},
+        {"incident_rows", legacyInvestigationIncidentRows(response)},
+        {"citation_rows", evidence.value("citations", json::array())},
+        {"events", response.events}
+    };
+}
+
+json legacyCollectionResult(const tape_engine::QueryResponse& response,
+                            const char* collectionKind) {
+    return {
+        {"schema", tape_engine::kCollectionResultSchema},
+        {"version", tape_engine::kCollectionResultVersion},
+        {"collection_kind", collectionKind},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", response.summary.value("includes_mutable_tail", false)},
+        {"returned_count", response.events.is_array() ? response.events.size() : 0},
+        {"total_count", response.summary.value("returned_events",
+                         response.summary.value("session_report_count",
+                         response.summary.value("case_report_count", 0ULL)))},
+        {"rows", response.events}
+    };
+}
+
+json legacySeekOrderResult(const tape_engine::QueryResponse& response) {
+    RangeQuery replayRange;
+    json replayRangeJson = nullptr;
+    if (parseReplayRange(response.summary, &replayRange)) {
+        replayRangeJson = {
+            {"first_session_seq", replayRange.firstSessionSeq},
+            {"last_session_seq", replayRange.lastSessionSeq}
+        };
+    }
+    return {
+        {"schema", tape_engine::kSeekOrderResultSchema},
+        {"version", tape_engine::kSeekOrderResultVersion},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", response.summary.value("includes_mutable_tail", false)},
+        {"replay_target_session_seq", response.summary.value("replay_target_session_seq", 0ULL)},
+        {"first_session_seq", response.summary.value("first_session_seq", 0ULL)},
+        {"last_session_seq", response.summary.value("last_session_seq", 0ULL)},
+        {"last_fill_session_seq", response.summary.value("last_fill_session_seq", 0ULL)},
+        {"replay_range", replayRangeJson},
+        {"anchor", response.summary.value("anchor", json::object())},
+        {"protected_window", response.summary.value("protected_window", json::object())}
+    };
+}
+
+json legacyArtifactExportResult(const tape_engine::QueryResponse& response) {
+    return {
+        {"schema", tape_engine::kArtifactExportResultSchema},
+        {"version", tape_engine::kArtifactExportResultVersion},
+        {"artifact_id", response.summary.value("artifact_id", std::string())},
+        {"format", response.summary.value("export_format", std::string())},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)},
+        {"artifact_export", response.summary.value("artifact_export", json::object())},
+        {"markdown", response.summary.value("markdown", std::string())},
+        {"bundle", response.summary.value("bundle", json::object())}
+    };
+}
+
+json legacyBundleExportResult(const tape_engine::QueryResponse& response) {
+    return {
+        {"schema", tape_engine::kBundleExportResultSchema},
+        {"version", tape_engine::kBundleExportResultVersion},
+        {"artifact", response.summary.value("artifact", json::object())},
+        {"bundle", response.summary.value("bundle", json::object())},
+        {"source_artifact", response.summary.value("source_artifact", json::object())},
+        {"source_report", response.summary.value("source_report", json::object())},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)},
+        {"export_status", response.summary.value("export_status", std::string())}
+    };
+}
+
+json legacyBundleVerifyResult(const tape_engine::QueryResponse& response) {
+    json result{
+        {"schema", tape_engine::kBundleVerifyResultSchema},
+        {"version", tape_engine::kBundleVerifyResultVersion},
+        {"artifact", response.summary.value("artifact", json::object())},
+        {"bundle", response.summary.value("bundle", json::object())},
+        {"source_artifact", response.summary.value("source_artifact", json::object())},
+        {"source_report", response.summary.value("source_report", json::object())},
+        {"report_summary", response.summary.value("report_summary", json::object())},
+        {"report_markdown", response.summary.value("report_markdown", std::string())},
+        {"verify_status", response.summary.value("verify_status", std::string())},
+        {"import_supported", response.summary.value("import_supported", false)},
+        {"already_imported", response.summary.value("already_imported", false)},
+        {"can_import", response.summary.value("can_import", false)},
+        {"import_reason", response.summary.value("import_reason", std::string())},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)}
+    };
+    const json importedCase = response.summary.value("imported_case", json::object());
+    if (importedCase.is_object() && !importedCase.empty()) {
+        result["imported_case"] = importedCase;
+    }
+    return result;
+}
+
+json legacyCaseBundleImportResult(const tape_engine::QueryResponse& response) {
+    return {
+        {"schema", tape_engine::kCaseBundleImportResultSchema},
+        {"version", tape_engine::kCaseBundleImportResultVersion},
+        {"artifact", response.summary.value("artifact", json::object())},
+        {"imported_case", response.summary.value("imported_case", json::object())},
+        {"import_status", response.summary.value("import_status", std::string())},
+        {"duplicate_import", response.summary.value("duplicate_import", false)}
+    };
+}
+
+json legacyImportedCaseInventoryResult(const tape_engine::QueryResponse& response) {
+    return {
+        {"schema", tape_engine::kImportedCaseInventoryResultSchema},
+        {"version", tape_engine::kImportedCaseInventoryResultVersion},
+        {"returned_count", response.events.is_array() ? response.events.size() : 0},
+        {"imported_cases", response.events}
+    };
+}
+
+QueryResult<StatusSnapshot> packStatusPayload(const QueryResult<tape_engine::QueryResponse>& response) {
+    if (!response.ok()) {
+        return propagateError<StatusSnapshot>(response.error);
+    }
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kStatusResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyStatusResult(response.value);
+    if (!typedResult.is_object()) {
+        return makeError<StatusSnapshot>(QueryErrorKind::MalformedResponse,
+                                         "status result must be an object");
+    }
+
+    StatusSnapshot snapshot;
+    snapshot.socketPath = typedResult.value("socket_path", std::string());
+    snapshot.dataDir = typedResult.value("data_dir", std::string());
+    snapshot.instrumentId = typedResult.value("instrument_id", std::string());
+    snapshot.latestSessionSeq = typedResult.value("latest_session_seq", 0ULL);
+    snapshot.liveEventCount = typedResult.value("live_event_count", 0ULL);
+    snapshot.segmentCount = typedResult.value("segment_count", 0ULL);
+    snapshot.manifestHash = typedResult.value("last_manifest_hash", std::string());
+    return makeSuccess(std::move(snapshot));
+}
+
 QueryResult<InvestigationPayload> packInvestigationPayload(const QueryResult<tape_engine::QueryResponse>& response) {
     if (!response.ok()) {
         return propagateError<InvestigationPayload>(response.error);
     }
-    if (!response.value.summary.is_object()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kInvestigationResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyInvestigationResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<InvestigationPayload>(QueryErrorKind::MalformedResponse,
-                                               "investigation summary must be an object");
+                                               "investigation result must be an object");
     }
-    if (!response.value.events.is_array()) {
+    const json typedEvents = typedResult.value("events", response.value.events);
+    if (!typedEvents.is_array()) {
         return makeError<InvestigationPayload>(QueryErrorKind::MalformedResponse,
-                                               "investigation events must be an array");
+                                               "investigation result events must be an array");
     }
 
     InvestigationPayload payload;
-    payload.summary = response.value.summary;
+    payload.summary = response.value.summary.is_object() ? response.value.summary : json::object();
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.events.reserve(response.value.events.size());
-    for (const auto& event : response.value.events) {
+    payload.events.reserve(typedEvents.size());
+    for (const auto& event : typedEvents) {
         payload.events.push_back(event);
     }
-    payload.incidents = parseIncidentRows(response.value.events);
-    payload.evidence = parseEvidenceCitations(payload.summary);
+    payload.incidents = parseIncidentRows(typedResult.value("incident_rows", json::array()));
 
-    const json artifact = payload.summary.value("artifact", json::object());
+    const json citationRows = typedResult.value("citation_rows", json::array());
+    if (citationRows.is_array()) {
+        for (const auto& item : citationRows) {
+            EvidenceCitation citation;
+            citation.raw = item;
+            if (item.is_object()) {
+                citation.kind = item.value("kind", std::string());
+                citation.artifactId = item.value("artifact_id", std::string());
+                citation.label = item.value("label", std::string());
+            }
+            payload.evidence.push_back(std::move(citation));
+        }
+    } else {
+        payload.evidence = parseEvidenceCitations(payload.summary);
+    }
+
+    const json artifact = typedResult.value("artifact", payload.summary.value("artifact", json::object()));
     payload.artifactId = artifact.value("artifact_id", artifact.value("id", std::string()));
     payload.artifactKind = artifact.value("kind", artifact.value("artifact_type", std::string()));
 
-    const json report = payload.summary.value("report", json::object());
-    payload.headline = firstPresentString(report, {"title", "headline"});
+    payload.headline = typedResult.value("headline", std::string());
     if (payload.headline.empty()) {
-        payload.headline = firstPresentString(payload.summary, {"headline", "title", "why_it_matters"});
+        const json report = payload.summary.value("report", json::object());
+        payload.headline = firstPresentString(report, {"title", "headline"});
+        if (payload.headline.empty()) {
+            payload.headline = firstPresentString(payload.summary, {"headline", "title", "why_it_matters"});
+        }
     }
-    payload.detail = firstPresentString(report, {"summary", "why_it_matters"});
+    payload.detail = typedResult.value("detail", std::string());
     if (payload.detail.empty()) {
-        payload.detail = firstPresentString(payload.summary, {"what_changed_first", "why_it_matters", "headline"});
+        const json report = payload.summary.value("report", json::object());
+        payload.detail = firstPresentString(report, {"summary", "why_it_matters"});
+        if (payload.detail.empty()) {
+            payload.detail = firstPresentString(payload.summary, {"what_changed_first", "why_it_matters", "headline"});
+        }
     }
 
-    RangeQuery replayRange;
-    if (parseSeekReplayRange(payload.summary, &replayRange)) {
-        payload.replayRange = replayRange;
+    const json replayRangeJson = typedResult.value("replay_range", json(nullptr));
+    if (replayRangeJson.is_object()) {
+        payload.replayRange = RangeQuery{
+            replayRangeJson.value("first_session_seq", 1ULL),
+            replayRangeJson.value("last_session_seq", 0ULL)
+        };
+    } else {
+        RangeQuery replayRange;
+        if (parseSeekReplayRange(payload.summary, &replayRange) || parseReplayRange(payload.summary, &replayRange)) {
+            payload.replayRange = replayRange;
+        }
     }
     return makeSuccess(std::move(payload));
 }
@@ -261,21 +560,25 @@ QueryResult<EventListPayload> packEventListPayload(const QueryResult<tape_engine
     if (!response.ok()) {
         return propagateError<EventListPayload>(response.error);
     }
-    if (!response.value.summary.is_object()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kEventListResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyEventListResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<EventListPayload>(QueryErrorKind::MalformedResponse,
-                                           "event-list summary must be an object");
+                                           "event-list result must be an object");
     }
-    if (!response.value.events.is_array()) {
+    const json events = typedResult.value("events", response.value.events);
+    if (!events.is_array()) {
         return makeError<EventListPayload>(QueryErrorKind::MalformedResponse,
-                                           "event-list events must be an array");
+                                           "event-list result events must be an array");
     }
 
     EventListPayload payload;
     payload.summary = response.value.summary;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.events = parseEventRows(response.value.events);
+    payload.events = parseEventRows(events);
     return makeSuccess(std::move(payload));
 }
 
@@ -283,14 +586,17 @@ QueryResult<SessionQualityPayload> packSessionQualityPayload(const QueryResult<t
     if (!response.ok()) {
         return propagateError<SessionQualityPayload>(response.error);
     }
-    if (!response.value.summary.is_object()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kSessionQualityResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacySessionQualityResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<SessionQualityPayload>(QueryErrorKind::MalformedResponse,
-                                                "session quality summary must be an object");
+                                                "session quality result must be an object");
     }
     SessionQualityPayload payload;
     payload.summary = response.value.summary;
-    payload.dataQuality = payload.summary.value("data_quality", json::object());
+    payload.dataQuality = typedResult.value("data_quality", payload.summary.value("data_quality", json::object()));
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
     return makeSuccess(std::move(payload));
@@ -300,23 +606,34 @@ QueryResult<SeekOrderPayload> packSeekOrderPayload(const QueryResult<tape_engine
     if (!response.ok()) {
         return propagateError<SeekOrderPayload>(response.error);
     }
-    if (!response.value.summary.is_object()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kSeekOrderResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacySeekOrderResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<SeekOrderPayload>(QueryErrorKind::MalformedResponse,
-                                           "seek summary must be an object");
+                                           "seek result must be an object");
     }
 
     SeekOrderPayload payload;
     payload.summary = response.value.summary;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.replayTargetSessionSeq = payload.summary.value("replay_target_session_seq", 0ULL);
-    payload.firstSessionSeq = payload.summary.value("first_session_seq", 0ULL);
-    payload.lastSessionSeq = payload.summary.value("last_session_seq", 0ULL);
-    payload.lastFillSessionSeq = payload.summary.value("last_fill_session_seq", 0ULL);
-    RangeQuery replayRange;
-    if (parseReplayRange(payload.summary, &replayRange)) {
-        payload.replayRange = replayRange;
+    payload.replayTargetSessionSeq = typedResult.value("replay_target_session_seq", 0ULL);
+    payload.firstSessionSeq = typedResult.value("first_session_seq", 0ULL);
+    payload.lastSessionSeq = typedResult.value("last_session_seq", 0ULL);
+    payload.lastFillSessionSeq = typedResult.value("last_fill_session_seq", 0ULL);
+    const json replayRangeJson = typedResult.value("replay_range", json(nullptr));
+    if (replayRangeJson.is_object()) {
+        payload.replayRange = RangeQuery{
+            replayRangeJson.value("first_session_seq", 1ULL),
+            replayRangeJson.value("last_session_seq", 0ULL)
+        };
+    } else {
+        RangeQuery replayRange;
+        if (parseReplayRange(payload.summary, &replayRange)) {
+            payload.replayRange = replayRange;
+        }
     }
     return makeSuccess(std::move(payload));
 }
@@ -325,16 +642,57 @@ QueryResult<IncidentListPayload> packIncidentListPayload(const QueryResult<tape_
     if (!response.ok()) {
         return propagateError<IncidentListPayload>(response.error);
     }
-    if (!response.value.events.is_array()) {
+    const json* typedResultPtr = typedCollectionResultOrNull(response.value, "incidents");
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyCollectionResult(response.value, "incidents");
+    const json incidents = typedResult.value("rows", response.value.events);
+    if (!incidents.is_array()) {
         return makeError<IncidentListPayload>(QueryErrorKind::MalformedResponse,
-                                              "incident list events must be an array");
+                                              "incident list rows must be an array");
     }
 
     IncidentListPayload payload;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.incidents = parseIncidentRows(response.value.events);
+    payload.incidents = parseIncidentRows(incidents);
+    return makeSuccess(std::move(payload));
+}
+
+QueryResult<CollectionRowsPayload> packCollectionRowsPayload(const QueryResult<tape_engine::QueryResponse>& response,
+                                                             const char* expectedKind) {
+    if (!response.ok()) {
+        return propagateError<CollectionRowsPayload>(response.error);
+    }
+    const json* typedResultPtr = typedCollectionResultOrNull(response.value, expectedKind);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyCollectionResult(response.value, expectedKind);
+    const json rows = typedResult.value("rows", response.value.events);
+    if (!typedResult.is_object()) {
+        return makeError<CollectionRowsPayload>(QueryErrorKind::MalformedResponse,
+                                                "collection result must be an object");
+    }
+    if (!rows.is_array()) {
+        return makeError<CollectionRowsPayload>(QueryErrorKind::MalformedResponse,
+                                                "collection result rows must be an array");
+    }
+
+    CollectionRowsPayload payload;
+    payload.summary = response.value.summary;
+    payload.collectionKind = typedResult.value("collection_kind", std::string(expectedKind));
+    payload.servedRevisionId = typedResult.value("served_revision_id",
+                                                 response.value.summary.value("served_revision_id", 0ULL));
+    payload.includesMutableTail = typedResult.value("includes_mutable_tail",
+                                                    response.value.summary.value("includes_mutable_tail", false));
+    payload.totalCount = typedResult.value("total_count",
+                                           static_cast<std::size_t>(response.value.summary.value("returned_events", 0ULL)));
+    payload.raw = json::object();
+    payload.raw["result"] = typedResult;
+    payload.raw["summary"] = response.value.summary;
+    payload.raw["events"] = response.value.events;
+    payload.rows.reserve(rows.size());
+    for (const auto& row : rows) {
+        payload.rows.push_back(row);
+    }
     return makeSuccess(std::move(payload));
 }
 
@@ -343,19 +701,24 @@ QueryResult<ReportInventoryPayload> packReportInventoryPayload(const QueryResult
     if (!response.ok()) {
         return propagateError<ReportInventoryPayload>(response.error);
     }
-    if (!response.value.events.is_array()) {
+    const char* expectedKind = sessionReports ? "session_reports" : "case_reports";
+    const json* typedResultPtr = typedCollectionResultOrNull(response.value, expectedKind);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyCollectionResult(response.value, expectedKind);
+    const json rows = typedResult.value("rows", response.value.events);
+    if (!rows.is_array()) {
         return makeError<ReportInventoryPayload>(QueryErrorKind::MalformedResponse,
-                                                 "report inventory events must be an array");
+                                                 "report inventory rows must be an array");
     }
 
     ReportInventoryPayload payload;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
     if (sessionReports) {
-        payload.sessionReports = parseReportRows(response.value.events);
+        payload.sessionReports = parseReportRows(rows);
     } else {
-        payload.caseReports = parseReportRows(response.value.events);
+        payload.caseReports = parseReportRows(rows);
     }
     return makeSuccess(std::move(payload));
 }
@@ -364,22 +727,27 @@ QueryResult<ArtifactExportPayload> packArtifactExportPayload(const QueryResult<t
     if (!response.ok()) {
         return propagateError<ArtifactExportPayload>(response.error);
     }
-    if (!response.value.summary.is_object()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kArtifactExportResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyArtifactExportResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<ArtifactExportPayload>(QueryErrorKind::MalformedResponse,
-                                                "artifact export summary must be an object");
+                                                "artifact export result must be an object");
     }
 
     ArtifactExportPayload payload;
     payload.summary = response.value.summary;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.artifactId = payload.summary.value("artifact_id", std::string());
-    payload.format = payload.summary.value("export_format", std::string());
-    payload.servedRevisionId = payload.summary.value("served_revision_id", 0ULL);
-    payload.artifactExport = payload.summary.value("artifact_export", json::object());
-    payload.markdown = payload.summary.value("markdown", std::string());
-    payload.bundle = payload.summary.value("bundle", json::object());
+    payload.artifactId = typedResult.value("artifact_id", response.value.summary.value("artifact_id", std::string()));
+    payload.format = typedResult.value("format", response.value.summary.value("export_format", std::string()));
+    payload.servedRevisionId = typedResult.value("served_revision_id",
+                                                 response.value.summary.value("served_revision_id", 0ULL));
+    payload.artifactExport = typedResult.value("artifact_export",
+                                               response.value.summary.value("artifact_export", json::object()));
+    payload.markdown = typedResult.value("markdown", response.value.summary.value("markdown", std::string()));
+    payload.bundle = typedResult.value("bundle", response.value.summary.value("bundle", json::object()));
 
     const std::string exportFormat = payload.artifactExport.value("format", payload.format);
     if (payload.format.empty()) {
@@ -407,29 +775,72 @@ QueryResult<ArtifactExportPayload> packArtifactExportPayload(const QueryResult<t
     return makeSuccess(std::move(payload));
 }
 
+QueryResult<ReplaySnapshotPayload> packReplaySnapshotPayload(const QueryResult<tape_engine::QueryResponse>& response) {
+    if (!response.ok()) {
+        return propagateError<ReplaySnapshotPayload>(response.error);
+    }
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kReplaySnapshotResultSchema);
+    const json typedResult = typedResultPtr != nullptr
+        ? *typedResultPtr
+        : (response.value.summary.is_object() ? response.value.summary : json::object());
+    if (!typedResult.is_object()) {
+        return makeError<ReplaySnapshotPayload>(QueryErrorKind::MalformedResponse,
+                                                "replay snapshot result must be an object");
+    }
+
+    ReplaySnapshotPayload payload;
+    payload.summary = response.value.summary;
+    payload.raw = json::object();
+    payload.raw["result"] = typedResult;
+    payload.raw["summary"] = response.value.summary;
+    payload.raw["events"] = response.value.events;
+    payload.servedRevisionId = typedResult.value("served_revision_id",
+                                                 response.value.summary.value("served_revision_id", 0ULL));
+    payload.includesMutableTail = typedResult.value("includes_mutable_tail",
+                                                    response.value.summary.value("includes_mutable_tail", false));
+    payload.targetSessionSeq = typedResult.value("target_session_seq", 0ULL);
+    payload.replayedThroughSessionSeq = typedResult.value("replayed_through_session_seq", 0ULL);
+    payload.appliedEventCount = typedResult.value("applied_event_count", 0ULL);
+    payload.gapMarkersEncountered = typedResult.value("gap_markers_encountered", 0ULL);
+    payload.checkpointUsed = typedResult.value("checkpoint_used", false);
+    payload.checkpointRevisionId = typedResult.value("checkpoint_revision_id", 0ULL);
+    payload.checkpointSessionSeq = typedResult.value("checkpoint_session_seq", 0ULL);
+    payload.bidPrice = typedResult.value("bid_price", json(nullptr));
+    payload.askPrice = typedResult.value("ask_price", json(nullptr));
+    payload.lastPrice = typedResult.value("last_price", json(nullptr));
+    payload.bidBook = typedResult.value("bid_book", json::array());
+    payload.askBook = typedResult.value("ask_book", json::array());
+    payload.dataQuality = typedResult.value("data_quality", json::object());
+    return makeSuccess(std::move(payload));
+}
+
 QueryResult<BundleExportPayload> packBundleExportPayload(const QueryResult<tape_engine::QueryResponse>& response) {
     if (!response.ok()) {
         return propagateError<BundleExportPayload>(response.error);
     }
-    if (!response.value.summary.is_object()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kBundleExportResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyBundleExportResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<BundleExportPayload>(QueryErrorKind::MalformedResponse,
-                                              "bundle export summary must be an object");
+                                              "bundle export result must be an object");
     }
 
     BundleExportPayload payload;
     payload.summary = response.value.summary;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.artifact = payload.summary.value("artifact", json::object());
-    payload.bundle = payload.summary.value("bundle", json::object());
-    payload.sourceArtifact = payload.summary.value("source_artifact", json::object());
-    payload.sourceReport = payload.summary.value("source_report", json::object());
+    payload.artifact = typedResult.value("artifact", json::object());
+    payload.bundle = typedResult.value("bundle", json::object());
+    payload.sourceArtifact = typedResult.value("source_artifact", json::object());
+    payload.sourceReport = typedResult.value("source_report", json::object());
     payload.artifactId = payload.artifact.value("artifact_id", std::string());
     payload.bundleId = payload.bundle.value("bundle_id", std::string());
     payload.bundleType = payload.bundle.value("bundle_type", std::string());
     payload.bundlePath = payload.bundle.value("bundle_path", std::string());
-    payload.servedRevisionId = payload.summary.value("served_revision_id", 0ULL);
+    payload.servedRevisionId = typedResult.value("served_revision_id",
+                                                 response.value.summary.value("served_revision_id", 0ULL));
 
     if (!payload.artifact.is_object() || payload.artifactId.empty()) {
         return makeError<BundleExportPayload>(QueryErrorKind::MalformedResponse,
@@ -446,35 +857,39 @@ QueryResult<BundleVerifyPayload> packBundleVerifyPayload(const QueryResult<tape_
     if (!response.ok()) {
         return propagateError<BundleVerifyPayload>(response.error);
     }
-    if (!response.value.summary.is_object()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kBundleVerifyResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyBundleVerifyResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<BundleVerifyPayload>(QueryErrorKind::MalformedResponse,
-                                              "bundle verify summary must be an object");
+                                              "bundle verify result must be an object");
     }
 
     BundleVerifyPayload payload;
     payload.summary = response.value.summary;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.artifact = payload.summary.value("artifact", json::object());
-    payload.bundle = payload.summary.value("bundle", json::object());
-    payload.sourceArtifact = payload.summary.value("source_artifact", json::object());
-    payload.sourceReport = payload.summary.value("source_report", json::object());
-    payload.reportSummary = payload.summary.value("report_summary", json::object());
-    payload.importSupported = payload.summary.value("import_supported", false);
-    payload.alreadyImported = payload.summary.value("already_imported", false);
-    payload.canImport = payload.summary.value("can_import", false);
-    payload.verifyStatus = payload.summary.value("verify_status", std::string());
-    payload.importReason = payload.summary.value("import_reason", std::string());
+    payload.artifact = typedResult.value("artifact", json::object());
+    payload.bundle = typedResult.value("bundle", json::object());
+    payload.sourceArtifact = typedResult.value("source_artifact", json::object());
+    payload.sourceReport = typedResult.value("source_report", json::object());
+    payload.reportSummary = typedResult.value("report_summary", json::object());
+    payload.importSupported = typedResult.value("import_supported", false);
+    payload.alreadyImported = typedResult.value("already_imported", false);
+    payload.canImport = typedResult.value("can_import", false);
+    payload.verifyStatus = typedResult.value("verify_status", std::string());
+    payload.importReason = typedResult.value("import_reason", std::string());
     payload.artifactId = payload.artifact.value("artifact_id", std::string());
     payload.bundleId = payload.bundle.value("bundle_id", std::string());
     payload.bundleType = payload.bundle.value("bundle_type", std::string());
     payload.bundlePath = payload.bundle.value("bundle_path", std::string());
     payload.payloadSha256 = payload.bundle.value("payload_sha256", std::string());
-    payload.servedRevisionId = payload.summary.value("served_revision_id", 0ULL);
-    payload.reportMarkdown = payload.summary.value("report_markdown", std::string());
+    payload.servedRevisionId = typedResult.value("served_revision_id",
+                                                 response.value.summary.value("served_revision_id", 0ULL));
+    payload.reportMarkdown = typedResult.value("report_markdown", std::string());
 
-    const json importedCase = payload.summary.value("imported_case", json::object());
+    const json importedCase = typedResult.value("imported_case", json::object());
     payload.hasImportedCase = importedCase.is_object() && !importedCase.empty();
     if (payload.hasImportedCase) {
         payload.importedCase = parseImportedCaseRow(importedCase);
@@ -499,16 +914,24 @@ QueryResult<ImportedCaseListPayload> packImportedCaseListPayload(const QueryResu
     if (!response.ok()) {
         return propagateError<ImportedCaseListPayload>(response.error);
     }
-    if (!response.value.events.is_array()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kImportedCaseInventoryResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyImportedCaseInventoryResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<ImportedCaseListPayload>(QueryErrorKind::MalformedResponse,
-                                                  "imported-case inventory events must be an array");
+                                                  "imported-case inventory result must be an object");
+    }
+    const json importedCases = typedResult.value("imported_cases", json::array());
+    if (!importedCases.is_array()) {
+        return makeError<ImportedCaseListPayload>(QueryErrorKind::MalformedResponse,
+                                                  "imported-case inventory is missing imported_cases rows");
     }
 
     ImportedCaseListPayload payload;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.importedCases = parseImportedCaseRows(response.value.events);
+    payload.importedCases = parseImportedCaseRows(importedCases);
     return makeSuccess(std::move(payload));
 }
 
@@ -516,22 +939,25 @@ QueryResult<CaseBundleImportPayload> packCaseBundleImportPayload(const QueryResu
     if (!response.ok()) {
         return propagateError<CaseBundleImportPayload>(response.error);
     }
-    if (!response.value.summary.is_object()) {
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kCaseBundleImportResultSchema);
+    const json typedResult = typedResultPtr != nullptr ? *typedResultPtr : legacyCaseBundleImportResult(response.value);
+    if (!typedResult.is_object()) {
         return makeError<CaseBundleImportPayload>(QueryErrorKind::MalformedResponse,
-                                                  "case-bundle import summary must be an object");
+                                                  "case-bundle import result must be an object");
     }
 
     CaseBundleImportPayload payload;
     payload.summary = response.value.summary;
     payload.raw = json::object();
+    payload.raw["result"] = typedResult;
     payload.raw["summary"] = response.value.summary;
     payload.raw["events"] = response.value.events;
-    payload.artifact = payload.summary.value("artifact", json::object());
-    payload.importStatus = payload.summary.value("import_status", std::string());
-    payload.duplicateImport = payload.summary.value("duplicate_import", false);
+    payload.artifact = typedResult.value("artifact", json::object());
+    payload.importStatus = typedResult.value("import_status", std::string());
+    payload.duplicateImport = typedResult.value("duplicate_import", false);
     payload.artifactId = payload.artifact.value("artifact_id", std::string());
 
-    const json importedCase = payload.summary.value("imported_case", json::object());
+    const json importedCase = typedResult.value("imported_case", json::object());
     if (!importedCase.is_object()) {
         return makeError<CaseBundleImportPayload>(QueryErrorKind::MalformedResponse,
                                                   "case-bundle import is missing imported_case metadata");

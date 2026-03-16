@@ -575,6 +575,8 @@ private:
                                        std::uint64_t lastSessionSeq,
                                        const QueryResponse& response);
     bool restoreImportedCasesManifest(const std::filesystem::path& path, std::string* error = nullptr);
+    bool persistImportedCasesManifest(const std::vector<ImportedCaseRecord>& records,
+                                      std::string* error = nullptr) const;
     ImportedCaseRecord persistImportedCaseRecord(const QuerySnapshot& snapshot,
                                                  const json& bundle,
                                                  const std::filesystem::path& sourcePath,
@@ -586,6 +588,7 @@ private:
     void upsertArtifactLookupIndexUnlocked(const SessionReportRecord& record);
     void upsertArtifactLookupIndexUnlocked(const CaseReportRecord& record);
     void upsertArtifactLookupIndexUnlocked(const ImportedCaseRecord& record);
+    bool artifactLookupMatchesStateUnlocked(const ArtifactLookupIndex& index) const;
     bool persistArtifactLookupIndex(const ArtifactLookupIndex& index, std::string* error = nullptr) const;
     bool restoreArtifactLookupIndex(const std::filesystem::path& path,
                                     ArtifactLookupIndex* index,

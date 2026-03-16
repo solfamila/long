@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -21,6 +22,7 @@
 #include <tuple>
 #include <unordered_set>
 
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -31,6 +33,132 @@ namespace {
 
 constexpr const char* kImportedCaseManifestSchema = "com.foxy.tape-engine.imported-case-bundle";
 constexpr std::uint32_t kImportedCaseManifestVersion = 1;
+
+json investigationResultToJson(const QueryResponse& response);
+
+std::filesystem::path atomicWriteTempPathFor(const std::filesystem::path& path) {
+    static std::atomic<std::uint64_t> counter{1};
+    std::ostringstream name;
+    name << path.filename().string() << ".tmp." << ::getpid() << '.'
+         << counter.fetch_add(1, std::memory_order_relaxed);
+    return path.parent_path() / name.str();
+}
+
+void syncDirectoryBestEffort(const std::filesystem::path& path) {
+    if (path.empty()) {
+        return;
+    }
+
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        return;
+    }
+    (void)::fsync(fd);
+    ::close(fd);
+}
+
+bool writeFileAtomically(const std::filesystem::path& path,
+                         const std::uint8_t* data,
+                         std::size_t size,
+                         std::string* error) {
+    auto localErrnoMessage = [](const std::string& prefix) {
+        return prefix + ": " + std::strerror(errno);
+    };
+
+    if (data == nullptr && size > 0) {
+        if (error != nullptr) {
+            *error = "atomic write payload pointer is null";
+        }
+        return false;
+    }
+
+    std::error_code ec;
+    if (!path.parent_path().empty()) {
+        std::filesystem::create_directories(path.parent_path(), ec);
+        if (ec) {
+            if (error != nullptr) {
+                *error = "failed to create parent directory for atomic write: " + ec.message();
+            }
+            return false;
+        }
+    }
+
+    const std::filesystem::path tempPath = atomicWriteTempPathFor(path);
+    int fd = ::open(tempPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        if (error != nullptr) {
+            *error = localErrnoMessage("open");
+        }
+        return false;
+    }
+
+    auto cleanupTemp = [&]() {
+        std::error_code removeEc;
+        std::filesystem::remove(tempPath, removeEc);
+    };
+    auto closeFd = [&]() {
+        if (fd >= 0) {
+            while (::close(fd) != 0 && errno == EINTR) {
+            }
+            fd = -1;
+        }
+    };
+
+    std::size_t offset = 0;
+    while (offset < size) {
+        const ssize_t wrote = ::write(fd, data + offset, size - offset);
+        if (wrote < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (error != nullptr) {
+                *error = localErrnoMessage("write");
+            }
+            closeFd();
+            cleanupTemp();
+            return false;
+        }
+        offset += static_cast<std::size_t>(wrote);
+    }
+
+    if (::fsync(fd) != 0) {
+        if (error != nullptr) {
+            *error = localErrnoMessage("fsync");
+        }
+        closeFd();
+        cleanupTemp();
+        return false;
+    }
+
+    closeFd();
+
+    std::filesystem::rename(tempPath, path, ec);
+    if (ec) {
+        if (error != nullptr) {
+            *error = "failed to publish atomic write: " + ec.message();
+        }
+        cleanupTemp();
+        return false;
+    }
+
+    syncDirectoryBestEffort(path.parent_path());
+    return true;
+}
+
+bool writeBinaryFileAtomically(const std::filesystem::path& path,
+                               const std::vector<std::uint8_t>& bytes,
+                               std::string* error) {
+    return writeFileAtomically(path, bytes.data(), bytes.size(), error);
+}
+
+bool writeTextFileAtomically(const std::filesystem::path& path,
+                             const std::string& text,
+                             std::string* error) {
+    return writeFileAtomically(path,
+                               reinterpret_cast<const std::uint8_t*>(text.data()),
+                               text.size(),
+                               error);
+}
 
 std::string errnoMessage(const std::string& prefix) {
     return prefix + ": " + std::strerror(errno);
@@ -957,6 +1085,7 @@ void annotateInvestigationEnvelope(QueryResponse* response,
         evidence["timeline_entry_count"] = timeline.is_array() ? timeline.size() : 0;
         response->summary["evidence"] = std::move(evidence);
     }
+    response->result = investigationResultToJson(*response);
 }
 
 std::string incidentWhyItMatters(const IncidentRecord& incident) {
@@ -1766,6 +1895,271 @@ json importedCaseToJson(const ImportedCaseRecord& record) {
     };
 }
 
+json bundleExportResultToJson(const json& artifact,
+                              const json& bundle,
+                              const json& sourceArtifact,
+                              const json& sourceReport,
+                              std::uint64_t servedRevisionId,
+                              const std::string& exportStatus) {
+    return {
+        {"schema", kBundleExportResultSchema},
+        {"version", kBundleExportResultVersion},
+        {"artifact", artifact},
+        {"bundle", bundle},
+        {"source_artifact", sourceArtifact},
+        {"source_report", sourceReport},
+        {"served_revision_id", servedRevisionId},
+        {"export_status", exportStatus}
+    };
+}
+
+json bundleVerifyResultToJson(const json& artifact,
+                              const json& bundle,
+                              const json& sourceArtifact,
+                              const json& sourceReport,
+                              const json& reportSummary,
+                              const std::string& reportMarkdown,
+                              const std::string& verifyStatus,
+                              bool importSupported,
+                              bool alreadyImported,
+                              bool canImport,
+                              const std::string& importReason,
+                              std::uint64_t servedRevisionId,
+                              const std::optional<ImportedCaseRecord>& importedCase) {
+    json result{
+        {"schema", kBundleVerifyResultSchema},
+        {"version", kBundleVerifyResultVersion},
+        {"artifact", artifact},
+        {"bundle", bundle},
+        {"source_artifact", sourceArtifact},
+        {"source_report", sourceReport},
+        {"report_summary", reportSummary},
+        {"report_markdown", reportMarkdown},
+        {"verify_status", verifyStatus},
+        {"import_supported", importSupported},
+        {"already_imported", alreadyImported},
+        {"can_import", canImport},
+        {"import_reason", importReason},
+        {"served_revision_id", servedRevisionId}
+    };
+    if (importedCase.has_value()) {
+        result["imported_case"] = importedCaseToJson(*importedCase);
+    }
+    return result;
+}
+
+json caseBundleImportResultToJson(const json& artifact,
+                                  const ImportedCaseRecord& importedCase,
+                                  const std::string& importStatus,
+                                  bool duplicateImport) {
+    return {
+        {"schema", kCaseBundleImportResultSchema},
+        {"version", kCaseBundleImportResultVersion},
+        {"artifact", artifact},
+        {"imported_case", importedCaseToJson(importedCase)},
+        {"import_status", importStatus},
+        {"duplicate_import", duplicateImport}
+    };
+}
+
+json importedCaseInventoryResultToJson(const json& importedCases,
+                                       std::size_t returnedCount) {
+    return {
+        {"schema", kImportedCaseInventoryResultSchema},
+        {"version", kImportedCaseInventoryResultVersion},
+        {"returned_count", returnedCount},
+        {"imported_cases", importedCases}
+    };
+}
+
+std::string firstStringValue(const json& payload,
+                             std::initializer_list<const char*> keys) {
+    if (!payload.is_object()) {
+        return {};
+    }
+    for (const char* key : keys) {
+        const auto it = payload.find(key);
+        if (it != payload.end() && it->is_string()) {
+            return it->get<std::string>();
+        }
+    }
+    return {};
+}
+
+json maybeReplayRangeToJson(const json& summary) {
+    if (summary.contains("replay_from_session_seq") || summary.contains("replay_to_session_seq")) {
+        return {
+            {"first_session_seq", summary.value("replay_from_session_seq", 0ULL)},
+            {"last_session_seq", summary.value("replay_to_session_seq", 0ULL)}
+        };
+    }
+    return nullptr;
+}
+
+json statusResultToJson(const json& summary) {
+    json result = summary.is_object() ? summary : json::object();
+    result["schema"] = kStatusResultSchema;
+    result["version"] = kStatusResultVersion;
+    return result;
+}
+
+json eventListResultToJson(const json& summary,
+                           const json& events) {
+    return {
+        {"schema", kEventListResultSchema},
+        {"version", kEventListResultVersion},
+        {"served_revision_id", summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", summary.value("includes_mutable_tail", false)},
+        {"returned_count", events.is_array() ? events.size() : 0},
+        {"base_revision_id", summary.value("base_revision_id", 0ULL)},
+        {"live_tail_high_water_seq", summary.value("live_tail_high_water_seq", 0ULL)},
+        {"from_session_seq", summary.value("from_session_seq", 0ULL)},
+        {"to_session_seq", summary.value("to_session_seq", 0ULL)},
+        {"trace_id", summary.value("trace_id", 0ULL)},
+        {"order_id", summary.value("order_id", 0LL)},
+        {"perm_id", summary.value("perm_id", 0LL)},
+        {"exec_id", summary.value("exec_id", std::string())},
+        {"events", events.is_array() ? events : json::array()}
+    };
+}
+
+json sessionQualityResultToJson(const json& summary) {
+    return {
+        {"schema", kSessionQualityResultSchema},
+        {"version", kSessionQualityResultVersion},
+        {"served_revision_id", summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", summary.value("includes_mutable_tail", false)},
+        {"first_session_seq", summary.value("from_session_seq", 0ULL)},
+        {"last_session_seq", summary.value("to_session_seq", 0ULL)},
+        {"data_quality", summary.value("data_quality", json::object())}
+    };
+}
+
+json investigationIncidentRows(const QueryResponse& response) {
+    const json& summary = response.summary;
+    if (summary.contains("related_incidents") && summary["related_incidents"].is_array()) {
+        return summary["related_incidents"];
+    }
+    if (summary.contains("top_incidents") && summary["top_incidents"].is_array()) {
+        return summary["top_incidents"];
+    }
+    if (summary.contains("incident_revisions") && summary["incident_revisions"].is_array()) {
+        return summary["incident_revisions"];
+    }
+    if (summary.contains("latest_incident") && summary["latest_incident"].is_object() && !summary["latest_incident"].empty()) {
+        return json::array({summary["latest_incident"]});
+    }
+    if (summary.contains("incident") && summary["incident"].is_object() && !summary["incident"].empty()) {
+        return json::array({summary["incident"]});
+    }
+    if (response.events.is_array()) {
+        bool allIncidents = !response.events.empty();
+        for (const auto& item : response.events) {
+            if (!item.is_object() || !item.contains("logical_incident_id")) {
+                allIncidents = false;
+                break;
+            }
+        }
+        if (allIncidents) {
+            return response.events;
+        }
+    }
+    return json::array();
+}
+
+json investigationResultToJson(const QueryResponse& response) {
+    const json artifact = response.summary.value("artifact", json::object());
+    const json report = response.summary.value("report",
+        response.summary.value("report_summary", json::object()));
+    const json evidence = response.summary.value("evidence", json::object());
+    const json citationRows = evidence.value("citations", json::array());
+    const std::string headline = firstStringValue(report, {"headline", "title", "summary"});
+    std::string detail = firstStringValue(report, {"summary", "why_it_matters"});
+    if (detail.empty()) {
+        detail = firstStringValue(response.summary, {"what_changed_first", "why_it_matters", "headline"});
+    }
+    return {
+        {"schema", kInvestigationResultSchema},
+        {"version", kInvestigationResultVersion},
+        {"artifact_id", artifact.value("artifact_id", std::string())},
+        {"artifact_kind", artifact.value("artifact_type", artifact.value("artifact_kind", std::string()))},
+        {"headline", headline},
+        {"detail", detail},
+        {"served_revision_id", response.summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", response.summary.value("includes_mutable_tail", false)},
+        {"artifact", artifact},
+        {"entity", response.summary.value("entity", json::object())},
+        {"report", report},
+        {"evidence", evidence},
+        {"data_quality", response.summary.value("data_quality", json::object())},
+        {"replay_range", maybeReplayRangeToJson(response.summary)},
+        {"incident_rows", investigationIncidentRows(response)},
+        {"citation_rows", citationRows.is_array() ? citationRows : json::array()},
+        {"events", response.events.is_array() ? response.events : json::array()}
+    };
+}
+
+json collectionResultToJson(const json& rows,
+                            std::string collectionKind,
+                            std::uint64_t servedRevisionId,
+                            bool includesMutableTail,
+                            std::size_t totalCount) {
+    return {
+        {"schema", kCollectionResultSchema},
+        {"version", kCollectionResultVersion},
+        {"collection_kind", std::move(collectionKind)},
+        {"served_revision_id", servedRevisionId},
+        {"includes_mutable_tail", includesMutableTail},
+        {"returned_count", rows.is_array() ? rows.size() : 0},
+        {"total_count", totalCount},
+        {"rows", rows.is_array() ? rows : json::array()}
+    };
+}
+
+json seekOrderResultToJson(const json& summary) {
+    return {
+        {"schema", kSeekOrderResultSchema},
+        {"version", kSeekOrderResultVersion},
+        {"served_revision_id", summary.value("served_revision_id", 0ULL)},
+        {"includes_mutable_tail", summary.value("includes_mutable_tail", false)},
+        {"replay_target_session_seq", summary.value("replay_target_session_seq", 0ULL)},
+        {"first_session_seq", summary.value("first_session_seq", 0ULL)},
+        {"last_session_seq", summary.value("last_session_seq", 0ULL)},
+        {"last_fill_session_seq", summary.value("last_fill_session_seq", 0ULL)},
+        {"replay_range", maybeReplayRangeToJson(summary)},
+        {"anchor", summary.value("anchor", json::object())},
+        {"protected_window", summary.value("protected_window", json::object())}
+    };
+}
+
+json artifactExportResultToJson(const json& summary) {
+    return {
+        {"schema", kArtifactExportResultSchema},
+        {"version", kArtifactExportResultVersion},
+        {"artifact_id", summary.value("artifact_id", std::string())},
+        {"format", summary.value("export_format", std::string())},
+        {"served_revision_id", summary.value("served_revision_id", 0ULL)},
+        {"artifact_export", summary.value("artifact_export", json::object())},
+        {"markdown", summary.value("markdown", std::string())},
+        {"bundle", summary.value("bundle", json::object())}
+    };
+}
+
+json replaySnapshotResultToJson(const json& summary) {
+    json result = summary.is_object() ? summary : json::object();
+    result["schema"] = kReplaySnapshotResultSchema;
+    result["version"] = kReplaySnapshotResultVersion;
+    return result;
+}
+
+std::string importedCasesManifestContents(const std::vector<ImportedCaseRecord>& records) {
+    std::ostringstream out;
+    for (const auto& record : records) {
+        out << importedCaseToJson(record).dump() << '\n';
+    }
+    return out.str();
+}
+
 OrderAnchorRecord orderAnchorFromJson(const json& payload) {
     OrderAnchorRecord record;
     record.anchorId = payload.value("anchor_id", 0ULL);
@@ -2186,35 +2580,19 @@ void Server::upsertArtifactLookupIndexUnlocked(const ImportedCaseRecord& record)
     artifactLookupIndex_.importedCasesById[record.importedCaseId] = record;
 }
 
+bool Server::artifactLookupMatchesStateUnlocked(const ArtifactLookupIndex& index) const {
+    return artifactLookupIndexToJson(index) == artifactLookupIndexToJson(rebuildArtifactLookupIndexUnlocked());
+}
+
 bool Server::persistArtifactLookupIndex(const ArtifactLookupIndex& index, std::string* error) const {
     const std::filesystem::path lookupPath = config_.dataDir / "artifact-lookup.msgpack";
-    const std::filesystem::path tempPath = lookupPath.string() + ".tmp";
     const std::vector<std::uint8_t> payload = json::to_msgpack(artifactLookupIndexToJson(index));
-
-    {
-        std::ofstream out(tempPath, std::ios::binary);
-        if (!out.is_open()) {
-            if (error != nullptr) {
-                *error = "failed to open tape-engine artifact lookup index for write";
-            }
-            return false;
+    if (!writeBinaryFileAtomically(lookupPath, payload, error)) {
+        if (error != nullptr && error->rfind("failed to ", 0) != 0) {
+            *error = "failed to publish tape-engine artifact lookup index: " + *error;
+        } else if (error != nullptr && error->empty()) {
+            *error = "failed to publish tape-engine artifact lookup index";
         }
-        out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
-        if (!out.good()) {
-            if (error != nullptr) {
-                *error = "failed to write tape-engine artifact lookup index";
-            }
-            return false;
-        }
-    }
-
-    std::error_code ec;
-    std::filesystem::rename(tempPath, lookupPath, ec);
-    if (ec) {
-        if (error != nullptr) {
-            *error = "failed to publish tape-engine artifact lookup index: " + ec.message();
-        }
-        std::filesystem::remove(tempPath, ec);
         return false;
     }
     return true;
@@ -2480,6 +2858,10 @@ bool Server::restoreFrozenState(std::string* error) {
         ArtifactLookupIndex restoredLookup;
         if (restoreArtifactLookupIndex(lookupPath, &restoredLookup, &lookupError)) {
             artifactLookupIndex_ = std::move(restoredLookup);
+            if (!artifactLookupMatchesStateUnlocked(artifactLookupIndex_)) {
+                artifactLookupIndex_ = rebuildArtifactLookupIndexUnlocked();
+                shouldPersistLookupIndex = true;
+            }
         } else {
             artifactLookupIndex_ = rebuildArtifactLookupIndexUnlocked();
             shouldPersistLookupIndex = true;
@@ -5142,6 +5524,25 @@ bool Server::restoreImportedCasesManifest(const std::filesystem::path& path, std
     return true;
 }
 
+bool Server::persistImportedCasesManifest(const std::vector<ImportedCaseRecord>& records, std::string* error) const {
+    const std::filesystem::path manifestPath = config_.dataDir / "imported-case-bundles.jsonl";
+    if (records.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(manifestPath, ec);
+        return true;
+    }
+    std::string manifest = importedCasesManifestContents(records);
+    if (!writeTextFileAtomically(manifestPath, manifest, error)) {
+        if (error != nullptr && error->rfind("failed to ", 0) != 0) {
+            *error = "failed to persist imported case bundle manifest: " + *error;
+        } else if (error != nullptr && error->empty()) {
+            *error = "failed to persist imported case bundle manifest";
+        }
+        return false;
+    }
+    return true;
+}
+
 std::optional<ImportedCaseRecord> Server::findImportedCaseByPayloadSha(const QuerySnapshot& snapshot,
                                                                        const std::string& payloadSha256) const {
     if (payloadSha256.empty()) {
@@ -5170,7 +5571,7 @@ ImportedCaseRecord Server::persistImportedCaseRecord(const QuerySnapshot& snapsh
     ImportedCaseRecord record;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
-        record.importedCaseId = nextImportedCaseId_++;
+        record.importedCaseId = nextImportedCaseId_;
     }
     record.importedTsEngineNs = nowEngineNs();
     record.bundleId = bundle.value("bundle_id", std::string());
@@ -5201,36 +5602,44 @@ ImportedCaseRecord Server::persistImportedCaseRecord(const QuerySnapshot& snapsh
     record.fileName = fileName.str();
 
     const std::filesystem::path bundlePath = snapshot.dataDir / "imports" / record.fileName;
-    {
-        std::ofstream out(bundlePath, std::ios::binary);
-        if (!out.is_open()) {
-            throw std::runtime_error("failed to open imported case bundle for write");
-        }
-        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-        if (!out.good()) {
-            throw std::runtime_error("failed to write imported case bundle");
-        }
+    std::string persistError;
+    if (!writeBinaryFileAtomically(bundlePath, bytes, &persistError)) {
+        throw std::runtime_error("failed to persist imported case bundle: " + persistError);
     }
 
-    const std::filesystem::path manifestPath = snapshot.dataDir / "imported-case-bundles.jsonl";
-    {
-        std::ofstream manifestOut(manifestPath, std::ios::app);
-        if (!manifestOut.is_open()) {
-            throw std::runtime_error("failed to open imported case bundle manifest for append");
-        }
-        manifestOut << importedCaseToJson(record).dump() << '\n';
+    std::vector<ImportedCaseRecord> manifestRecords = snapshot.importedCases;
+    manifestRecords.push_back(record);
+    if (!persistImportedCasesManifest(manifestRecords, &persistError)) {
+        std::error_code removeEc;
+        std::filesystem::remove(bundlePath, removeEc);
+        throw std::runtime_error(persistError);
     }
 
     ArtifactLookupIndex lookupIndexSnapshot;
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
-        importedCases_.push_back(record);
-        upsertArtifactLookupIndexUnlocked(record);
         lookupIndexSnapshot = artifactLookupIndex_;
     }
+    lookupIndexSnapshot.importedCasesById[record.importedCaseId] = record;
+
     std::string lookupError;
     if (!persistArtifactLookupIndex(lookupIndexSnapshot, &lookupError)) {
+        std::string rollbackError;
+        const bool manifestRolledBack = persistImportedCasesManifest(snapshot.importedCases, &rollbackError);
+        std::error_code removeEc;
+        std::filesystem::remove(bundlePath, removeEc);
+
+        if (!manifestRolledBack) {
+            throw std::runtime_error(lookupError + "; rollback failed: " + rollbackError);
+        }
         throw std::runtime_error(lookupError);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        nextImportedCaseId_ = std::max(nextImportedCaseId_, record.importedCaseId + 1);
+        importedCases_.push_back(record);
+        artifactLookupIndex_ = lookupIndexSnapshot;
     }
     return record;
 }
@@ -6015,6 +6424,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         if (!snapshot.writerFailure.empty()) {
             response.summary["writer_error"] = snapshot.writerFailure;
         }
+        response.result = statusResultToJson(response.summary);
         return response;
     }
 
@@ -6032,6 +6442,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             response.events.push_back(eventToJson(snapshot.liveEvents[i]));
         }
         response.summary["returned_events"] = response.events.size();
+        response.result = eventListResultToJson(response.summary, response.events);
         return response;
     }
 
@@ -6051,10 +6462,12 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                       to);
         response.summary = {
             {"from_session_seq", from},
+            {"includes_mutable_tail", request.includeLiveTail},
             {"to_session_seq", to},
             {"served_revision_id", frozenRevisionId},
             {"data_quality", buildDataQualitySummary(events, request.includeLiveTail, snapshot.instrumentId)}
         };
+        response.result = sessionQualityResultToJson(response.summary);
         return response;
     }
 
@@ -6160,6 +6573,11 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"returned_events", response.events.size()},
             {"session_report_count", snapshot.sessionReports.size()}
         };
+        response.result = collectionResultToJson(response.events,
+                                                 "session_reports",
+                                                 request.revisionId,
+                                                 false,
+                                                 snapshot.sessionReports.size());
         return response;
     }
 
@@ -6198,6 +6616,11 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"returned_events", response.events.size()},
             {"case_report_count", snapshot.caseReports.size()}
         };
+        response.result = collectionResultToJson(response.events,
+                                                 "case_reports",
+                                                 request.revisionId,
+                                                 false,
+                                                 snapshot.caseReports.size());
         return response;
     }
 
@@ -6291,15 +6714,9 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         fileName << filePrefix << std::setw(6) << std::setfill('0') << request.reportId << ".msgpack";
         const std::filesystem::path bundlePath = snapshot.dataDir / "bundles" / fileName.str();
         const std::vector<std::uint8_t> payload = json::to_msgpack(bundle);
-        {
-            std::ofstream out(bundlePath, std::ios::binary);
-            if (!out.is_open()) {
-                return rejectResponse(request, "failed to open report bundle for write");
-            }
-            out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
-            if (!out.good()) {
-                return rejectResponse(request, "failed to write report bundle");
-            }
+        std::string writeError;
+        if (!writeBinaryFileAtomically(bundlePath, payload, &writeError)) {
+            return rejectResponse(request, "failed to write report bundle: " + writeError);
         }
 
         response.summary = {
@@ -6325,6 +6742,12 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"served_revision_id", sourceRevisionId},
             {"export_status", "written"}
         };
+        response.result = bundleExportResultToJson(response.summary.value("artifact", json::object()),
+                                                   response.summary.value("bundle", json::object()),
+                                                   sourceArtifact,
+                                                   sourceReport,
+                                                   sourceRevisionId,
+                                                   "written");
         response.events = json::array();
         return response;
     }
@@ -6384,6 +6807,19 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         if (alreadyImported) {
             response.summary["imported_case"] = importedCaseToJson(*existing);
         }
+        response.result = bundleVerifyResultToJson(response.summary.value("artifact", json::object()),
+                                                   response.summary.value("bundle", json::object()),
+                                                   inspection.sourceArtifact,
+                                                   inspection.sourceReport,
+                                                   inspection.reportSummary,
+                                                   inspection.reportMarkdown,
+                                                   verifyStatus,
+                                                   importSupported,
+                                                   alreadyImported,
+                                                   importSupported && !alreadyImported,
+                                                   importReason,
+                                                   inspection.sourceRevisionId,
+                                                   existing);
         response.events = json::array();
         return response;
     }
@@ -6419,6 +6855,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                 {"duplicate_import", true},
                 {"imported_case", importedCaseToJson(*existing)}
             };
+            response.result = caseBundleImportResultToJson(response.summary.value("artifact", json::object()),
+                                                           *existing,
+                                                           "existing",
+                                                           true);
             response.events = json::array();
             return response;
         }
@@ -6443,6 +6883,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"duplicate_import", false},
             {"imported_case", importedCaseToJson(record)}
         };
+        response.result = caseBundleImportResultToJson(response.summary.value("artifact", json::object()),
+                                                       record,
+                                                       "imported",
+                                                       false);
         response.events = json::array();
         return response;
     }
@@ -6461,6 +6905,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"schema", kImportedCaseListSchema},
             {"version", kImportedCaseListVersion}
         };
+        response.result = importedCaseInventoryResultToJson(response.events, response.events.size());
         return response;
     }
 
@@ -6608,6 +7053,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"envelope_version", kArtifactExportVersion},
             {"includes_mutable_tail", artifactResponse.summary.value("includes_mutable_tail", request.includeLiveTail)}
         };
+        exportResponse.result = artifactExportResultToJson(exportResponse.summary);
         return exportResponse;
     }
 
@@ -6668,6 +7114,27 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"returned_events", response.events.size()},
             {"served_revision_id", frozenRevisionId}
         };
+        response.result = collectionResultToJson(response.events,
+                                                 operation == QueryOperation::ListOrderAnchors
+                                                     ? "order_anchors"
+                                                     : operation == QueryOperation::ListProtectedWindows
+                                                         ? "protected_windows"
+                                                         : operation == QueryOperation::ListFindings
+                                                             ? "findings"
+                                                             : "incidents",
+                                                 frozenRevisionId,
+                                                 request.includeLiveTail,
+                                                 operation == QueryOperation::ListOrderAnchors
+                                                     ? artifacts.orderAnchors.size()
+                                                     : operation == QueryOperation::ListProtectedWindows
+                                                         ? artifacts.protectedWindows.size()
+                                                         : operation == QueryOperation::ListFindings
+                                                             ? artifacts.findings.size()
+                                                             : collapseAdjustedIncidents(snapshot,
+                                                                                        artifacts,
+                                                                                        artifacts.incidents,
+                                                                                        frozenRevisionId,
+                                                                                        request.includeLiveTail).size());
         return response;
     }
 
@@ -7195,6 +7662,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         if (request.includeLiveTail) {
             response.summary["live_tail_high_water_seq"] = snapshot.liveEvents.empty() ? 0 : snapshot.liveEvents.back().sessionSeq;
         }
+        response.result = eventListResultToJson(response.summary, response.events);
         return response;
     }
 
@@ -7230,6 +7698,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"served_revision_id", frozenRevisionId},
             {"trace_id", request.traceId}
         };
+        response.result = eventListResultToJson(response.summary, response.events);
         return response;
     }
 
@@ -7519,6 +7988,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                                 request.execId,
                                                 frozenRevisionId,
                                                 request.includeLiveTail);
+        response.result = seekOrderResultToJson(response.summary);
         return response;
     }
 
@@ -7537,6 +8007,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
                                               request.includeLiveTail);
         response.summary["served_revision_id"] = frozenRevisionId;
         response.events = json::array();
+        response.result = replaySnapshotResultToJson(response.summary);
         return response;
     }
 

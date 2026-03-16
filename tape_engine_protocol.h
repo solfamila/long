@@ -23,6 +23,30 @@ inline constexpr std::uint32_t kReportBundleVersion = 1;
 inline constexpr const char* kReportBundleSchema = "com.foxy.tape-engine.report-bundle";
 inline constexpr std::uint32_t kImportedCaseListVersion = 1;
 inline constexpr const char* kImportedCaseListSchema = "com.foxy.tape-engine.imported-case-list";
+inline constexpr std::uint32_t kStatusResultVersion = 1;
+inline constexpr const char* kStatusResultSchema = "com.foxy.tape-engine.status-result";
+inline constexpr std::uint32_t kEventListResultVersion = 1;
+inline constexpr const char* kEventListResultSchema = "com.foxy.tape-engine.event-list-result";
+inline constexpr std::uint32_t kSessionQualityResultVersion = 1;
+inline constexpr const char* kSessionQualityResultSchema = "com.foxy.tape-engine.session-quality-result";
+inline constexpr std::uint32_t kInvestigationResultVersion = 1;
+inline constexpr const char* kInvestigationResultSchema = "com.foxy.tape-engine.investigation-result";
+inline constexpr std::uint32_t kCollectionResultVersion = 1;
+inline constexpr const char* kCollectionResultSchema = "com.foxy.tape-engine.collection-result";
+inline constexpr std::uint32_t kSeekOrderResultVersion = 1;
+inline constexpr const char* kSeekOrderResultSchema = "com.foxy.tape-engine.seek-order-result";
+inline constexpr std::uint32_t kArtifactExportResultVersion = 1;
+inline constexpr const char* kArtifactExportResultSchema = "com.foxy.tape-engine.artifact-export-result";
+inline constexpr std::uint32_t kReplaySnapshotResultVersion = 1;
+inline constexpr const char* kReplaySnapshotResultSchema = "com.foxy.tape-engine.replay-snapshot-result";
+inline constexpr std::uint32_t kBundleExportResultVersion = 1;
+inline constexpr const char* kBundleExportResultSchema = "com.foxy.tape-engine.bundle-export-result";
+inline constexpr std::uint32_t kBundleVerifyResultVersion = 1;
+inline constexpr const char* kBundleVerifyResultSchema = "com.foxy.tape-engine.bundle-verify-result";
+inline constexpr std::uint32_t kCaseBundleImportResultVersion = 1;
+inline constexpr const char* kCaseBundleImportResultSchema = "com.foxy.tape-engine.case-bundle-import-result";
+inline constexpr std::uint32_t kImportedCaseInventoryResultVersion = 1;
+inline constexpr const char* kImportedCaseInventoryResultSchema = "com.foxy.tape-engine.imported-case-inventory-result";
 
 enum class QueryOperation {
     Unknown = 0,
@@ -125,6 +149,7 @@ struct QueryResponse {
     std::string operation;
     std::string status = "ok";
     std::string error;
+    json result = json::object();
     json summary = json::object();
     json events = json::array();
 };
