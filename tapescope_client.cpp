@@ -103,6 +103,35 @@ json phase7ExecutionLedgerAppliedFilters(const Phase7ExecutionLedgerInventorySel
     };
 }
 
+json phase7ExecutionJournalAppliedFilters(const Phase7ExecutionJournalInventorySelection& selection,
+                                          std::size_t matchedCount) {
+    return json{
+        {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
+        {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
+        {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
+        {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+        {"journal_status", selection.journalStatus.empty() ? json(nullptr) : json(selection.journalStatus)},
+        {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
+        {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+        {"matched_count", matchedCount}
+    };
+}
+
+json phase7ExecutionApplyAppliedFilters(const Phase7ExecutionApplyInventorySelection& selection,
+                                        std::size_t matchedCount) {
+    return json{
+        {"execution_journal_artifact_id", selection.journalArtifactId.empty() ? json(nullptr) : json(selection.journalArtifactId)},
+        {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
+        {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
+        {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
+        {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+        {"apply_status", selection.applyStatus.empty() ? json(nullptr) : json(selection.applyStatus)},
+        {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
+        {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+        {"matched_count", matchedCount}
+    };
+}
+
 void sortPhase7Analyses(std::vector<Phase7AnalysisArtifact>* artifacts, std::string_view sortBy) {
     if (artifacts == nullptr) {
         return;
@@ -330,6 +359,176 @@ Phase7ExecutionLedgerInventoryPayload selectPhase7ExecutionLedgers(
     const std::size_t returnedCount = selection.limit == 0 ? filtered.size() : std::min(selection.limit, filtered.size());
     payload.artifacts.assign(filtered.begin(), filtered.begin() + static_cast<std::ptrdiff_t>(returnedCount));
     payload.appliedFilters = phase7ExecutionLedgerAppliedFilters(selection, payload.matchedCount);
+    return payload;
+}
+
+Phase7ExecutionJournalInventoryPayload selectPhase7ExecutionJournals(
+    std::vector<Phase7ExecutionJournalArtifact> artifacts,
+    const Phase7ExecutionJournalInventorySelection& selection) {
+    auto matches = [&](const Phase7ExecutionJournalArtifact& artifact) {
+        if (!selection.ledgerArtifactId.empty() &&
+            artifact.ledgerArtifact.artifactId != selection.ledgerArtifactId) {
+            return false;
+        }
+        if (!selection.playbookArtifactId.empty() &&
+            artifact.playbookArtifact.artifactId != selection.playbookArtifactId) {
+            return false;
+        }
+        if (!selection.analysisArtifactId.empty() &&
+            artifact.analysisArtifact.artifactId != selection.analysisArtifactId) {
+            return false;
+        }
+        if (!selection.sourceArtifactId.empty() &&
+            artifact.sourceArtifact.artifactId != selection.sourceArtifactId) {
+            return false;
+        }
+        if (!selection.journalStatus.empty() && artifact.journalStatus != selection.journalStatus) {
+            return false;
+        }
+        return true;
+    };
+
+    std::vector<Phase7ExecutionJournalArtifact> filtered;
+    filtered.reserve(artifacts.size());
+    for (auto& artifact : artifacts) {
+        if (matches(artifact)) {
+            filtered.push_back(std::move(artifact));
+        }
+    }
+    const auto statusRank = [](const std::string& journalStatus) {
+        if (journalStatus == tape_phase7::kExecutionJournalStatusFailed) {
+            return 0;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusCancelled) {
+            return 1;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusInProgress) {
+            return 2;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusQueued) {
+            return 3;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusPartiallySucceeded) {
+            return 4;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusSucceeded) {
+            return 5;
+        }
+        return 6;
+    };
+    const std::string sortMode(selection.sortBy.empty() ? "generated_at_desc" : selection.sortBy);
+    std::sort(filtered.begin(),
+              filtered.end(),
+              [&](const Phase7ExecutionJournalArtifact& lhs, const Phase7ExecutionJournalArtifact& rhs) {
+                  if (sortMode == "attention_desc") {
+                      const int lhsRank = statusRank(lhs.journalStatus);
+                      const int rhsRank = statusRank(rhs.journalStatus);
+                      if (lhsRank != rhsRank) {
+                          return lhsRank < rhsRank;
+                      }
+                  } else if (sortMode == "source_artifact_asc") {
+                      if (lhs.sourceArtifact.artifactId != rhs.sourceArtifact.artifactId) {
+                          return lhs.sourceArtifact.artifactId < rhs.sourceArtifact.artifactId;
+                      }
+                  }
+                  if (lhs.generatedAtUtc != rhs.generatedAtUtc) {
+                      return lhs.generatedAtUtc > rhs.generatedAtUtc;
+                  }
+                  return lhs.journalArtifact.artifactId < rhs.journalArtifact.artifactId;
+              });
+
+    Phase7ExecutionJournalInventoryPayload payload;
+    payload.matchedCount = filtered.size();
+    const std::size_t returnedCount = selection.limit == 0 ? filtered.size() : std::min(selection.limit, filtered.size());
+    payload.artifacts.assign(filtered.begin(), filtered.begin() + static_cast<std::ptrdiff_t>(returnedCount));
+    payload.appliedFilters = phase7ExecutionJournalAppliedFilters(selection, payload.matchedCount);
+    return payload;
+}
+
+Phase7ExecutionApplyInventoryPayload selectPhase7ExecutionApplies(
+    std::vector<Phase7ExecutionApplyArtifact> artifacts,
+    const Phase7ExecutionApplyInventorySelection& selection) {
+    auto matches = [&](const Phase7ExecutionApplyArtifact& artifact) {
+        if (!selection.journalArtifactId.empty() &&
+            artifact.journalArtifact.artifactId != selection.journalArtifactId) {
+            return false;
+        }
+        if (!selection.ledgerArtifactId.empty() &&
+            artifact.ledgerArtifact.artifactId != selection.ledgerArtifactId) {
+            return false;
+        }
+        if (!selection.playbookArtifactId.empty() &&
+            artifact.playbookArtifact.artifactId != selection.playbookArtifactId) {
+            return false;
+        }
+        if (!selection.analysisArtifactId.empty() &&
+            artifact.analysisArtifact.artifactId != selection.analysisArtifactId) {
+            return false;
+        }
+        if (!selection.sourceArtifactId.empty() &&
+            artifact.sourceArtifact.artifactId != selection.sourceArtifactId) {
+            return false;
+        }
+        if (!selection.applyStatus.empty() && artifact.applyStatus != selection.applyStatus) {
+            return false;
+        }
+        return true;
+    };
+
+    std::vector<Phase7ExecutionApplyArtifact> filtered;
+    filtered.reserve(artifacts.size());
+    for (auto& artifact : artifacts) {
+        if (matches(artifact)) {
+            filtered.push_back(std::move(artifact));
+        }
+    }
+    const auto statusRank = [](const std::string& applyStatus) {
+        if (applyStatus == tape_phase7::kExecutionJournalStatusFailed) {
+            return 0;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusCancelled) {
+            return 1;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusInProgress) {
+            return 2;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusQueued) {
+            return 3;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusPartiallySucceeded) {
+            return 4;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusSucceeded) {
+            return 5;
+        }
+        return 6;
+    };
+    const std::string sortMode(selection.sortBy.empty() ? "generated_at_desc" : selection.sortBy);
+    std::sort(filtered.begin(),
+              filtered.end(),
+              [&](const Phase7ExecutionApplyArtifact& lhs, const Phase7ExecutionApplyArtifact& rhs) {
+                  if (sortMode == "attention_desc") {
+                      const int lhsRank = statusRank(lhs.applyStatus);
+                      const int rhsRank = statusRank(rhs.applyStatus);
+                      if (lhsRank != rhsRank) {
+                          return lhsRank < rhsRank;
+                      }
+                  } else if (sortMode == "source_artifact_asc") {
+                      if (lhs.sourceArtifact.artifactId != rhs.sourceArtifact.artifactId) {
+                          return lhs.sourceArtifact.artifactId < rhs.sourceArtifact.artifactId;
+                      }
+                  }
+                  if (lhs.generatedAtUtc != rhs.generatedAtUtc) {
+                      return lhs.generatedAtUtc > rhs.generatedAtUtc;
+                  }
+                  return lhs.applyArtifact.artifactId < rhs.applyArtifact.artifactId;
+              });
+
+    Phase7ExecutionApplyInventoryPayload payload;
+    payload.matchedCount = filtered.size();
+    const std::size_t returnedCount = selection.limit == 0 ? filtered.size() : std::min(selection.limit, filtered.size());
+    payload.artifacts.assign(filtered.begin(), filtered.begin() + static_cast<std::ptrdiff_t>(returnedCount));
+    payload.appliedFilters = phase7ExecutionApplyAppliedFilters(selection, payload.matchedCount);
     return payload;
 }
 
@@ -934,6 +1133,206 @@ QueryResult<Phase7ExecutionLedgerReviewPayload> QueryClient::recordExecutionLedg
                                                  &payload.auditEventId,
                                                  &errorCode,
                                                  &errorMessage),
+        std::move(payload),
+        errorCode,
+        errorMessage);
+}
+
+QueryResult<Phase7ExecutionJournalStartPayload> QueryClient::startExecutionJournalPayload(
+    const std::string& executionLedgerArtifactId,
+    const std::string& actor,
+    const std::string& executionCapability) const {
+    Phase7ExecutionJournalStartPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(
+        tape_phase7::startExecutionJournal("",
+                                           executionLedgerArtifactId,
+                                           actor,
+                                           executionCapability,
+                                           &payload.artifact,
+                                           &payload.created,
+                                           &errorCode,
+                                           &errorMessage),
+        std::move(payload),
+        errorCode,
+        errorMessage);
+}
+
+QueryResult<std::vector<Phase7ExecutionJournalArtifact>> QueryClient::listExecutionJournalArtifactsPayload(
+    std::size_t limit) const {
+    Phase7ExecutionJournalInventorySelection selection;
+    selection.limit = limit;
+    const auto filtered = listExecutionJournalArtifactsPayload(selection);
+    if (!filtered.ok()) {
+        return propagateError<std::vector<Phase7ExecutionJournalArtifact>>(filtered.error);
+    }
+    return makeSuccess(std::move(filtered.value.artifacts));
+}
+
+QueryResult<Phase7ExecutionJournalInventoryPayload> QueryClient::listExecutionJournalArtifactsPayload(
+    const Phase7ExecutionJournalInventorySelection& selection) const {
+    std::vector<Phase7ExecutionJournalArtifact> artifacts;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase7::listExecutionJournals(0, &artifacts, &errorCode, &errorMessage),
+                                 selectPhase7ExecutionJournals(std::move(artifacts), selection),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase7ExecutionJournalArtifact> QueryClient::readExecutionJournalArtifactPayload(
+    const std::string& artifactId) const {
+    Phase7ExecutionJournalArtifact artifact;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(
+        tape_phase7::loadExecutionJournalArtifact("", artifactId, &artifact, &errorCode, &errorMessage),
+        std::move(artifact),
+        errorCode,
+        errorMessage);
+}
+
+QueryResult<Phase7ExecutionJournalDispatchPayload> QueryClient::dispatchExecutionJournalPayload(
+    const std::string& artifactId,
+    const std::vector<std::string>& entryIds,
+    const std::string& actor,
+    const std::string& executionCapability,
+    const std::string& comment) const {
+    Phase7ExecutionJournalDispatchPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(
+        tape_phase7::dispatchExecutionJournalEntries("",
+                                                     artifactId,
+                                                     entryIds,
+                                                     actor,
+                                                     executionCapability,
+                                                     comment,
+                                                     &payload.artifact,
+                                                     &payload.updatedEntryIds,
+                                                     &payload.auditEventId,
+                                                     &errorCode,
+                                                     &errorMessage),
+        std::move(payload),
+        errorCode,
+        errorMessage);
+}
+
+QueryResult<Phase7ExecutionJournalEventPayload> QueryClient::recordExecutionJournalEventPayload(
+    const std::string& artifactId,
+    const std::vector<std::string>& entryIds,
+    const std::string& executionStatus,
+    const std::string& actor,
+    const std::string& comment,
+    const std::string& failureCode,
+    const std::string& failureMessage) const {
+    Phase7ExecutionJournalEventPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(
+        tape_phase7::recordExecutionJournalEvent("",
+                                                 artifactId,
+                                                 entryIds,
+                                                 executionStatus,
+                                                 actor,
+                                                 comment,
+                                                 failureCode,
+                                                 failureMessage,
+                                                 &payload.artifact,
+                                                 &payload.updatedEntryIds,
+                                                 &payload.auditEventId,
+                                                 &errorCode,
+                                                 &errorMessage),
+                                 std::move(payload),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase7ExecutionApplyStartPayload> QueryClient::startExecutionApplyPayload(
+    const std::string& executionJournalArtifactId,
+    const std::vector<std::string>& entryIds,
+    const std::string& actor,
+    const std::string& executionCapability,
+    const std::string& comment) const {
+    Phase7ExecutionApplyStartPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(
+        tape_phase7::startExecutionApply("",
+                                         executionJournalArtifactId,
+                                         entryIds,
+                                         actor,
+                                         executionCapability,
+                                         comment,
+                                         &payload.artifact,
+                                         &payload.created,
+                                         &errorCode,
+                                         &errorMessage),
+        std::move(payload),
+        errorCode,
+        errorMessage);
+}
+
+QueryResult<std::vector<Phase7ExecutionApplyArtifact>> QueryClient::listExecutionApplyArtifactsPayload(
+    std::size_t limit) const {
+    Phase7ExecutionApplyInventorySelection selection;
+    selection.limit = limit;
+    const auto filtered = listExecutionApplyArtifactsPayload(selection);
+    if (!filtered.ok()) {
+        return propagateError<std::vector<Phase7ExecutionApplyArtifact>>(filtered.error);
+    }
+    return makeSuccess(std::move(filtered.value.artifacts));
+}
+
+QueryResult<Phase7ExecutionApplyInventoryPayload> QueryClient::listExecutionApplyArtifactsPayload(
+    const Phase7ExecutionApplyInventorySelection& selection) const {
+    std::vector<Phase7ExecutionApplyArtifact> artifacts;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase7::listExecutionApplies(0, &artifacts, &errorCode, &errorMessage),
+                                 selectPhase7ExecutionApplies(std::move(artifacts), selection),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase7ExecutionApplyArtifact> QueryClient::readExecutionApplyArtifactPayload(
+    const std::string& artifactId) const {
+    Phase7ExecutionApplyArtifact artifact;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(
+        tape_phase7::loadExecutionApplyArtifact("", artifactId, &artifact, &errorCode, &errorMessage),
+        std::move(artifact),
+        errorCode,
+        errorMessage);
+}
+
+QueryResult<Phase7ExecutionApplyEventPayload> QueryClient::recordExecutionApplyEventPayload(
+    const std::string& artifactId,
+    const std::vector<std::string>& entryIds,
+    const std::string& executionStatus,
+    const std::string& actor,
+    const std::string& comment,
+    const std::string& failureCode,
+    const std::string& failureMessage) const {
+    Phase7ExecutionApplyEventPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(
+        tape_phase7::recordExecutionApplyEvent("",
+                                               artifactId,
+                                               entryIds,
+                                               executionStatus,
+                                               actor,
+                                               comment,
+                                               failureCode,
+                                               failureMessage,
+                                               &payload.artifact,
+                                               &payload.updatedEntryIds,
+                                               &payload.auditEventId,
+                                               &errorCode,
+                                               &errorMessage),
         std::move(payload),
         errorCode,
         errorMessage);

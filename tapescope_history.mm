@@ -190,7 +190,14 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         {"playbook_mode_filter", ToStdString(_phase7PlaybookModeFilterPopup.titleOfSelectedItem)},
         {"playbook_sort", ToStdString(_phase7PlaybookSortPopup.titleOfSelectedItem)},
         {"ledger_status_filter", ToStdString(_phase7LedgerStatusFilterPopup.titleOfSelectedItem)},
-        {"ledger_sort", ToStdString(_phase7LedgerSortPopup.titleOfSelectedItem)}
+        {"ledger_sort", ToStdString(_phase7LedgerSortPopup.titleOfSelectedItem)},
+        {"journal_ledger_filter", ToStdString(_phase7JournalLedgerFilterField.stringValue)},
+        {"journal_status_filter", ToStdString(_phase7JournalStatusFilterPopup.titleOfSelectedItem)},
+        {"journal_sort", ToStdString(_phase7JournalSortPopup.titleOfSelectedItem)},
+        {"journal_actor", ToStdString(_phase7JournalActorField.stringValue)},
+        {"execution_capability", ToStdString(_phase7ExecutionCapabilityField.stringValue)},
+        {"execution_status", ToStdString(_phase7ExecutionStatusPopup.titleOfSelectedItem)},
+        {"execution_actor", ToStdString(_phase7ExecutionActorField.stringValue)}
     };
     return state;
 }
@@ -301,6 +308,23 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     if (!phase7LedgerSort.empty()) {
         [_phase7LedgerSortPopup selectItemWithTitle:ToNSString(phase7LedgerSort)];
     }
+    _phase7JournalLedgerFilterField.stringValue = ToNSString(phase7.value("journal_ledger_filter", std::string()));
+    const std::string phase7JournalStatusFilter = phase7.value("journal_status_filter", std::string());
+    if (!phase7JournalStatusFilter.empty()) {
+        [_phase7JournalStatusFilterPopup selectItemWithTitle:ToNSString(phase7JournalStatusFilter)];
+    }
+    const std::string phase7JournalSort = phase7.value("journal_sort", std::string());
+    if (!phase7JournalSort.empty()) {
+        [_phase7JournalSortPopup selectItemWithTitle:ToNSString(phase7JournalSort)];
+    }
+    _phase7JournalActorField.stringValue = ToNSString(phase7.value("journal_actor", std::string("tapescope")));
+    _phase7ExecutionCapabilityField.stringValue =
+        ToNSString(phase7.value("execution_capability", std::string("manual_review")));
+    const std::string phase7ExecutionStatus = phase7.value("execution_status", std::string());
+    if (!phase7ExecutionStatus.empty()) {
+        [_phase7ExecutionStatusPopup selectItemWithTitle:ToNSString(phase7ExecutionStatus)];
+    }
+    _phase7ExecutionActorField.stringValue = ToNSString(phase7.value("execution_actor", std::string("tapescope")));
 
     _recentHistoryItems.clear();
     const tapescope::json recentHistory = state.value("recent_history", tapescope::json::array());
@@ -543,6 +567,22 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         if (!artifactId.empty()) {
             [_tabView selectTabViewItemWithIdentifier:@"Phase7Pane"];
             [self openPhase7ExecutionLedgerArtifactId:artifactId];
+        }
+        return;
+    }
+    if (kind == "phase7_execution_journal") {
+        const std::string artifactId = entry.value("artifact_id", entry.value("target_id", std::string()));
+        if (!artifactId.empty()) {
+            [_tabView selectTabViewItemWithIdentifier:@"Phase7Pane"];
+            [self openPhase7ExecutionJournalArtifactId:artifactId];
+        }
+        return;
+    }
+    if (kind == "phase7_execution_apply") {
+        const std::string artifactId = entry.value("artifact_id", entry.value("target_id", std::string()));
+        if (!artifactId.empty()) {
+            [_tabView selectTabViewItemWithIdentifier:@"Phase7Pane"];
+            [self openPhase7ExecutionApplyArtifactId:artifactId];
         }
         return;
     }

@@ -48,6 +48,10 @@ using Phase7PlaybookAction = tape_phase7::PlaybookAction;
 using Phase7PlaybookArtifact = tape_phase7::PlaybookArtifact;
 using Phase7ExecutionLedgerEntry = tape_phase7::ExecutionLedgerEntry;
 using Phase7ExecutionLedgerArtifact = tape_phase7::ExecutionLedgerArtifact;
+using Phase7ExecutionJournalEntry = tape_phase7::ExecutionJournalEntry;
+using Phase7ExecutionJournalArtifact = tape_phase7::ExecutionJournalArtifact;
+using Phase7ExecutionApplyEntry = tape_phase7::ExecutionApplyEntry;
+using Phase7ExecutionApplyArtifact = tape_phase7::ExecutionApplyArtifact;
 
 struct Phase7AnalysisRunPayload {
     Phase7AnalysisArtifact artifact;
@@ -68,6 +72,47 @@ struct Phase7ExecutionLedgerReviewPayload {
     Phase7ExecutionLedgerArtifact artifact;
     std::vector<std::string> updatedEntryIds;
     std::string auditEventId;
+};
+
+struct Phase7ExecutionJournalStartPayload {
+    Phase7ExecutionJournalArtifact artifact;
+    bool created = false;
+};
+
+struct Phase7ExecutionJournalEventPayload {
+    Phase7ExecutionJournalArtifact artifact;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+};
+
+using Phase7ExecutionJournalDispatchPayload = Phase7ExecutionJournalEventPayload;
+
+struct Phase7ExecutionApplyStartPayload {
+    Phase7ExecutionApplyArtifact artifact;
+    bool created = false;
+};
+
+struct Phase7ExecutionApplyEventPayload {
+    Phase7ExecutionApplyArtifact artifact;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+};
+
+struct Phase7ExecutionApplyInventorySelection {
+    std::string journalArtifactId;
+    std::string ledgerArtifactId;
+    std::string playbookArtifactId;
+    std::string analysisArtifactId;
+    std::string sourceArtifactId;
+    std::string applyStatus;
+    std::string sortBy = "generated_at_desc";
+    std::size_t limit = 20;
+};
+
+struct Phase7ExecutionApplyInventoryPayload {
+    std::vector<Phase7ExecutionApplyArtifact> artifacts;
+    json appliedFilters = json::object();
+    std::size_t matchedCount = 0;
 };
 
 struct Phase7AnalysisInventorySelection {
@@ -108,6 +153,22 @@ struct Phase7ExecutionLedgerInventorySelection {
 
 struct Phase7ExecutionLedgerInventoryPayload {
     std::vector<Phase7ExecutionLedgerArtifact> artifacts;
+    json appliedFilters = json::object();
+    std::size_t matchedCount = 0;
+};
+
+struct Phase7ExecutionJournalInventorySelection {
+    std::string ledgerArtifactId;
+    std::string playbookArtifactId;
+    std::string analysisArtifactId;
+    std::string sourceArtifactId;
+    std::string journalStatus;
+    std::string sortBy = "generated_at_desc";
+    std::size_t limit = 20;
+};
+
+struct Phase7ExecutionJournalInventoryPayload {
+    std::vector<Phase7ExecutionJournalArtifact> artifacts;
     json appliedFilters = json::object();
     std::size_t matchedCount = 0;
 };
@@ -219,6 +280,50 @@ public:
         const std::string& reviewStatus,
         const std::string& actor,
         const std::string& comment) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionJournalStartPayload> startExecutionJournalPayload(
+        const std::string& executionLedgerArtifactId,
+        const std::string& actor,
+        const std::string& executionCapability) const;
+    [[nodiscard]] QueryResult<std::vector<Phase7ExecutionJournalArtifact>> listExecutionJournalArtifactsPayload(
+        std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionJournalInventoryPayload> listExecutionJournalArtifactsPayload(
+        const Phase7ExecutionJournalInventorySelection& selection) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionJournalArtifact> readExecutionJournalArtifactPayload(
+        const std::string& artifactId) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionJournalDispatchPayload> dispatchExecutionJournalPayload(
+        const std::string& artifactId,
+        const std::vector<std::string>& entryIds,
+        const std::string& actor,
+        const std::string& executionCapability,
+        const std::string& comment = {}) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionJournalEventPayload> recordExecutionJournalEventPayload(
+        const std::string& artifactId,
+        const std::vector<std::string>& entryIds,
+        const std::string& executionStatus,
+        const std::string& actor,
+        const std::string& comment,
+        const std::string& failureCode = {},
+        const std::string& failureMessage = {}) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionApplyStartPayload> startExecutionApplyPayload(
+        const std::string& executionJournalArtifactId,
+        const std::vector<std::string>& entryIds,
+        const std::string& actor,
+        const std::string& executionCapability,
+        const std::string& comment = {}) const;
+    [[nodiscard]] QueryResult<std::vector<Phase7ExecutionApplyArtifact>> listExecutionApplyArtifactsPayload(
+        std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionApplyInventoryPayload> listExecutionApplyArtifactsPayload(
+        const Phase7ExecutionApplyInventorySelection& selection) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionApplyArtifact> readExecutionApplyArtifactPayload(
+        const std::string& artifactId) const;
+    [[nodiscard]] QueryResult<Phase7ExecutionApplyEventPayload> recordExecutionApplyEventPayload(
+        const std::string& artifactId,
+        const std::vector<std::string>& entryIds,
+        const std::string& executionStatus,
+        const std::string& actor,
+        const std::string& comment,
+        const std::string& failureCode = {},
+        const std::string& failureMessage = {}) const;
 
     [[nodiscard]] static std::string describeError(const QueryError& error);
 

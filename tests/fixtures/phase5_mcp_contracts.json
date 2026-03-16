@@ -87,6 +87,20 @@
       "title": "Replay Key Moment"
     },
     {
+      "name": "review_phase7_execution_apply",
+      "required_args": [
+        "execution_apply_artifact_id"
+      ],
+      "title": "Review Phase 7 Execution Apply"
+    },
+    {
+      "name": "review_phase7_execution_journal",
+      "required_args": [
+        "execution_journal_artifact_id"
+      ],
+      "title": "Review Phase 7 Execution Journal"
+    },
+    {
       "name": "review_phase7_execution_ledger",
       "required_args": [
         "execution_ledger_artifact_id"
@@ -116,14 +130,15 @@
   "resource_read_case_report_markdown": {
     "contains_order_case": true,
     "contains_phase7_analysis": false,
+    "contains_phase7_execution_apply": false,
+    "contains_phase7_execution_ledger": false,
     "contains_phase7_playbook": false,
     "contains_session_overview": false,
     "content_count": 1,
     "has_text": true,
     "mime_type": "text/markdown",
     "ok": true,
-    "uri": "tape://artifact/case-report/<id>/markdown",
-    "contains_phase7_execution_ledger": false
+    "uri": "tape://artifact/case-report/<id>/markdown"
   },
   "resource_read_session_report": {
     "content_count": 1,
@@ -225,11 +240,11 @@
       },
       "has_data_quality": true,
       "headline": "Session overview",
-    "incident_kinds": [
-      "order_fill_context",
-      "order_flow_timeline",
-      "source_gap"
-    ],
+      "incident_kinds": [
+        "order_fill_context",
+        "order_flow_timeline",
+        "source_gap"
+      ],
       "includes_mutable_tail": false,
       "replay_range": {
         "first_session_seq": 1,
@@ -243,7 +258,7 @@
       "headline": "Session overview",
       "report_type": "session_overview",
       "schema_version": 1,
-      "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+      "what_changed_first": "<summary>"
     },
       "served_revision_id": 7
     },
@@ -269,7 +284,7 @@
         "headline": "Session overview",
         "report_type": "session_overview",
         "schema_version": 1,
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+        "what_changed_first": "<summary>"
       }
     },
     "uri": "tape://artifact/session-report/<id>/json-bundle"
@@ -340,7 +355,7 @@
           "headline": "Session overview",
           "report_type": "session_overview",
           "schema_version": 1,
-          "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+          "what_changed_first": "<summary>"
         }
       },
       "format": "json-bundle",
@@ -712,7 +727,7 @@
         "headline": "Session overview",
         "report_type": "session_overview",
         "schema_version": 1,
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -839,8 +854,8 @@
         "schema_version": 1
       },
       "has_data_quality": true,
-    "headline": "Order case for order 7401",
-    "incident_kinds": [
+      "headline": "Order case for order 7401",
+      "incident_kinds": [
         "order_fill_context",
         "order_flow_timeline",
         "source_gap"
@@ -859,7 +874,7 @@
         "report_type": "order_case",
         "schema_version": 1,
         "uncertainty": "The evidence is usable but carries some data-quality caveats.",
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -957,7 +972,7 @@
         "report_type": "finding",
         "schema_version": 1,
         "uncertainty": "The evidence is usable but carries some data-quality caveats.",
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -1084,7 +1099,7 @@
         "report_type": "incident",
         "schema_version": 1,
         "uncertainty": "The evidence is usable but carries some data-quality caveats.",
-        "what_changed_first": "Order window captured 2 lifecycle events and 1 fills"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -1250,8 +1265,8 @@
         "schema_version": 1
       },
       "has_data_quality": true,
-    "headline": "Order anchor 3",
-    "incident_kinds": [
+      "headline": "Order anchor 3",
+      "incident_kinds": [
         "order_fill_context",
         "order_flow_timeline",
         "source_gap"
@@ -1270,7 +1285,7 @@
         "report_type": "order_case",
         "schema_version": 1,
         "uncertainty": "The evidence is usable but carries some data-quality caveats.",
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -1417,7 +1432,7 @@
         "report_type": "order_case",
         "schema_version": 1,
         "uncertainty": "The evidence is usable but carries some data-quality caveats.",
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -1497,7 +1512,7 @@
         "report_type": "protected_window",
         "schema_version": 1,
         "uncertainty": "The evidence is usable but carries some data-quality caveats.",
-        "what_changed_first": "Fill execution"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -1662,12 +1677,12 @@
           "last_session_seq"
         ]
       },
-    "report": {
-      "headline": "Session overview",
-      "report_type": "session_overview",
-      "schema_version": 1,
-      "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
-    },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "<summary>"
+      },
       "served_revision_id": 7
     },
     "revision": {
@@ -1849,12 +1864,12 @@
           "last_session_seq"
         ]
       },
-    "report": {
-      "headline": "Session overview",
-      "report_type": "session_overview",
-      "schema_version": 1,
-      "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
-    },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "<summary>"
+      },
       "served_revision_id": 7
     },
     "revision": {
@@ -2039,7 +2054,7 @@
         "report_type": "incident",
         "schema_version": 1,
         "uncertainty": "The evidence is usable but carries some data-quality caveats.",
-        "what_changed_first": "Order window captured 2 lifecycle events and 1 fills"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -2166,8 +2181,8 @@
         "schema_version": 1
       },
       "has_data_quality": true,
-    "headline": "Order case for order 7401",
-    "incident_kinds": [
+      "headline": "Order case for order 7401",
+      "incident_kinds": [
         "order_fill_context",
         "order_flow_timeline",
         "source_gap"
@@ -2186,7 +2201,7 @@
         "report_type": "order_case",
         "schema_version": 1,
         "uncertainty": "The evidence is usable but carries some data-quality caveats.",
-        "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
+        "what_changed_first": "<summary>"
       },
       "served_revision_id": 7
     },
@@ -2320,12 +2335,12 @@
           "last_session_seq"
         ]
       },
-    "report": {
-      "headline": "Session overview",
-      "report_type": "session_overview",
-      "schema_version": 1,
-      "what_changed_first": "Order/fill context captured 0 market updates around 1 fills"
-    },
+      "report": {
+        "headline": "Session overview",
+        "report_type": "session_overview",
+        "schema_version": 1,
+        "what_changed_first": "<summary>"
+      },
       "served_revision_id": 7
     },
     "revision": {
@@ -2390,7 +2405,7 @@
       "latest_session_seq": 4,
       "live_event_count": 4,
       "manifest_hash": "<hash>",
-      "segment_count": 7,
+    "segment_count": "<count>",
       "socket_path": "<tmp>/tape-mcp-phase5-engine.sock"
     },
     "revision": {
@@ -2417,6 +2432,32 @@
         "replay_context",
         "findings",
         "artifact_status"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_dispatch_execution_journal",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "playbook_artifact",
+        "execution_ledger",
+        "execution_journal",
+        "mode",
+        "generated_at_utc",
+        "initiated_by",
+        "execution_capability",
+        "journal_status",
+        "execution_policy",
+        "filtered_finding_ids",
+        "entry_count",
+        "execution_summary",
+        "latest_audit_event",
+        "entries",
+        "audit_trail",
+        "replay_context",
+        "updated_entry_ids",
+        "audit_event_id"
       ]
     },
     {
@@ -2518,6 +2559,24 @@
       "output_required": [
         "returned_count",
         "case_reports"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_list_execution_applies",
+      "output_required": [
+        "returned_count",
+        "applied_filters",
+        "execution_applies"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_list_execution_journals",
+      "output_required": [
+        "returned_count",
+        "applied_filters",
+        "execution_journals"
       ]
     },
     {
@@ -2695,6 +2754,55 @@
         "incident_rows",
         "citation_rows",
         "events"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_read_execution_apply",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "playbook_artifact",
+        "execution_ledger",
+        "execution_journal",
+        "execution_apply",
+        "mode",
+        "generated_at_utc",
+        "initiated_by",
+        "execution_capability",
+        "apply_status",
+        "execution_policy",
+        "filtered_finding_ids",
+        "entry_count",
+        "execution_summary",
+        "latest_audit_event",
+        "entries",
+        "audit_trail",
+        "replay_context"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_read_execution_journal",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "playbook_artifact",
+        "execution_ledger",
+        "execution_journal",
+        "mode",
+        "generated_at_utc",
+        "initiated_by",
+        "execution_capability",
+        "journal_status",
+        "execution_policy",
+        "filtered_finding_ids",
+        "entry_count",
+        "execution_summary",
+        "latest_audit_event",
+        "entries",
+        "audit_trail",
+        "replay_context"
       ]
     },
     {
@@ -2927,6 +3035,59 @@
     },
     {
       "input_required": [],
+      "name": "tapescript_record_execution_apply_event",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "playbook_artifact",
+        "execution_ledger",
+        "execution_journal",
+        "execution_apply",
+        "mode",
+        "generated_at_utc",
+        "initiated_by",
+        "execution_capability",
+        "apply_status",
+        "execution_policy",
+        "filtered_finding_ids",
+        "entry_count",
+        "execution_summary",
+        "latest_audit_event",
+        "entries",
+        "audit_trail",
+        "replay_context",
+        "updated_entry_ids",
+        "audit_event_id"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_record_execution_journal_event",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "playbook_artifact",
+        "execution_ledger",
+        "execution_journal",
+        "mode",
+        "generated_at_utc",
+        "initiated_by",
+        "execution_capability",
+        "journal_status",
+        "execution_policy",
+        "filtered_finding_ids",
+        "entry_count",
+        "execution_summary",
+        "latest_audit_event",
+        "entries",
+        "audit_trail",
+        "replay_context",
+        "updated_entry_ids",
+        "audit_event_id"
+      ]
+    },
+    {
+      "input_required": [],
       "name": "tapescript_record_execution_ledger_review",
       "output_required": [
         "source_artifact",
@@ -3050,6 +3211,57 @@
         "last_session_seq",
         "last_fill_session_seq",
         "replay_range"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_start_execution_apply",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "playbook_artifact",
+        "execution_ledger",
+        "execution_journal",
+        "execution_apply",
+        "mode",
+        "generated_at_utc",
+        "initiated_by",
+        "execution_capability",
+        "apply_status",
+        "execution_policy",
+        "filtered_finding_ids",
+        "entry_count",
+        "execution_summary",
+        "latest_audit_event",
+        "entries",
+        "audit_trail",
+        "replay_context",
+        "artifact_status"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_start_execution_journal",
+      "output_required": [
+        "source_artifact",
+        "analysis_artifact",
+        "playbook_artifact",
+        "execution_ledger",
+        "execution_journal",
+        "mode",
+        "generated_at_utc",
+        "initiated_by",
+        "execution_capability",
+        "journal_status",
+        "execution_policy",
+        "filtered_finding_ids",
+        "entry_count",
+        "execution_summary",
+        "latest_audit_event",
+        "entries",
+        "audit_trail",
+        "replay_context",
+        "artifact_status"
       ]
     },
     {

@@ -134,10 +134,22 @@ using namespace tapescope_support;
     if (tableView == _phase7LedgerTableView) {
         return static_cast<NSInteger>(_latestPhase7ExecutionLedgers.size());
     }
+    if (tableView == _phase7JournalTableView) {
+        return static_cast<NSInteger>(_latestPhase7ExecutionJournals.size());
+    }
+    if (tableView == _phase7ApplyTableView) {
+        return static_cast<NSInteger>(_latestPhase7ExecutionApplies.size());
+    }
     if (tableView == _phase7FindingTableView) {
         return static_cast<NSInteger>(_phase7VisibleFindings.size());
     }
     if (tableView == _phase7ActionTableView) {
+        if (_phase7SelectionIsApply) {
+            return static_cast<NSInteger>(_phase7VisibleApplyEntries.size());
+        }
+        if (_phase7SelectionIsJournal) {
+            return static_cast<NSInteger>(_phase7VisibleJournalEntries.size());
+        }
         return static_cast<NSInteger>(_phase7SelectionIsLedger ? _phase7VisibleLedgerEntries.size()
                                                                : _phase7VisibleActions.size());
     }
@@ -159,9 +171,13 @@ using namespace tapescope_support;
     const tapescope::Phase7AnalysisArtifact* analysisArtifactItem = nullptr;
     const tapescope::Phase7PlaybookArtifact* playbookArtifactItem = nullptr;
     const tapescope::Phase7ExecutionLedgerArtifact* executionLedgerArtifactItem = nullptr;
+    const tapescope::Phase7ExecutionJournalArtifact* executionJournalArtifactItem = nullptr;
+    const tapescope::Phase7ExecutionApplyArtifact* executionApplyArtifactItem = nullptr;
     const tapescope::Phase7FindingRecord* phase7FindingItem = nullptr;
     const tapescope::Phase7PlaybookAction* phase7ActionItem = nullptr;
     const tapescope::Phase7ExecutionLedgerEntry* phase7LedgerEntryItem = nullptr;
+    const tapescope::Phase7ExecutionJournalEntry* phase7JournalEntryItem = nullptr;
+    const tapescope::Phase7ExecutionApplyEntry* phase7ApplyEntryItem = nullptr;
     if (tableView == _liveTableView) {
         if (static_cast<std::size_t>(row) >= _liveEvents.size()) {
             return nil;
@@ -257,13 +273,33 @@ using namespace tapescope_support;
             return nil;
         }
         executionLedgerArtifactItem = &_latestPhase7ExecutionLedgers.at(static_cast<std::size_t>(row));
+    } else if (tableView == _phase7JournalTableView) {
+        if (static_cast<std::size_t>(row) >= _latestPhase7ExecutionJournals.size()) {
+            return nil;
+        }
+        executionJournalArtifactItem = &_latestPhase7ExecutionJournals.at(static_cast<std::size_t>(row));
+    } else if (tableView == _phase7ApplyTableView) {
+        if (static_cast<std::size_t>(row) >= _latestPhase7ExecutionApplies.size()) {
+            return nil;
+        }
+        executionApplyArtifactItem = &_latestPhase7ExecutionApplies.at(static_cast<std::size_t>(row));
     } else if (tableView == _phase7FindingTableView) {
         if (static_cast<std::size_t>(row) >= _phase7VisibleFindings.size()) {
             return nil;
         }
         phase7FindingItem = &_phase7VisibleFindings.at(static_cast<std::size_t>(row));
     } else if (tableView == _phase7ActionTableView) {
-        if (_phase7SelectionIsLedger) {
+        if (_phase7SelectionIsApply) {
+            if (static_cast<std::size_t>(row) >= _phase7VisibleApplyEntries.size()) {
+                return nil;
+            }
+            phase7ApplyEntryItem = &_phase7VisibleApplyEntries.at(static_cast<std::size_t>(row));
+        } else if (_phase7SelectionIsJournal) {
+            if (static_cast<std::size_t>(row) >= _phase7VisibleJournalEntries.size()) {
+                return nil;
+            }
+            phase7JournalEntryItem = &_phase7VisibleJournalEntries.at(static_cast<std::size_t>(row));
+        } else if (_phase7SelectionIsLedger) {
             if (static_cast<std::size_t>(row) >= _phase7VisibleLedgerEntries.size()) {
                 return nil;
             }
@@ -455,6 +491,48 @@ using namespace tapescope_support;
         } else {
             value = std::to_string(executionLedgerArtifactItem->entries.size());
         }
+    } else if (tableView == _phase7JournalTableView) {
+        const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(*executionJournalArtifactItem);
+        const auto latestAudit = tape_phase7::latestExecutionJournalAuditSummary(*executionJournalArtifactItem);
+        if ([columnId isEqualToString:@"artifact_id"]) {
+            value = executionJournalArtifactItem->journalArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"ledger_artifact_id"]) {
+            value = executionJournalArtifactItem->ledgerArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"journal_status"]) {
+            value = executionJournalArtifactItem->journalStatus;
+        } else if ([columnId isEqualToString:@"queued_count"]) {
+            value = std::to_string(executionSummary.queuedCount);
+        } else if ([columnId isEqualToString:@"submitted_count"]) {
+            value = std::to_string(executionSummary.submittedCount);
+        } else if ([columnId isEqualToString:@"terminal_count"]) {
+            value = std::to_string(executionSummary.terminalCount);
+        } else if ([columnId isEqualToString:@"latest_audit_event"]) {
+            if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+                value = latestAudit.at("message").get<std::string>();
+            }
+        } else {
+            value = std::to_string(executionJournalArtifactItem->entries.size());
+        }
+    } else if (tableView == _phase7ApplyTableView) {
+        const auto applySummary = tape_phase7::summarizeExecutionApplySummary(*executionApplyArtifactItem);
+        const auto latestAudit = tape_phase7::latestExecutionApplyAuditSummary(*executionApplyArtifactItem);
+        if ([columnId isEqualToString:@"artifact_id"]) {
+            value = executionApplyArtifactItem->applyArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"journal_artifact_id"]) {
+            value = executionApplyArtifactItem->journalArtifact.artifactId;
+        } else if ([columnId isEqualToString:@"apply_status"]) {
+            value = executionApplyArtifactItem->applyStatus;
+        } else if ([columnId isEqualToString:@"submitted_count"]) {
+            value = std::to_string(applySummary.submittedCount);
+        } else if ([columnId isEqualToString:@"terminal_count"]) {
+            value = std::to_string(applySummary.terminalCount);
+        } else if ([columnId isEqualToString:@"latest_audit_event"]) {
+            if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+                value = latestAudit.at("message").get<std::string>();
+            }
+        } else {
+            value = std::to_string(executionApplyArtifactItem->entries.size());
+        }
     } else if (tableView == _phase7FindingTableView) {
         if ([columnId isEqualToString:@"finding_id"]) {
             value = phase7FindingItem->findingId;
@@ -466,7 +544,31 @@ using namespace tapescope_support;
             value = phase7FindingItem->summary;
         }
     } else if (tableView == _phase7ActionTableView) {
-        if (_phase7SelectionIsLedger) {
+        if (_phase7SelectionIsApply) {
+            if ([columnId isEqualToString:@"action_id"]) {
+                value = phase7ApplyEntryItem->applyEntryId;
+            } else if ([columnId isEqualToString:@"action_type"]) {
+                value = phase7ApplyEntryItem->actionType;
+            } else if ([columnId isEqualToString:@"finding_id"]) {
+                value = phase7ApplyEntryItem->findingId;
+            } else if ([columnId isEqualToString:@"review_status"]) {
+                value = phase7ApplyEntryItem->executionStatus;
+            } else {
+                value = phase7ApplyEntryItem->title;
+            }
+        } else if (_phase7SelectionIsJournal) {
+            if ([columnId isEqualToString:@"action_id"]) {
+                value = phase7JournalEntryItem->journalEntryId;
+            } else if ([columnId isEqualToString:@"action_type"]) {
+                value = phase7JournalEntryItem->actionType;
+            } else if ([columnId isEqualToString:@"finding_id"]) {
+                value = phase7JournalEntryItem->findingId;
+            } else if ([columnId isEqualToString:@"review_status"]) {
+                value = phase7JournalEntryItem->executionStatus;
+            } else {
+                value = phase7JournalEntryItem->title;
+            }
+        } else if (_phase7SelectionIsLedger) {
             if ([columnId isEqualToString:@"action_id"]) {
                 value = phase7LedgerEntryItem->actionId;
             } else if ([columnId isEqualToString:@"action_type"]) {
@@ -628,9 +730,13 @@ using namespace tapescope_support;
         const NSInteger selected = _phase7AnalysisTableView.selectedRow;
         _phase7SelectionIsPlaybook = NO;
         _phase7SelectionIsLedger = NO;
+        _phase7SelectionIsJournal = NO;
+        _phase7SelectionIsApply = NO;
         if (selected >= 0) {
             [_phase7PlaybookTableView deselectAll:nil];
             [_phase7LedgerTableView deselectAll:nil];
+            [_phase7JournalTableView deselectAll:nil];
+            [_phase7ApplyTableView deselectAll:nil];
         }
         [self refreshPhase7DetailText];
         return;
@@ -640,9 +746,13 @@ using namespace tapescope_support;
         const NSInteger selected = _phase7PlaybookTableView.selectedRow;
         _phase7SelectionIsPlaybook = (selected >= 0);
         _phase7SelectionIsLedger = NO;
+        _phase7SelectionIsJournal = NO;
+        _phase7SelectionIsApply = NO;
         if (selected >= 0) {
             [_phase7AnalysisTableView deselectAll:nil];
             [_phase7LedgerTableView deselectAll:nil];
+            [_phase7JournalTableView deselectAll:nil];
+            [_phase7ApplyTableView deselectAll:nil];
         }
         [self refreshPhase7DetailText];
         return;
@@ -652,9 +762,45 @@ using namespace tapescope_support;
         const NSInteger selected = _phase7LedgerTableView.selectedRow;
         _phase7SelectionIsPlaybook = NO;
         _phase7SelectionIsLedger = (selected >= 0);
+        _phase7SelectionIsJournal = NO;
+        _phase7SelectionIsApply = NO;
         if (selected >= 0) {
             [_phase7AnalysisTableView deselectAll:nil];
             [_phase7PlaybookTableView deselectAll:nil];
+            [_phase7JournalTableView deselectAll:nil];
+            [_phase7ApplyTableView deselectAll:nil];
+        }
+        [self refreshPhase7DetailText];
+        return;
+    }
+
+    if (tableView == _phase7JournalTableView) {
+        const NSInteger selected = _phase7JournalTableView.selectedRow;
+        _phase7SelectionIsPlaybook = NO;
+        _phase7SelectionIsLedger = NO;
+        _phase7SelectionIsJournal = (selected >= 0);
+        _phase7SelectionIsApply = NO;
+        if (selected >= 0) {
+            [_phase7AnalysisTableView deselectAll:nil];
+            [_phase7PlaybookTableView deselectAll:nil];
+            [_phase7LedgerTableView deselectAll:nil];
+            [_phase7ApplyTableView deselectAll:nil];
+        }
+        [self refreshPhase7DetailText];
+        return;
+    }
+
+    if (tableView == _phase7ApplyTableView) {
+        const NSInteger selected = _phase7ApplyTableView.selectedRow;
+        _phase7SelectionIsPlaybook = NO;
+        _phase7SelectionIsLedger = NO;
+        _phase7SelectionIsJournal = NO;
+        _phase7SelectionIsApply = (selected >= 0);
+        if (selected >= 0) {
+            [_phase7AnalysisTableView deselectAll:nil];
+            [_phase7PlaybookTableView deselectAll:nil];
+            [_phase7LedgerTableView deselectAll:nil];
+            [_phase7JournalTableView deselectAll:nil];
         }
         [self refreshPhase7DetailText];
         return;

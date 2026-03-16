@@ -232,6 +232,22 @@ std::string normalizeResourceUri(std::string uri) {
         }
         return phase7LedgerPrefix + "<id>" + uri.substr(formatPos);
     }
+    const std::string phase7JournalPrefix = "tape://phase7/journal/";
+    if (uri.rfind(phase7JournalPrefix, 0) == 0) {
+        const std::size_t formatPos = uri.find('/', phase7JournalPrefix.size());
+        if (formatPos == std::string::npos) {
+            return phase7JournalPrefix + "<id>";
+        }
+        return phase7JournalPrefix + "<id>" + uri.substr(formatPos);
+    }
+    const std::string phase7ApplyPrefix = "tape://phase7/apply/";
+    if (uri.rfind(phase7ApplyPrefix, 0) == 0) {
+        const std::size_t formatPos = uri.find('/', phase7ApplyPrefix.size());
+        if (formatPos == std::string::npos) {
+            return phase7ApplyPrefix + "<id>";
+        }
+        return phase7ApplyPrefix + "<id>" + uri.substr(formatPos);
+    }
     return uri;
 }
 
@@ -259,6 +275,10 @@ json stringValueOrNull(const json& value, const char* key) {
 
 json normalizePositiveId(std::uint64_t value) {
     return value == 0 ? json(nullptr) : json("<id>");
+}
+
+json normalizePositiveCount(std::uint64_t value) {
+    return value == 0 ? json(0ULL) : json("<count>");
 }
 
 json normalizeTestPath(const json& value) {
@@ -344,7 +364,8 @@ json projectReportSummary(const json& report) {
         {"schema_version", report.value("schema_version", 0U)}
     };
     if (report.contains("what_changed_first")) {
-        projected["what_changed_first"] = report.value("what_changed_first", std::string());
+        const std::string summary = report.value("what_changed_first", std::string());
+        projected["what_changed_first"] = summary.empty() ? json(std::string()) : json("<summary>");
     }
     if (report.contains("uncertainty")) {
         projected["uncertainty"] = report.value("uncertainty", std::string());
@@ -449,6 +470,10 @@ json projectPromptGet(const json& promptResult) {
 json projectInvestigationResult(const json& result);
 json projectPhase7ExecutionLedgerResult(const json& result);
 json projectPhase7ExecutionLedgerInventoryResult(const json& result);
+json projectPhase7ExecutionJournalResult(const json& result);
+json projectPhase7ExecutionJournalInventoryResult(const json& result);
+json projectPhase7ExecutionApplyResult(const json& result);
+json projectPhase7ExecutionApplyInventoryResult(const json& result);
 
 json projectResourceList(const json& listResult) {
     json projection = json::array();
@@ -514,7 +539,11 @@ json projectResourceRead(const json& readResult) {
     const std::string text = content.value("text", std::string());
     if (mimeType == "application/json") {
         const json parsed = json::parse(text);
-        if (parsed.contains("execution_ledger") && parsed.contains("playbook_artifact")) {
+        if (parsed.contains("execution_apply") && parsed.contains("execution_journal")) {
+            projection["payload"] = projectPhase7ExecutionApplyResult(parsed);
+        } else if (parsed.contains("execution_journal") && parsed.contains("execution_ledger")) {
+            projection["payload"] = projectPhase7ExecutionJournalResult(parsed);
+        } else if (parsed.contains("execution_ledger") && parsed.contains("playbook_artifact")) {
             projection["payload"] = projectPhase7ExecutionLedgerResult(parsed);
         } else if (parsed.contains("source_artifact") && parsed.contains("analysis_artifact")) {
             projection["payload"] = {
@@ -552,6 +581,7 @@ json projectResourceRead(const json& readResult) {
         projection["contains_phase7_analysis"] = text.find("# Phase 7 Analysis") != std::string::npos;
         projection["contains_phase7_playbook"] = text.find("# Phase 7 Playbook") != std::string::npos;
         projection["contains_phase7_execution_ledger"] = text.find("# Phase 7 Execution Ledger") != std::string::npos;
+        projection["contains_phase7_execution_apply"] = text.find("# Phase 7 Execution Apply") != std::string::npos;
     }
     return projection;
 }
@@ -920,6 +950,375 @@ json projectPhase7ExecutionLedgerInventoryResult(const json& result) {
     };
 }
 
+json projectPhase7ExecutionJournalSummary(const json& summary) {
+    if (!summary.is_object()) {
+        return json::object();
+    }
+    return {
+        {"queued_count", summary.value("queued_count", 0ULL)},
+        {"submitted_count", summary.value("submitted_count", 0ULL)},
+        {"succeeded_count", summary.value("succeeded_count", 0ULL)},
+        {"failed_count", summary.value("failed_count", 0ULL)},
+        {"cancelled_count", summary.value("cancelled_count", 0ULL)},
+        {"terminal_count", summary.value("terminal_count", 0ULL)},
+        {"actionable_entry_count", summary.value("actionable_entry_count", 0ULL)},
+        {"all_terminal", summary.value("all_terminal", false)}
+    };
+}
+
+json projectPhase7ExecutionJournalAuditSummary(const json& event) {
+    if (!event.is_object()) {
+        return json::object();
+    }
+    return {
+        {"event_type", stringValueOrNull(event, "event_type")},
+        {"has_generated_at_utc", !stringValueOrEmpty(event, "generated_at_utc").empty()},
+        {"actor", stringValueOrNull(event, "actor")},
+        {"execution_status", stringValueOrNull(event, "execution_status")},
+        {"journal_status", stringValueOrNull(event, "journal_status")},
+        {"message", stringValueOrNull(event, "message")}
+    };
+}
+
+json projectPhase7ExecutionJournalEntries(const json& entries) {
+    json projected = json::array();
+    for (const auto& entry : entries) {
+        projected.push_back({
+            {"journal_entry_id_present", !stringValueOrEmpty(entry, "journal_entry_id").empty()},
+            {"ledger_entry_id_present", !stringValueOrEmpty(entry, "ledger_entry_id").empty()},
+            {"action_id_present", !stringValueOrEmpty(entry, "action_id").empty()},
+            {"action_type", stringValueOrEmpty(entry, "action_type")},
+            {"finding_id", stringValueOrNull(entry, "finding_id")},
+            {"execution_status", stringValueOrEmpty(entry, "execution_status")},
+            {"idempotency_key_present", !stringValueOrEmpty(entry, "idempotency_key").empty()},
+            {"attempt_count", entry.value("attempt_count", 0ULL)},
+            {"terminal", entry.value("terminal", false)},
+            {"requires_manual_confirmation", entry.value("requires_manual_confirmation", true)},
+            {"title", stringValueOrEmpty(entry, "title")},
+            {"summary", stringValueOrEmpty(entry, "summary")},
+            {"has_queued_at_utc", !stringValueOrEmpty(entry, "queued_at_utc").empty()},
+            {"has_started_at_utc", !stringValueOrEmpty(entry, "started_at_utc").empty()},
+            {"has_completed_at_utc", !stringValueOrEmpty(entry, "completed_at_utc").empty()},
+            {"has_last_updated_at_utc", !stringValueOrEmpty(entry, "last_updated_at_utc").empty()},
+            {"last_updated_by", stringValueOrNull(entry, "last_updated_by")},
+            {"has_execution_comment", !stringValueOrEmpty(entry, "execution_comment").empty()},
+            {"failure_code", stringValueOrNull(entry, "failure_code")},
+            {"failure_message", stringValueOrNull(entry, "failure_message")},
+            {"suggested_tools_count", entry.value("suggested_tools", json::array()).size()}
+        });
+    }
+    std::sort(projected.begin(), projected.end(), [](const json& left, const json& right) {
+        return left.value("title", std::string()) < right.value("title", std::string());
+    });
+    return projected;
+}
+
+json projectPhase7ExecutionJournalResult(const json& result) {
+    json auditTrail = json::array();
+    for (const auto& event : result.value("audit_trail", json::array())) {
+        auditTrail.push_back({
+            {"event_id_present", !stringValueOrEmpty(event, "event_id").empty()},
+            {"event_type", stringValueOrEmpty(event, "event_type")},
+            {"execution_status", stringValueOrNull(event, "execution_status")},
+            {"journal_status", stringValueOrNull(event, "journal_status")},
+            {"actor", stringValueOrNull(event, "actor")},
+            {"updated_entry_count", event.value("updated_entry_ids", json::array()).size()},
+            {"previous_entry_status_count", event.value("previous_entry_statuses", json::array()).size()},
+            {"has_comment", !stringValueOrEmpty(event, "comment").empty()},
+            {"has_failure_code", !stringValueOrEmpty(event, "failure_code").empty()},
+            {"has_failure_message", !stringValueOrEmpty(event, "failure_message").empty()},
+            {"message", stringValueOrEmpty(event, "message")},
+            {"has_generated_at_utc", !stringValueOrEmpty(event, "generated_at_utc").empty()}
+        });
+    }
+    std::sort(auditTrail.begin(), auditTrail.end(), [](const json& left, const json& right) {
+        if (left.value("event_type", std::string()) != right.value("event_type", std::string())) {
+            return left.value("event_type", std::string()) < right.value("event_type", std::string());
+        }
+        return left.value("message", std::string()) < right.value("message", std::string());
+    });
+
+    json projection{
+        {"source_artifact", projectPhase7ArtifactRef(result.value("source_artifact", json::object()))},
+        {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
+        {"playbook_artifact", projectPhase7ArtifactRef(result.value("playbook_artifact", json::object()))},
+        {"execution_ledger", projectPhase7ArtifactRef(result.value("execution_ledger", json::object()))},
+        {"execution_journal", projectPhase7ArtifactRef(result.value("execution_journal", json::object()))},
+        {"mode", stringValueOrEmpty(result, "mode")},
+        {"has_generated_at_utc", !stringValueOrEmpty(result, "generated_at_utc").empty()},
+        {"initiated_by", stringValueOrNull(result, "initiated_by")},
+        {"execution_capability", stringValueOrNull(result, "execution_capability")},
+        {"journal_status", stringValueOrEmpty(result, "journal_status")},
+        {"execution_policy", result.value("execution_policy", json::object())},
+        {"filtered_finding_ids", result.value("filtered_finding_ids", json::array())},
+        {"entry_count", result.value("entry_count", 0ULL)},
+        {"execution_summary", projectPhase7ExecutionJournalSummary(result.value("execution_summary", json::object()))},
+        {"latest_audit_event", projectPhase7ExecutionJournalAuditSummary(result.value("latest_audit_event", json::object()))},
+        {"entries", projectPhase7ExecutionJournalEntries(result.value("entries", json::array()))},
+        {"audit_trail", std::move(auditTrail)},
+        {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))}
+    };
+    if (result.contains("artifact_status")) {
+        projection["artifact_status"] = stringValueOrEmpty(result, "artifact_status");
+    }
+    if (result.contains("updated_entry_ids")) {
+        projection["updated_entry_ids"] = result.value("updated_entry_ids", json::array());
+    }
+    if (result.contains("audit_event_id")) {
+        projection["audit_event_id_present"] = !stringValueOrEmpty(result, "audit_event_id").empty();
+    }
+    return projection;
+}
+
+json projectPhase7ExecutionJournalInventoryResult(const json& result) {
+    json rows = json::array();
+    for (const auto& row : result.value("execution_journals", json::array())) {
+        rows.push_back({
+            {"execution_journal", projectPhase7ArtifactRef(row.value("execution_journal", json::object()))},
+            {"execution_ledger", projectPhase7ArtifactRef(row.value("execution_ledger", json::object()))},
+            {"playbook_artifact", projectPhase7ArtifactRef(row.value("playbook_artifact", json::object()))},
+            {"analysis_artifact", projectPhase7ArtifactRef(row.value("analysis_artifact", json::object()))},
+            {"source_artifact", projectPhase7ArtifactRef(row.value("source_artifact", json::object()))},
+            {"mode", stringValueOrEmpty(row, "mode")},
+            {"has_generated_at_utc", !stringValueOrEmpty(row, "generated_at_utc").empty()},
+            {"journal_status", stringValueOrEmpty(row, "journal_status")},
+            {"entry_count", row.value("entry_count", 0ULL)},
+            {"execution_summary", projectPhase7ExecutionJournalSummary(row.value("execution_summary", json::object()))},
+            {"latest_audit_event", projectPhase7ExecutionJournalAuditSummary(row.value("latest_audit_event", json::object()))},
+            {"replay_context", projectPhase7ReplayContext(row.value("replay_context", json::object()))}
+        });
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+        return left.value("execution_journal", json::object()).value("artifact_id", std::string()) <
+               right.value("execution_journal", json::object()).value("artifact_id", std::string());
+    });
+    return {
+        {"returned_count", result.value("returned_count", 0ULL)},
+        {"applied_filters", {
+            {"execution_ledger_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("execution_ledger_artifact_id") || filters.at("execution_ledger_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("execution_ledger_artifact_id").get<std::string>());
+            }()},
+            {"playbook_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("playbook_artifact_id") || filters.at("playbook_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("playbook_artifact_id").get<std::string>());
+            }()},
+            {"analysis_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("analysis_artifact_id") || filters.at("analysis_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("analysis_artifact_id").get<std::string>());
+            }()},
+            {"source_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("source_artifact_id") || filters.at("source_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("source_artifact_id").get<std::string>());
+            }()},
+            {"journal_status", result.value("applied_filters", json::object()).contains("journal_status")
+                                   ? result.value("applied_filters", json::object()).at("journal_status")
+                                   : json(nullptr)},
+            {"sort_by", result.value("applied_filters", json::object()).contains("sort_by")
+                            ? result.value("applied_filters", json::object()).at("sort_by")
+                            : json("generated_at_desc")},
+            {"limit", result.value("applied_filters", json::object()).contains("limit")
+                          ? result.value("applied_filters", json::object()).at("limit")
+                          : json(nullptr)},
+            {"matched_count", result.value("applied_filters", json::object()).value("matched_count", 0ULL)}
+        }},
+        {"execution_journals", std::move(rows)}
+    };
+}
+
+json projectPhase7ExecutionApplyAuditSummary(const json& event) {
+    if (!event.is_object()) {
+        return json::object();
+    }
+    return {
+        {"event_type", stringValueOrNull(event, "event_type")},
+        {"has_generated_at_utc", !stringValueOrEmpty(event, "generated_at_utc").empty()},
+        {"actor", stringValueOrNull(event, "actor")},
+        {"execution_status", stringValueOrNull(event, "execution_status")},
+        {"apply_status", stringValueOrNull(event, "apply_status")},
+        {"message", stringValueOrNull(event, "message")}
+    };
+}
+
+json projectPhase7ExecutionApplyEntries(const json& entries) {
+    json projected = json::array();
+    for (const auto& entry : entries) {
+        projected.push_back({
+            {"apply_entry_id_present", !stringValueOrEmpty(entry, "apply_entry_id").empty()},
+            {"journal_entry_id_present", !stringValueOrEmpty(entry, "journal_entry_id").empty()},
+            {"ledger_entry_id_present", !stringValueOrEmpty(entry, "ledger_entry_id").empty()},
+            {"action_id_present", !stringValueOrEmpty(entry, "action_id").empty()},
+            {"action_type", stringValueOrEmpty(entry, "action_type")},
+            {"finding_id", stringValueOrNull(entry, "finding_id")},
+            {"execution_status", stringValueOrEmpty(entry, "execution_status")},
+            {"idempotency_key_present", !stringValueOrEmpty(entry, "idempotency_key").empty()},
+            {"attempt_count", entry.value("attempt_count", 0ULL)},
+            {"terminal", entry.value("terminal", false)},
+            {"requires_manual_confirmation", entry.value("requires_manual_confirmation", true)},
+            {"title", stringValueOrEmpty(entry, "title")},
+            {"summary", stringValueOrEmpty(entry, "summary")},
+            {"has_submitted_at_utc", !stringValueOrEmpty(entry, "submitted_at_utc").empty()},
+            {"has_completed_at_utc", !stringValueOrEmpty(entry, "completed_at_utc").empty()},
+            {"has_last_updated_at_utc", !stringValueOrEmpty(entry, "last_updated_at_utc").empty()},
+            {"last_updated_by", stringValueOrNull(entry, "last_updated_by")},
+            {"has_execution_comment", !stringValueOrEmpty(entry, "execution_comment").empty()},
+            {"failure_code", stringValueOrNull(entry, "failure_code")},
+            {"failure_message", stringValueOrNull(entry, "failure_message")},
+            {"suggested_tools_count", entry.value("suggested_tools", json::array()).size()}
+        });
+    }
+    std::sort(projected.begin(), projected.end(), [](const json& left, const json& right) {
+        return left.value("title", std::string()) < right.value("title", std::string());
+    });
+    return projected;
+}
+
+json projectPhase7ExecutionApplyResult(const json& result) {
+    json auditTrail = json::array();
+    for (const auto& event : result.value("audit_trail", json::array())) {
+        auditTrail.push_back({
+            {"event_id_present", !stringValueOrEmpty(event, "event_id").empty()},
+            {"event_type", stringValueOrEmpty(event, "event_type")},
+            {"execution_status", stringValueOrNull(event, "execution_status")},
+            {"apply_status", stringValueOrNull(event, "apply_status")},
+            {"actor", stringValueOrNull(event, "actor")},
+            {"updated_entry_count", event.value("updated_entry_ids", json::array()).size()},
+            {"previous_entry_status_count", event.value("previous_entry_statuses", json::array()).size()},
+            {"has_comment", !stringValueOrEmpty(event, "comment").empty()},
+            {"has_failure_code", !stringValueOrEmpty(event, "failure_code").empty()},
+            {"has_failure_message", !stringValueOrEmpty(event, "failure_message").empty()},
+            {"message", stringValueOrEmpty(event, "message")},
+            {"has_generated_at_utc", !stringValueOrEmpty(event, "generated_at_utc").empty()}
+        });
+    }
+    std::sort(auditTrail.begin(), auditTrail.end(), [](const json& left, const json& right) {
+        if (left.value("event_type", std::string()) != right.value("event_type", std::string())) {
+            return left.value("event_type", std::string()) < right.value("event_type", std::string());
+        }
+        return left.value("message", std::string()) < right.value("message", std::string());
+    });
+
+    json projection{
+        {"source_artifact", projectPhase7ArtifactRef(result.value("source_artifact", json::object()))},
+        {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
+        {"playbook_artifact", projectPhase7ArtifactRef(result.value("playbook_artifact", json::object()))},
+        {"execution_ledger", projectPhase7ArtifactRef(result.value("execution_ledger", json::object()))},
+        {"execution_journal", projectPhase7ArtifactRef(result.value("execution_journal", json::object()))},
+        {"execution_apply", projectPhase7ArtifactRef(result.value("execution_apply", json::object()))},
+        {"mode", stringValueOrEmpty(result, "mode")},
+        {"has_generated_at_utc", !stringValueOrEmpty(result, "generated_at_utc").empty()},
+        {"initiated_by", stringValueOrNull(result, "initiated_by")},
+        {"execution_capability", stringValueOrNull(result, "execution_capability")},
+        {"apply_status", stringValueOrEmpty(result, "apply_status")},
+        {"execution_policy", result.value("execution_policy", json::object())},
+        {"filtered_finding_ids", result.value("filtered_finding_ids", json::array())},
+        {"entry_count", result.value("entry_count", 0ULL)},
+        {"execution_summary", projectPhase7ExecutionJournalSummary(result.value("execution_summary", json::object()))},
+        {"latest_audit_event", projectPhase7ExecutionApplyAuditSummary(result.value("latest_audit_event", json::object()))},
+        {"entries", projectPhase7ExecutionApplyEntries(result.value("entries", json::array()))},
+        {"audit_trail", std::move(auditTrail)},
+        {"replay_context", projectPhase7ReplayContext(result.value("replay_context", json::object()))}
+    };
+    if (result.contains("artifact_status")) {
+        projection["artifact_status"] = stringValueOrEmpty(result, "artifact_status");
+    }
+    if (result.contains("updated_entry_ids")) {
+        projection["updated_entry_ids"] = result.value("updated_entry_ids", json::array());
+    }
+    if (result.contains("audit_event_id")) {
+        projection["audit_event_id_present"] = !stringValueOrEmpty(result, "audit_event_id").empty();
+    }
+    return projection;
+}
+
+json projectPhase7ExecutionApplyInventoryResult(const json& result) {
+    json rows = json::array();
+    for (const auto& row : result.value("execution_applies", json::array())) {
+        rows.push_back({
+            {"execution_apply", projectPhase7ArtifactRef(row.value("execution_apply", json::object()))},
+            {"execution_journal", projectPhase7ArtifactRef(row.value("execution_journal", json::object()))},
+            {"execution_ledger", projectPhase7ArtifactRef(row.value("execution_ledger", json::object()))},
+            {"playbook_artifact", projectPhase7ArtifactRef(row.value("playbook_artifact", json::object()))},
+            {"analysis_artifact", projectPhase7ArtifactRef(row.value("analysis_artifact", json::object()))},
+            {"source_artifact", projectPhase7ArtifactRef(row.value("source_artifact", json::object()))},
+            {"mode", stringValueOrEmpty(row, "mode")},
+            {"has_generated_at_utc", !stringValueOrEmpty(row, "generated_at_utc").empty()},
+            {"apply_status", stringValueOrEmpty(row, "apply_status")},
+            {"entry_count", row.value("entry_count", 0ULL)},
+            {"execution_summary", projectPhase7ExecutionJournalSummary(row.value("execution_summary", json::object()))},
+            {"latest_audit_event", projectPhase7ExecutionApplyAuditSummary(row.value("latest_audit_event", json::object()))},
+            {"replay_context", projectPhase7ReplayContext(row.value("replay_context", json::object()))}
+        });
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+        return left.value("execution_apply", json::object()).value("artifact_id", std::string()) <
+               right.value("execution_apply", json::object()).value("artifact_id", std::string());
+    });
+    return {
+        {"returned_count", result.value("returned_count", 0ULL)},
+        {"applied_filters", {
+            {"execution_journal_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("execution_journal_artifact_id") || filters.at("execution_journal_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("execution_journal_artifact_id").get<std::string>());
+            }()},
+            {"execution_ledger_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("execution_ledger_artifact_id") || filters.at("execution_ledger_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("execution_ledger_artifact_id").get<std::string>());
+            }()},
+            {"playbook_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("playbook_artifact_id") || filters.at("playbook_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("playbook_artifact_id").get<std::string>());
+            }()},
+            {"analysis_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("analysis_artifact_id") || filters.at("analysis_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("analysis_artifact_id").get<std::string>());
+            }()},
+            {"source_artifact_id", [&]() -> json {
+                const json filters = result.value("applied_filters", json::object());
+                if (!filters.contains("source_artifact_id") || filters.at("source_artifact_id").is_null()) {
+                    return nullptr;
+                }
+                return normalizeArtifactId(filters.at("source_artifact_id").get<std::string>());
+            }()},
+            {"apply_status", result.value("applied_filters", json::object()).contains("apply_status")
+                                 ? result.value("applied_filters", json::object()).at("apply_status")
+                                 : json(nullptr)},
+            {"sort_by", result.value("applied_filters", json::object()).contains("sort_by")
+                            ? result.value("applied_filters", json::object()).at("sort_by")
+                            : json("generated_at_desc")},
+            {"limit", result.value("applied_filters", json::object()).contains("limit")
+                          ? result.value("applied_filters", json::object()).at("limit")
+                          : json(nullptr)},
+            {"matched_count", result.value("applied_filters", json::object()).value("matched_count", 0ULL)}
+        }},
+        {"execution_applies", std::move(rows)}
+    };
+}
+
 json projectPhase7PlaybookInventoryResult(const json& result) {
     json rows = json::array();
     for (const auto& row : result.value("playbook_artifacts", json::array())) {
@@ -1206,7 +1605,7 @@ json projectEnvelope(const json& envelope) {
             {"instrument_id", result.value("instrument_id", std::string())},
             {"latest_session_seq", result.value("latest_session_seq", 0ULL)},
             {"live_event_count", result.value("live_event_count", 0ULL)},
-            {"segment_count", result.value("segment_count", 0ULL)},
+            {"segment_count", normalizePositiveCount(result.value("segment_count", 0ULL))},
             {"manifest_hash", normalizeHash(result.value("manifest_hash", json(nullptr)))}
         };
     } else if (toolName == "tapescript_read_live_tail" ||
@@ -1316,6 +1715,19 @@ json projectEnvelope(const json& envelope) {
         projection["result"] = projectPhase7ExecutionLedgerResult(result);
     } else if (toolName == "tapescript_list_execution_ledgers") {
         projection["result"] = projectPhase7ExecutionLedgerInventoryResult(result);
+    } else if (toolName == "tapescript_start_execution_journal" ||
+               toolName == "tapescript_read_execution_journal" ||
+               toolName == "tapescript_dispatch_execution_journal" ||
+               toolName == "tapescript_record_execution_journal_event") {
+        projection["result"] = projectPhase7ExecutionJournalResult(result);
+    } else if (toolName == "tapescript_list_execution_journals") {
+        projection["result"] = projectPhase7ExecutionJournalInventoryResult(result);
+    } else if (toolName == "tapescript_start_execution_apply" ||
+               toolName == "tapescript_read_execution_apply" ||
+               toolName == "tapescript_record_execution_apply_event") {
+        projection["result"] = projectPhase7ExecutionApplyResult(result);
+    } else if (toolName == "tapescript_list_execution_applies") {
+        projection["result"] = projectPhase7ExecutionApplyInventoryResult(result);
     } else {
         projection["result"] = projectInvestigationResult(result);
     }
@@ -2668,6 +3080,344 @@ void testTapeMcpPhase7Contracts() {
            "phase7 ready-for-execution list_execution_ledgers envelope should match golden fixture\nactual:\n" +
                readyExecutionLedgerInventoryEnvelope.dump(2));
 
+    const json dispatchAnalysisEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_analyzer_run", json{
+        {"case_bundle_path", caseBundlePath},
+        {"analysis_profile", tape_phase7::kOrderImpactAnalyzerProfile}
+    }));
+    expect(dispatchAnalysisEnvelopeRaw.value("ok", false),
+           "phase7 dispatch-specific analyzer_run should return ok=true");
+    const std::string orderImpactAnalysisArtifactId =
+        dispatchAnalysisEnvelopeRaw.value("result", json::object())
+            .value("analysis_artifact", json::object())
+            .value("artifact_id", std::string());
+    const std::string orderImpactFindingId =
+        dispatchAnalysisEnvelopeRaw.value("result", json::object())
+            .value("findings", json::array())
+            .empty()
+            ? std::string()
+            : dispatchAnalysisEnvelopeRaw.value("result", json::object())
+                  .value("findings", json::array())
+                  .front()
+                  .value("finding_id", std::string());
+    expect(!orderImpactAnalysisArtifactId.empty() && !orderImpactFindingId.empty(),
+           "phase7 order-impact analyzer should expose a reusable artifact id and finding id");
+    const json dispatchPlaybookEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_playbook_apply", json{
+        {"analysis_artifact_id", orderImpactAnalysisArtifactId},
+        {"finding_ids", json::array({orderImpactFindingId})}
+    }));
+    expect(dispatchPlaybookEnvelopeRaw.value("ok", false),
+           "phase7 dispatch-specific playbook_apply should return ok=true");
+    const std::string dispatchPlaybookArtifactId =
+        dispatchPlaybookEnvelopeRaw.value("result", json::object()).value("playbook_artifact", json::object()).value("artifact_id", std::string());
+    expect(!dispatchPlaybookArtifactId.empty(),
+           "phase7 dispatch-specific playbook_apply should expose a playbook artifact id");
+    const json dispatchLedgerEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_prepare_execution_ledger", json{
+        {"playbook_artifact_id", dispatchPlaybookArtifactId}
+    }));
+    expect(dispatchLedgerEnvelopeRaw.value("ok", false),
+           "phase7 dispatch-specific prepare_execution_ledger should return ok=true");
+    const std::string dispatchLedgerArtifactId =
+        dispatchLedgerEnvelopeRaw.value("result", json::object()).value("execution_ledger", json::object()).value("artifact_id", std::string());
+    const std::string dispatchLedgerEntryId =
+        dispatchLedgerEnvelopeRaw.value("result", json::object()).value("entries", json::array()).empty()
+            ? std::string()
+            : dispatchLedgerEnvelopeRaw.value("result", json::object()).value("entries", json::array()).front().value("entry_id", std::string());
+    expect(!dispatchLedgerArtifactId.empty() && !dispatchLedgerEntryId.empty(),
+           "phase7 dispatch-specific prepare_execution_ledger should expose a ledger artifact and entry id");
+    const json dispatchLedgerFirstApprovalEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_ledger_review", json{
+            {"execution_ledger_artifact_id", dispatchLedgerArtifactId},
+            {"entry_ids", json::array({dispatchLedgerEntryId})},
+            {"review_status", "approved"},
+            {"actor", "mcp-dispatch-reviewer-a"},
+            {"comment", "First approval for dispatch-specific journal coverage."}
+        })));
+    expect(dispatchLedgerFirstApprovalEnvelope.value("ok", false),
+           "phase7 dispatch-specific first ledger approval should return ok=true");
+    const json dispatchLedgerReadyEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_ledger_review", json{
+            {"execution_ledger_artifact_id", dispatchLedgerArtifactId},
+            {"entry_ids", json::array({dispatchLedgerEntryId})},
+            {"review_status", "approved"},
+            {"actor", "mcp-dispatch-reviewer-b"},
+            {"comment", "Second approval prepares the journal for dispatch."}
+        })));
+    expect(dispatchLedgerReadyEnvelope.value("ok", false),
+           "phase7 dispatch-specific second ledger approval should return ok=true");
+    const json dispatchJournalEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_start_execution_journal", json{
+        {"execution_ledger_artifact_id", dispatchLedgerArtifactId},
+        {"actor", "mcp-executor-dispatch"},
+        {"execution_capability", "phase7.execution_operator.v1"}
+    }));
+    expect(dispatchJournalEnvelopeRaw.value("ok", false),
+           "phase7 dispatch-specific start_execution_journal should return ok=true");
+    const std::string dispatchJournalArtifactId =
+        dispatchJournalEnvelopeRaw.value("result", json::object()).value("execution_journal", json::object()).value("artifact_id", std::string());
+    const std::string dispatchRequiredCapability =
+        dispatchJournalEnvelopeRaw.value("result", json::object())
+            .value("execution_policy", json::object())
+            .value("capability_required", std::string());
+    expect(!dispatchJournalArtifactId.empty(),
+           "phase7 dispatch-specific start_execution_journal should expose a journal artifact id");
+    expect(!dispatchRequiredCapability.empty(),
+           "phase7 dispatch-specific start_execution_journal should expose a required execution capability");
+    const json missingCapabilityDispatchEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_dispatch_execution_journal", json{
+            {"execution_journal_artifact_id", dispatchJournalArtifactId},
+            {"actor", "mcp-executor-dispatch"},
+            {"comment", "Missing capability should fail."}
+        })));
+    expect(!missingCapabilityDispatchEnvelope.value("ok", true),
+           "phase7 dispatch_execution_journal without execution_capability should return ok=false");
+    const json dispatchedExecutionJournalEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_dispatch_execution_journal", json{
+            {"execution_journal_artifact_id", dispatchJournalArtifactId},
+            {"actor", "mcp-executor-dispatch"},
+            {"execution_capability", dispatchRequiredCapability},
+            {"comment", "Dispatching queued entries through the controlled path."}
+        })));
+    expect(dispatchedExecutionJournalEnvelope.value("ok", false),
+           "phase7 dispatch_execution_journal should return ok=true");
+
+    const json executionJournalEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_start_execution_journal", json{
+        {"execution_ledger_artifact_id", singleEntryLedgerArtifactId},
+        {"actor", "mcp-executor-a"},
+        {"execution_capability", "phase7.execution_operator.v1"}
+    }));
+    const json executionJournalEnvelope = projectEnvelope(executionJournalEnvelopeRaw);
+    expect(executionJournalEnvelope.value("ok", false),
+           "phase7 start_execution_journal should return ok=true\nactual:\n" + executionJournalEnvelope.dump(2));
+    const std::string executionJournalArtifactId =
+        executionJournalEnvelopeRaw.value("result", json::object()).value("execution_journal", json::object()).value("artifact_id", std::string());
+    const std::string executionJournalEntryId =
+        executionJournalEnvelopeRaw.value("result", json::object()).value("entries", json::array()).empty()
+            ? std::string()
+            : executionJournalEnvelopeRaw.value("result", json::object()).value("entries", json::array()).front().value("journal_entry_id", std::string());
+    expect(!executionJournalArtifactId.empty() && !executionJournalEntryId.empty(),
+           "phase7 start_execution_journal should expose a journal artifact and entry id");
+    const json reusedExecutionJournalEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_start_execution_journal", json{
+        {"execution_ledger_artifact_id", singleEntryLedgerArtifactId},
+        {"actor", "mcp-executor-a"},
+        {"execution_capability", "phase7.execution_operator.v1"}
+    })));
+    expect(reusedExecutionJournalEnvelope.value("ok", false),
+           "phase7 start_execution_journal rerun should return ok=true\nactual:\n" + reusedExecutionJournalEnvelope.dump(2));
+    const json executionJournalInventoryEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_execution_journals", json{
+        {"execution_ledger_artifact_id", singleEntryLedgerArtifactId},
+        {"limit", 10}
+    })));
+    expect(executionJournalInventoryEnvelope.value("ok", false),
+           "phase7 list_execution_journals should return ok=true\nactual:\n" + executionJournalInventoryEnvelope.dump(2));
+    const json readExecutionJournalEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_read_execution_journal", json{
+        {"execution_journal_artifact_id", executionJournalArtifactId}
+    })));
+    expect(readExecutionJournalEnvelope.value("ok", false),
+           "phase7 read_execution_journal should return ok=true\nactual:\n" + readExecutionJournalEnvelope.dump(2));
+    const json missingActorExecutionJournalEventEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_journal_event", json{
+            {"execution_journal_artifact_id", executionJournalArtifactId},
+            {"entry_ids", json::array({executionJournalEntryId})},
+            {"execution_status", "submitted"},
+            {"comment", "Missing actor should fail."}
+        })));
+    expect(!missingActorExecutionJournalEventEnvelope.value("ok", true),
+           "phase7 record_execution_journal_event without actor should return ok=false");
+    const json missingFailureDetailsExecutionJournalEventEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_journal_event", json{
+            {"execution_journal_artifact_id", executionJournalArtifactId},
+            {"entry_ids", json::array({executionJournalEntryId})},
+            {"execution_status", "failed"},
+            {"actor", "mcp-executor-a"},
+            {"comment", "Failed execution requires details."}
+        })));
+    expect(!missingFailureDetailsExecutionJournalEventEnvelope.value("ok", true),
+           "phase7 failed record_execution_journal_event without failure details should return ok=false");
+    const json submittedExecutionJournalEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_journal_event", json{
+            {"execution_journal_artifact_id", executionJournalArtifactId},
+            {"entry_ids", json::array({executionJournalEntryId})},
+            {"execution_status", "submitted"},
+            {"actor", "mcp-executor-a"},
+            {"comment", "Submitting the first execution attempt."}
+        })));
+    expect(submittedExecutionJournalEnvelope.value("ok", false),
+           "phase7 submitted record_execution_journal_event should return ok=true");
+    const json succeededExecutionJournalEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_journal_event", json{
+            {"execution_journal_artifact_id", executionJournalArtifactId},
+            {"entry_ids", json::array({executionJournalEntryId})},
+            {"execution_status", "succeeded"},
+            {"actor", "mcp-executor-a"},
+            {"comment", "Execution completed successfully."}
+        })));
+    expect(succeededExecutionJournalEnvelope.value("ok", false),
+           "phase7 succeeded record_execution_journal_event should return ok=true");
+    const json succeededExecutionJournalInventoryEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_list_execution_journals", json{
+            {"execution_ledger_artifact_id", singleEntryLedgerArtifactId},
+            {"journal_status", tape_phase7::kExecutionJournalStatusSucceeded}
+        })));
+    expect(succeededExecutionJournalInventoryEnvelope.value("ok", false),
+           "phase7 succeeded list_execution_journals should return ok=true");
+    const json executionApplyEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_start_execution_apply", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId},
+        {"actor", "mcp-executor-dispatch"},
+        {"execution_capability", dispatchRequiredCapability},
+        {"comment", "Creating a controlled apply artifact from submitted journal entries."}
+    }));
+    const json executionApplyEnvelope = projectEnvelope(executionApplyEnvelopeRaw);
+    expect(executionApplyEnvelope.value("ok", false),
+           "phase7 start_execution_apply should return ok=true\nactual:\n" + executionApplyEnvelope.dump(2));
+    const std::string executionApplyArtifactId =
+        executionApplyEnvelopeRaw.value("result", json::object()).value("execution_apply", json::object()).value("artifact_id", std::string());
+    const std::string executionApplyEntryId =
+        executionApplyEnvelopeRaw.value("result", json::object()).value("entries", json::array()).empty()
+            ? std::string()
+            : executionApplyEnvelopeRaw.value("result", json::object()).value("entries", json::array()).front().value("apply_entry_id", std::string());
+    expect(!executionApplyArtifactId.empty() && !executionApplyEntryId.empty(),
+           "phase7 start_execution_apply should expose an execution-apply artifact and entry id");
+    const json reusedExecutionApplyEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_start_execution_apply", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId},
+        {"actor", "mcp-executor-dispatch"},
+        {"execution_capability", dispatchRequiredCapability}
+    })));
+    expect(reusedExecutionApplyEnvelope.value("ok", false),
+           "phase7 start_execution_apply rerun should return ok=true\nactual:\n" + reusedExecutionApplyEnvelope.dump(2));
+    const json executionApplyInventoryEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_execution_applies", json{
+        {"execution_journal_artifact_id", dispatchJournalArtifactId},
+        {"limit", 10}
+    })));
+    expect(executionApplyInventoryEnvelope.value("ok", false),
+           "phase7 list_execution_applies should return ok=true\nactual:\n" + executionApplyInventoryEnvelope.dump(2));
+    const json readExecutionApplyEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_read_execution_apply", json{
+        {"execution_apply_artifact_id", executionApplyArtifactId}
+    })));
+    expect(readExecutionApplyEnvelope.value("ok", false),
+           "phase7 read_execution_apply should return ok=true\nactual:\n" + readExecutionApplyEnvelope.dump(2));
+    const json missingFailureDetailsExecutionApplyEventEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_apply_event", json{
+            {"execution_apply_artifact_id", executionApplyArtifactId},
+            {"entry_ids", json::array({executionApplyEntryId})},
+            {"execution_status", "failed"},
+            {"actor", "mcp-executor-dispatch"},
+            {"comment", "Failed apply requires details."}
+        })));
+    expect(!missingFailureDetailsExecutionApplyEventEnvelope.value("ok", true),
+           "phase7 failed record_execution_apply_event without failure details should return ok=false");
+    const json succeededExecutionApplyEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_record_execution_apply_event", json{
+            {"execution_apply_artifact_id", executionApplyArtifactId},
+            {"entry_ids", json::array({executionApplyEntryId})},
+            {"execution_status", "succeeded"},
+            {"actor", "mcp-executor-dispatch"},
+            {"comment", "Apply completed successfully."}
+        })));
+    expect(succeededExecutionApplyEnvelope.value("ok", false),
+           "phase7 succeeded record_execution_apply_event should return ok=true");
+    const json succeededExecutionApplyInventoryEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_list_execution_applies", json{
+            {"execution_journal_artifact_id", dispatchJournalArtifactId},
+            {"apply_status", tape_phase7::kExecutionJournalStatusSucceeded}
+        })));
+    expect(succeededExecutionApplyInventoryEnvelope.value("ok", false),
+           "phase7 succeeded list_execution_applies should return ok=true");
+    const json executionJournalResource = projectResourceRead(
+        adapter.readResourceResult("tape://phase7/journal/" + executionJournalArtifactId));
+    const json executionJournalMarkdownResource = projectResourceRead(
+        adapter.readResourceResult("tape://phase7/journal/" + executionJournalArtifactId + "/markdown"));
+    const json executionApplyResource = projectResourceRead(
+        adapter.readResourceResult("tape://phase7/apply/" + executionApplyArtifactId));
+    const json executionApplyMarkdownResource = projectResourceRead(
+        adapter.readResourceResult("tape://phase7/apply/" + executionApplyArtifactId + "/markdown"));
+    expect(executionJournalEnvelope ==
+               fixture.value("tapescript_start_execution_journal", json::object()),
+           "phase7 start_execution_journal envelope should match golden fixture\nactual:\n" +
+               executionJournalEnvelope.dump(2));
+    expect(reusedExecutionJournalEnvelope ==
+               fixture.value("tapescript_start_execution_journal_reused", json::object()),
+           "phase7 start_execution_journal rerun envelope should match golden fixture\nactual:\n" +
+               reusedExecutionJournalEnvelope.dump(2));
+    expect(executionJournalInventoryEnvelope ==
+               fixture.value("tapescript_list_execution_journals", json::object()),
+           "phase7 list_execution_journals envelope should match golden fixture\nactual:\n" +
+               executionJournalInventoryEnvelope.dump(2));
+    expect(readExecutionJournalEnvelope ==
+               fixture.value("tapescript_read_execution_journal", json::object()),
+           "phase7 read_execution_journal envelope should match golden fixture\nactual:\n" +
+               readExecutionJournalEnvelope.dump(2));
+    expect(missingCapabilityDispatchEnvelope ==
+               fixture.value("tapescript_dispatch_execution_journal_missing_capability", json::object()),
+           "phase7 dispatch_execution_journal missing-capability envelope should match golden fixture\nactual:\n" +
+               missingCapabilityDispatchEnvelope.dump(2));
+    expect(dispatchedExecutionJournalEnvelope ==
+               fixture.value("tapescript_dispatch_execution_journal", json::object()),
+           "phase7 dispatch_execution_journal envelope should match golden fixture\nactual:\n" +
+               dispatchedExecutionJournalEnvelope.dump(2));
+    expect(missingActorExecutionJournalEventEnvelope ==
+               fixture.value("tapescript_record_execution_journal_event_missing_actor", json::object()),
+           "phase7 record_execution_journal_event missing-actor envelope should match golden fixture\nactual:\n" +
+               missingActorExecutionJournalEventEnvelope.dump(2));
+    expect(missingFailureDetailsExecutionJournalEventEnvelope ==
+               fixture.value("tapescript_record_execution_journal_event_missing_failure_details", json::object()),
+           "phase7 record_execution_journal_event missing-failure-details envelope should match golden fixture\nactual:\n" +
+               missingFailureDetailsExecutionJournalEventEnvelope.dump(2));
+    expect(submittedExecutionJournalEnvelope ==
+               fixture.value("tapescript_record_execution_journal_event_submitted", json::object()),
+           "phase7 record_execution_journal_event submitted envelope should match golden fixture\nactual:\n" +
+               submittedExecutionJournalEnvelope.dump(2));
+    expect(succeededExecutionJournalEnvelope ==
+               fixture.value("tapescript_record_execution_journal_event_succeeded", json::object()),
+           "phase7 record_execution_journal_event succeeded envelope should match golden fixture\nactual:\n" +
+               succeededExecutionJournalEnvelope.dump(2));
+    expect(succeededExecutionJournalInventoryEnvelope ==
+               fixture.value("tapescript_list_execution_journals_succeeded", json::object()),
+           "phase7 succeeded list_execution_journals envelope should match golden fixture\nactual:\n" +
+               succeededExecutionJournalInventoryEnvelope.dump(2));
+    expect(executionApplyEnvelope ==
+               fixture.value("tapescript_start_execution_apply", json::object()),
+           "phase7 start_execution_apply envelope should match golden fixture\nactual:\n" +
+               executionApplyEnvelope.dump(2));
+    expect(reusedExecutionApplyEnvelope ==
+               fixture.value("tapescript_start_execution_apply_reused", json::object()),
+           "phase7 start_execution_apply rerun envelope should match golden fixture\nactual:\n" +
+               reusedExecutionApplyEnvelope.dump(2));
+    expect(executionApplyInventoryEnvelope ==
+               fixture.value("tapescript_list_execution_applies", json::object()),
+           "phase7 list_execution_applies envelope should match golden fixture\nactual:\n" +
+               executionApplyInventoryEnvelope.dump(2));
+    expect(readExecutionApplyEnvelope ==
+               fixture.value("tapescript_read_execution_apply", json::object()),
+           "phase7 read_execution_apply envelope should match golden fixture\nactual:\n" +
+               readExecutionApplyEnvelope.dump(2));
+    expect(missingFailureDetailsExecutionApplyEventEnvelope ==
+               fixture.value("tapescript_record_execution_apply_event_missing_failure_details", json::object()),
+           "phase7 record_execution_apply_event missing-failure-details envelope should match golden fixture\nactual:\n" +
+               missingFailureDetailsExecutionApplyEventEnvelope.dump(2));
+    expect(succeededExecutionApplyEnvelope ==
+               fixture.value("tapescript_record_execution_apply_event", json::object()),
+           "phase7 record_execution_apply_event envelope should match golden fixture\nactual:\n" +
+               succeededExecutionApplyEnvelope.dump(2));
+    expect(succeededExecutionApplyInventoryEnvelope ==
+               fixture.value("tapescript_list_execution_applies_succeeded", json::object()),
+           "phase7 succeeded list_execution_applies envelope should match golden fixture\nactual:\n" +
+               succeededExecutionApplyInventoryEnvelope.dump(2));
+    expect(executionJournalResource ==
+               fixture.value("resource_read_phase7_execution_journal", json::object()),
+           "phase7 execution journal resource should match golden fixture\nactual:\n" +
+               executionJournalResource.dump(2));
+    expect(executionJournalMarkdownResource ==
+               fixture.value("resource_read_phase7_execution_journal_markdown", json::object()),
+           "phase7 execution journal markdown resource should match golden fixture\nactual:\n" +
+               executionJournalMarkdownResource.dump(2));
+    expect(executionApplyResource ==
+               fixture.value("resource_read_phase7_execution_apply", json::object()),
+           "phase7 execution apply resource should match golden fixture\nactual:\n" +
+               executionApplyResource.dump(2));
+    expect(executionApplyMarkdownResource ==
+               fixture.value("resource_read_phase7_execution_apply_markdown", json::object()),
+           "phase7 execution apply markdown resource should match golden fixture\nactual:\n" +
+               executionApplyMarkdownResource.dump(2));
+
     server->stop();
 }
 
@@ -2731,7 +3481,7 @@ void testTapeMcpStdioHarness() {
     });
     const json listResponse = readJsonRpcMessage(child.readFd);
     const json tools = listResponse.value("result", json::object()).value("tools", json::array());
-    expect(tools.is_array() && tools.size() == 44, "tools/list should expose the expanded phase 7 tool slice");
+    expect(tools.is_array() && tools.size() == 53, "tools/list should expose the expanded phase 7 tool slice");
     json overviewTool = json::object();
     for (const auto& tool : tools) {
         if (tool.value("name", std::string()) == "tapescript_read_session_overview") {
@@ -2786,7 +3536,7 @@ void testTapeMcpStdioHarness() {
     });
     const json promptListResponse = readJsonRpcMessage(child.readFd);
     const json prompts = promptListResponse.value("result", json::object()).value("prompts", json::array());
-    expect(prompts.is_array() && prompts.size() == 12, "prompts/list should expose the expanded phase7 prompt set");
+    expect(prompts.is_array() && prompts.size() == 14, "prompts/list should expose the expanded phase7 prompt set");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},

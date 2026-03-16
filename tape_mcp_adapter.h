@@ -67,7 +67,16 @@ enum class ToolId {
     PrepareExecutionLedger,
     ListExecutionLedgers,
     ReadExecutionLedger,
-    RecordExecutionLedgerReview
+    RecordExecutionLedgerReview,
+    StartExecutionJournal,
+    ListExecutionJournals,
+    ReadExecutionJournal,
+    DispatchExecutionJournal,
+    RecordExecutionJournalEvent,
+    StartExecutionApply,
+    ListExecutionApplies,
+    ReadExecutionApply,
+    RecordExecutionApplyEvent
 };
 
 struct ToolSpec {
@@ -147,6 +156,15 @@ private:
     [[nodiscard]] json invokeListExecutionLedgersTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadExecutionLedgerTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeRecordExecutionLedgerReviewTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeStartExecutionJournalTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListExecutionJournalsTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadExecutionJournalTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeDispatchExecutionJournalTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeRecordExecutionJournalEventTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeStartExecutionApplyTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListExecutionAppliesTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadExecutionApplyTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeRecordExecutionApplyEventTool(const ToolSpec& tool, const json& args) const;
 
     [[nodiscard]] json makeToolResult(const json& envelope) const;
     [[nodiscard]] json makeSuccessEnvelope(const ToolSpec& tool, json result, json revision) const;

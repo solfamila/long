@@ -719,6 +719,343 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                : reviewedLedgerIndex >= pendingLedgerIndex,
            "TapeScope sorted phase7 execution ledger inventory should order ledgers by attention rank instead of assuming one fixed review status");
 
+    const auto missingActorPhase7ExecutionJournalStart = client.startExecutionJournalPayload(
+        readyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId,
+        "",
+        "phase7.execution_operator.v1");
+    expect(!missingActorPhase7ExecutionJournalStart.ok(),
+           "TapeScope typed phase7 execution journal start should require an actor");
+    expect(tapescope::QueryClient::describeError(missingActorPhase7ExecutionJournalStart.error).find("actor is required") !=
+               std::string::npos,
+           "TapeScope typed phase7 execution journal start should surface the actor-required policy");
+
+    const auto phase7ExecutionJournalStart = client.startExecutionJournalPayload(
+        readyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId,
+        "tapescope-executor-a",
+        "phase7.execution_operator.v1");
+    expect(phase7ExecutionJournalStart.ok(), "TapeScope typed phase7 execution journal start should succeed: " +
+                                                 tapescope::QueryClient::describeError(phase7ExecutionJournalStart.error));
+    expect(phase7ExecutionJournalStart.value.created,
+           "TapeScope typed phase7 execution journal start should create the journal on first run");
+    expect(phase7ExecutionJournalStart.value.artifact.journalStatus == tape_phase7::kExecutionJournalStatusQueued,
+           "TapeScope typed phase7 execution journal start should begin queued");
+    expect(phase7ExecutionJournalStart.value.artifact.entries.size() == 1 &&
+               phase7ExecutionJournalStart.value.artifact.entries.front().executionStatus ==
+                   tape_phase7::kExecutionEntryStatusQueued,
+           "TapeScope typed phase7 execution journal start should expose queued execution entries");
+    const auto reusedPhase7ExecutionJournalStart = client.startExecutionJournalPayload(
+        readyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId,
+        "tapescope-executor-a",
+        "phase7.execution_operator.v1");
+    expect(reusedPhase7ExecutionJournalStart.ok(),
+           "TapeScope typed phase7 execution journal rerun should succeed: " +
+               tapescope::QueryClient::describeError(reusedPhase7ExecutionJournalStart.error));
+    expect(!reusedPhase7ExecutionJournalStart.value.created,
+           "TapeScope typed phase7 execution journal rerun should reuse the deterministic journal");
+
+    const auto typedPhase7ExecutionJournal = client.readExecutionJournalArtifactPayload(
+        phase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId);
+    expect(typedPhase7ExecutionJournal.ok(), "TapeScope typed phase7 execution journal read should succeed: " +
+                                                 tapescope::QueryClient::describeError(typedPhase7ExecutionJournal.error));
+    expect(typedPhase7ExecutionJournal.value.ledgerArtifact.artifactId ==
+               readyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId,
+           "TapeScope typed phase7 execution journal read should preserve the linked ledger artifact id");
+
+    expect(!orderImpactAnalysisRun.value.artifact.findings.empty(),
+           "TapeScope typed order-impact analysis should expose findings for dispatch coverage");
+    const std::vector<std::string> dispatchFindingIds = {
+        orderImpactAnalysisRun.value.artifact.findings.front().findingId
+    };
+    const auto dispatchPhase7Playbook = client.buildPlaybookPayload(
+        orderImpactAnalysisRun.value.artifact.analysisArtifact.artifactId,
+        dispatchFindingIds);
+    expect(dispatchPhase7Playbook.ok(),
+           "TapeScope typed dispatch-specific phase7 playbook should succeed: " +
+               tapescope::QueryClient::describeError(dispatchPhase7Playbook.error));
+    const auto dispatchPhase7ExecutionLedger =
+        client.buildExecutionLedgerPayload(dispatchPhase7Playbook.value.artifact.playbookArtifact.artifactId);
+    expect(dispatchPhase7ExecutionLedger.ok(),
+           "TapeScope typed dispatch-specific phase7 execution ledger should succeed: " +
+               tapescope::QueryClient::describeError(dispatchPhase7ExecutionLedger.error));
+    std::vector<std::string> dispatchReviewedEntryIds;
+    for (const auto& entry : dispatchPhase7ExecutionLedger.value.artifact.entries) {
+        dispatchReviewedEntryIds.push_back(entry.entryId);
+    }
+    const auto dispatchReviewedPhase7ExecutionLedger = client.recordExecutionLedgerReviewPayload(
+        dispatchPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId,
+        dispatchReviewedEntryIds,
+        tape_phase7::kLedgerEntryStatusApproved,
+        "tapescope-dispatch-reviewer-a",
+        "First approval for the dispatch-specific execution journal.");
+    expect(dispatchReviewedPhase7ExecutionLedger.ok(),
+           "TapeScope typed dispatch-specific first execution-ledger approval should succeed: " +
+               tapescope::QueryClient::describeError(dispatchReviewedPhase7ExecutionLedger.error));
+    const auto dispatchReadyPhase7ExecutionLedger = client.recordExecutionLedgerReviewPayload(
+        dispatchPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId,
+        dispatchReviewedEntryIds,
+        tape_phase7::kLedgerEntryStatusApproved,
+        "tapescope-dispatch-reviewer-b",
+        "Second approval prepares the dispatch-specific execution journal.");
+    expect(dispatchReadyPhase7ExecutionLedger.ok(),
+           "TapeScope typed dispatch-specific second execution-ledger approval should succeed: " +
+               tapescope::QueryClient::describeError(dispatchReadyPhase7ExecutionLedger.error));
+    expect(dispatchReadyPhase7ExecutionLedger.value.artifact.ledgerStatus ==
+               tape_phase7::kLedgerStatusReadyForExecution,
+           "TapeScope typed dispatch-specific execution ledger should become ready for execution");
+    const auto dispatchPhase7ExecutionJournalStart = client.startExecutionJournalPayload(
+        dispatchReadyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId,
+        "tapescope-executor-dispatch",
+        "phase7.execution_operator.v1");
+    expect(dispatchPhase7ExecutionJournalStart.ok(),
+           "TapeScope typed dispatch-specific execution journal start should succeed: " +
+               tapescope::QueryClient::describeError(dispatchPhase7ExecutionJournalStart.error));
+    const std::string dispatchRequiredCapability =
+        dispatchPhase7ExecutionJournalStart.value.artifact.executionPolicy.value("capability_required", std::string());
+    expect(!dispatchRequiredCapability.empty(),
+           "TapeScope typed dispatch-specific execution journal should expose a required execution capability");
+    const auto missingCapabilityPhase7ExecutionDispatch = client.dispatchExecutionJournalPayload(
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        {},
+        "tapescope-executor-dispatch",
+        {},
+        "Missing capability should fail.");
+    expect(!missingCapabilityPhase7ExecutionDispatch.ok(),
+           "TapeScope typed execution journal dispatch should require the configured capability");
+    expect(tapescope::QueryClient::describeError(missingCapabilityPhase7ExecutionDispatch.error)
+               .find("execution_capability is required") != std::string::npos,
+           "TapeScope typed execution journal dispatch should surface the capability-required policy");
+    const auto dispatchedPhase7ExecutionJournal = client.dispatchExecutionJournalPayload(
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        {},
+        "tapescope-executor-dispatch",
+        dispatchRequiredCapability,
+        "Dispatching queued entries through the controlled path.");
+    expect(dispatchedPhase7ExecutionJournal.ok(),
+           "TapeScope typed execution journal dispatch should succeed: " +
+               tapescope::QueryClient::describeError(dispatchedPhase7ExecutionJournal.error));
+    expect(!dispatchedPhase7ExecutionJournal.value.updatedEntryIds.empty() &&
+               dispatchedPhase7ExecutionJournal.value.artifact.journalStatus ==
+                   tape_phase7::kExecutionJournalStatusInProgress &&
+               std::all_of(dispatchedPhase7ExecutionJournal.value.artifact.entries.begin(),
+                           dispatchedPhase7ExecutionJournal.value.artifact.entries.end(),
+                           [](const tapescope::Phase7ExecutionJournalEntry& entry) {
+                               return entry.executionStatus == tape_phase7::kExecutionEntryStatusSubmitted;
+                           }),
+           "TapeScope typed execution journal dispatch should move queued entries into the submitted in-progress state");
+
+    const std::vector<std::string> journalEntryIds = {
+        phase7ExecutionJournalStart.value.artifact.entries.front().journalEntryId
+    };
+    const auto missingFailureDetailsPhase7ExecutionEvent = client.recordExecutionJournalEventPayload(
+        phase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        journalEntryIds,
+        tape_phase7::kExecutionEntryStatusFailed,
+        "tapescope-executor-a",
+        "Failed execution should require details.",
+        {},
+        {});
+    expect(!missingFailureDetailsPhase7ExecutionEvent.ok(),
+           "TapeScope typed phase7 execution journal failure should require failure details");
+    expect(tapescope::QueryClient::describeError(missingFailureDetailsPhase7ExecutionEvent.error)
+               .find("failure_code or failure_message") != std::string::npos,
+           "TapeScope typed phase7 execution journal failure should surface the failure-detail policy");
+
+    const auto submittedPhase7ExecutionJournal = client.recordExecutionJournalEventPayload(
+        phase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        journalEntryIds,
+        tape_phase7::kExecutionEntryStatusSubmitted,
+        "tapescope-executor-a",
+        "Submitting the first execution attempt.");
+    expect(submittedPhase7ExecutionJournal.ok(),
+           "TapeScope typed phase7 execution journal submitted transition should succeed: " +
+               tapescope::QueryClient::describeError(submittedPhase7ExecutionJournal.error));
+    expect(submittedPhase7ExecutionJournal.value.artifact.journalStatus ==
+               tape_phase7::kExecutionJournalStatusInProgress &&
+               submittedPhase7ExecutionJournal.value.artifact.entries.front().attemptCount == 1,
+           "TapeScope typed phase7 execution journal submitted transition should move the journal in progress");
+
+    const auto failedPhase7ExecutionJournal = client.recordExecutionJournalEventPayload(
+        phase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        journalEntryIds,
+        tape_phase7::kExecutionEntryStatusFailed,
+        "tapescope-executor-a",
+        "Execution failed on routing.",
+        "venue_reject",
+        "Exchange rejected the order.");
+    expect(failedPhase7ExecutionJournal.ok(),
+           "TapeScope typed phase7 execution journal failed transition should succeed: " +
+               tapescope::QueryClient::describeError(failedPhase7ExecutionJournal.error));
+    expect(failedPhase7ExecutionJournal.value.artifact.journalStatus ==
+               tape_phase7::kExecutionJournalStatusFailed &&
+               failedPhase7ExecutionJournal.value.artifact.entries.front().terminal,
+           "TapeScope typed phase7 execution journal failed transition should preserve terminal failure state");
+
+    const auto requeuedPhase7ExecutionJournal = client.recordExecutionJournalEventPayload(
+        phase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        journalEntryIds,
+        tape_phase7::kExecutionEntryStatusQueued,
+        "tapescope-executor-b",
+        "Requeue after triage.");
+    expect(requeuedPhase7ExecutionJournal.ok(),
+           "TapeScope typed phase7 execution journal requeue transition should succeed: " +
+               tapescope::QueryClient::describeError(requeuedPhase7ExecutionJournal.error));
+    expect(requeuedPhase7ExecutionJournal.value.artifact.journalStatus ==
+               tape_phase7::kExecutionJournalStatusQueued &&
+               !requeuedPhase7ExecutionJournal.value.artifact.entries.front().terminal,
+           "TapeScope typed phase7 execution journal requeue transition should return the journal to queued state");
+
+    const auto resubmittedPhase7ExecutionJournal = client.recordExecutionJournalEventPayload(
+        phase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        journalEntryIds,
+        tape_phase7::kExecutionEntryStatusSubmitted,
+        "tapescope-executor-b",
+        "Submitting a second execution attempt.");
+    expect(resubmittedPhase7ExecutionJournal.ok(),
+           "TapeScope typed phase7 execution journal resubmit transition should succeed: " +
+               tapescope::QueryClient::describeError(resubmittedPhase7ExecutionJournal.error));
+    expect(resubmittedPhase7ExecutionJournal.value.artifact.entries.front().attemptCount == 2,
+           "TapeScope typed phase7 execution journal resubmit transition should increment attempts");
+
+    const auto succeededPhase7ExecutionJournal = client.recordExecutionJournalEventPayload(
+        phase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        journalEntryIds,
+        tape_phase7::kExecutionEntryStatusSucceeded,
+        "tapescope-executor-b",
+        "Execution completed successfully.");
+    expect(succeededPhase7ExecutionJournal.ok(),
+           "TapeScope typed phase7 execution journal success transition should succeed: " +
+               tapescope::QueryClient::describeError(succeededPhase7ExecutionJournal.error));
+    const auto succeededJournalSummary =
+        tape_phase7::summarizeExecutionJournalSummary(succeededPhase7ExecutionJournal.value.artifact);
+    expect(succeededPhase7ExecutionJournal.value.artifact.journalStatus ==
+               tape_phase7::kExecutionJournalStatusSucceeded &&
+               succeededJournalSummary.succeededCount == 1 &&
+               succeededJournalSummary.allTerminal,
+           "TapeScope typed phase7 execution journal success transition should expose a fully terminal success summary");
+
+    tapescope::Phase7ExecutionJournalInventorySelection filteredJournalSelection;
+    filteredJournalSelection.ledgerArtifactId = readyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId;
+    filteredJournalSelection.journalStatus = tape_phase7::kExecutionJournalStatusSucceeded;
+    filteredJournalSelection.limit = 10;
+    const auto filteredPhase7ExecutionJournals = client.listExecutionJournalArtifactsPayload(filteredJournalSelection);
+    expect(filteredPhase7ExecutionJournals.ok(),
+           "TapeScope filtered phase7 execution journal inventory should succeed: " +
+               tapescope::QueryClient::describeError(filteredPhase7ExecutionJournals.error));
+    expect(filteredPhase7ExecutionJournals.value.matchedCount >= 1 &&
+               !filteredPhase7ExecutionJournals.value.artifacts.empty(),
+           "TapeScope filtered phase7 execution journal inventory should return the matching succeeded journal");
+    expect(filteredPhase7ExecutionJournals.value.appliedFilters.value("execution_ledger_artifact_id", std::string()) ==
+                   readyPhase7ExecutionLedger.value.artifact.ledgerArtifact.artifactId &&
+               filteredPhase7ExecutionJournals.value.appliedFilters.value("journal_status", std::string()) ==
+                   tape_phase7::kExecutionJournalStatusSucceeded,
+           "TapeScope filtered phase7 execution journal inventory should preserve the requested ledger and journal-status filters");
+
+    tapescope::Phase7ExecutionJournalInventorySelection sortedJournalSelection;
+    sortedJournalSelection.analysisArtifactId = phase7AnalysisArtifact.analysisArtifact.artifactId;
+    sortedJournalSelection.sortBy = "attention_desc";
+    sortedJournalSelection.limit = 10;
+    const auto sortedPhase7ExecutionJournals = client.listExecutionJournalArtifactsPayload(sortedJournalSelection);
+    expect(sortedPhase7ExecutionJournals.ok(),
+           "TapeScope sorted phase7 execution journal inventory should succeed: " +
+               tapescope::QueryClient::describeError(sortedPhase7ExecutionJournals.error));
+    expect(!sortedPhase7ExecutionJournals.value.artifacts.empty(),
+           "TapeScope sorted phase7 execution journal inventory should expose the stored journal");
+    expect(sortedPhase7ExecutionJournals.value.appliedFilters.value("sort_by", std::string()) == "attention_desc",
+           "TapeScope sorted phase7 execution journal inventory should preserve the requested sort mode");
+
+    const auto phase7ExecutionApplyStart = client.startExecutionApplyPayload(
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        {},
+        "tapescope-executor-dispatch",
+        dispatchRequiredCapability,
+        "Creating an apply artifact from submitted journal entries.");
+    expect(phase7ExecutionApplyStart.ok(), "TapeScope typed phase7 execution apply start should succeed: " +
+                                               tapescope::QueryClient::describeError(phase7ExecutionApplyStart.error));
+    expect(phase7ExecutionApplyStart.value.created,
+           "TapeScope typed phase7 execution apply start should create the apply artifact on first run");
+    expect(phase7ExecutionApplyStart.value.artifact.applyStatus == tape_phase7::kExecutionJournalStatusInProgress &&
+               phase7ExecutionApplyStart.value.artifact.entries.size() ==
+                   dispatchedPhase7ExecutionJournal.value.artifact.entries.size(),
+           "TapeScope typed phase7 execution apply start should mirror the submitted journal state");
+    const auto reusedPhase7ExecutionApplyStart = client.startExecutionApplyPayload(
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+        {},
+        "tapescope-executor-dispatch",
+        dispatchRequiredCapability);
+    expect(reusedPhase7ExecutionApplyStart.ok(),
+           "TapeScope typed phase7 execution apply rerun should succeed: " +
+               tapescope::QueryClient::describeError(reusedPhase7ExecutionApplyStart.error));
+    expect(!reusedPhase7ExecutionApplyStart.value.created,
+           "TapeScope typed phase7 execution apply rerun should reuse the deterministic apply artifact");
+
+    const auto typedPhase7ExecutionApply = client.readExecutionApplyArtifactPayload(
+        phase7ExecutionApplyStart.value.artifact.applyArtifact.artifactId);
+    expect(typedPhase7ExecutionApply.ok(), "TapeScope typed phase7 execution apply read should succeed: " +
+                                               tapescope::QueryClient::describeError(typedPhase7ExecutionApply.error));
+    expect(typedPhase7ExecutionApply.value.journalArtifact.artifactId ==
+               dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId,
+           "TapeScope typed phase7 execution apply read should preserve the linked journal artifact id");
+
+    const std::vector<std::string> applyEntryIds = {
+        phase7ExecutionApplyStart.value.artifact.entries.front().applyEntryId
+    };
+    const auto missingFailureDetailsPhase7ExecutionApplyEvent = client.recordExecutionApplyEventPayload(
+        phase7ExecutionApplyStart.value.artifact.applyArtifact.artifactId,
+        applyEntryIds,
+        tape_phase7::kExecutionEntryStatusFailed,
+        "tapescope-executor-dispatch",
+        "Failed apply should require details.",
+        {},
+        {});
+    expect(!missingFailureDetailsPhase7ExecutionApplyEvent.ok(),
+           "TapeScope typed phase7 execution apply failure should require failure details");
+    expect(tapescope::QueryClient::describeError(missingFailureDetailsPhase7ExecutionApplyEvent.error)
+               .find("failure_code or failure_message") != std::string::npos,
+           "TapeScope typed phase7 execution apply failure should surface the failure-detail policy");
+
+    const auto succeededPhase7ExecutionApply = client.recordExecutionApplyEventPayload(
+        phase7ExecutionApplyStart.value.artifact.applyArtifact.artifactId,
+        applyEntryIds,
+        tape_phase7::kExecutionEntryStatusSucceeded,
+        "tapescope-executor-dispatch",
+        "Apply completed successfully.");
+    expect(succeededPhase7ExecutionApply.ok(),
+           "TapeScope typed phase7 execution apply success should succeed: " +
+               tapescope::QueryClient::describeError(succeededPhase7ExecutionApply.error));
+    expect(succeededPhase7ExecutionApply.value.artifact.applyStatus ==
+                   tape_phase7::kExecutionJournalStatusSucceeded &&
+               succeededPhase7ExecutionApply.value.artifact.entries.front().terminal,
+           "TapeScope typed phase7 execution apply success should persist terminal success state");
+
+    tapescope::Phase7ExecutionApplyInventorySelection filteredApplySelection;
+    filteredApplySelection.journalArtifactId =
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId;
+    filteredApplySelection.applyStatus = tape_phase7::kExecutionJournalStatusSucceeded;
+    filteredApplySelection.limit = 10;
+    const auto filteredPhase7ExecutionApplies = client.listExecutionApplyArtifactsPayload(filteredApplySelection);
+    expect(filteredPhase7ExecutionApplies.ok(),
+           "TapeScope filtered phase7 execution apply inventory should succeed: " +
+               tapescope::QueryClient::describeError(filteredPhase7ExecutionApplies.error));
+    expect(filteredPhase7ExecutionApplies.value.matchedCount >= 1 &&
+               !filteredPhase7ExecutionApplies.value.artifacts.empty(),
+           "TapeScope filtered phase7 execution apply inventory should return the matching succeeded apply");
+    expect(filteredPhase7ExecutionApplies.value.appliedFilters.value("execution_journal_artifact_id", std::string()) ==
+                   dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId &&
+               filteredPhase7ExecutionApplies.value.appliedFilters.value("apply_status", std::string()) ==
+                   tape_phase7::kExecutionJournalStatusSucceeded,
+           "TapeScope filtered phase7 execution apply inventory should preserve the requested journal and apply-status filters");
+
+    const auto rereadDispatchedPhase7ExecutionJournal = client.readExecutionJournalArtifactPayload(
+        dispatchPhase7ExecutionJournalStart.value.artifact.journalArtifact.artifactId);
+    expect(rereadDispatchedPhase7ExecutionJournal.ok(),
+           "TapeScope reread of the dispatch-specific execution journal should succeed after apply updates: " +
+               tapescope::QueryClient::describeError(rereadDispatchedPhase7ExecutionJournal.error));
+    expect(rereadDispatchedPhase7ExecutionJournal.value.journalStatus ==
+                   tape_phase7::kExecutionJournalStatusSucceeded &&
+               rereadDispatchedPhase7ExecutionJournal.value.entries.front().executionStatus ==
+                   tape_phase7::kExecutionEntryStatusSucceeded,
+           "TapeScope execution apply updates should synchronize the linked execution journal");
+
     tapescope::Phase7PlaybookInventorySelection filteredPlaybookSelection;
     filteredPlaybookSelection.analysisArtifactId = phase7AnalysisArtifact.analysisArtifact.artifactId;
     filteredPlaybookSelection.sourceArtifactId = phase7AnalysisArtifact.sourceArtifact.artifactId;

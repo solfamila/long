@@ -33,7 +33,7 @@ std::string DescribePhase7Profiles(const tapescope::QueryResult<std::vector<tape
 
     std::ostringstream out;
     out << "Supported Phase 7 analyzer profiles: " << result.value.size() << "\n"
-        << "Playbook apply stays deferred in TapeScope; this pane only reopens durable analysis and dry-run playbook artifacts.\n";
+        << "Playbook intent stays guarded in TapeScope; this pane supports dry-run planning plus journal-backed controlled apply artifacts.\n";
     for (const auto& profile : result.value) {
         out << "\n- " << profile.analysisProfile;
         if (profile.defaultProfile) {
@@ -117,6 +117,61 @@ std::string DescribePhase7ExecutionLedgerArtifact(const tapescope::Phase7Executi
     return out.str();
 }
 
+std::string DescribePhase7ExecutionJournalArtifact(const tapescope::Phase7ExecutionJournalArtifact& artifact) {
+    const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(artifact);
+    const auto latestAudit = tape_phase7::latestExecutionJournalAuditSummary(artifact);
+    std::ostringstream out;
+    out << tape_phase7::executionJournalArtifactMarkdown(artifact);
+    out << "\nExecution summary detail: queued=" << executionSummary.queuedCount
+        << ", submitted=" << executionSummary.submittedCount
+        << ", succeeded=" << executionSummary.succeededCount
+        << ", failed=" << executionSummary.failedCount
+        << ", cancelled=" << executionSummary.cancelledCount
+        << ", terminal=" << executionSummary.terminalCount
+        << ", actionable=" << executionSummary.actionableEntryCount
+        << ", all_terminal=" << (executionSummary.allTerminal ? "true" : "false") << "\n";
+    out << "Initiated by: " << artifact.initiatedBy
+        << "\nExecution capability: " << artifact.executionCapability
+        << "\nJournal status: " << artifact.journalStatus << "\n";
+    if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+        out << "Latest audit note: " << latestAudit.at("message").get<std::string>() << "\n";
+    }
+    if (!artifact.generatedAtUtc.empty()) {
+        out << "\nGenerated at: " << artifact.generatedAtUtc << "\n";
+    }
+    if (artifact.manifest.is_object()) {
+        out << "\nManifest:\n" << artifact.manifest.dump(2) << "\n";
+    }
+    return out.str();
+}
+
+std::string DescribePhase7ExecutionApplyArtifact(const tapescope::Phase7ExecutionApplyArtifact& artifact) {
+    const auto applySummary = tape_phase7::summarizeExecutionApplySummary(artifact);
+    const auto latestAudit = tape_phase7::latestExecutionApplyAuditSummary(artifact);
+    std::ostringstream out;
+    out << tape_phase7::executionApplyArtifactMarkdown(artifact);
+    out << "\nApply summary detail: submitted=" << applySummary.submittedCount
+        << ", succeeded=" << applySummary.succeededCount
+        << ", failed=" << applySummary.failedCount
+        << ", cancelled=" << applySummary.cancelledCount
+        << ", terminal=" << applySummary.terminalCount
+        << ", actionable=" << applySummary.actionableEntryCount
+        << ", all_terminal=" << (applySummary.allTerminal ? "true" : "false") << "\n";
+    out << "Initiated by: " << artifact.initiatedBy
+        << "\nExecution capability: " << artifact.executionCapability
+        << "\nApply status: " << artifact.applyStatus << "\n";
+    if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+        out << "Latest audit note: " << latestAudit.at("message").get<std::string>() << "\n";
+    }
+    if (!artifact.generatedAtUtc.empty()) {
+        out << "\nGenerated at: " << artifact.generatedAtUtc << "\n";
+    }
+    if (artifact.manifest.is_object()) {
+        out << "\nManifest:\n" << artifact.manifest.dump(2) << "\n";
+    }
+    return out.str();
+}
+
 std::string DescribePhase7AnalysisRun(const std::string& bundlePath,
                                       const tapescope::QueryResult<tapescope::Phase7AnalysisRunPayload>& result) {
     if (!result.ok()) {
@@ -157,6 +212,34 @@ std::string DescribePhase7ExecutionLedgerBuild(
     return out.str();
 }
 
+std::string DescribePhase7ExecutionJournalStart(
+    const std::string& executionLedgerArtifactId,
+    const tapescope::QueryResult<tapescope::Phase7ExecutionJournalStartPayload>& result) {
+    if (!result.ok()) {
+        return "Phase 7 execution journal start failed for " + executionLedgerArtifactId + "\n" +
+               tapescope::QueryClient::describeError(result.error);
+    }
+    std::ostringstream out;
+    out << "Phase 7 execution journal start for " << executionLedgerArtifactId << "\n"
+        << "artifact_status: " << (result.value.created ? "created" : "reused") << "\n\n"
+        << DescribePhase7ExecutionJournalArtifact(result.value.artifact);
+    return out.str();
+}
+
+std::string DescribePhase7ExecutionApplyStart(
+    const std::string& executionJournalArtifactId,
+    const tapescope::QueryResult<tapescope::Phase7ExecutionApplyStartPayload>& result) {
+    if (!result.ok()) {
+        return "Phase 7 execution apply start failed for " + executionJournalArtifactId + "\n" +
+               tapescope::QueryClient::describeError(result.error);
+    }
+    std::ostringstream out;
+    out << "Phase 7 execution apply start for " << executionJournalArtifactId << "\n"
+        << "artifact_status: " << (result.value.created ? "created" : "reused") << "\n\n"
+        << DescribePhase7ExecutionApplyArtifact(result.value.artifact);
+    return out.str();
+}
+
 std::string SourceArtifactIdForPlaybook(const tapescope::Phase7PlaybookArtifact& artifact,
                                         const std::vector<tapescope::Phase7AnalysisArtifact>& analysisArtifacts) {
     for (const auto& analysis : analysisArtifacts) {
@@ -168,7 +251,7 @@ std::string SourceArtifactIdForPlaybook(const tapescope::Phase7PlaybookArtifact&
 }
 
 std::string Phase7DetailPlaceholder() {
-    return "Refresh Phase 7 artifacts to browse durable analyses and dry-run playbooks created from portable bundles.";
+    return "Refresh Phase 7 artifacts to browse durable analyses, dry-run playbooks, ledgers, journals, and controlled apply artifacts created from portable bundles.";
 }
 
 std::string DescribePhase7Finding(const tapescope::Phase7FindingRecord& finding) {
@@ -241,6 +324,68 @@ std::vector<std::string> SelectedPhase7LedgerEntryIds(NSTableView* tableView,
     return selectedIds;
 }
 
+std::vector<std::string> SelectedPhase7JournalEntryIds(NSTableView* tableView,
+                                                       const std::vector<tapescope::Phase7ExecutionJournalEntry>& entries) {
+    std::vector<std::string> selectedIds;
+    if (tableView == nil) {
+        return selectedIds;
+    }
+    NSIndexSet* indexes = tableView.selectedRowIndexes;
+    for (NSUInteger idx = indexes.firstIndex; idx != NSNotFound; idx = [indexes indexGreaterThanIndex:idx]) {
+        if (idx < entries.size()) {
+            selectedIds.push_back(entries.at(idx).journalEntryId);
+        }
+    }
+    return selectedIds;
+}
+
+std::vector<std::string> SelectedPhase7SubmittedJournalEntryIds(
+    NSTableView* tableView,
+    const std::vector<tapescope::Phase7ExecutionJournalEntry>& entries) {
+    std::vector<std::string> selectedIds;
+    if (tableView == nil) {
+        return selectedIds;
+    }
+    NSIndexSet* indexes = tableView.selectedRowIndexes;
+    for (NSUInteger idx = indexes.firstIndex; idx != NSNotFound; idx = [indexes indexGreaterThanIndex:idx]) {
+        if (idx < entries.size() && entries.at(idx).executionStatus == tape_phase7::kExecutionEntryStatusSubmitted) {
+            selectedIds.push_back(entries.at(idx).journalEntryId);
+        }
+    }
+    return selectedIds;
+}
+
+std::vector<std::string> SelectedPhase7QueuedJournalEntryIds(
+    NSTableView* tableView,
+    const std::vector<tapescope::Phase7ExecutionJournalEntry>& entries) {
+    std::vector<std::string> selectedIds;
+    if (tableView == nil) {
+        return selectedIds;
+    }
+    NSIndexSet* indexes = tableView.selectedRowIndexes;
+    for (NSUInteger idx = indexes.firstIndex; idx != NSNotFound; idx = [indexes indexGreaterThanIndex:idx]) {
+        if (idx < entries.size() && entries.at(idx).executionStatus == tape_phase7::kExecutionEntryStatusQueued) {
+            selectedIds.push_back(entries.at(idx).journalEntryId);
+        }
+    }
+    return selectedIds;
+}
+
+std::vector<std::string> SelectedPhase7ApplyEntryIds(NSTableView* tableView,
+                                                     const std::vector<tapescope::Phase7ExecutionApplyEntry>& entries) {
+    std::vector<std::string> selectedIds;
+    if (tableView == nil) {
+        return selectedIds;
+    }
+    NSIndexSet* indexes = tableView.selectedRowIndexes;
+    for (NSUInteger idx = indexes.firstIndex; idx != NSNotFound; idx = [indexes indexGreaterThanIndex:idx]) {
+        if (idx < entries.size()) {
+            selectedIds.push_back(entries.at(idx).applyEntryId);
+        }
+    }
+    return selectedIds;
+}
+
 NSIndexSet* IndexSetForPhase7FindingIds(const std::vector<std::string>& selectedIds,
                                         const std::vector<tapescope::Phase7FindingRecord>& findings) {
     NSMutableIndexSet* indexes = [NSMutableIndexSet indexSet];
@@ -273,6 +418,32 @@ NSIndexSet* IndexSetForPhase7LedgerEntryIds(const std::vector<std::string>& sele
     if (!selectedIds.empty()) {
         for (std::size_t index = 0; index < entries.size(); ++index) {
             if (std::find(selectedIds.begin(), selectedIds.end(), entries[index].entryId) != selectedIds.end()) {
+                [indexes addIndex:index];
+            }
+        }
+    }
+    return indexes;
+}
+
+NSIndexSet* IndexSetForPhase7JournalEntryIds(const std::vector<std::string>& selectedIds,
+                                             const std::vector<tapescope::Phase7ExecutionJournalEntry>& entries) {
+    NSMutableIndexSet* indexes = [NSMutableIndexSet indexSet];
+    if (!selectedIds.empty()) {
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            if (std::find(selectedIds.begin(), selectedIds.end(), entries[index].journalEntryId) != selectedIds.end()) {
+                [indexes addIndex:index];
+            }
+        }
+    }
+    return indexes;
+}
+
+NSIndexSet* IndexSetForPhase7ApplyEntryIds(const std::vector<std::string>& selectedIds,
+                                           const std::vector<tapescope::Phase7ExecutionApplyEntry>& entries) {
+    NSMutableIndexSet* indexes = [NSMutableIndexSet indexSet];
+    if (!selectedIds.empty()) {
+        for (std::size_t index = 0; index < entries.size(); ++index) {
+            if (std::find(selectedIds.begin(), selectedIds.end(), entries[index].applyEntryId) != selectedIds.end()) {
                 [indexes addIndex:index];
             }
         }
@@ -370,6 +541,96 @@ std::string DescribePhase7LedgerEntry(const tapescope::Phase7ExecutionLedgerEntr
     return out.str();
 }
 
+std::string DescribePhase7JournalEntry(const tapescope::Phase7ExecutionJournalEntry& entry) {
+    std::ostringstream out;
+    out << "journal_entry_id: " << entry.journalEntryId << "\n"
+        << "ledger_entry_id: " << entry.ledgerEntryId << "\n"
+        << "action_id: " << entry.actionId << "\n"
+        << "action_type: " << entry.actionType << "\n"
+        << "finding_id: " << entry.findingId << "\n"
+        << "execution_status: " << entry.executionStatus << "\n"
+        << "attempt_count: " << entry.attemptCount << "\n"
+        << "terminal: " << (entry.terminal ? "true" : "false") << "\n"
+        << "requires_manual_confirmation: " << (entry.requiresManualConfirmation ? "true" : "false") << "\n"
+        << "title: " << entry.title << "\n"
+        << "summary: " << entry.summary << "\n";
+    if (!entry.idempotencyKey.empty()) {
+        out << "idempotency_key: " << entry.idempotencyKey << "\n";
+    }
+    if (!entry.queuedAtUtc.empty()) {
+        out << "queued_at_utc: " << entry.queuedAtUtc << "\n";
+    }
+    if (!entry.startedAtUtc.empty()) {
+        out << "started_at_utc: " << entry.startedAtUtc << "\n";
+    }
+    if (!entry.completedAtUtc.empty()) {
+        out << "completed_at_utc: " << entry.completedAtUtc << "\n";
+    }
+    if (!entry.lastUpdatedAtUtc.empty()) {
+        out << "last_updated_at_utc: " << entry.lastUpdatedAtUtc << "\n";
+    }
+    if (!entry.lastUpdatedBy.empty()) {
+        out << "last_updated_by: " << entry.lastUpdatedBy << "\n";
+    }
+    if (!entry.executionComment.empty()) {
+        out << "execution_comment: " << entry.executionComment << "\n";
+    }
+    if (!entry.failureCode.empty()) {
+        out << "failure_code: " << entry.failureCode << "\n";
+    }
+    if (!entry.failureMessage.empty()) {
+        out << "failure_message: " << entry.failureMessage << "\n";
+    }
+    if (entry.suggestedTools.is_array() && !entry.suggestedTools.empty()) {
+        out << "suggested_tools:\n" << entry.suggestedTools.dump(2) << "\n";
+    }
+    return out.str();
+}
+
+std::string DescribePhase7ApplyEntry(const tapescope::Phase7ExecutionApplyEntry& entry) {
+    std::ostringstream out;
+    out << "apply_entry_id: " << entry.applyEntryId << "\n"
+        << "journal_entry_id: " << entry.journalEntryId << "\n"
+        << "ledger_entry_id: " << entry.ledgerEntryId << "\n"
+        << "action_id: " << entry.actionId << "\n"
+        << "action_type: " << entry.actionType << "\n"
+        << "finding_id: " << entry.findingId << "\n"
+        << "execution_status: " << entry.executionStatus << "\n"
+        << "attempt_count: " << entry.attemptCount << "\n"
+        << "terminal: " << (entry.terminal ? "true" : "false") << "\n"
+        << "requires_manual_confirmation: " << (entry.requiresManualConfirmation ? "true" : "false") << "\n"
+        << "title: " << entry.title << "\n"
+        << "summary: " << entry.summary << "\n";
+    if (!entry.idempotencyKey.empty()) {
+        out << "idempotency_key: " << entry.idempotencyKey << "\n";
+    }
+    if (!entry.submittedAtUtc.empty()) {
+        out << "submitted_at_utc: " << entry.submittedAtUtc << "\n";
+    }
+    if (!entry.completedAtUtc.empty()) {
+        out << "completed_at_utc: " << entry.completedAtUtc << "\n";
+    }
+    if (!entry.lastUpdatedAtUtc.empty()) {
+        out << "last_updated_at_utc: " << entry.lastUpdatedAtUtc << "\n";
+    }
+    if (!entry.lastUpdatedBy.empty()) {
+        out << "last_updated_by: " << entry.lastUpdatedBy << "\n";
+    }
+    if (!entry.executionComment.empty()) {
+        out << "execution_comment: " << entry.executionComment << "\n";
+    }
+    if (!entry.failureCode.empty()) {
+        out << "failure_code: " << entry.failureCode << "\n";
+    }
+    if (!entry.failureMessage.empty()) {
+        out << "failure_message: " << entry.failureMessage << "\n";
+    }
+    if (entry.suggestedTools.is_array() && !entry.suggestedTools.empty()) {
+        out << "suggested_tools:\n" << entry.suggestedTools.dump(2) << "\n";
+    }
+    return out.str();
+}
+
 std::string DescribeSelectedPhase7LedgerEntries(const std::vector<tapescope::Phase7ExecutionLedgerEntry>& entries,
                                                 NSIndexSet* selectedIndexes) {
     if (entries.empty()) {
@@ -402,7 +663,78 @@ std::string DescribeSelectedPhase7LedgerEntries(const std::vector<tapescope::Pha
     return out.str();
 }
 
+std::string DescribeSelectedPhase7JournalEntries(const std::vector<tapescope::Phase7ExecutionJournalEntry>& entries,
+                                                 NSIndexSet* selectedIndexes) {
+    if (entries.empty()) {
+        return "No execution-journal entries are available for this artifact.";
+    }
+    if (selectedIndexes == nil || selectedIndexes.count == 0) {
+        std::ostringstream out;
+        out << "Execution entries available: " << entries.size()
+            << ". Select one or more rows to record append-only execution lifecycle events.\n";
+        return out.str();
+    }
+    std::ostringstream out;
+    out << "Selected execution entries: " << selectedIndexes.count << "\n";
+    NSUInteger rendered = 0;
+    for (NSUInteger idx = selectedIndexes.firstIndex; idx != NSNotFound; idx = [selectedIndexes indexGreaterThanIndex:idx]) {
+        if (idx >= entries.size()) {
+            continue;
+        }
+        if (rendered > 0) {
+            out << "\n";
+        }
+        out << DescribePhase7JournalEntry(entries.at(idx));
+        ++rendered;
+        if (rendered >= 3 && selectedIndexes.count > 3) {
+            out << "\n… " << (selectedIndexes.count - rendered) << " more selected journal entr";
+            out << (selectedIndexes.count - rendered == 1 ? "y" : "ies");
+            break;
+        }
+    }
+    return out.str();
+}
+
+std::string DescribeSelectedPhase7ApplyEntries(const std::vector<tapescope::Phase7ExecutionApplyEntry>& entries,
+                                               NSIndexSet* selectedIndexes) {
+    if (entries.empty()) {
+        return "No controlled apply entries are available for this artifact.";
+    }
+    if (selectedIndexes == nil || selectedIndexes.count == 0) {
+        std::ostringstream out;
+        out << "Apply entries available: " << entries.size()
+            << ". Select one or more rows to record append-only apply lifecycle events.\n";
+        return out.str();
+    }
+    std::ostringstream out;
+    out << "Selected apply entries: " << selectedIndexes.count << "\n";
+    NSUInteger rendered = 0;
+    for (NSUInteger idx = selectedIndexes.firstIndex; idx != NSNotFound; idx = [selectedIndexes indexGreaterThanIndex:idx]) {
+        if (idx >= entries.size()) {
+            continue;
+        }
+        if (rendered > 0) {
+            out << "\n";
+        }
+        out << DescribePhase7ApplyEntry(entries.at(idx));
+        ++rendered;
+        if (rendered >= 3 && selectedIndexes.count > 3) {
+            out << "\n… " << (selectedIndexes.count - rendered) << " more selected apply entr";
+            out << (selectedIndexes.count - rendered == 1 ? "y" : "ies");
+            break;
+        }
+    }
+    return out.str();
+}
+
 std::string SelectedPhase7ReviewStatus(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return {};
+    }
+    return TrimAscii(ToStdString(popup.titleOfSelectedItem));
+}
+
+std::string SelectedPhase7ExecutionStatus(NSPopUpButton* popup) {
     if (popup == nil || popup.titleOfSelectedItem == nil) {
         return {};
     }
@@ -498,15 +830,41 @@ std::string SelectedPhase7LedgerSort(NSPopUpButton* popup) {
     return "generated_at_desc";
 }
 
+std::string SelectedPhase7JournalStatusFilter(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return {};
+    }
+    const std::string value = ToStdString(popup.titleOfSelectedItem);
+    return value == "All Journals" ? std::string() : value;
+}
+
+std::string SelectedPhase7JournalSort(NSPopUpButton* popup) {
+    if (popup == nil || popup.titleOfSelectedItem == nil) {
+        return "generated_at_desc";
+    }
+    const std::string value = ToStdString(popup.titleOfSelectedItem);
+    if (value == "Needs Attention") {
+        return "attention_desc";
+    }
+    if (value == "Source Artifact") {
+        return "source_artifact_asc";
+    }
+    return "generated_at_desc";
+}
+
 std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInventoryPayload& analyses,
                                           const tapescope::Phase7PlaybookInventoryPayload& playbooks,
-                                          const tapescope::Phase7ExecutionLedgerInventoryPayload& ledgers) {
+                                          const tapescope::Phase7ExecutionLedgerInventoryPayload& ledgers,
+                                          const tapescope::Phase7ExecutionJournalInventoryPayload& journals,
+                                          const tapescope::Phase7ExecutionApplyInventoryPayload& applies) {
     std::ostringstream out;
     out << "Phase 7 inventory loaded. "
         << "Analyses: " << analyses.artifacts.size() << "/" << analyses.matchedCount
         << " matched. Playbooks: " << playbooks.artifacts.size() << "/" << playbooks.matchedCount
         << " matched. Ledgers: " << ledgers.artifacts.size() << "/" << ledgers.matchedCount
-        << " matched. Execution remains deferred; ledger entries capture append-only review decisions only.";
+        << " matched. Journals: " << journals.artifacts.size() << "/" << journals.matchedCount
+        << " matched. Applies: " << applies.artifacts.size() << "/" << applies.matchedCount
+        << " matched. Controlled apply stays journal-backed and append-only.";
     return out.str();
 }
 
@@ -519,7 +877,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     NSStackView* stack = paneWithStack.stack;
     NSView* pane = paneWithStack.view;
 
-    [stack addArrangedSubview:MakeIntroLabel(@"Phase 7 artifact inventory: reopen durable local analysis and playbook artifacts created from Phase 6 bundles, then prepare review-only execution ledgers from guarded playbooks. TapeScope keeps playbook apply deferred and only surfaces audit/reopen flows here.",
+    [stack addArrangedSubview:MakeIntroLabel(@"Phase 7 artifact inventory: reopen durable local analysis and playbook artifacts created from Phase 6 bundles, prepare review-only execution ledgers from guarded playbooks, then move through append-only execution journals and controlled apply artifacts once review thresholds are satisfied.",
                                              2)];
 
     NSStackView* controls = MakeControlRow();
@@ -565,6 +923,18 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7BuildLedgerButton.enabled = NO;
     [controls addArrangedSubview:_phase7BuildLedgerButton];
 
+    _phase7StartJournalButton = [NSButton buttonWithTitle:@"Start Execution Journal"
+                                                   target:self
+                                                   action:@selector(startSelectedPhase7ExecutionJournal:)];
+    _phase7StartJournalButton.enabled = NO;
+    [controls addArrangedSubview:_phase7StartJournalButton];
+
+    _phase7StartApplyButton = [NSButton buttonWithTitle:@"Start Apply"
+                                                 target:self
+                                                 action:@selector(startSelectedPhase7ExecutionApply:)];
+    _phase7StartApplyButton.enabled = NO;
+    [controls addArrangedSubview:_phase7StartApplyButton];
+
     _phase7OpenAnalysisButton = [NSButton buttonWithTitle:@"Open Selected Analysis"
                                                    target:self
                                                    action:@selector(openSelectedPhase7Analysis:)];
@@ -583,6 +953,18 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7OpenLedgerButton.enabled = NO;
     [controls addArrangedSubview:_phase7OpenLedgerButton];
 
+    _phase7OpenJournalButton = [NSButton buttonWithTitle:@"Open Selected Journal"
+                                                  target:self
+                                                  action:@selector(openSelectedPhase7ExecutionJournal:)];
+    _phase7OpenJournalButton.enabled = NO;
+    [controls addArrangedSubview:_phase7OpenJournalButton];
+
+    _phase7OpenApplyButton = [NSButton buttonWithTitle:@"Open Selected Apply"
+                                                target:self
+                                                action:@selector(openSelectedPhase7ExecutionApply:)];
+    _phase7OpenApplyButton.enabled = NO;
+    [controls addArrangedSubview:_phase7OpenApplyButton];
+
     _phase7OpenSourceArtifactButton = [NSButton buttonWithTitle:@"Open Source Artifact"
                                                          target:self
                                                          action:@selector(openSelectedPhase7SourceArtifact:)];
@@ -595,12 +977,34 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7OpenLinkedAnalysisButton.enabled = NO;
     [controls addArrangedSubview:_phase7OpenLinkedAnalysisButton];
 
+    _phase7OpenLinkedLedgerButton = [NSButton buttonWithTitle:@"Open Linked Ledger"
+                                                       target:self
+                                                       action:@selector(openSelectedPhase7LinkedLedger:)];
+    _phase7OpenLinkedLedgerButton.enabled = NO;
+    [controls addArrangedSubview:_phase7OpenLinkedLedgerButton];
+
+    _phase7OpenLinkedJournalButton = [NSButton buttonWithTitle:@"Open Linked Journal"
+                                                        target:self
+                                                        action:@selector(openSelectedPhase7LinkedJournal:)];
+    _phase7OpenLinkedJournalButton.enabled = NO;
+    [controls addArrangedSubview:_phase7OpenLinkedJournalButton];
+
     _phase7LoadRangeButton = [NSButton buttonWithTitle:@"Load Replay Range"
                                                 target:self
                                                 action:@selector(loadReplayRangeFromPhase7Selection:)];
     _phase7LoadRangeButton.enabled = NO;
     [controls addArrangedSubview:_phase7LoadRangeButton];
     [stack addArrangedSubview:controls];
+
+    NSStackView* journalControls = MakeControlRow();
+    [journalControls addArrangedSubview:MakeLabel(@"journal start",
+                                                  [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                  [NSColor secondaryLabelColor])];
+    _phase7JournalActorField = MakeMonospacedField(160.0, @"tapescope", @"actor");
+    [journalControls addArrangedSubview:_phase7JournalActorField];
+    _phase7ExecutionCapabilityField = MakeMonospacedField(240.0, @"phase7.execution_operator.v1", @"execution capability");
+    [journalControls addArrangedSubview:_phase7ExecutionCapabilityField];
+    [stack addArrangedSubview:journalControls];
 
     NSStackView* reviewControls = MakeControlRow();
     [reviewControls addArrangedSubview:MakeLabel(@"ledger review",
@@ -619,6 +1023,43 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7RecordReviewButton.enabled = NO;
     [reviewControls addArrangedSubview:_phase7RecordReviewButton];
     [stack addArrangedSubview:reviewControls];
+
+    NSStackView* executionControls = MakeControlRow();
+    [executionControls addArrangedSubview:MakeLabel(@"execution event",
+                                                    [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                    [NSColor secondaryLabelColor])];
+    _phase7ExecutionStatusPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 170, 24) pullsDown:NO];
+    [_phase7ExecutionStatusPopup addItemsWithTitles:@[@"queued",
+                                                      @"submitted",
+                                                      @"succeeded",
+                                                      @"failed",
+                                                      @"cancelled"]];
+    [executionControls addArrangedSubview:_phase7ExecutionStatusPopup];
+    _phase7ExecutionActorField = MakeMonospacedField(160.0, @"tapescope", @"actor");
+    [executionControls addArrangedSubview:_phase7ExecutionActorField];
+    _phase7ExecutionCommentField = MakeMonospacedField(260.0, nil, @"execution comment");
+    [executionControls addArrangedSubview:_phase7ExecutionCommentField];
+    _phase7ExecutionFailureCodeField = MakeMonospacedField(160.0, nil, @"failure code");
+    [executionControls addArrangedSubview:_phase7ExecutionFailureCodeField];
+    _phase7ExecutionFailureMessageField = MakeMonospacedField(240.0, nil, @"failure message");
+    [executionControls addArrangedSubview:_phase7ExecutionFailureMessageField];
+    _phase7DispatchJournalButton = [NSButton buttonWithTitle:@"Dispatch Selected"
+                                                      target:self
+                                                      action:@selector(dispatchSelectedPhase7JournalEntries:)];
+    _phase7DispatchJournalButton.enabled = NO;
+    [executionControls addArrangedSubview:_phase7DispatchJournalButton];
+    _phase7RecordExecutionButton = [NSButton buttonWithTitle:@"Record Execution Event"
+                                                      target:self
+                                                      action:@selector(recordSelectedPhase7JournalEvent:)];
+    _phase7RecordExecutionButton.enabled = NO;
+    [executionControls addArrangedSubview:_phase7RecordExecutionButton];
+
+    _phase7RecordApplyButton = [NSButton buttonWithTitle:@"Record Apply Event"
+                                                  target:self
+                                                  action:@selector(recordSelectedPhase7ApplyEvent:)];
+    _phase7RecordApplyButton.enabled = NO;
+    [executionControls addArrangedSubview:_phase7RecordApplyButton];
+    [stack addArrangedSubview:executionControls];
 
     _phase7StateLabel = MakeLabel(@"No Phase 7 artifacts loaded yet.",
                                   [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
@@ -678,6 +1119,26 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     [ledgerFilters addArrangedSubview:_phase7LedgerSortPopup];
     [stack addArrangedSubview:ledgerFilters];
 
+    NSStackView* journalFilters = MakeControlRow();
+    [journalFilters addArrangedSubview:MakeLabel(@"journal filters",
+                                                 [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                 [NSColor secondaryLabelColor])];
+    _phase7JournalLedgerFilterField = MakeMonospacedField(240.0, nil, @"execution_ledger_artifact_id");
+    [journalFilters addArrangedSubview:_phase7JournalLedgerFilterField];
+    _phase7JournalStatusFilterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24) pullsDown:NO];
+    [_phase7JournalStatusFilterPopup addItemsWithTitles:@[@"All Journals",
+                                                          @"execution_queued",
+                                                          @"execution_in_progress",
+                                                          @"execution_succeeded",
+                                                          @"execution_partially_succeeded",
+                                                          @"execution_failed",
+                                                          @"execution_cancelled"]];
+    [journalFilters addArrangedSubview:_phase7JournalStatusFilterPopup];
+    _phase7JournalSortPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24) pullsDown:NO];
+    [_phase7JournalSortPopup addItemsWithTitles:@[@"Newest First", @"Needs Attention", @"Source Artifact"]];
+    [journalFilters addArrangedSubview:_phase7JournalSortPopup];
+    [stack addArrangedSubview:journalFilters];
+
     [stack addArrangedSubview:MakeSectionLabel(@"Analyzer Profiles")];
 
     _phase7ProfilesTextView = MakeReadOnlyTextView();
@@ -720,6 +1181,31 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     ConfigureTablePrimaryAction(_phase7LedgerTableView, self, @selector(openSelectedPhase7ExecutionLedger:));
     [stack addArrangedSubview:MakeTableScrollView(_phase7LedgerTableView, 150.0)];
 
+    [stack addArrangedSubview:MakeSectionLabel(@"Execution Journals")];
+
+    _phase7JournalTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_phase7JournalTableView, @"artifact_id", @"artifact_id", 220.0);
+    AddTableColumn(_phase7JournalTableView, @"ledger_artifact_id", @"ledger_artifact_id", 220.0);
+    AddTableColumn(_phase7JournalTableView, @"journal_status", @"journal_status", 170.0);
+    AddTableColumn(_phase7JournalTableView, @"queued_count", @"queued", 90.0);
+    AddTableColumn(_phase7JournalTableView, @"submitted_count", @"submitted", 90.0);
+    AddTableColumn(_phase7JournalTableView, @"terminal_count", @"terminal", 90.0);
+    AddTableColumn(_phase7JournalTableView, @"latest_audit_event", @"latest_audit", 320.0);
+    ConfigureTablePrimaryAction(_phase7JournalTableView, self, @selector(openSelectedPhase7ExecutionJournal:));
+    [stack addArrangedSubview:MakeTableScrollView(_phase7JournalTableView, 150.0)];
+
+    [stack addArrangedSubview:MakeSectionLabel(@"Execution Applies")];
+
+    _phase7ApplyTableView = MakeStandardTableView(self, self);
+    AddTableColumn(_phase7ApplyTableView, @"artifact_id", @"artifact_id", 220.0);
+    AddTableColumn(_phase7ApplyTableView, @"journal_artifact_id", @"journal_artifact_id", 220.0);
+    AddTableColumn(_phase7ApplyTableView, @"apply_status", @"apply_status", 170.0);
+    AddTableColumn(_phase7ApplyTableView, @"submitted_count", @"submitted", 90.0);
+    AddTableColumn(_phase7ApplyTableView, @"terminal_count", @"terminal", 90.0);
+    AddTableColumn(_phase7ApplyTableView, @"latest_audit_event", @"latest_audit", 320.0);
+    ConfigureTablePrimaryAction(_phase7ApplyTableView, self, @selector(openSelectedPhase7ExecutionApply:));
+    [stack addArrangedSubview:MakeTableScrollView(_phase7ApplyTableView, 150.0)];
+
     [stack addArrangedSubview:MakeSectionLabel(@"Selected Findings")];
 
     _phase7FindingTableView = MakeStandardTableView(self, self);
@@ -737,7 +1223,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     AddTableColumn(_phase7ActionTableView, @"action_id", @"action_id", 220.0);
     AddTableColumn(_phase7ActionTableView, @"action_type", @"action_type", 220.0);
     AddTableColumn(_phase7ActionTableView, @"finding_id", @"finding_id", 220.0);
-    AddTableColumn(_phase7ActionTableView, @"review_status", @"review_status", 140.0);
+    AddTableColumn(_phase7ActionTableView, @"review_status", @"status", 140.0);
     AddTableColumn(_phase7ActionTableView, @"title", @"title", 260.0);
     [stack addArrangedSubview:MakeTableScrollView(_phase7ActionTableView, 140.0)];
 
@@ -779,20 +1265,47 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     ledgerSelection.sortBy = SelectedPhase7LedgerSort(_phase7LedgerSortPopup);
     ledgerSelection.limit = 20;
 
+    tapescope::Phase7ExecutionJournalInventorySelection journalSelection;
+    journalSelection.ledgerArtifactId = TrimAscii(ToStdString(_phase7JournalLedgerFilterField.stringValue));
+    journalSelection.playbookArtifactId.clear();
+    journalSelection.analysisArtifactId = playbookSelection.analysisArtifactId;
+    journalSelection.sourceArtifactId = playbookSelection.sourceArtifactId;
+    journalSelection.journalStatus = SelectedPhase7JournalStatusFilter(_phase7JournalStatusFilterPopup);
+    journalSelection.sortBy = SelectedPhase7JournalSort(_phase7JournalSortPopup);
+    journalSelection.limit = 20;
+
+    tapescope::Phase7ExecutionApplyInventorySelection applySelection;
+    applySelection.journalArtifactId.clear();
+    applySelection.ledgerArtifactId = journalSelection.ledgerArtifactId;
+    applySelection.playbookArtifactId.clear();
+    applySelection.analysisArtifactId = playbookSelection.analysisArtifactId;
+    applySelection.sourceArtifactId = playbookSelection.sourceArtifactId;
+    applySelection.sortBy = "generated_at_desc";
+    applySelection.limit = 20;
+
     _phase7InFlight = YES;
     const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
     _phase7RefreshButton.enabled = NO;
     _phase7OpenAnalysisButton.enabled = NO;
     _phase7OpenPlaybookButton.enabled = NO;
     _phase7OpenLedgerButton.enabled = NO;
+    _phase7OpenJournalButton.enabled = NO;
     _phase7BuildLedgerButton.enabled = NO;
+    _phase7StartJournalButton.enabled = NO;
+    _phase7StartApplyButton.enabled = NO;
     _phase7OpenSourceArtifactButton.enabled = NO;
     _phase7OpenLinkedAnalysisButton.enabled = NO;
+    _phase7OpenLinkedLedgerButton.enabled = NO;
+    _phase7OpenLinkedJournalButton.enabled = NO;
+    _phase7OpenApplyButton.enabled = NO;
     _phase7LoadRangeButton.enabled = NO;
     _phase7RecordReviewButton.enabled = NO;
+    _phase7DispatchJournalButton.enabled = NO;
+    _phase7RecordExecutionButton.enabled = NO;
+    _phase7RecordApplyButton.enabled = NO;
     _phase7StateLabel.stringValue = @"Refreshing Phase 7 artifact inventory…";
     _phase7StateLabel.textColor = [NSColor systemOrangeColor];
-    _phase7TextView.string = @"Refreshing durable Phase 7 analyses, playbooks, and review ledgers…";
+    _phase7TextView.string = @"Refreshing durable Phase 7 analyses, playbooks, ledgers, journals, and controlled apply artifacts…";
 
     __weak TapeScopeWindowController* weakSelf = self;
     dispatch_async(_artifactQueue, ^{
@@ -804,6 +1317,8 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         const auto analyses = strongSelf->_client->listAnalysisArtifactsPayload(analysisSelection);
         const auto playbooks = strongSelf->_client->listPlaybookArtifactsPayload(playbookSelection);
         const auto ledgers = strongSelf->_client->listExecutionLedgerArtifactsPayload(ledgerSelection);
+        const auto journals = strongSelf->_client->listExecutionJournalArtifactsPayload(journalSelection);
+        const auto applies = strongSelf->_client->listExecutionApplyArtifactsPayload(applySelection);
         dispatch_async(dispatch_get_main_queue(), ^{
             TapeScopeWindowController* innerSelf = weakSelf;
             if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
@@ -815,6 +1330,8 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
             innerSelf->_latestPhase7AnalysisArtifacts.clear();
             innerSelf->_latestPhase7PlaybookArtifacts.clear();
             innerSelf->_latestPhase7ExecutionLedgers.clear();
+            innerSelf->_latestPhase7ExecutionJournals.clear();
+            innerSelf->_latestPhase7ExecutionApplies.clear();
             if (profiles.ok()) {
                 innerSelf->_latestPhase7Profiles = profiles.value;
             }
@@ -826,6 +1343,12 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
             }
             if (ledgers.ok()) {
                 innerSelf->_latestPhase7ExecutionLedgers = ledgers.value.artifacts;
+            }
+            if (journals.ok()) {
+                innerSelf->_latestPhase7ExecutionJournals = journals.value.artifacts;
+            }
+            if (applies.ok()) {
+                innerSelf->_latestPhase7ExecutionApplies = applies.value.artifacts;
             }
             innerSelf->_phase7ProfilesTextView.string = ToNSString(DescribePhase7Profiles(profiles));
             const std::string requestedFilterProfile = analysisSelection.analysisProfile;
@@ -863,31 +1386,57 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
             [innerSelf->_phase7AnalysisTableView reloadData];
             [innerSelf->_phase7PlaybookTableView reloadData];
             [innerSelf->_phase7LedgerTableView reloadData];
+            [innerSelf->_phase7JournalTableView reloadData];
+            [innerSelf->_phase7ApplyTableView reloadData];
             if (!innerSelf->_latestPhase7AnalysisArtifacts.empty()) {
                 innerSelf->_phase7SelectionIsPlaybook = NO;
                 innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
+                innerSelf->_phase7SelectionIsApply = NO;
                 [innerSelf->_phase7AnalysisTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                 byExtendingSelection:NO];
             } else if (!innerSelf->_latestPhase7PlaybookArtifacts.empty()) {
                 innerSelf->_phase7SelectionIsPlaybook = YES;
                 innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
+                innerSelf->_phase7SelectionIsApply = NO;
                 [innerSelf->_phase7PlaybookTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                  byExtendingSelection:NO];
             } else if (!innerSelf->_latestPhase7ExecutionLedgers.empty()) {
                 innerSelf->_phase7SelectionIsPlaybook = NO;
                 innerSelf->_phase7SelectionIsLedger = YES;
+                innerSelf->_phase7SelectionIsJournal = NO;
+                innerSelf->_phase7SelectionIsApply = NO;
                 [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                byExtendingSelection:NO];
+            } else if (!innerSelf->_latestPhase7ExecutionJournals.empty()) {
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = YES;
+                innerSelf->_phase7SelectionIsApply = NO;
+                [innerSelf->_phase7JournalTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                                byExtendingSelection:NO];
+            } else if (!innerSelf->_latestPhase7ExecutionApplies.empty()) {
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
+                innerSelf->_phase7SelectionIsApply = YES;
+                [innerSelf->_phase7ApplyTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                              byExtendingSelection:NO];
             }
 
-            if (profiles.ok() || analyses.ok() || playbooks.ok() || ledgers.ok()) {
+            if (profiles.ok() || analyses.ok() || playbooks.ok() || ledgers.ok() || journals.ok() || applies.ok()) {
                 if (!innerSelf->_latestPhase7AnalysisArtifacts.empty() ||
                     !innerSelf->_latestPhase7PlaybookArtifacts.empty() ||
-                    !innerSelf->_latestPhase7ExecutionLedgers.empty()) {
+                    !innerSelf->_latestPhase7ExecutionLedgers.empty() ||
+                    !innerSelf->_latestPhase7ExecutionJournals.empty() ||
+                    !innerSelf->_latestPhase7ExecutionApplies.empty()) {
                     innerSelf->_phase7StateLabel.stringValue = ToNSString(DescribePhase7InventoryStatus(
                         analyses.ok() ? analyses.value : tapescope::Phase7AnalysisInventoryPayload{},
                         playbooks.ok() ? playbooks.value : tapescope::Phase7PlaybookInventoryPayload{},
-                        ledgers.ok() ? ledgers.value : tapescope::Phase7ExecutionLedgerInventoryPayload{}));
+                        ledgers.ok() ? ledgers.value : tapescope::Phase7ExecutionLedgerInventoryPayload{},
+                        journals.ok() ? journals.value : tapescope::Phase7ExecutionJournalInventoryPayload{},
+                        applies.ok() ? applies.value : tapescope::Phase7ExecutionApplyInventoryPayload{}));
                     innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
                 } else {
                     innerSelf->_phase7StateLabel.stringValue =
@@ -896,9 +1445,11 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                          playbookSelection.analysisArtifactId.empty() &&
                          playbookSelection.sourceArtifactId.empty() &&
                          playbookSelection.mode.empty() &&
-                         ledgerSelection.ledgerStatus.empty())
-                            ? @"No Phase 7 analysis, playbook, or ledger artifacts are available yet."
-                            : @"Phase 7 filters matched no analysis, playbook, or ledger artifacts.";
+                         ledgerSelection.ledgerStatus.empty() &&
+                         journalSelection.ledgerArtifactId.empty() &&
+                         journalSelection.journalStatus.empty())
+                            ? @"No Phase 7 analysis, playbook, ledger, execution-journal, or controlled-apply artifacts are available yet."
+                            : @"Phase 7 filters matched no analysis, playbook, ledger, execution-journal, or controlled-apply artifacts.";
                     innerSelf->_phase7StateLabel.textColor = TapeInkMutedColor();
                 }
             } else {
@@ -921,6 +1472,9 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     [_phase7PlaybookSortPopup selectItemWithTitle:@"Newest First"];
     [_phase7LedgerStatusFilterPopup selectItemWithTitle:@"All Ledgers"];
     [_phase7LedgerSortPopup selectItemWithTitle:@"Newest First"];
+    _phase7JournalLedgerFilterField.stringValue = @"";
+    [_phase7JournalStatusFilterPopup selectItemWithTitle:@"All Journals"];
+    [_phase7JournalSortPopup selectItemWithTitle:@"Newest First"];
     [self refreshPhase7Artifacts:nil];
 }
 
@@ -943,25 +1497,36 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         SelectedPhase7ActionIds(_phase7ActionTableView, _phase7VisibleActions);
     const std::vector<std::string> selectedLedgerEntryIds =
         SelectedPhase7LedgerEntryIds(_phase7ActionTableView, _phase7VisibleLedgerEntries);
+    const std::vector<std::string> selectedJournalEntryIds =
+        SelectedPhase7JournalEntryIds(_phase7ActionTableView, _phase7VisibleJournalEntries);
+    const std::vector<std::string> selectedApplyEntryIds =
+        SelectedPhase7ApplyEntryIds(_phase7ActionTableView, _phase7VisibleApplyEntries);
     _phase7SelectedSourceArtifactId.clear();
     _phase7SelectedLinkedAnalysisArtifactId.clear();
     _phase7SelectedLinkedPlaybookArtifactId.clear();
+    _phase7SelectedLinkedLedgerArtifactId.clear();
+    _phase7SelectedLinkedJournalArtifactId.clear();
     _phase7ReplayRange = {};
     _phase7VisibleFindings.clear();
     _phase7VisibleActions.clear();
     _phase7VisibleLedgerEntries.clear();
+    _phase7VisibleJournalEntries.clear();
+    _phase7VisibleApplyEntries.clear();
 
     const NSInteger analysisSelected = _phase7AnalysisTableView.selectedRow;
     if (analysisSelected >= 0 &&
         static_cast<std::size_t>(analysisSelected) < _latestPhase7AnalysisArtifacts.size() &&
         _phase7SelectionIsPlaybook == NO &&
-        _phase7SelectionIsLedger == NO) {
+        _phase7SelectionIsLedger == NO &&
+        _phase7SelectionIsJournal == NO) {
         const auto& artifact = _latestPhase7AnalysisArtifacts.at(static_cast<std::size_t>(analysisSelected));
         _phase7DetailBody = DescribePhase7AnalysisArtifact(artifact);
         _phase7VisibleFindings = artifact.findings;
         _phase7SelectedSourceArtifactId = artifact.sourceArtifact.artifactId;
         _phase7SelectedLinkedAnalysisArtifactId.clear();
         _phase7SelectedLinkedPlaybookArtifactId.clear();
+        _phase7SelectedLinkedLedgerArtifactId.clear();
+        _phase7SelectedLinkedJournalArtifactId.clear();
         if (const auto replayRange = ReplayRangeFromPhase7Context(artifact.replayContext); replayRange.has_value()) {
             _phase7ReplayRange = *replayRange;
             _phase7LoadRangeButton.enabled = YES;
@@ -970,14 +1535,23 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         }
         _phase7BuildPlaybookButton.enabled = YES;
         _phase7BuildLedgerButton.enabled = NO;
+        _phase7StartJournalButton.enabled = NO;
+        _phase7StartApplyButton.enabled = NO;
         UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, selectedFindingIds.size());
         _phase7OpenAnalysisButton.enabled = YES;
         _phase7OpenPlaybookButton.title = @"Open Selected Playbook";
         _phase7OpenPlaybookButton.enabled = NO;
         _phase7OpenLedgerButton.enabled = NO;
+        _phase7OpenJournalButton.enabled = NO;
+        _phase7OpenApplyButton.enabled = NO;
         _phase7OpenSourceArtifactButton.enabled = !_phase7SelectedSourceArtifactId.empty();
         _phase7OpenLinkedAnalysisButton.enabled = NO;
+        _phase7OpenLinkedLedgerButton.enabled = NO;
+        _phase7OpenLinkedJournalButton.enabled = NO;
         _phase7RecordReviewButton.enabled = NO;
+        _phase7DispatchJournalButton.enabled = NO;
+        _phase7RecordExecutionButton.enabled = NO;
+        _phase7RecordApplyButton.enabled = NO;
         [_phase7FindingTableView reloadData];
         [_phase7ActionTableView reloadData];
         NSIndexSet* findingSelection = IndexSetForPhase7FindingIds(selectedFindingIds, _phase7VisibleFindings);
@@ -996,12 +1570,15 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     const NSInteger playbookSelected = _phase7PlaybookTableView.selectedRow;
     if (playbookSelected >= 0 &&
         static_cast<std::size_t>(playbookSelected) < _latestPhase7PlaybookArtifacts.size() &&
-        _phase7SelectionIsLedger == NO) {
+        _phase7SelectionIsLedger == NO &&
+        _phase7SelectionIsJournal == NO) {
         const auto& artifact = _latestPhase7PlaybookArtifacts.at(static_cast<std::size_t>(playbookSelected));
         _phase7DetailBody = DescribePhase7PlaybookArtifact(artifact);
         _phase7VisibleActions = artifact.plannedActions;
         _phase7SelectedLinkedAnalysisArtifactId = artifact.analysisArtifact.artifactId;
         _phase7SelectedLinkedPlaybookArtifactId = artifact.playbookArtifact.artifactId;
+        _phase7SelectedLinkedLedgerArtifactId.clear();
+        _phase7SelectedLinkedJournalArtifactId.clear();
         _phase7SelectedSourceArtifactId = SourceArtifactIdForPlaybook(artifact, _latestPhase7AnalysisArtifacts);
         if (_phase7SelectedSourceArtifactId.empty() && _client != nullptr &&
             !_phase7SelectedLinkedAnalysisArtifactId.empty()) {
@@ -1018,14 +1595,23 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         }
         _phase7BuildPlaybookButton.enabled = NO;
         _phase7BuildLedgerButton.enabled = YES;
+        _phase7StartJournalButton.enabled = NO;
+        _phase7StartApplyButton.enabled = NO;
         UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, 0);
         _phase7OpenAnalysisButton.enabled = NO;
         _phase7OpenPlaybookButton.title = @"Open Selected Playbook";
         _phase7OpenPlaybookButton.enabled = YES;
         _phase7OpenLedgerButton.enabled = NO;
+        _phase7OpenJournalButton.enabled = NO;
+        _phase7OpenApplyButton.enabled = NO;
         _phase7OpenSourceArtifactButton.enabled = !_phase7SelectedSourceArtifactId.empty();
         _phase7OpenLinkedAnalysisButton.enabled = !_phase7SelectedLinkedAnalysisArtifactId.empty();
+        _phase7OpenLinkedLedgerButton.enabled = NO;
+        _phase7OpenLinkedJournalButton.enabled = NO;
         _phase7RecordReviewButton.enabled = NO;
+        _phase7DispatchJournalButton.enabled = NO;
+        _phase7RecordExecutionButton.enabled = NO;
+        _phase7RecordApplyButton.enabled = NO;
         [_phase7FindingTableView reloadData];
         [_phase7ActionTableView reloadData];
         [_phase7FindingTableView deselectAll:nil];
@@ -1050,6 +1636,8 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         _phase7SelectedSourceArtifactId = artifact.sourceArtifact.artifactId;
         _phase7SelectedLinkedAnalysisArtifactId = artifact.analysisArtifact.artifactId;
         _phase7SelectedLinkedPlaybookArtifactId = artifact.playbookArtifact.artifactId;
+        _phase7SelectedLinkedLedgerArtifactId = artifact.ledgerArtifact.artifactId;
+        _phase7SelectedLinkedJournalArtifactId.clear();
         if (const auto replayRange = ReplayRangeFromPhase7Context(artifact.replayContext); replayRange.has_value()) {
             _phase7ReplayRange = *replayRange;
             _phase7LoadRangeButton.enabled = YES;
@@ -1058,13 +1646,20 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         }
         _phase7BuildPlaybookButton.enabled = NO;
         _phase7BuildLedgerButton.enabled = NO;
+        _phase7StartJournalButton.enabled =
+            (artifact.ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution);
+        _phase7StartApplyButton.enabled = NO;
         UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, 0);
         _phase7OpenAnalysisButton.enabled = NO;
         _phase7OpenPlaybookButton.title = @"Open Linked Playbook";
         _phase7OpenPlaybookButton.enabled = !_phase7SelectedLinkedPlaybookArtifactId.empty();
         _phase7OpenLedgerButton.enabled = YES;
+        _phase7OpenJournalButton.enabled = NO;
+        _phase7OpenApplyButton.enabled = NO;
         _phase7OpenSourceArtifactButton.enabled = !_phase7SelectedSourceArtifactId.empty();
         _phase7OpenLinkedAnalysisButton.enabled = !_phase7SelectedLinkedAnalysisArtifactId.empty();
+        _phase7OpenLinkedLedgerButton.enabled = NO;
+        _phase7OpenLinkedJournalButton.enabled = NO;
         [_phase7FindingTableView reloadData];
         [_phase7ActionTableView reloadData];
         [_phase7FindingTableView deselectAll:nil];
@@ -1075,9 +1670,130 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
             [_phase7ActionTableView deselectAll:nil];
         }
         _phase7RecordReviewButton.enabled = (_phase7ActionTableView.selectedRowIndexes.count > 0);
+        _phase7DispatchJournalButton.enabled = NO;
+        _phase7RecordExecutionButton.enabled = NO;
+        _phase7RecordApplyButton.enabled = NO;
         _phase7TextView.string = ToNSString(_phase7DetailBody + "\n\n" +
                                             DescribeSelectedPhase7LedgerEntries(_phase7VisibleLedgerEntries,
                                                                                _phase7ActionTableView.selectedRowIndexes));
+        return;
+    }
+
+    const NSInteger journalSelected = _phase7JournalTableView.selectedRow;
+    if (journalSelected >= 0 &&
+        static_cast<std::size_t>(journalSelected) < _latestPhase7ExecutionJournals.size() &&
+        _phase7SelectionIsJournal == YES) {
+        const auto& artifact = _latestPhase7ExecutionJournals.at(static_cast<std::size_t>(journalSelected));
+        _phase7DetailBody = DescribePhase7ExecutionJournalArtifact(artifact);
+        _phase7VisibleJournalEntries = artifact.entries;
+        _phase7SelectedSourceArtifactId = artifact.sourceArtifact.artifactId;
+        _phase7SelectedLinkedAnalysisArtifactId = artifact.analysisArtifact.artifactId;
+        _phase7SelectedLinkedPlaybookArtifactId = artifact.playbookArtifact.artifactId;
+        _phase7SelectedLinkedLedgerArtifactId = artifact.ledgerArtifact.artifactId;
+        _phase7SelectedLinkedJournalArtifactId = artifact.journalArtifact.artifactId;
+        if (const auto replayRange = ReplayRangeFromPhase7Context(artifact.replayContext); replayRange.has_value()) {
+            _phase7ReplayRange = *replayRange;
+            _phase7LoadRangeButton.enabled = YES;
+        } else {
+            _phase7LoadRangeButton.enabled = NO;
+        }
+        _phase7BuildPlaybookButton.enabled = NO;
+        _phase7BuildLedgerButton.enabled = NO;
+        _phase7StartJournalButton.enabled = NO;
+        const std::vector<std::string> selectedSubmittedJournalEntryIds =
+            SelectedPhase7SubmittedJournalEntryIds(_phase7ActionTableView, _phase7VisibleJournalEntries);
+        const bool anySubmittedJournalEntry =
+            std::any_of(_phase7VisibleJournalEntries.begin(),
+                        _phase7VisibleJournalEntries.end(),
+                        [](const tapescope::Phase7ExecutionJournalEntry& entry) {
+                            return entry.executionStatus == tape_phase7::kExecutionEntryStatusSubmitted;
+                        });
+        const bool hasJournalSelection = (_phase7ActionTableView.selectedRowIndexes.count > 0);
+        _phase7StartApplyButton.enabled = hasJournalSelection
+                                              ? (!selectedSubmittedJournalEntryIds.empty() &&
+                                                 selectedSubmittedJournalEntryIds.size() ==
+                                                     selectedJournalEntryIds.size())
+                                              : anySubmittedJournalEntry;
+        UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, 0);
+        _phase7OpenAnalysisButton.enabled = NO;
+        _phase7OpenPlaybookButton.title = @"Open Linked Playbook";
+        _phase7OpenPlaybookButton.enabled = !_phase7SelectedLinkedPlaybookArtifactId.empty();
+        _phase7OpenLedgerButton.enabled = NO;
+        _phase7OpenJournalButton.enabled = YES;
+        _phase7OpenApplyButton.enabled = NO;
+        _phase7OpenSourceArtifactButton.enabled = !_phase7SelectedSourceArtifactId.empty();
+        _phase7OpenLinkedAnalysisButton.enabled = !_phase7SelectedLinkedAnalysisArtifactId.empty();
+        _phase7OpenLinkedLedgerButton.enabled = !_phase7SelectedLinkedLedgerArtifactId.empty();
+        _phase7OpenLinkedJournalButton.enabled = NO;
+        _phase7RecordReviewButton.enabled = NO;
+        [_phase7FindingTableView reloadData];
+        [_phase7ActionTableView reloadData];
+        [_phase7FindingTableView deselectAll:nil];
+        NSIndexSet* journalSelection = IndexSetForPhase7JournalEntryIds(selectedJournalEntryIds, _phase7VisibleJournalEntries);
+        if (journalSelection.count > 0) {
+            [_phase7ActionTableView selectRowIndexes:journalSelection byExtendingSelection:NO];
+        } else {
+            [_phase7ActionTableView deselectAll:nil];
+        }
+        _phase7DispatchJournalButton.enabled =
+            !SelectedPhase7QueuedJournalEntryIds(_phase7ActionTableView, _phase7VisibleJournalEntries).empty();
+        _phase7RecordExecutionButton.enabled = (_phase7ActionTableView.selectedRowIndexes.count > 0);
+        _phase7RecordApplyButton.enabled = NO;
+        _phase7TextView.string = ToNSString(_phase7DetailBody + "\n\n" +
+                                            DescribeSelectedPhase7JournalEntries(_phase7VisibleJournalEntries,
+                                                                                _phase7ActionTableView.selectedRowIndexes));
+        return;
+    }
+
+    const NSInteger applySelected = _phase7ApplyTableView.selectedRow;
+    if (applySelected >= 0 &&
+        static_cast<std::size_t>(applySelected) < _latestPhase7ExecutionApplies.size() &&
+        _phase7SelectionIsApply == YES) {
+        const auto& artifact = _latestPhase7ExecutionApplies.at(static_cast<std::size_t>(applySelected));
+        _phase7DetailBody = DescribePhase7ExecutionApplyArtifact(artifact);
+        _phase7VisibleApplyEntries = artifact.entries;
+        _phase7SelectedSourceArtifactId = artifact.sourceArtifact.artifactId;
+        _phase7SelectedLinkedAnalysisArtifactId = artifact.analysisArtifact.artifactId;
+        _phase7SelectedLinkedPlaybookArtifactId = artifact.playbookArtifact.artifactId;
+        _phase7SelectedLinkedLedgerArtifactId = artifact.ledgerArtifact.artifactId;
+        _phase7SelectedLinkedJournalArtifactId = artifact.journalArtifact.artifactId;
+        if (const auto replayRange = ReplayRangeFromPhase7Context(artifact.replayContext); replayRange.has_value()) {
+            _phase7ReplayRange = *replayRange;
+            _phase7LoadRangeButton.enabled = YES;
+        } else {
+            _phase7LoadRangeButton.enabled = NO;
+        }
+        _phase7BuildPlaybookButton.enabled = NO;
+        _phase7BuildLedgerButton.enabled = NO;
+        _phase7StartJournalButton.enabled = NO;
+        _phase7StartApplyButton.enabled = NO;
+        UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, 0);
+        _phase7OpenAnalysisButton.enabled = NO;
+        _phase7OpenPlaybookButton.title = @"Open Linked Playbook";
+        _phase7OpenPlaybookButton.enabled = !_phase7SelectedLinkedPlaybookArtifactId.empty();
+        _phase7OpenLedgerButton.enabled = NO;
+        _phase7OpenJournalButton.enabled = NO;
+        _phase7OpenApplyButton.enabled = YES;
+        _phase7OpenSourceArtifactButton.enabled = !_phase7SelectedSourceArtifactId.empty();
+        _phase7OpenLinkedAnalysisButton.enabled = !_phase7SelectedLinkedAnalysisArtifactId.empty();
+        _phase7OpenLinkedLedgerButton.enabled = !_phase7SelectedLinkedLedgerArtifactId.empty();
+        _phase7OpenLinkedJournalButton.enabled = !_phase7SelectedLinkedJournalArtifactId.empty();
+        _phase7RecordReviewButton.enabled = NO;
+        _phase7DispatchJournalButton.enabled = NO;
+        _phase7RecordExecutionButton.enabled = NO;
+        [_phase7FindingTableView reloadData];
+        [_phase7ActionTableView reloadData];
+        [_phase7FindingTableView deselectAll:nil];
+        NSIndexSet* applySelection = IndexSetForPhase7ApplyEntryIds(selectedApplyEntryIds, _phase7VisibleApplyEntries);
+        if (applySelection.count > 0) {
+            [_phase7ActionTableView selectRowIndexes:applySelection byExtendingSelection:NO];
+        } else {
+            [_phase7ActionTableView deselectAll:nil];
+        }
+        _phase7RecordApplyButton.enabled = (_phase7ActionTableView.selectedRowIndexes.count > 0);
+        _phase7TextView.string = ToNSString(_phase7DetailBody + "\n\n" +
+                                            DescribeSelectedPhase7ApplyEntries(_phase7VisibleApplyEntries,
+                                                                              _phase7ActionTableView.selectedRowIndexes));
         return;
     }
 
@@ -1086,13 +1802,22 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7OpenPlaybookButton.title = @"Open Selected Playbook";
     _phase7OpenPlaybookButton.enabled = NO;
     _phase7OpenLedgerButton.enabled = NO;
+    _phase7OpenJournalButton.enabled = NO;
+    _phase7OpenApplyButton.enabled = NO;
     _phase7BuildPlaybookButton.enabled = NO;
     _phase7BuildLedgerButton.enabled = NO;
+    _phase7StartJournalButton.enabled = NO;
+    _phase7StartApplyButton.enabled = NO;
     UpdatePhase7BuildPlaybookButtonTitle(_phase7BuildPlaybookButton, 0);
     _phase7OpenSourceArtifactButton.enabled = NO;
     _phase7OpenLinkedAnalysisButton.enabled = NO;
+    _phase7OpenLinkedLedgerButton.enabled = NO;
+    _phase7OpenLinkedJournalButton.enabled = NO;
     _phase7LoadRangeButton.enabled = NO;
     _phase7RecordReviewButton.enabled = NO;
+    _phase7DispatchJournalButton.enabled = NO;
+    _phase7RecordExecutionButton.enabled = NO;
+    _phase7RecordApplyButton.enabled = NO;
     [_phase7FindingTableView reloadData];
     [_phase7ActionTableView reloadData];
     _phase7TextView.string = ToNSString(_phase7DetailBody);
@@ -1159,16 +1884,22 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 *it = result.value.artifact;
                 const std::size_t index = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7AnalysisArtifacts.begin(), it));
                 innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7AnalysisTableView reloadData];
                 [innerSelf->_phase7AnalysisTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
             } else {
                 innerSelf->_latestPhase7AnalysisArtifacts.insert(innerSelf->_latestPhase7AnalysisArtifacts.begin(),
                                                                  result.value.artifact);
                 innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7AnalysisTableView reloadData];
                 [innerSelf->_phase7AnalysisTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
             }
             [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
             [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7StateLabel.stringValue = ToNSString(std::string("Phase 7 analysis ") +
                                                                   (result.value.created ? "created." : "reused."));
@@ -1255,15 +1986,21 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 const std::size_t index = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7PlaybookArtifacts.begin(), it));
                 innerSelf->_phase7SelectionIsPlaybook = YES;
                 [innerSelf->_phase7PlaybookTableView reloadData];
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7PlaybookTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
             } else {
                 innerSelf->_latestPhase7PlaybookArtifacts.insert(innerSelf->_latestPhase7PlaybookArtifacts.begin(),
                                                                  result.value.artifact);
                 innerSelf->_phase7SelectionIsPlaybook = YES;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7PlaybookTableView reloadData];
                 [innerSelf->_phase7PlaybookTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
             }
             [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
             [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7StateLabel.stringValue = ToNSString(std::string("Phase 7 dry-run playbook ") +
                                                                   (result.value.created ? "created." : "reused."));
@@ -1351,6 +2088,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 [innerSelf->_phase7LedgerTableView reloadData];
                 innerSelf->_phase7SelectionIsPlaybook = NO;
                 innerSelf->_phase7SelectionIsLedger = YES;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
                                                byExtendingSelection:NO];
             } else {
@@ -1359,11 +2097,13 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 [innerSelf->_phase7LedgerTableView reloadData];
                 innerSelf->_phase7SelectionIsPlaybook = NO;
                 innerSelf->_phase7SelectionIsLedger = YES;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                byExtendingSelection:NO];
             }
             [innerSelf->_phase7AnalysisTableView deselectAll:nil];
             [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
             [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7SelectedSourceArtifactId = result.value.artifact.sourceArtifact.artifactId;
             innerSelf->_phase7SelectedLinkedAnalysisArtifactId = result.value.artifact.analysisArtifact.artifactId;
@@ -1398,6 +2138,282 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     });
 }
 
+- (void)startSelectedPhase7ExecutionJournal:(id)sender {
+    (void)sender;
+    if (_phase7InFlight || !_client) {
+        return;
+    }
+    const NSInteger selected = _phase7LedgerTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _latestPhase7ExecutionLedgers.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution ledger row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& ledger = _latestPhase7ExecutionLedgers.at(static_cast<std::size_t>(selected));
+    const std::string executionLedgerArtifactId = ledger.ledgerArtifact.artifactId;
+    const std::string actor = TrimAscii(ToStdString(_phase7JournalActorField.stringValue));
+    const std::string executionCapability = TrimAscii(ToStdString(_phase7ExecutionCapabilityField.stringValue));
+    if (executionLedgerArtifactId.empty()) {
+        _phase7StateLabel.stringValue = @"Selected execution ledger is missing an artifact id.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (actor.empty()) {
+        _phase7StateLabel.stringValue = @"Starting an execution journal requires an actor.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (executionCapability.empty()) {
+        _phase7StateLabel.stringValue = @"Starting an execution journal requires an execution capability.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _phase7InFlight = YES;
+    const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
+    _phase7RefreshButton.enabled = NO;
+    _phase7ChooseBundleButton.enabled = NO;
+    _phase7RunAnalysisButton.enabled = NO;
+    _phase7BuildPlaybookButton.enabled = NO;
+    _phase7BuildLedgerButton.enabled = NO;
+    _phase7StartJournalButton.enabled = NO;
+    _phase7DispatchJournalButton.enabled = NO;
+    _phase7StateLabel.stringValue = @"Starting execution journal…";
+    _phase7StateLabel.textColor = [NSColor systemOrangeColor];
+    _phase7TextView.string = @"Creating or reopening an append-only execution journal for the selected ready ledger…";
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->startExecutionJournalPayload(
+            executionLedgerArtifactId,
+            actor,
+            executionCapability);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
+                return;
+            }
+            innerSelf->_phase7InFlight = NO;
+            innerSelf->_phase7RefreshButton.enabled = YES;
+            innerSelf->_phase7ChooseBundleButton.enabled = YES;
+            innerSelf->_phase7RunAnalysisButton.enabled = YES;
+            if (!result.ok()) {
+                innerSelf->_phase7StateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_phase7StateLabel.textColor = ErrorColorForKind(result.error.kind);
+                innerSelf->_phase7TextView.string = ToNSString(
+                    DescribePhase7ExecutionJournalStart(executionLedgerArtifactId, result));
+                return;
+            }
+
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionJournals.begin(),
+                                   innerSelf->_latestPhase7ExecutionJournals.end(),
+                                   [&](const tapescope::Phase7ExecutionJournalArtifact& item) {
+                                       return item.journalArtifact.artifactId == result.value.artifact.journalArtifact.artifactId;
+                                   });
+            if (it != innerSelf->_latestPhase7ExecutionJournals.end()) {
+                *it = result.value.artifact;
+                const std::size_t index =
+                    static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionJournals.begin(), it));
+                [innerSelf->_phase7JournalTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = YES;
+                [innerSelf->_phase7JournalTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
+                                                byExtendingSelection:NO];
+            } else {
+                innerSelf->_latestPhase7ExecutionJournals.insert(innerSelf->_latestPhase7ExecutionJournals.begin(),
+                                                                 result.value.artifact);
+                [innerSelf->_phase7JournalTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = YES;
+                [innerSelf->_phase7JournalTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                                byExtendingSelection:NO];
+            }
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf refreshPhase7DetailText];
+            innerSelf->_phase7StateLabel.stringValue = ToNSString(std::string("Phase 7 execution journal ") +
+                                                                  (result.value.created ? "created." : "reused."));
+            innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
+            innerSelf->_phase7TextView.string = ToNSString(
+                DescribePhase7ExecutionJournalStart(executionLedgerArtifactId, result));
+            [innerSelf recordRecentHistoryEntry:tapescope::json{
+                {"kind", "phase7_execution_journal"},
+                {"target_id", result.value.artifact.journalArtifact.artifactId},
+                {"artifact_id", result.value.artifact.journalArtifact.artifactId},
+                {"ledger_artifact_id", result.value.artifact.ledgerArtifact.artifactId},
+                {"playbook_artifact_id", result.value.artifact.playbookArtifact.artifactId},
+                {"analysis_artifact_id", result.value.artifact.analysisArtifact.artifactId},
+                {"source_artifact_id", result.value.artifact.sourceArtifact.artifactId},
+                {"headline", std::string("Phase 7 execution journal")},
+                {"detail", std::string(result.value.created ? "Execution journal created"
+                                                            : "Execution journal reused") +
+                               " with " + std::to_string(result.value.artifact.entries.size()) +
+                               " execution entr" +
+                               (result.value.artifact.entries.size() == 1 ? "y" : "ies")},
+                {"first_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
+                {"last_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
+            }];
+        });
+    });
+}
+
+- (void)startSelectedPhase7ExecutionApply:(id)sender {
+    (void)sender;
+    if (_phase7InFlight || !_client) {
+        return;
+    }
+    const NSInteger selected = _phase7JournalTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _latestPhase7ExecutionJournals.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution journal row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& journal = _latestPhase7ExecutionJournals.at(static_cast<std::size_t>(selected));
+    const std::string executionJournalArtifactId = journal.journalArtifact.artifactId;
+    const std::string actor = TrimAscii(ToStdString(_phase7ExecutionActorField.stringValue));
+    const std::string executionCapability = TrimAscii(ToStdString(_phase7ExecutionCapabilityField.stringValue));
+    const std::string comment = TrimAscii(ToStdString(_phase7ExecutionCommentField.stringValue));
+    if (executionJournalArtifactId.empty()) {
+        _phase7StateLabel.stringValue = @"Selected execution journal is missing an artifact id.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (actor.empty()) {
+        _phase7StateLabel.stringValue = @"Starting controlled apply requires an actor.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (executionCapability.empty()) {
+        _phase7StateLabel.stringValue = @"Starting controlled apply requires an execution capability.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    const std::vector<std::string> selectedJournalEntryIds =
+        SelectedPhase7JournalEntryIds(_phase7ActionTableView, _phase7VisibleJournalEntries);
+    const std::vector<std::string> selectedSubmittedJournalEntryIds =
+        SelectedPhase7SubmittedJournalEntryIds(_phase7ActionTableView, _phase7VisibleJournalEntries);
+    std::vector<std::string> entryIds;
+    if (!selectedJournalEntryIds.empty()) {
+        if (selectedSubmittedJournalEntryIds.size() != selectedJournalEntryIds.size()) {
+            _phase7StateLabel.stringValue = @"Controlled apply only supports submitted execution entries.";
+            _phase7StateLabel.textColor = [NSColor systemRedColor];
+            return;
+        }
+        entryIds = selectedSubmittedJournalEntryIds;
+    }
+
+    _phase7InFlight = YES;
+    const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
+    _phase7RefreshButton.enabled = NO;
+    _phase7ChooseBundleButton.enabled = NO;
+    _phase7RunAnalysisButton.enabled = NO;
+    _phase7BuildPlaybookButton.enabled = NO;
+    _phase7BuildLedgerButton.enabled = NO;
+    _phase7StartJournalButton.enabled = NO;
+    _phase7StartApplyButton.enabled = NO;
+    _phase7DispatchJournalButton.enabled = NO;
+    _phase7RecordExecutionButton.enabled = NO;
+    _phase7RecordApplyButton.enabled = NO;
+    _phase7StateLabel.stringValue = @"Starting controlled apply…";
+    _phase7StateLabel.textColor = [NSColor systemOrangeColor];
+    _phase7TextView.string = @"Creating or reopening a controlled apply artifact from the selected submitted journal entries…";
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->startExecutionApplyPayload(
+            executionJournalArtifactId,
+            entryIds,
+            actor,
+            executionCapability,
+            comment);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
+                return;
+            }
+            innerSelf->_phase7InFlight = NO;
+            innerSelf->_phase7RefreshButton.enabled = YES;
+            innerSelf->_phase7ChooseBundleButton.enabled = YES;
+            innerSelf->_phase7RunAnalysisButton.enabled = YES;
+            if (!result.ok()) {
+                innerSelf->_phase7StateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_phase7StateLabel.textColor = ErrorColorForKind(result.error.kind);
+                innerSelf->_phase7TextView.string = ToNSString(
+                    DescribePhase7ExecutionApplyStart(executionJournalArtifactId, result));
+                return;
+            }
+
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionApplies.begin(),
+                                   innerSelf->_latestPhase7ExecutionApplies.end(),
+                                   [&](const tapescope::Phase7ExecutionApplyArtifact& item) {
+                                       return item.applyArtifact.artifactId == result.value.artifact.applyArtifact.artifactId;
+                                   });
+            if (it != innerSelf->_latestPhase7ExecutionApplies.end()) {
+                *it = result.value.artifact;
+                const std::size_t index =
+                    static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionApplies.begin(), it));
+                [innerSelf->_phase7ApplyTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
+                innerSelf->_phase7SelectionIsApply = YES;
+                [innerSelf->_phase7ApplyTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
+                                              byExtendingSelection:NO];
+            } else {
+                innerSelf->_latestPhase7ExecutionApplies.insert(innerSelf->_latestPhase7ExecutionApplies.begin(),
+                                                                result.value.artifact);
+                [innerSelf->_phase7ApplyTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
+                innerSelf->_phase7SelectionIsApply = YES;
+                [innerSelf->_phase7ApplyTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                              byExtendingSelection:NO];
+            }
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
+            [innerSelf refreshPhase7DetailText];
+            innerSelf->_phase7StateLabel.stringValue = ToNSString(std::string("Phase 7 controlled apply ") +
+                                                                  (result.value.created ? "created." : "reused."));
+            innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
+            innerSelf->_phase7TextView.string = ToNSString(
+                DescribePhase7ExecutionApplyStart(executionJournalArtifactId, result));
+            [innerSelf recordRecentHistoryEntry:tapescope::json{
+                {"kind", "phase7_execution_apply"},
+                {"target_id", result.value.artifact.applyArtifact.artifactId},
+                {"artifact_id", result.value.artifact.applyArtifact.artifactId},
+                {"journal_artifact_id", result.value.artifact.journalArtifact.artifactId},
+                {"ledger_artifact_id", result.value.artifact.ledgerArtifact.artifactId},
+                {"playbook_artifact_id", result.value.artifact.playbookArtifact.artifactId},
+                {"analysis_artifact_id", result.value.artifact.analysisArtifact.artifactId},
+                {"source_artifact_id", result.value.artifact.sourceArtifact.artifactId},
+                {"headline", std::string("Phase 7 execution apply")},
+                {"detail", std::string(result.value.created ? "Controlled apply created"
+                                                            : "Controlled apply reused") +
+                               " with " + std::to_string(result.value.artifact.entries.size()) +
+                               " apply entr" +
+                               (result.value.artifact.entries.size() == 1 ? "y" : "ies")},
+                {"first_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
+                {"last_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
+            }];
+        });
+    });
+}
+
 - (void)openSelectedPhase7Analysis:(id)sender {
     (void)sender;
     const NSInteger selected = _phase7AnalysisTableView.selectedRow;
@@ -1413,7 +2429,8 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     (void)sender;
     const NSInteger selected = _phase7PlaybookTableView.selectedRow;
     if (selected < 0 || static_cast<std::size_t>(selected) >= _latestPhase7PlaybookArtifacts.size()) {
-        if (_phase7SelectionIsLedger && !_phase7SelectedLinkedPlaybookArtifactId.empty()) {
+        if ((_phase7SelectionIsLedger || _phase7SelectionIsJournal || _phase7SelectionIsApply) &&
+            !_phase7SelectedLinkedPlaybookArtifactId.empty()) {
             [self openPhase7PlaybookArtifactId:_phase7SelectedLinkedPlaybookArtifactId];
             return;
         }
@@ -1428,11 +2445,39 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     (void)sender;
     const NSInteger selected = _phase7LedgerTableView.selectedRow;
     if (selected < 0 || static_cast<std::size_t>(selected) >= _latestPhase7ExecutionLedgers.size()) {
+        if ((_phase7SelectionIsJournal || _phase7SelectionIsApply) && !_phase7SelectedLinkedLedgerArtifactId.empty()) {
+            [self openPhase7ExecutionLedgerArtifactId:_phase7SelectedLinkedLedgerArtifactId];
+            return;
+        }
         _phase7StateLabel.stringValue = @"Select a Phase 7 execution ledger row first.";
         _phase7StateLabel.textColor = [NSColor systemRedColor];
         return;
     }
     [self openPhase7ExecutionLedgerArtifactId:_latestPhase7ExecutionLedgers.at(static_cast<std::size_t>(selected)).ledgerArtifact.artifactId];
+}
+
+- (void)openSelectedPhase7ExecutionJournal:(id)sender {
+    (void)sender;
+    const NSInteger selected = _phase7JournalTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _latestPhase7ExecutionJournals.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution journal row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    [self openPhase7ExecutionJournalArtifactId:
+              _latestPhase7ExecutionJournals.at(static_cast<std::size_t>(selected)).journalArtifact.artifactId];
+}
+
+- (void)openSelectedPhase7ExecutionApply:(id)sender {
+    (void)sender;
+    const NSInteger selected = _phase7ApplyTableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= _latestPhase7ExecutionApplies.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution apply row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    [self openPhase7ExecutionApplyArtifactId:
+              _latestPhase7ExecutionApplies.at(static_cast<std::size_t>(selected)).applyArtifact.artifactId];
 }
 
 - (void)openPhase7AnalysisArtifactId:(const std::string&)artifactId {
@@ -1481,16 +2526,19 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 const std::size_t index = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7AnalysisArtifacts.begin(), it));
                 innerSelf->_phase7SelectionIsPlaybook = NO;
                 innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7AnalysisTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
             } else {
                 innerSelf->_latestPhase7AnalysisArtifacts.insert(innerSelf->_latestPhase7AnalysisArtifacts.begin(), result.value);
                 [innerSelf->_phase7AnalysisTableView reloadData];
                 innerSelf->_phase7SelectionIsPlaybook = NO;
                 innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7AnalysisTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
             }
             [innerSelf->_phase7PlaybookTableView deselectAll:nil];
             [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
             [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7StateLabel.stringValue = @"Phase 7 analysis reopened.";
             innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
@@ -1555,16 +2603,19 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 const std::size_t index = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7PlaybookArtifacts.begin(), it));
                 innerSelf->_phase7SelectionIsPlaybook = YES;
                 innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7PlaybookTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
             } else {
                 innerSelf->_latestPhase7PlaybookArtifacts.insert(innerSelf->_latestPhase7PlaybookArtifacts.begin(), result.value);
                 [innerSelf->_phase7PlaybookTableView reloadData];
                 innerSelf->_phase7SelectionIsPlaybook = YES;
                 innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7PlaybookTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
             }
             [innerSelf->_phase7AnalysisTableView deselectAll:nil];
             [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
             [innerSelf refreshPhase7DetailText];
             innerSelf->_phase7StateLabel.stringValue = @"Phase 7 playbook reopened (dry-run only).";
             innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
@@ -1630,6 +2681,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 [innerSelf->_phase7LedgerTableView reloadData];
                 innerSelf->_phase7SelectionIsPlaybook = NO;
                 innerSelf->_phase7SelectionIsLedger = YES;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
                                                byExtendingSelection:NO];
             } else {
@@ -1637,14 +2689,17 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 [innerSelf->_phase7LedgerTableView reloadData];
                 innerSelf->_phase7SelectionIsPlaybook = NO;
                 innerSelf->_phase7SelectionIsLedger = YES;
+                innerSelf->_phase7SelectionIsJournal = NO;
                 [innerSelf->_phase7LedgerTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
                                                byExtendingSelection:NO];
             }
             [innerSelf->_phase7AnalysisTableView deselectAll:nil];
             [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
             innerSelf->_phase7SelectedSourceArtifactId = result.value.sourceArtifact.artifactId;
             innerSelf->_phase7SelectedLinkedAnalysisArtifactId = result.value.analysisArtifact.artifactId;
             innerSelf->_phase7SelectedLinkedPlaybookArtifactId = result.value.playbookArtifact.artifactId;
+            innerSelf->_phase7SelectedLinkedLedgerArtifactId = result.value.ledgerArtifact.artifactId;
             if (const auto replayRange = ReplayRangeFromPhase7Context(result.value.replayContext); replayRange.has_value()) {
                 innerSelf->_phase7ReplayRange = *replayRange;
                 innerSelf->_phase7LoadRangeButton.enabled = YES;
@@ -1665,6 +2720,190 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 {"source_artifact_id", result.value.sourceArtifact.artifactId},
                 {"headline", std::string("Phase 7 execution ledger")},
                 {"detail", std::string("Review entries: ") + std::to_string(result.value.entries.size())},
+                {"first_session_seq", result.value.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
+                {"last_session_seq", result.value.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
+            }];
+        });
+    });
+}
+
+- (void)openPhase7ExecutionJournalArtifactId:(const std::string&)artifactId {
+    if (_phase7InFlight || !_client) {
+        return;
+    }
+    if (artifactId.empty()) {
+        _phase7StateLabel.stringValue = @"Phase 7 execution journal artifact id is missing.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _phase7InFlight = YES;
+    const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
+    _phase7RefreshButton.enabled = NO;
+    _phase7StateLabel.stringValue = @"Opening Phase 7 execution journal…";
+    _phase7StateLabel.textColor = [NSColor systemOrangeColor];
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->readExecutionJournalArtifactPayload(artifactId);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
+                return;
+            }
+            innerSelf->_phase7InFlight = NO;
+            innerSelf->_phase7RefreshButton.enabled = YES;
+            if (!result.ok()) {
+                innerSelf->_phase7StateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_phase7StateLabel.textColor = ErrorColorForKind(result.error.kind);
+                return;
+            }
+
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionJournals.begin(),
+                                   innerSelf->_latestPhase7ExecutionJournals.end(),
+                                   [&](const tapescope::Phase7ExecutionJournalArtifact& item) {
+                                       return item.journalArtifact.artifactId == artifactId;
+                                   });
+            if (it != innerSelf->_latestPhase7ExecutionJournals.end()) {
+                *it = result.value;
+                const std::size_t index =
+                    static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionJournals.begin(), it));
+                [innerSelf->_phase7JournalTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = YES;
+                [innerSelf->_phase7JournalTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
+                                                byExtendingSelection:NO];
+            } else {
+                innerSelf->_latestPhase7ExecutionJournals.insert(innerSelf->_latestPhase7ExecutionJournals.begin(), result.value);
+                [innerSelf->_phase7JournalTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = YES;
+                [innerSelf->_phase7JournalTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                                byExtendingSelection:NO];
+            }
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            innerSelf->_phase7SelectedSourceArtifactId = result.value.sourceArtifact.artifactId;
+            innerSelf->_phase7SelectedLinkedAnalysisArtifactId = result.value.analysisArtifact.artifactId;
+            innerSelf->_phase7SelectedLinkedPlaybookArtifactId = result.value.playbookArtifact.artifactId;
+            innerSelf->_phase7SelectedLinkedLedgerArtifactId = result.value.ledgerArtifact.artifactId;
+            if (const auto replayRange = ReplayRangeFromPhase7Context(result.value.replayContext); replayRange.has_value()) {
+                innerSelf->_phase7ReplayRange = *replayRange;
+                innerSelf->_phase7LoadRangeButton.enabled = YES;
+            } else {
+                innerSelf->_phase7ReplayRange = {};
+                innerSelf->_phase7LoadRangeButton.enabled = NO;
+            }
+            [innerSelf refreshPhase7DetailText];
+            innerSelf->_phase7StateLabel.stringValue = @"Phase 7 execution journal reopened.";
+            innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
+            innerSelf->_phase7TextView.string = ToNSString(DescribePhase7ExecutionJournalArtifact(result.value));
+            [innerSelf recordRecentHistoryEntry:tapescope::json{
+                {"kind", "phase7_execution_journal"},
+                {"target_id", artifactId},
+                {"artifact_id", artifactId},
+                {"ledger_artifact_id", result.value.ledgerArtifact.artifactId},
+                {"playbook_artifact_id", result.value.playbookArtifact.artifactId},
+                {"analysis_artifact_id", result.value.analysisArtifact.artifactId},
+                {"source_artifact_id", result.value.sourceArtifact.artifactId},
+                {"headline", std::string("Phase 7 execution journal")},
+                {"detail", std::string("Execution entries: ") + std::to_string(result.value.entries.size())},
+                {"first_session_seq", result.value.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
+                {"last_session_seq", result.value.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
+            }];
+        });
+    });
+}
+
+- (void)openPhase7ExecutionApplyArtifactId:(const std::string&)artifactId {
+    if (_phase7InFlight || !_client) {
+        return;
+    }
+    if (artifactId.empty()) {
+        _phase7StateLabel.stringValue = @"Phase 7 execution apply artifact id is missing.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _phase7InFlight = YES;
+    const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
+    _phase7RefreshButton.enabled = NO;
+    _phase7StateLabel.stringValue = @"Opening Phase 7 execution apply…";
+    _phase7StateLabel.textColor = [NSColor systemOrangeColor];
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->readExecutionApplyArtifactPayload(artifactId);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
+                return;
+            }
+            innerSelf->_phase7InFlight = NO;
+            innerSelf->_phase7RefreshButton.enabled = YES;
+            if (!result.ok()) {
+                innerSelf->_phase7StateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_phase7StateLabel.textColor = ErrorColorForKind(result.error.kind);
+                return;
+            }
+
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionApplies.begin(),
+                                   innerSelf->_latestPhase7ExecutionApplies.end(),
+                                   [&](const tapescope::Phase7ExecutionApplyArtifact& item) {
+                                       return item.applyArtifact.artifactId == artifactId;
+                                   });
+            if (it != innerSelf->_latestPhase7ExecutionApplies.end()) {
+                *it = result.value;
+                const std::size_t index =
+                    static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionApplies.begin(), it));
+                [innerSelf->_phase7ApplyTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
+                innerSelf->_phase7SelectionIsApply = YES;
+                [innerSelf->_phase7ApplyTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:index]
+                                              byExtendingSelection:NO];
+            } else {
+                innerSelf->_latestPhase7ExecutionApplies.insert(innerSelf->_latestPhase7ExecutionApplies.begin(),
+                                                                result.value);
+                [innerSelf->_phase7ApplyTableView reloadData];
+                innerSelf->_phase7SelectionIsPlaybook = NO;
+                innerSelf->_phase7SelectionIsLedger = NO;
+                innerSelf->_phase7SelectionIsJournal = NO;
+                innerSelf->_phase7SelectionIsApply = YES;
+                [innerSelf->_phase7ApplyTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                              byExtendingSelection:NO];
+            }
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
+            [innerSelf refreshPhase7DetailText];
+            innerSelf->_phase7StateLabel.stringValue = @"Phase 7 execution apply reopened.";
+            innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
+            innerSelf->_phase7TextView.string = ToNSString(DescribePhase7ExecutionApplyArtifact(result.value));
+            [innerSelf recordRecentHistoryEntry:tapescope::json{
+                {"kind", "phase7_execution_apply"},
+                {"target_id", artifactId},
+                {"artifact_id", artifactId},
+                {"journal_artifact_id", result.value.journalArtifact.artifactId},
+                {"ledger_artifact_id", result.value.ledgerArtifact.artifactId},
+                {"playbook_artifact_id", result.value.playbookArtifact.artifactId},
+                {"analysis_artifact_id", result.value.analysisArtifact.artifactId},
+                {"source_artifact_id", result.value.sourceArtifact.artifactId},
+                {"headline", std::string("Phase 7 execution apply")},
+                {"detail", std::string("Apply entries: ") + std::to_string(result.value.entries.size())},
                 {"first_session_seq", result.value.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
                 {"last_session_seq", result.value.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
             }];
@@ -1694,6 +2933,26 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
         return;
     }
     [self openPhase7AnalysisArtifactId:_phase7SelectedLinkedAnalysisArtifactId];
+}
+
+- (void)openSelectedPhase7LinkedLedger:(id)sender {
+    (void)sender;
+    if (_phase7SelectedLinkedLedgerArtifactId.empty()) {
+        _phase7StateLabel.stringValue = @"Selected execution journal does not expose a linked ledger artifact.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    [self openPhase7ExecutionLedgerArtifactId:_phase7SelectedLinkedLedgerArtifactId];
+}
+
+- (void)openSelectedPhase7LinkedJournal:(id)sender {
+    (void)sender;
+    if (_phase7SelectedLinkedJournalArtifactId.empty()) {
+        _phase7StateLabel.stringValue = @"Selected controlled apply does not expose a linked journal artifact.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    [self openPhase7ExecutionJournalArtifactId:_phase7SelectedLinkedJournalArtifactId];
 }
 
 - (void)recordSelectedPhase7LedgerReview:(id)sender {
@@ -1745,6 +3004,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     _phase7BuildLedgerButton.enabled = NO;
     _phase7OpenLedgerButton.enabled = NO;
     _phase7RecordReviewButton.enabled = NO;
+    _phase7DispatchJournalButton.enabled = NO;
     _phase7StateLabel.stringValue = @"Recording ledger review decision…";
     _phase7StateLabel.textColor = [NSColor systemOrangeColor];
     _phase7TextView.string = @"Appending a review decision to the selected Phase 7 execution-ledger entries…";
@@ -1821,6 +3081,446 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
                 {"source_artifact_id", result.value.artifact.sourceArtifact.artifactId},
                 {"headline", std::string("Phase 7 execution ledger")},
                 {"detail", std::string("Recorded ") + reviewStatus + " for " +
+                               std::to_string(result.value.updatedEntryIds.size()) + " entr" +
+                               (result.value.updatedEntryIds.size() == 1 ? "y" : "ies")},
+                {"first_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
+                {"last_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
+            }];
+        });
+    });
+}
+
+- (void)dispatchSelectedPhase7JournalEntries:(id)sender {
+    (void)sender;
+    if (_phase7InFlight || !_client) {
+        return;
+    }
+    const NSInteger journalSelected = _phase7JournalTableView.selectedRow;
+    if (journalSelected < 0 || static_cast<std::size_t>(journalSelected) >= _latestPhase7ExecutionJournals.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution journal row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& journal = _latestPhase7ExecutionJournals.at(static_cast<std::size_t>(journalSelected));
+    const std::vector<std::string> entryIds =
+        SelectedPhase7QueuedJournalEntryIds(_phase7ActionTableView, _phase7VisibleJournalEntries);
+    if (entryIds.empty()) {
+        _phase7StateLabel.stringValue = @"Select one or more queued execution entries first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const std::string actor = TrimAscii(ToStdString(_phase7ExecutionActorField.stringValue));
+    const std::string executionCapability = TrimAscii(ToStdString(_phase7ExecutionCapabilityField.stringValue));
+    const std::string comment = TrimAscii(ToStdString(_phase7ExecutionCommentField.stringValue));
+    if (actor.empty()) {
+        _phase7StateLabel.stringValue = @"Dispatching queued entries requires an actor.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (executionCapability.empty()) {
+        _phase7StateLabel.stringValue = @"Dispatching queued entries requires an execution capability.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _phase7InFlight = YES;
+    const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
+    _phase7RefreshButton.enabled = NO;
+    _phase7ChooseBundleButton.enabled = NO;
+    _phase7RunAnalysisButton.enabled = NO;
+    _phase7BuildPlaybookButton.enabled = NO;
+    _phase7BuildLedgerButton.enabled = NO;
+    _phase7StartJournalButton.enabled = NO;
+    _phase7OpenJournalButton.enabled = NO;
+    _phase7DispatchJournalButton.enabled = NO;
+    _phase7RecordExecutionButton.enabled = NO;
+    _phase7StateLabel.stringValue = @"Dispatching queued execution entries…";
+    _phase7StateLabel.textColor = [NSColor systemOrangeColor];
+    _phase7TextView.string = @"Promoting queued execution entries into the controlled execution journal flow…";
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->dispatchExecutionJournalPayload(
+            journal.journalArtifact.artifactId,
+            entryIds,
+            actor,
+            executionCapability,
+            comment);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
+                return;
+            }
+            innerSelf->_phase7InFlight = NO;
+            innerSelf->_phase7RefreshButton.enabled = YES;
+            innerSelf->_phase7ChooseBundleButton.enabled = YES;
+            innerSelf->_phase7RunAnalysisButton.enabled = YES;
+            if (!result.ok()) {
+                innerSelf->_phase7StateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_phase7StateLabel.textColor = ErrorColorForKind(result.error.kind);
+                return;
+            }
+
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionJournals.begin(),
+                                   innerSelf->_latestPhase7ExecutionJournals.end(),
+                                   [&](const tapescope::Phase7ExecutionJournalArtifact& item) {
+                                       return item.journalArtifact.artifactId == result.value.artifact.journalArtifact.artifactId;
+                                   });
+            std::size_t selectedIndex = 0;
+            if (it != innerSelf->_latestPhase7ExecutionJournals.end()) {
+                *it = result.value.artifact;
+                selectedIndex = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionJournals.begin(), it));
+            } else {
+                innerSelf->_latestPhase7ExecutionJournals.insert(innerSelf->_latestPhase7ExecutionJournals.begin(),
+                                                                 result.value.artifact);
+                selectedIndex = 0;
+            }
+            [innerSelf->_phase7JournalTableView reloadData];
+            innerSelf->_phase7SelectionIsPlaybook = NO;
+            innerSelf->_phase7SelectionIsLedger = NO;
+            innerSelf->_phase7SelectionIsJournal = YES;
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:selectedIndex]
+                                            byExtendingSelection:NO];
+            [innerSelf refreshPhase7DetailText];
+            NSIndexSet* updatedSelection = IndexSetForPhase7JournalEntryIds(result.value.updatedEntryIds,
+                                                                            innerSelf->_phase7VisibleJournalEntries);
+            if (updatedSelection.count > 0) {
+                [innerSelf->_phase7ActionTableView selectRowIndexes:updatedSelection byExtendingSelection:NO];
+                innerSelf->_phase7DispatchJournalButton.enabled =
+                    !SelectedPhase7QueuedJournalEntryIds(innerSelf->_phase7ActionTableView,
+                                                         innerSelf->_phase7VisibleJournalEntries).empty();
+                innerSelf->_phase7RecordExecutionButton.enabled = YES;
+                innerSelf->_phase7TextView.string = ToNSString(innerSelf->_phase7DetailBody + "\n\n" +
+                                                               DescribeSelectedPhase7JournalEntries(
+                                                                   innerSelf->_phase7VisibleJournalEntries,
+                                                                   innerSelf->_phase7ActionTableView.selectedRowIndexes));
+            }
+            innerSelf->_phase7StateLabel.stringValue = ToNSString(
+                std::string("Dispatched ") + std::to_string(result.value.updatedEntryIds.size()) +
+                " execution entr" + (result.value.updatedEntryIds.size() == 1 ? "y." : "ies."));
+            innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
+            [innerSelf recordRecentHistoryEntry:tapescope::json{
+                {"kind", "phase7_execution_journal"},
+                {"target_id", result.value.artifact.journalArtifact.artifactId},
+                {"artifact_id", result.value.artifact.journalArtifact.artifactId},
+                {"ledger_artifact_id", result.value.artifact.ledgerArtifact.artifactId},
+                {"playbook_artifact_id", result.value.artifact.playbookArtifact.artifactId},
+                {"analysis_artifact_id", result.value.artifact.analysisArtifact.artifactId},
+                {"source_artifact_id", result.value.artifact.sourceArtifact.artifactId},
+                {"headline", std::string("Phase 7 execution journal")},
+                {"detail", std::string("Dispatched ") + std::to_string(result.value.updatedEntryIds.size()) +
+                               " queued entr" + (result.value.updatedEntryIds.size() == 1 ? "y" : "ies")},
+                {"first_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
+                {"last_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
+            }];
+        });
+    });
+}
+
+- (void)recordSelectedPhase7JournalEvent:(id)sender {
+    (void)sender;
+    if (_phase7InFlight || !_client) {
+        return;
+    }
+    const NSInteger journalSelected = _phase7JournalTableView.selectedRow;
+    if (journalSelected < 0 || static_cast<std::size_t>(journalSelected) >= _latestPhase7ExecutionJournals.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution journal row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& journal = _latestPhase7ExecutionJournals.at(static_cast<std::size_t>(journalSelected));
+    const std::vector<std::string> entryIds =
+        SelectedPhase7JournalEntryIds(_phase7ActionTableView, _phase7VisibleJournalEntries);
+    if (entryIds.empty()) {
+        _phase7StateLabel.stringValue = @"Select one or more execution entries first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const std::string executionStatus = SelectedPhase7ExecutionStatus(_phase7ExecutionStatusPopup);
+    const std::string actor = TrimAscii(ToStdString(_phase7ExecutionActorField.stringValue));
+    const std::string comment = TrimAscii(ToStdString(_phase7ExecutionCommentField.stringValue));
+    const std::string failureCode = TrimAscii(ToStdString(_phase7ExecutionFailureCodeField.stringValue));
+    const std::string failureMessage = TrimAscii(ToStdString(_phase7ExecutionFailureMessageField.stringValue));
+    if (executionStatus.empty()) {
+        _phase7StateLabel.stringValue = @"Choose an execution status first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (actor.empty()) {
+        _phase7StateLabel.stringValue = @"Execution journal updates require an actor.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if ((executionStatus == tape_phase7::kExecutionEntryStatusFailed ||
+         executionStatus == tape_phase7::kExecutionEntryStatusCancelled) &&
+        comment.empty()) {
+        _phase7StateLabel.stringValue = @"Failed and cancelled execution updates require a comment.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+        failureCode.empty() && failureMessage.empty()) {
+        _phase7StateLabel.stringValue = @"Failed execution updates require a failure code or message.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _phase7InFlight = YES;
+    const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
+    _phase7RefreshButton.enabled = NO;
+    _phase7ChooseBundleButton.enabled = NO;
+    _phase7RunAnalysisButton.enabled = NO;
+    _phase7BuildPlaybookButton.enabled = NO;
+    _phase7BuildLedgerButton.enabled = NO;
+    _phase7StartJournalButton.enabled = NO;
+    _phase7OpenJournalButton.enabled = NO;
+    _phase7DispatchJournalButton.enabled = NO;
+    _phase7RecordExecutionButton.enabled = NO;
+    _phase7StateLabel.stringValue = @"Recording execution journal event…";
+    _phase7StateLabel.textColor = [NSColor systemOrangeColor];
+    _phase7TextView.string = @"Appending an execution lifecycle event to the selected journal entries…";
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->recordExecutionJournalEventPayload(
+            journal.journalArtifact.artifactId,
+            entryIds,
+            executionStatus,
+            actor,
+            comment,
+            failureCode,
+            failureMessage);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
+                return;
+            }
+            innerSelf->_phase7InFlight = NO;
+            innerSelf->_phase7RefreshButton.enabled = YES;
+            innerSelf->_phase7ChooseBundleButton.enabled = YES;
+            innerSelf->_phase7RunAnalysisButton.enabled = YES;
+            if (!result.ok()) {
+                innerSelf->_phase7StateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_phase7StateLabel.textColor = ErrorColorForKind(result.error.kind);
+                return;
+            }
+
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionJournals.begin(),
+                                   innerSelf->_latestPhase7ExecutionJournals.end(),
+                                   [&](const tapescope::Phase7ExecutionJournalArtifact& item) {
+                                       return item.journalArtifact.artifactId == result.value.artifact.journalArtifact.artifactId;
+                                   });
+            std::size_t selectedIndex = 0;
+            if (it != innerSelf->_latestPhase7ExecutionJournals.end()) {
+                *it = result.value.artifact;
+                selectedIndex = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionJournals.begin(), it));
+            } else {
+                innerSelf->_latestPhase7ExecutionJournals.insert(innerSelf->_latestPhase7ExecutionJournals.begin(),
+                                                                 result.value.artifact);
+                selectedIndex = 0;
+            }
+            [innerSelf->_phase7JournalTableView reloadData];
+            innerSelf->_phase7SelectionIsPlaybook = NO;
+            innerSelf->_phase7SelectionIsLedger = NO;
+            innerSelf->_phase7SelectionIsJournal = YES;
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:selectedIndex]
+                                            byExtendingSelection:NO];
+            [innerSelf refreshPhase7DetailText];
+            NSIndexSet* updatedSelection = IndexSetForPhase7JournalEntryIds(result.value.updatedEntryIds,
+                                                                            innerSelf->_phase7VisibleJournalEntries);
+            if (updatedSelection.count > 0) {
+                [innerSelf->_phase7ActionTableView selectRowIndexes:updatedSelection byExtendingSelection:NO];
+                innerSelf->_phase7DispatchJournalButton.enabled =
+                    !SelectedPhase7QueuedJournalEntryIds(innerSelf->_phase7ActionTableView,
+                                                         innerSelf->_phase7VisibleJournalEntries).empty();
+                innerSelf->_phase7RecordExecutionButton.enabled = YES;
+                innerSelf->_phase7TextView.string = ToNSString(innerSelf->_phase7DetailBody + "\n\n" +
+                                                               DescribeSelectedPhase7JournalEntries(
+                                                                   innerSelf->_phase7VisibleJournalEntries,
+                                                                   innerSelf->_phase7ActionTableView.selectedRowIndexes));
+            }
+            innerSelf->_phase7StateLabel.stringValue = ToNSString(
+                std::string("Recorded `") + executionStatus + "` for " +
+                std::to_string(result.value.updatedEntryIds.size()) + " execution entr" +
+                (result.value.updatedEntryIds.size() == 1 ? "y." : "ies."));
+            innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
+            [innerSelf recordRecentHistoryEntry:tapescope::json{
+                {"kind", "phase7_execution_journal"},
+                {"target_id", result.value.artifact.journalArtifact.artifactId},
+                {"artifact_id", result.value.artifact.journalArtifact.artifactId},
+                {"ledger_artifact_id", result.value.artifact.ledgerArtifact.artifactId},
+                {"playbook_artifact_id", result.value.artifact.playbookArtifact.artifactId},
+                {"analysis_artifact_id", result.value.artifact.analysisArtifact.artifactId},
+                {"source_artifact_id", result.value.artifact.sourceArtifact.artifactId},
+                {"headline", std::string("Phase 7 execution journal")},
+                {"detail", std::string("Recorded ") + executionStatus + " for " +
+                               std::to_string(result.value.updatedEntryIds.size()) + " entr" +
+                               (result.value.updatedEntryIds.size() == 1 ? "y" : "ies")},
+                {"first_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},
+                {"last_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("last_session_seq", 0ULL)}
+            }];
+        });
+    });
+}
+
+- (void)recordSelectedPhase7ApplyEvent:(id)sender {
+    (void)sender;
+    if (_phase7InFlight || !_client) {
+        return;
+    }
+    const NSInteger applySelected = _phase7ApplyTableView.selectedRow;
+    if (applySelected < 0 || static_cast<std::size_t>(applySelected) >= _latestPhase7ExecutionApplies.size()) {
+        _phase7StateLabel.stringValue = @"Select a Phase 7 execution apply row first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const auto& apply = _latestPhase7ExecutionApplies.at(static_cast<std::size_t>(applySelected));
+    const std::vector<std::string> entryIds =
+        SelectedPhase7ApplyEntryIds(_phase7ActionTableView, _phase7VisibleApplyEntries);
+    if (entryIds.empty()) {
+        _phase7StateLabel.stringValue = @"Select one or more apply entries first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    const std::string executionStatus = SelectedPhase7ExecutionStatus(_phase7ExecutionStatusPopup);
+    const std::string actor = TrimAscii(ToStdString(_phase7ExecutionActorField.stringValue));
+    const std::string comment = TrimAscii(ToStdString(_phase7ExecutionCommentField.stringValue));
+    const std::string failureCode = TrimAscii(ToStdString(_phase7ExecutionFailureCodeField.stringValue));
+    const std::string failureMessage = TrimAscii(ToStdString(_phase7ExecutionFailureMessageField.stringValue));
+    if (executionStatus.empty()) {
+        _phase7StateLabel.stringValue = @"Choose an apply status first.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (actor.empty()) {
+        _phase7StateLabel.stringValue = @"Controlled apply updates require an actor.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if ((executionStatus == tape_phase7::kExecutionEntryStatusFailed ||
+         executionStatus == tape_phase7::kExecutionEntryStatusCancelled) &&
+        comment.empty()) {
+        _phase7StateLabel.stringValue = @"Failed and cancelled apply updates require a comment.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+    if (executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+        failureCode.empty() && failureMessage.empty()) {
+        _phase7StateLabel.stringValue = @"Failed apply updates require a failure code or message.";
+        _phase7StateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _phase7InFlight = YES;
+    const std::uint64_t token = [self issueRequestToken:&_phase7RequestToken];
+    _phase7RefreshButton.enabled = NO;
+    _phase7ChooseBundleButton.enabled = NO;
+    _phase7RunAnalysisButton.enabled = NO;
+    _phase7BuildPlaybookButton.enabled = NO;
+    _phase7BuildLedgerButton.enabled = NO;
+    _phase7StartJournalButton.enabled = NO;
+    _phase7StartApplyButton.enabled = NO;
+    _phase7OpenApplyButton.enabled = NO;
+    _phase7RecordApplyButton.enabled = NO;
+    _phase7StateLabel.stringValue = @"Recording controlled apply event…";
+    _phase7StateLabel.textColor = [NSColor systemOrangeColor];
+    _phase7TextView.string = @"Appending a controlled apply lifecycle event to the selected apply entries…";
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_artifactQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->recordExecutionApplyEventPayload(
+            apply.applyArtifact.artifactId,
+            entryIds,
+            executionStatus,
+            actor,
+            comment,
+            failureCode,
+            failureMessage);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || ![innerSelf isRequestTokenCurrent:token storage:&innerSelf->_phase7RequestToken]) {
+                return;
+            }
+            innerSelf->_phase7InFlight = NO;
+            innerSelf->_phase7RefreshButton.enabled = YES;
+            innerSelf->_phase7ChooseBundleButton.enabled = YES;
+            innerSelf->_phase7RunAnalysisButton.enabled = YES;
+            if (!result.ok()) {
+                innerSelf->_phase7StateLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(result.error));
+                innerSelf->_phase7StateLabel.textColor = ErrorColorForKind(result.error.kind);
+                return;
+            }
+
+            auto it = std::find_if(innerSelf->_latestPhase7ExecutionApplies.begin(),
+                                   innerSelf->_latestPhase7ExecutionApplies.end(),
+                                   [&](const tapescope::Phase7ExecutionApplyArtifact& item) {
+                                       return item.applyArtifact.artifactId == result.value.artifact.applyArtifact.artifactId;
+                                   });
+            std::size_t selectedIndex = 0;
+            if (it != innerSelf->_latestPhase7ExecutionApplies.end()) {
+                *it = result.value.artifact;
+                selectedIndex = static_cast<std::size_t>(std::distance(innerSelf->_latestPhase7ExecutionApplies.begin(), it));
+            } else {
+                innerSelf->_latestPhase7ExecutionApplies.insert(innerSelf->_latestPhase7ExecutionApplies.begin(),
+                                                                result.value.artifact);
+                selectedIndex = 0;
+            }
+            [innerSelf->_phase7ApplyTableView reloadData];
+            innerSelf->_phase7SelectionIsPlaybook = NO;
+            innerSelf->_phase7SelectionIsLedger = NO;
+            innerSelf->_phase7SelectionIsJournal = NO;
+            innerSelf->_phase7SelectionIsApply = YES;
+            [innerSelf->_phase7AnalysisTableView deselectAll:nil];
+            [innerSelf->_phase7PlaybookTableView deselectAll:nil];
+            [innerSelf->_phase7LedgerTableView deselectAll:nil];
+            [innerSelf->_phase7JournalTableView deselectAll:nil];
+            [innerSelf->_phase7ApplyTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:selectedIndex]
+                                              byExtendingSelection:NO];
+            [innerSelf refreshPhase7DetailText];
+            NSIndexSet* updatedSelection = IndexSetForPhase7ApplyEntryIds(result.value.updatedEntryIds,
+                                                                          innerSelf->_phase7VisibleApplyEntries);
+            if (updatedSelection.count > 0) {
+                [innerSelf->_phase7ActionTableView selectRowIndexes:updatedSelection byExtendingSelection:NO];
+                innerSelf->_phase7RecordApplyButton.enabled = YES;
+                innerSelf->_phase7TextView.string = ToNSString(innerSelf->_phase7DetailBody + "\n\n" +
+                                                               DescribeSelectedPhase7ApplyEntries(
+                                                                   innerSelf->_phase7VisibleApplyEntries,
+                                                                   innerSelf->_phase7ActionTableView.selectedRowIndexes));
+            }
+            innerSelf->_phase7StateLabel.stringValue = ToNSString(
+                std::string("Recorded `") + executionStatus + "` for " +
+                std::to_string(result.value.updatedEntryIds.size()) + " apply entr" +
+                (result.value.updatedEntryIds.size() == 1 ? "y." : "ies."));
+            innerSelf->_phase7StateLabel.textColor = [NSColor systemGreenColor];
+            [innerSelf recordRecentHistoryEntry:tapescope::json{
+                {"kind", "phase7_execution_apply"},
+                {"target_id", result.value.artifact.applyArtifact.artifactId},
+                {"artifact_id", result.value.artifact.applyArtifact.artifactId},
+                {"journal_artifact_id", result.value.artifact.journalArtifact.artifactId},
+                {"ledger_artifact_id", result.value.artifact.ledgerArtifact.artifactId},
+                {"playbook_artifact_id", result.value.artifact.playbookArtifact.artifactId},
+                {"analysis_artifact_id", result.value.artifact.analysisArtifact.artifactId},
+                {"source_artifact_id", result.value.artifact.sourceArtifact.artifactId},
+                {"headline", std::string("Phase 7 execution apply")},
+                {"detail", std::string("Recorded ") + executionStatus + " for " +
                                std::to_string(result.value.updatedEntryIds.size()) + " entr" +
                                (result.value.updatedEntryIds.size() == 1 ? "y" : "ies")},
                 {"first_session_seq", result.value.artifact.replayContext.value("requested_window", tapescope::json::object()).value("first_session_seq", 0ULL)},

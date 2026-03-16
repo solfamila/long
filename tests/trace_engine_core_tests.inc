@@ -1619,6 +1619,496 @@ void testTapeEnginePhase7ArtifactsReuseDeterministically() {
                readyLedgerSummary.readyForExecution,
            "phase 7 execution ledger second approval should expose the ready-for-execution summary state");
 
+    tape_phase7::ExecutionJournalArtifact invalidJournal;
+    bool journalCreated = false;
+    expect(!tape_phase7::startExecutionJournal({},
+                                               firstLedger.ledgerArtifact.artifactId,
+                                               "",
+                                               "phase7.execution_operator.v1",
+                                               &invalidJournal,
+                                               &journalCreated,
+                                               &phase7Code,
+                                               &phase7Message),
+           "phase 7 execution journal start should require an actor");
+    expect(phase7Code == "invalid_arguments" &&
+               phase7Message.find("actor is required") != std::string::npos,
+           "phase 7 execution journal start should surface the actor-required policy");
+
+    tape_phase7::ExecutionJournalArtifact firstJournal;
+    journalCreated = false;
+    expect(tape_phase7::startExecutionJournal({},
+                                              firstLedger.ledgerArtifact.artifactId,
+                                              "executor-a",
+                                              "phase7.execution_operator.v1",
+                                              &firstJournal,
+                                              &journalCreated,
+                                              &phase7Code,
+                                              &phase7Message),
+           "phase 7 execution journal first start should succeed: " + phase7Code + " " + phase7Message);
+    expect(journalCreated, "phase 7 execution journal first start should create a new journal artifact");
+    expect(firstJournal.entries.size() == 1 &&
+               firstJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusQueued,
+           "phase 7 execution journal should start queued with one executable entry from the ready ledger");
+    expect(firstJournal.journalStatus == tape_phase7::kExecutionJournalStatusQueued,
+           "phase 7 execution journal should begin in the queued aggregate state");
+    expect(firstJournal.initiatedBy == "executor-a" &&
+               firstJournal.executionCapability == "phase7.execution_operator.v1",
+           "phase 7 execution journal should preserve the initiating actor and capability");
+
+    tape_phase7::ExecutionJournalArtifact secondJournal;
+    journalCreated = true;
+    expect(tape_phase7::startExecutionJournal({},
+                                              firstLedger.ledgerArtifact.artifactId,
+                                              "executor-a",
+                                              "phase7.execution_operator.v1",
+                                              &secondJournal,
+                                              &journalCreated,
+                                              &phase7Code,
+                                              &phase7Message),
+           "phase 7 execution journal rerun should succeed: " + phase7Code + " " + phase7Message);
+    expect(!journalCreated, "phase 7 execution journal rerun should reuse the persisted journal artifact");
+    expect(firstJournal.journalArtifact.artifactId == secondJournal.journalArtifact.artifactId &&
+               firstJournal.generatedAtUtc == secondJournal.generatedAtUtc,
+           "phase 7 execution journal rerun should preserve deterministic journal identity and timestamp");
+
+    tape_phase7::ExecutionJournalArtifact readJournal;
+    expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                     firstJournal.journalArtifact.artifactId,
+                                                     &readJournal,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 execution journal read should succeed: " + phase7Code + " " + phase7Message);
+    expect(readJournal.ledgerArtifact.artifactId == firstLedger.ledgerArtifact.artifactId &&
+               readJournal.playbookArtifact.artifactId == firstPlaybook.playbookArtifact.artifactId &&
+               readJournal.sourceArtifact.artifactId == firstAnalysis.sourceArtifact.artifactId,
+           "phase 7 execution journal read should preserve the linked ledger/playbook/source lineage");
+
+    tape_phase7::ExecutionLedgerArtifact dispatchLedger;
+    bool dispatchLedgerCreated = false;
+    expect(tape_phase7::buildExecutionLedger({},
+                                             orderImpactPlaybook.playbookArtifact.artifactId,
+                                             &dispatchLedger,
+                                             &dispatchLedgerCreated,
+                                             &phase7Code,
+                                             &phase7Message),
+           "phase 7 dispatch-specific execution ledger build should succeed: " + phase7Code + " " + phase7Message);
+    expect(dispatchLedgerCreated,
+           "phase 7 dispatch-specific execution ledger build should create a distinct ledger artifact");
+    std::vector<std::string> dispatchReviewedEntryIds;
+    for (const auto& entry : dispatchLedger.entries) {
+        dispatchReviewedEntryIds.push_back(entry.entryId);
+    }
+    tape_phase7::ExecutionLedgerArtifact dispatchReviewedLedger;
+    std::vector<std::string> dispatchReviewedUpdatedEntryIds;
+    std::string dispatchReviewedAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    dispatchLedger.ledgerArtifact.artifactId,
+                                                    dispatchReviewedEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "dispatch-reviewer-a",
+                                                    "First approval for the dispatch-specific journal.",
+                                                    &dispatchReviewedLedger,
+                                                    &dispatchReviewedUpdatedEntryIds,
+                                                    &dispatchReviewedAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 dispatch-specific first execution-ledger approval should succeed: " + phase7Code + " " + phase7Message);
+    tape_phase7::ExecutionLedgerArtifact dispatchReadyLedger;
+    std::vector<std::string> dispatchReadyUpdatedEntryIds;
+    std::string dispatchReadyAuditEventId;
+    expect(tape_phase7::recordExecutionLedgerReview({},
+                                                    dispatchLedger.ledgerArtifact.artifactId,
+                                                    dispatchReviewedEntryIds,
+                                                    tape_phase7::kLedgerEntryStatusApproved,
+                                                    "dispatch-reviewer-b",
+                                                    "Second approval prepares the dispatch-specific journal.",
+                                                    &dispatchReadyLedger,
+                                                    &dispatchReadyUpdatedEntryIds,
+                                                    &dispatchReadyAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 dispatch-specific second execution-ledger approval should succeed: " + phase7Code + " " + phase7Message);
+    expect(dispatchReadyLedger.ledgerStatus == tape_phase7::kLedgerStatusReadyForExecution,
+           "phase 7 dispatch-specific execution ledger should become ready for execution");
+
+    tape_phase7::ExecutionJournalArtifact dispatchJournal;
+    bool dispatchJournalCreated = false;
+    expect(tape_phase7::startExecutionJournal({},
+                                              dispatchReadyLedger.ledgerArtifact.artifactId,
+                                              "executor-dispatch",
+                                              "phase7.execution_operator.v1",
+                                              &dispatchJournal,
+                                              &dispatchJournalCreated,
+                                              &phase7Code,
+                                              &phase7Message),
+           "phase 7 dispatch-specific execution journal start should succeed: " + phase7Code + " " + phase7Message);
+    expect(dispatchJournalCreated && !dispatchJournal.entries.empty(),
+           "phase 7 dispatch-specific execution journal should start with queued entries");
+    const std::string dispatchRequiredCapability =
+        dispatchJournal.executionPolicy.value("capability_required", std::string());
+    expect(!dispatchRequiredCapability.empty(),
+           "phase 7 dispatch-specific execution journal should expose a required execution capability");
+    tape_phase7::ExecutionJournalArtifact invalidDispatchJournal;
+    std::vector<std::string> invalidDispatchUpdatedEntryIds;
+    std::string invalidDispatchAuditEventId;
+    expect(!tape_phase7::dispatchExecutionJournalEntries({},
+                                                         dispatchJournal.journalArtifact.artifactId,
+                                                         {},
+                                                         "executor-dispatch",
+                                                         {},
+                                                         "Missing capability should fail.",
+                                                         &invalidDispatchJournal,
+                                                         &invalidDispatchUpdatedEntryIds,
+                                                         &invalidDispatchAuditEventId,
+                                                         &phase7Code,
+                                                         &phase7Message),
+           "phase 7 execution journal dispatch should require an execution capability when the policy requires one");
+    expect(phase7Code == "invalid_arguments" &&
+               phase7Message.find("execution_capability is required") != std::string::npos,
+           "phase 7 execution journal dispatch should surface the missing-capability policy");
+    expect(!tape_phase7::dispatchExecutionJournalEntries({},
+                                                         dispatchJournal.journalArtifact.artifactId,
+                                                         {},
+                                                         "executor-dispatch",
+                                                         dispatchRequiredCapability + ".mismatch",
+                                                         "Capability mismatch should fail.",
+                                                         &invalidDispatchJournal,
+                                                         &invalidDispatchUpdatedEntryIds,
+                                                         &invalidDispatchAuditEventId,
+                                                         &phase7Code,
+                                                         &phase7Message),
+           "phase 7 execution journal dispatch should reject mismatched capabilities");
+    expect(phase7Code == "capability_mismatch",
+           "phase 7 execution journal dispatch should report capability_mismatch for the wrong capability");
+    tape_phase7::ExecutionJournalArtifact dispatchedJournal;
+    std::vector<std::string> dispatchedJournalEntryIds;
+    std::string dispatchedJournalAuditEventId;
+    expect(tape_phase7::dispatchExecutionJournalEntries({},
+                                                        dispatchJournal.journalArtifact.artifactId,
+                                                        {},
+                                                        "executor-dispatch",
+                                                        dispatchRequiredCapability,
+                                                        "Dispatching all queued entries through the controlled path.",
+                                                        &dispatchedJournal,
+                                                        &dispatchedJournalEntryIds,
+                                                        &dispatchedJournalAuditEventId,
+                                                        &phase7Code,
+                                                        &phase7Message),
+           "phase 7 execution journal dispatch should succeed: " + phase7Code + " " + phase7Message);
+    expect(!dispatchedJournalEntryIds.empty() &&
+               dispatchedJournal.journalStatus == tape_phase7::kExecutionJournalStatusInProgress &&
+               std::all_of(dispatchedJournal.entries.begin(),
+                           dispatchedJournal.entries.end(),
+                           [](const tape_phase7::ExecutionJournalEntry& entry) {
+                               return entry.executionStatus == tape_phase7::kExecutionEntryStatusSubmitted;
+                           }),
+           "phase 7 execution journal dispatch should move queued entries into the submitted in-progress state");
+    expect(!tape_phase7::dispatchExecutionJournalEntries({},
+                                                         dispatchJournal.journalArtifact.artifactId,
+                                                         {},
+                                                         "executor-dispatch",
+                                                         dispatchRequiredCapability,
+                                                         "Dispatching again should fail.",
+                                                         &invalidDispatchJournal,
+                                                         &invalidDispatchUpdatedEntryIds,
+                                                         &invalidDispatchAuditEventId,
+                                                         &phase7Code,
+                                                         &phase7Message),
+           "phase 7 execution journal dispatch should reject journals without queued entries");
+    expect(phase7Code == "nothing_dispatchable",
+           "phase 7 execution journal dispatch should report nothing_dispatchable once the queued entries are gone");
+
+    const std::vector<std::string> journalEntryIds = {firstJournal.entries.front().journalEntryId};
+    tape_phase7::ExecutionJournalArtifact invalidJournalUpdate;
+    std::vector<std::string> invalidJournalUpdatedEntryIds;
+    std::string invalidJournalAuditEventId;
+    expect(!tape_phase7::recordExecutionJournalEvent({},
+                                                     firstJournal.journalArtifact.artifactId,
+                                                     journalEntryIds,
+                                                     tape_phase7::kExecutionEntryStatusSubmitted,
+                                                     "",
+                                                     "Missing actor should fail.",
+                                                     {},
+                                                     {},
+                                                     &invalidJournalUpdate,
+                                                     &invalidJournalUpdatedEntryIds,
+                                                     &invalidJournalAuditEventId,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 execution journal event should require an actor");
+    expect(phase7Code == "invalid_arguments" &&
+               phase7Message.find("actor is required") != std::string::npos,
+           "phase 7 execution journal event should surface the actor-required policy");
+    expect(!tape_phase7::recordExecutionJournalEvent({},
+                                                     firstJournal.journalArtifact.artifactId,
+                                                     journalEntryIds,
+                                                     tape_phase7::kExecutionEntryStatusFailed,
+                                                     "executor-a",
+                                                     "Failure details are required.",
+                                                     {},
+                                                     {},
+                                                     &invalidJournalUpdate,
+                                                     &invalidJournalUpdatedEntryIds,
+                                                     &invalidJournalAuditEventId,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 execution journal failed status should require failure details");
+    expect(phase7Code == "invalid_arguments" &&
+               phase7Message.find("failure_code or failure_message") != std::string::npos,
+           "phase 7 execution journal failed status should surface the failure-detail policy");
+
+    tape_phase7::ExecutionJournalArtifact submittedJournal;
+    std::vector<std::string> submittedJournalEntryIds;
+    std::string submittedJournalAuditEventId;
+    expect(tape_phase7::recordExecutionJournalEvent({},
+                                                    firstJournal.journalArtifact.artifactId,
+                                                    journalEntryIds,
+                                                    tape_phase7::kExecutionEntryStatusSubmitted,
+                                                    "executor-a",
+                                                    "Submitting the first execution attempt.",
+                                                    {},
+                                                    {},
+                                                    &submittedJournal,
+                                                    &submittedJournalEntryIds,
+                                                    &submittedJournalAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 execution journal submitted transition should succeed: " + phase7Code + " " + phase7Message);
+    expect(submittedJournalEntryIds == journalEntryIds && !submittedJournalAuditEventId.empty(),
+           "phase 7 execution journal submitted transition should report updated entry ids and an audit event id");
+    expect(submittedJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSubmitted &&
+               submittedJournal.entries.front().attemptCount == 1 &&
+               !submittedJournal.entries.front().startedAtUtc.empty(),
+           "phase 7 execution journal submitted transition should mark the entry submitted and increment attempts");
+    expect(submittedJournal.journalStatus == tape_phase7::kExecutionJournalStatusInProgress,
+           "phase 7 execution journal submitted transition should move the aggregate journal in progress");
+
+    tape_phase7::ExecutionJournalArtifact failedJournal;
+    std::vector<std::string> failedJournalEntryIds;
+    std::string failedJournalAuditEventId;
+    expect(tape_phase7::recordExecutionJournalEvent({},
+                                                    firstJournal.journalArtifact.artifactId,
+                                                    journalEntryIds,
+                                                    tape_phase7::kExecutionEntryStatusFailed,
+                                                    "executor-a",
+                                                    "Attempt failed on venue routing.",
+                                                    "venue_reject",
+                                                    "Exchange rejected the child order.",
+                                                    &failedJournal,
+                                                    &failedJournalEntryIds,
+                                                    &failedJournalAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 execution journal failed transition should succeed: " + phase7Code + " " + phase7Message);
+    expect(failedJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusFailed &&
+               failedJournal.entries.front().terminal &&
+               !failedJournal.entries.front().completedAtUtc.empty() &&
+               failedJournal.entries.front().failureCode == "venue_reject",
+           "phase 7 execution journal failed transition should persist terminal failure details");
+    expect(failedJournal.journalStatus == tape_phase7::kExecutionJournalStatusFailed,
+           "phase 7 execution journal failed transition should move the aggregate journal into failed status");
+
+    tape_phase7::ExecutionJournalArtifact requeuedJournal;
+    std::vector<std::string> requeuedJournalEntryIds;
+    std::string requeuedJournalAuditEventId;
+    expect(tape_phase7::recordExecutionJournalEvent({},
+                                                    firstJournal.journalArtifact.artifactId,
+                                                    journalEntryIds,
+                                                    tape_phase7::kExecutionEntryStatusQueued,
+                                                    "executor-b",
+                                                    "Requeued after failure triage.",
+                                                    {},
+                                                    {},
+                                                    &requeuedJournal,
+                                                    &requeuedJournalEntryIds,
+                                                    &requeuedJournalAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 execution journal requeue transition should succeed: " + phase7Code + " " + phase7Message);
+    expect(requeuedJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusQueued &&
+               !requeuedJournal.entries.front().terminal &&
+               requeuedJournal.journalStatus == tape_phase7::kExecutionJournalStatusQueued,
+           "phase 7 execution journal requeue transition should reset the entry and aggregate journal to queued");
+
+    tape_phase7::ExecutionJournalArtifact resubmittedJournal;
+    std::vector<std::string> resubmittedJournalEntryIds;
+    std::string resubmittedJournalAuditEventId;
+    expect(tape_phase7::recordExecutionJournalEvent({},
+                                                    firstJournal.journalArtifact.artifactId,
+                                                    journalEntryIds,
+                                                    tape_phase7::kExecutionEntryStatusSubmitted,
+                                                    "executor-b",
+                                                    "Submitting a second execution attempt.",
+                                                    {},
+                                                    {},
+                                                    &resubmittedJournal,
+                                                    &resubmittedJournalEntryIds,
+                                                    &resubmittedJournalAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 execution journal resubmit transition should succeed: " + phase7Code + " " + phase7Message);
+    expect(resubmittedJournal.entries.front().attemptCount == 2,
+           "phase 7 execution journal resubmit transition should increment the attempt counter");
+
+    tape_phase7::ExecutionJournalArtifact succeededJournal;
+    std::vector<std::string> succeededJournalEntryIds;
+    std::string succeededJournalAuditEventId;
+    expect(tape_phase7::recordExecutionJournalEvent({},
+                                                    firstJournal.journalArtifact.artifactId,
+                                                    journalEntryIds,
+                                                    tape_phase7::kExecutionEntryStatusSucceeded,
+                                                    "executor-b",
+                                                    "Execution completed successfully.",
+                                                    {},
+                                                    {},
+                                                    &succeededJournal,
+                                                    &succeededJournalEntryIds,
+                                                    &succeededJournalAuditEventId,
+                                                    &phase7Code,
+                                                    &phase7Message),
+           "phase 7 execution journal success transition should succeed: " + phase7Code + " " + phase7Message);
+    const auto succeededJournalSummary = tape_phase7::summarizeExecutionJournalSummary(succeededJournal);
+    expect(succeededJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSucceeded &&
+               succeededJournal.entries.front().terminal &&
+               succeededJournal.journalStatus == tape_phase7::kExecutionJournalStatusSucceeded,
+           "phase 7 execution journal success transition should persist terminal success state");
+    expect(succeededJournalSummary.succeededCount == 1 &&
+               succeededJournalSummary.terminalCount == 1 &&
+               succeededJournalSummary.allTerminal,
+           "phase 7 execution journal success transition should expose a fully terminal execution summary");
+
+    std::vector<tape_phase7::ExecutionJournalArtifact> executionJournals;
+    expect(tape_phase7::listExecutionJournals(0, &executionJournals, &phase7Code, &phase7Message),
+           "phase 7 execution journal inventory should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(executionJournals.begin(), executionJournals.end(),
+                       [&](const tape_phase7::ExecutionJournalArtifact& artifact) {
+                           return artifact.journalArtifact.artifactId == firstJournal.journalArtifact.artifactId &&
+                               artifact.journalStatus == tape_phase7::kExecutionJournalStatusSucceeded;
+                       }),
+           "phase 7 execution journal inventory should include the deterministic journal in its latest lifecycle state");
+
+    tape_phase7::ExecutionApplyArtifact firstApply;
+    bool applyCreated = false;
+    expect(tape_phase7::startExecutionApply({},
+                                            dispatchJournal.journalArtifact.artifactId,
+                                            {},
+                                            "executor-dispatch",
+                                            dispatchRequiredCapability,
+                                            "Creating an apply artifact from the dispatched journal.",
+                                            &firstApply,
+                                            &applyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 execution apply first start should succeed: " + phase7Code + " " + phase7Message);
+    expect(applyCreated, "phase 7 execution apply first start should create a new apply artifact");
+    expect(firstApply.entries.size() == dispatchedJournal.entries.size() &&
+               firstApply.applyStatus == tape_phase7::kExecutionJournalStatusInProgress,
+           "phase 7 execution apply should mirror the submitted journal entries and aggregate status");
+    expect(firstApply.initiatedBy == "executor-dispatch" &&
+               firstApply.executionCapability == dispatchRequiredCapability,
+           "phase 7 execution apply should preserve the initiating actor and capability");
+
+    tape_phase7::ExecutionApplyArtifact secondApply;
+    applyCreated = true;
+    expect(tape_phase7::startExecutionApply({},
+                                            dispatchJournal.journalArtifact.artifactId,
+                                            {},
+                                            "executor-dispatch",
+                                            dispatchRequiredCapability,
+                                            {},
+                                            &secondApply,
+                                            &applyCreated,
+                                            &phase7Code,
+                                            &phase7Message),
+           "phase 7 execution apply rerun should succeed: " + phase7Code + " " + phase7Message);
+    expect(!applyCreated, "phase 7 execution apply rerun should reuse the persisted apply artifact");
+    expect(firstApply.applyArtifact.artifactId == secondApply.applyArtifact.artifactId &&
+               firstApply.generatedAtUtc == secondApply.generatedAtUtc,
+           "phase 7 execution apply rerun should preserve deterministic identity and timestamp");
+
+    tape_phase7::ExecutionApplyArtifact readApply;
+    expect(tape_phase7::loadExecutionApplyArtifact({},
+                                                   firstApply.applyArtifact.artifactId,
+                                                   &readApply,
+                                                   &phase7Code,
+                                                   &phase7Message),
+           "phase 7 execution apply read should succeed: " + phase7Code + " " + phase7Message);
+    expect(readApply.journalArtifact.artifactId == dispatchJournal.journalArtifact.artifactId &&
+               readApply.ledgerArtifact.artifactId == dispatchReadyLedger.ledgerArtifact.artifactId,
+           "phase 7 execution apply read should preserve the linked journal and ledger lineage");
+
+    std::vector<std::string> applyEntryIds = {firstApply.entries.front().applyEntryId};
+    tape_phase7::ExecutionApplyArtifact invalidApplyUpdate;
+    std::vector<std::string> invalidApplyUpdatedEntryIds;
+    std::string invalidApplyAuditEventId;
+    expect(!tape_phase7::recordExecutionApplyEvent({},
+                                                   firstApply.applyArtifact.artifactId,
+                                                   applyEntryIds,
+                                                   tape_phase7::kExecutionEntryStatusFailed,
+                                                   "executor-dispatch",
+                                                   "Failed apply requires details.",
+                                                   {},
+                                                   {},
+                                                   &invalidApplyUpdate,
+                                                   &invalidApplyUpdatedEntryIds,
+                                                   &invalidApplyAuditEventId,
+                                                   &phase7Code,
+                                                   &phase7Message),
+           "phase 7 execution apply failed status should require failure details");
+    expect(phase7Code == "invalid_arguments" &&
+               phase7Message.find("failure_code or failure_message") != std::string::npos,
+           "phase 7 execution apply failed status should surface the failure-detail policy");
+
+    tape_phase7::ExecutionApplyArtifact succeededApply;
+    std::vector<std::string> succeededApplyEntryIds;
+    std::string succeededApplyAuditEventId;
+    expect(tape_phase7::recordExecutionApplyEvent({},
+                                                  firstApply.applyArtifact.artifactId,
+                                                  applyEntryIds,
+                                                  tape_phase7::kExecutionEntryStatusSucceeded,
+                                                  "executor-dispatch",
+                                                  "Apply completed successfully.",
+                                                  {},
+                                                  {},
+                                                  &succeededApply,
+                                                  &succeededApplyEntryIds,
+                                                  &succeededApplyAuditEventId,
+                                                  &phase7Code,
+                                                  &phase7Message),
+           "phase 7 execution apply success transition should succeed: " + phase7Code + " " + phase7Message);
+    expect(succeededApplyEntryIds == applyEntryIds && !succeededApplyAuditEventId.empty(),
+           "phase 7 execution apply success transition should report updated entry ids and an audit event id");
+    const auto succeededApplySummary = tape_phase7::summarizeExecutionApplySummary(succeededApply);
+    expect(succeededApply.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSucceeded &&
+               succeededApply.entries.front().terminal &&
+               succeededApply.applyStatus == tape_phase7::kExecutionJournalStatusSucceeded,
+           "phase 7 execution apply success transition should persist terminal success state");
+    expect(succeededApplySummary.succeededCount == 1 &&
+               succeededApplySummary.terminalCount == 1 &&
+               succeededApplySummary.allTerminal,
+           "phase 7 execution apply success transition should expose a fully terminal execution summary");
+
+    std::vector<tape_phase7::ExecutionApplyArtifact> executionApplies;
+    expect(tape_phase7::listExecutionApplies(0, &executionApplies, &phase7Code, &phase7Message),
+           "phase 7 execution apply inventory should succeed: " + phase7Code + " " + phase7Message);
+    expect(std::any_of(executionApplies.begin(), executionApplies.end(),
+                       [&](const tape_phase7::ExecutionApplyArtifact& artifact) {
+                           return artifact.applyArtifact.artifactId == firstApply.applyArtifact.artifactId &&
+                               artifact.applyStatus == tape_phase7::kExecutionJournalStatusSucceeded;
+                       }),
+           "phase 7 execution apply inventory should include the deterministic apply artifact in its latest lifecycle state");
+
+    tape_phase7::ExecutionJournalArtifact rereadDispatchJournal;
+    expect(tape_phase7::loadExecutionJournalArtifact({},
+                                                     dispatchJournal.journalArtifact.artifactId,
+                                                     &rereadDispatchJournal,
+                                                     &phase7Code,
+                                                     &phase7Message),
+           "phase 7 execution journal reread after apply should succeed: " + phase7Code + " " + phase7Message);
+    expect(rereadDispatchJournal.journalStatus == tape_phase7::kExecutionJournalStatusSucceeded &&
+               rereadDispatchJournal.entries.front().executionStatus == tape_phase7::kExecutionEntryStatusSucceeded,
+           "phase 7 execution apply updates should synchronize the linked execution journal");
+
     tape_phase7::ExecutionLedgerArtifact rereadReviewedLedger;
     expect(tape_phase7::loadExecutionLedgerArtifact({},
                                                     firstLedger.ledgerArtifact.artifactId,

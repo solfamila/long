@@ -1023,6 +1023,494 @@ json phase7ExecutionLedgerListResultSchema() {
     };
 }
 
+json phase7ExecutionJournalEntryStatusSchema() {
+    return stringEnumSchema({
+        tape_phase7::kExecutionEntryStatusQueued,
+        tape_phase7::kExecutionEntryStatusSubmitted,
+        tape_phase7::kExecutionEntryStatusSucceeded,
+        tape_phase7::kExecutionEntryStatusFailed,
+        tape_phase7::kExecutionEntryStatusCancelled
+    });
+}
+
+json phase7ExecutionJournalAggregateStatusSchema() {
+    return stringEnumSchema({
+        tape_phase7::kExecutionJournalStatusQueued,
+        tape_phase7::kExecutionJournalStatusInProgress,
+        tape_phase7::kExecutionJournalStatusSucceeded,
+        tape_phase7::kExecutionJournalStatusPartiallySucceeded,
+        tape_phase7::kExecutionJournalStatusFailed,
+        tape_phase7::kExecutionJournalStatusCancelled
+    });
+}
+
+json phase7ExecutionJournalFiltersSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_ledger_artifact_id", nullableStringSchema()},
+            {"playbook_artifact_id", nullableStringSchema()},
+            {"analysis_artifact_id", nullableStringSchema()},
+            {"source_artifact_id", nullableStringSchema()},
+            {"journal_status", json{{"oneOf", json::array({
+                phase7ExecutionJournalAggregateStatusSchema(),
+                json{{"type", "null"}}
+            })}}},
+            {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})},
+            {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"matched_count", nonNegativeIntegerSchema()}
+        }},
+        {"required", json::array({
+            "execution_ledger_artifact_id",
+            "playbook_artifact_id",
+            "analysis_artifact_id",
+            "source_artifact_id",
+            "journal_status",
+            "sort_by",
+            "limit",
+            "matched_count"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalEntrySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"journal_entry_id", stringSchema()},
+            {"ledger_entry_id", stringSchema()},
+            {"action_id", stringSchema()},
+            {"action_type", stringSchema()},
+            {"finding_id", stringSchema()},
+            {"execution_status", phase7ExecutionJournalEntryStatusSchema()},
+            {"idempotency_key", stringSchema()},
+            {"requires_manual_confirmation", booleanSchema()},
+            {"title", stringSchema()},
+            {"summary", stringSchema()},
+            {"queued_at_utc", stringSchema()},
+            {"started_at_utc", nullableStringSchema()},
+            {"completed_at_utc", nullableStringSchema()},
+            {"last_updated_at_utc", nullableStringSchema()},
+            {"last_updated_by", nullableStringSchema()},
+            {"execution_comment", nullableStringSchema()},
+            {"failure_code", nullableStringSchema()},
+            {"failure_message", nullableStringSchema()},
+            {"attempt_count", nonNegativeIntegerSchema()},
+            {"terminal", booleanSchema()},
+            {"suggested_tools", json{{"type", "array"}, {"items", stringSchema()}}}
+        }},
+        {"required", json::array({
+            "journal_entry_id",
+            "ledger_entry_id",
+            "action_id",
+            "action_type",
+            "finding_id",
+            "execution_status",
+            "idempotency_key",
+            "requires_manual_confirmation",
+            "title",
+            "summary",
+            "queued_at_utc",
+            "started_at_utc",
+            "completed_at_utc",
+            "last_updated_at_utc",
+            "last_updated_by",
+            "execution_comment",
+            "failure_code",
+            "failure_message",
+            "attempt_count",
+            "terminal",
+            "suggested_tools"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalSummarySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"queued_count", nonNegativeIntegerSchema()},
+            {"submitted_count", nonNegativeIntegerSchema()},
+            {"succeeded_count", nonNegativeIntegerSchema()},
+            {"failed_count", nonNegativeIntegerSchema()},
+            {"cancelled_count", nonNegativeIntegerSchema()},
+            {"terminal_count", nonNegativeIntegerSchema()},
+            {"actionable_entry_count", nonNegativeIntegerSchema()},
+            {"all_terminal", booleanSchema()}
+        }},
+        {"required", json::array({
+            "queued_count",
+            "submitted_count",
+            "succeeded_count",
+            "failed_count",
+            "cancelled_count",
+            "terminal_count",
+            "actionable_entry_count",
+            "all_terminal"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalAuditSummarySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"event_type", nullableStringSchema()},
+            {"generated_at_utc", nullableStringSchema()},
+            {"actor", nullableStringSchema()},
+            {"execution_status", json{{"oneOf", json::array({phase7ExecutionJournalEntryStatusSchema(), json{{"type", "null"}}})}}},
+            {"journal_status", json{{"oneOf", json::array({phase7ExecutionJournalAggregateStatusSchema(), json{{"type", "null"}}})}}},
+            {"message", nullableStringSchema()}
+        }},
+        {"required", json::array({
+            "event_type",
+            "generated_at_utc",
+            "actor",
+            "execution_status",
+            "journal_status",
+            "message"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_ledger", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_journal", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"generated_at_utc", stringSchema()},
+            {"initiated_by", stringSchema()},
+            {"execution_capability", stringSchema()},
+            {"journal_status", phase7ExecutionJournalAggregateStatusSchema()},
+            {"execution_policy", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"entry_count", nonNegativeIntegerSchema()},
+            {"execution_summary", phase7ExecutionJournalSummarySchema()},
+            {"latest_audit_event", phase7ExecutionJournalAuditSummarySchema()},
+            {"entries", json{{"type", "array"}, {"items", phase7ExecutionJournalEntrySchema()}}},
+            {"audit_trail", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "source_artifact",
+            "analysis_artifact",
+            "playbook_artifact",
+            "execution_ledger",
+            "execution_journal",
+            "mode",
+            "generated_at_utc",
+            "initiated_by",
+            "execution_capability",
+            "journal_status",
+            "execution_policy",
+            "filtered_finding_ids",
+            "entry_count",
+            "execution_summary",
+            "latest_audit_event",
+            "entries",
+            "audit_trail",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalStartResultSchema() {
+    json schema = phase7ExecutionJournalResultSchema();
+    schema["properties"]["artifact_status"] = stringEnumSchema({"created", "reused"});
+    schema["required"].push_back("artifact_status");
+    return schema;
+}
+
+json phase7ExecutionJournalEventResultSchema() {
+    json schema = phase7ExecutionJournalResultSchema();
+    schema["properties"]["updated_entry_ids"] = json{{"type", "array"}, {"items", stringSchema()}};
+    schema["properties"]["audit_event_id"] = stringSchema();
+    schema["required"].push_back("updated_entry_ids");
+    schema["required"].push_back("audit_event_id");
+    return schema;
+}
+
+json phase7ExecutionJournalRowSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_journal", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_ledger", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"generated_at_utc", stringSchema()},
+            {"journal_status", phase7ExecutionJournalAggregateStatusSchema()},
+            {"entry_count", nonNegativeIntegerSchema()},
+            {"execution_summary", phase7ExecutionJournalSummarySchema()},
+            {"latest_audit_event", phase7ExecutionJournalAuditSummarySchema()},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "execution_journal",
+            "execution_ledger",
+            "playbook_artifact",
+            "analysis_artifact",
+            "source_artifact",
+            "mode",
+            "generated_at_utc",
+            "journal_status",
+            "entry_count",
+            "execution_summary",
+            "latest_audit_event",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"applied_filters", phase7ExecutionJournalFiltersSchema()},
+            {"execution_journals", json{{"type", "array"}, {"items", phase7ExecutionJournalRowSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "applied_filters", "execution_journals"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyFiltersSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_journal_artifact_id", nullableStringSchema()},
+            {"execution_ledger_artifact_id", nullableStringSchema()},
+            {"playbook_artifact_id", nullableStringSchema()},
+            {"analysis_artifact_id", nullableStringSchema()},
+            {"source_artifact_id", nullableStringSchema()},
+            {"apply_status", json{{"oneOf", json::array({
+                phase7ExecutionJournalAggregateStatusSchema(),
+                json{{"type", "null"}}
+            })}}},
+            {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})},
+            {"limit", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"matched_count", nonNegativeIntegerSchema()}
+        }},
+        {"required", json::array({
+            "execution_journal_artifact_id",
+            "execution_ledger_artifact_id",
+            "playbook_artifact_id",
+            "analysis_artifact_id",
+            "source_artifact_id",
+            "apply_status",
+            "sort_by",
+            "limit",
+            "matched_count"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyEntrySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"apply_entry_id", stringSchema()},
+            {"journal_entry_id", stringSchema()},
+            {"ledger_entry_id", stringSchema()},
+            {"action_id", stringSchema()},
+            {"action_type", stringSchema()},
+            {"finding_id", stringSchema()},
+            {"execution_status", phase7ExecutionJournalEntryStatusSchema()},
+            {"idempotency_key", stringSchema()},
+            {"requires_manual_confirmation", booleanSchema()},
+            {"title", stringSchema()},
+            {"summary", stringSchema()},
+            {"submitted_at_utc", stringSchema()},
+            {"completed_at_utc", nullableStringSchema()},
+            {"last_updated_at_utc", nullableStringSchema()},
+            {"last_updated_by", nullableStringSchema()},
+            {"execution_comment", nullableStringSchema()},
+            {"failure_code", nullableStringSchema()},
+            {"failure_message", nullableStringSchema()},
+            {"attempt_count", nonNegativeIntegerSchema()},
+            {"terminal", booleanSchema()},
+            {"suggested_tools", json{{"type", "array"}, {"items", stringSchema()}}}
+        }},
+        {"required", json::array({
+            "apply_entry_id",
+            "journal_entry_id",
+            "ledger_entry_id",
+            "action_id",
+            "action_type",
+            "finding_id",
+            "execution_status",
+            "idempotency_key",
+            "requires_manual_confirmation",
+            "title",
+            "summary",
+            "submitted_at_utc",
+            "completed_at_utc",
+            "last_updated_at_utc",
+            "last_updated_by",
+            "execution_comment",
+            "failure_code",
+            "failure_message",
+            "attempt_count",
+            "terminal",
+            "suggested_tools"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyAuditSummarySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"event_type", nullableStringSchema()},
+            {"generated_at_utc", nullableStringSchema()},
+            {"actor", nullableStringSchema()},
+            {"execution_status", json{{"oneOf", json::array({phase7ExecutionJournalEntryStatusSchema(), json{{"type", "null"}}})}}},
+            {"apply_status", json{{"oneOf", json::array({phase7ExecutionJournalAggregateStatusSchema(), json{{"type", "null"}}})}}},
+            {"message", nullableStringSchema()}
+        }},
+        {"required", json::array({
+            "event_type",
+            "generated_at_utc",
+            "actor",
+            "execution_status",
+            "apply_status",
+            "message"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_ledger", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_journal", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_apply", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"generated_at_utc", stringSchema()},
+            {"initiated_by", stringSchema()},
+            {"execution_capability", stringSchema()},
+            {"apply_status", phase7ExecutionJournalAggregateStatusSchema()},
+            {"execution_policy", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"filtered_finding_ids", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"entry_count", nonNegativeIntegerSchema()},
+            {"execution_summary", phase7ExecutionJournalSummarySchema()},
+            {"latest_audit_event", phase7ExecutionApplyAuditSummarySchema()},
+            {"entries", json{{"type", "array"}, {"items", phase7ExecutionApplyEntrySchema()}}},
+            {"audit_trail", json{{"type", "array"}, {"items", json{{"type", "object"}, {"additionalProperties", true}}}}},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "source_artifact",
+            "analysis_artifact",
+            "playbook_artifact",
+            "execution_ledger",
+            "execution_journal",
+            "execution_apply",
+            "mode",
+            "generated_at_utc",
+            "initiated_by",
+            "execution_capability",
+            "apply_status",
+            "execution_policy",
+            "filtered_finding_ids",
+            "entry_count",
+            "execution_summary",
+            "latest_audit_event",
+            "entries",
+            "audit_trail",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyStartResultSchema() {
+    json schema = phase7ExecutionApplyResultSchema();
+    schema["properties"]["artifact_status"] = stringEnumSchema({"created", "reused"});
+    schema["required"].push_back("artifact_status");
+    return schema;
+}
+
+json phase7ExecutionApplyEventResultSchema() {
+    json schema = phase7ExecutionApplyResultSchema();
+    schema["properties"]["updated_entry_ids"] = json{{"type", "array"}, {"items", stringSchema()}};
+    schema["properties"]["audit_event_id"] = stringSchema();
+    schema["required"].push_back("updated_entry_ids");
+    schema["required"].push_back("audit_event_id");
+    return schema;
+}
+
+json phase7ExecutionApplyRowSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_apply", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_journal", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"execution_ledger", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"playbook_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"analysis_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"source_artifact", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"mode", stringEnumSchema({tape_phase7::kDefaultPlaybookMode, tape_phase7::kApplyPlaybookMode})},
+            {"generated_at_utc", stringSchema()},
+            {"apply_status", phase7ExecutionJournalAggregateStatusSchema()},
+            {"entry_count", nonNegativeIntegerSchema()},
+            {"execution_summary", phase7ExecutionJournalSummarySchema()},
+            {"latest_audit_event", phase7ExecutionApplyAuditSummarySchema()},
+            {"replay_context", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "execution_apply",
+            "execution_journal",
+            "execution_ledger",
+            "playbook_artifact",
+            "analysis_artifact",
+            "source_artifact",
+            "mode",
+            "generated_at_utc",
+            "apply_status",
+            "entry_count",
+            "execution_summary",
+            "latest_audit_event",
+            "replay_context"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"applied_filters", phase7ExecutionApplyFiltersSchema()},
+            {"execution_applies", json{{"type", "array"}, {"items", phase7ExecutionApplyRowSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "applied_filters", "execution_applies"})},
+        {"additionalProperties", false}
+    };
+}
+
 json seekOrderResultSchema() {
     return json{
         {"type", "object"},
@@ -1187,6 +1675,24 @@ std::string toolTitle(const ToolSpec& tool) {
             return "Read Execution Ledger";
         case ToolId::RecordExecutionLedgerReview:
             return "Record Execution Ledger Review";
+        case ToolId::StartExecutionJournal:
+            return "Start Execution Journal";
+        case ToolId::ListExecutionJournals:
+            return "List Execution Journals";
+        case ToolId::ReadExecutionJournal:
+            return "Read Execution Journal";
+        case ToolId::DispatchExecutionJournal:
+            return "Dispatch Execution Journal";
+        case ToolId::RecordExecutionJournalEvent:
+            return "Record Execution Journal Event";
+        case ToolId::StartExecutionApply:
+            return "Start Execution Apply";
+        case ToolId::ListExecutionApplies:
+            return "List Execution Applies";
+        case ToolId::ReadExecutionApply:
+            return "Read Execution Apply";
+        case ToolId::RecordExecutionApplyEvent:
+            return "Record Execution Apply Event";
     }
     return tool.name;
 }
@@ -1204,6 +1710,9 @@ json toolAnnotationsForSpec(const ToolSpec& tool) {
         case ToolId::PlaybookApply:
         case ToolId::PrepareExecutionLedger:
         case ToolId::RecordExecutionLedgerReview:
+        case ToolId::StartExecutionJournal:
+        case ToolId::DispatchExecutionJournal:
+        case ToolId::RecordExecutionJournalEvent:
             return toolAnnotations(false, true, false);
         default:
             return toolAnnotations(true, true, false);
@@ -1312,6 +1821,80 @@ json toolInputSchemaForList(const ToolSpec& tool) {
                      {"review_status", tape_phase7::kLedgerEntryStatusApproved},
                      {"actor", "tapescope"},
                      {"comment", "Reviewed and safe for deferred follow-up."}}
+            });
+        case ToolId::StartExecutionJournal:
+            return withSchemaExamples(std::move(schema), {
+                json{{"execution_ledger_artifact_id", "phase7-ledger-1234abcd"},
+                     {"actor", "execution-operator"},
+                     {"execution_capability", "phase7.execution_operator.v1"}}
+            });
+        case ToolId::ListExecutionJournals:
+            return withSchemaExamples(std::move(schema), {
+                json{{"limit", 10}},
+                json{{"execution_ledger_artifact_id", "phase7-ledger-1234abcd"}},
+                json{{"journal_status", "execution_in_progress"}, {"sort_by", "attention_desc"}}
+            });
+        case ToolId::ReadExecutionJournal:
+            return withSchemaExamples(std::move(schema), {json{{"execution_journal_artifact_id", "phase7-journal-1234abcd"}}});
+        case ToolId::DispatchExecutionJournal:
+            return withSchemaExamples(std::move(schema), {
+                json{{"execution_journal_artifact_id", "phase7-journal-1234abcd"},
+                     {"actor", "execution-operator"},
+                     {"execution_capability", "phase7.execution_operator.v1"}},
+                json{{"execution_journal_artifact_id", "phase7-journal-1234abcd"},
+                     {"entry_ids", json::array({"phase7-journal-entry-1111"})},
+                     {"actor", "execution-operator"},
+                     {"execution_capability", "phase7.execution_operator.v1"},
+                     {"comment", "Dispatching the selected execution step."}}
+            });
+        case ToolId::RecordExecutionJournalEvent:
+            return withSchemaExamples(std::move(schema), {
+                json{{"execution_journal_artifact_id", "phase7-journal-1234abcd"},
+                     {"entry_ids", json::array({"phase7-journal-entry-1111"})},
+                     {"execution_status", tape_phase7::kExecutionEntryStatusSubmitted},
+                     {"actor", "execution-operator"},
+                     {"comment", "Submitted to the controlled execution path."}},
+                json{{"execution_journal_artifact_id", "phase7-journal-1234abcd"},
+                     {"entry_ids", json::array({"phase7-journal-entry-1111"})},
+                     {"execution_status", tape_phase7::kExecutionEntryStatusFailed},
+                     {"actor", "execution-operator"},
+                     {"comment", "Submission rejected by execution gate."},
+                     {"failure_code", "gate_rejected"},
+                     {"failure_message", "Pre-trade limit check rejected the action."}}
+            });
+        case ToolId::StartExecutionApply:
+            return withSchemaExamples(std::move(schema), {
+                json{{"execution_journal_artifact_id", "phase7-journal-1234abcd"},
+                     {"actor", "execution-operator"},
+                     {"execution_capability", "phase7.execution_operator.v1"}},
+                json{{"execution_journal_artifact_id", "phase7-journal-1234abcd"},
+                     {"entry_ids", json::array({"phase7-journal-entry-1111"})},
+                     {"actor", "execution-operator"},
+                     {"execution_capability", "phase7.execution_operator.v1"},
+                     {"comment", "Creating a durable apply artifact for the submitted entry."}}
+            });
+        case ToolId::ListExecutionApplies:
+            return withSchemaExamples(std::move(schema), {
+                json{{"limit", 10}},
+                json{{"execution_journal_artifact_id", "phase7-journal-1234abcd"}},
+                json{{"apply_status", "execution_in_progress"}, {"sort_by", "attention_desc"}}
+            });
+        case ToolId::ReadExecutionApply:
+            return withSchemaExamples(std::move(schema), {json{{"execution_apply_artifact_id", "phase7-apply-1234abcd"}}});
+        case ToolId::RecordExecutionApplyEvent:
+            return withSchemaExamples(std::move(schema), {
+                json{{"execution_apply_artifact_id", "phase7-apply-1234abcd"},
+                     {"entry_ids", json::array({"phase7-apply-entry-1111"})},
+                     {"execution_status", tape_phase7::kExecutionEntryStatusSucceeded},
+                     {"actor", "execution-operator"},
+                     {"comment", "Execution completed successfully."}},
+                json{{"execution_apply_artifact_id", "phase7-apply-1234abcd"},
+                     {"entry_ids", json::array({"phase7-apply-entry-1111"})},
+                     {"execution_status", tape_phase7::kExecutionEntryStatusFailed},
+                     {"actor", "execution-operator"},
+                     {"comment", "Execution failed after submission."},
+                     {"failure_code", "venue_reject"},
+                     {"failure_message", "Exchange rejected the submitted action."}}
             });
         case ToolId::Status:
         default:
@@ -1436,6 +2019,22 @@ std::vector<PromptSpec> buildPromptSpecs() {
             "Guide an agent through reopening a stored Phase 7 execution/audit ledger while live apply remains deferred.",
             {
                 {"execution_ledger_artifact_id", "Stored Phase 7 execution ledger artifact id.", true}
+            }
+        },
+        {
+            "review_phase7_execution_journal",
+            "Review Phase 7 Execution Journal",
+            "Guide an agent through reopening a stored Phase 7 execution journal and preserving the append-only execution audit trail.",
+            {
+                {"execution_journal_artifact_id", "Stored Phase 7 execution journal artifact id.", true}
+            }
+        },
+        {
+            "review_phase7_execution_apply",
+            "Review Phase 7 Execution Apply",
+            "Guide an agent through reopening a stored Phase 7 execution-apply artifact and reconciling it with the linked execution journal.",
+            {
+                {"execution_apply_artifact_id", "Stored Phase 7 execution apply artifact id.", true}
             }
         }
     };
@@ -1657,6 +2256,30 @@ std::string promptMessageForPrompt(const PromptSpec& prompt, const json& args) {
             << "/markdown`, then follow the linked playbook and analysis artifacts with `tapescript_read_playbook_artifact` and `tapescript_findings_list`. If review decisions need to be captured, call `tapescript_record_execution_ledger_review`. Keep apply deferred and treat the ledger as an audit/review surface only. Return: review status, blocked actions, required confirmations, and the next safe investigation steps.";
         return out.str();
     }
+    if (prompt.name == "review_phase7_execution_journal") {
+        const std::string journalArtifactId = promptStringArg(args, "execution_journal_artifact_id");
+        std::ostringstream out;
+        out << "Review stored Phase 7 execution journal `"
+            << (journalArtifactId.empty() ? "<execution_journal_artifact_id>" : journalArtifactId)
+            << "`. Reopen it with `resources/read` on `tape://phase7/journal/"
+            << (journalArtifactId.empty() ? "<execution_journal_artifact_id>" : journalArtifactId)
+            << "` and `tape://phase7/journal/"
+            << (journalArtifactId.empty() ? "<execution_journal_artifact_id>" : journalArtifactId)
+            << "/markdown`, then follow the linked ledger/playbook/analysis artifacts. If action lifecycle changes need to be recorded, call `tapescript_record_execution_journal_event` with explicit `entry_ids`, `execution_status`, `actor`, and failure details when needed. Return: execution status, queued/submitted/terminal counts, failed actions, and the safest next execution step.";
+        return out.str();
+    }
+    if (prompt.name == "review_phase7_execution_apply") {
+        const std::string applyArtifactId = promptStringArg(args, "execution_apply_artifact_id");
+        std::ostringstream out;
+        out << "Review stored Phase 7 execution apply `"
+            << (applyArtifactId.empty() ? "<execution_apply_artifact_id>" : applyArtifactId)
+            << "`. Reopen it with `resources/read` on `tape://phase7/apply/"
+            << (applyArtifactId.empty() ? "<execution_apply_artifact_id>" : applyArtifactId)
+            << "` and `tape://phase7/apply/"
+            << (applyArtifactId.empty() ? "<execution_apply_artifact_id>" : applyArtifactId)
+            << "/markdown`, compare it with the linked execution journal, and record outcome changes only through `tapescript_record_execution_apply_event` so the apply artifact and journal stay synchronized. Return: apply status, entry-level outcomes, unresolved items, and the safest next execution step.";
+        return out.str();
+    }
     return prompt.description;
 }
 
@@ -1673,7 +2296,11 @@ enum class ResourceKind {
     Phase7PlaybookJson,
     Phase7PlaybookMarkdown,
     Phase7ExecutionLedgerJson,
-    Phase7ExecutionLedgerMarkdown
+    Phase7ExecutionLedgerMarkdown,
+    Phase7ExecutionJournalJson,
+    Phase7ExecutionJournalMarkdown,
+    Phase7ExecutionApplyJson,
+    Phase7ExecutionApplyMarkdown
 };
 
 struct ParsedResourceUri {
@@ -1722,6 +2349,22 @@ std::string phase7ExecutionLedgerMarkdownUri(std::string_view artifactId) {
     return "tape://phase7/ledger/" + std::string(artifactId) + "/markdown";
 }
 
+std::string phase7ExecutionJournalUri(std::string_view artifactId) {
+    return "tape://phase7/journal/" + std::string(artifactId);
+}
+
+std::string phase7ExecutionJournalMarkdownUri(std::string_view artifactId) {
+    return "tape://phase7/journal/" + std::string(artifactId) + "/markdown";
+}
+
+std::string phase7ExecutionApplyUri(std::string_view artifactId) {
+    return "tape://phase7/apply/" + std::string(artifactId);
+}
+
+std::string phase7ExecutionApplyMarkdownUri(std::string_view artifactId) {
+    return "tape://phase7/apply/" + std::string(artifactId) + "/markdown";
+}
+
 ParsedResourceUri parseResourceUri(std::string_view uri) {
     ParsedResourceUri parsed;
     const std::string text(uri);
@@ -1747,6 +2390,8 @@ ParsedResourceUri parseResourceUri(std::string_view uri) {
     constexpr std::string_view kPhase7AnalysisPrefix = "tape://phase7/analysis/";
     constexpr std::string_view kPhase7PlaybookPrefix = "tape://phase7/playbook/";
     constexpr std::string_view kPhase7ExecutionLedgerPrefix = "tape://phase7/ledger/";
+    constexpr std::string_view kPhase7ExecutionJournalPrefix = "tape://phase7/journal/";
+    constexpr std::string_view kPhase7ExecutionApplyPrefix = "tape://phase7/apply/";
 
     if (text.rfind(std::string(kSessionReportPrefix), 0) == 0) {
         parsed.kind = ResourceKind::SessionReportJson;
@@ -1817,6 +2462,30 @@ ParsedResourceUri parseResourceUri(std::string_view uri) {
             parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionLedgerJson;
         } else if (text.substr(formatPos + 1) == "markdown") {
             parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionLedgerMarkdown;
+        }
+        return parsed;
+    }
+    if (text.rfind(std::string(kPhase7ExecutionJournalPrefix), 0) == 0) {
+        const std::size_t formatPos = text.find('/', kPhase7ExecutionJournalPrefix.size());
+        parsed.artifactId = text.substr(
+            kPhase7ExecutionJournalPrefix.size(),
+            (formatPos == std::string::npos ? text.size() : formatPos) - kPhase7ExecutionJournalPrefix.size());
+        if (formatPos == std::string::npos) {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionJournalJson;
+        } else if (text.substr(formatPos + 1) == "markdown") {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionJournalMarkdown;
+        }
+        return parsed;
+    }
+    if (text.rfind(std::string(kPhase7ExecutionApplyPrefix), 0) == 0) {
+        const std::size_t formatPos = text.find('/', kPhase7ExecutionApplyPrefix.size());
+        parsed.artifactId = text.substr(
+            kPhase7ExecutionApplyPrefix.size(),
+            (formatPos == std::string::npos ? text.size() : formatPos) - kPhase7ExecutionApplyPrefix.size());
+        if (formatPos == std::string::npos) {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionApplyJson;
+        } else if (text.substr(formatPos + 1) == "markdown") {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionApplyMarkdown;
         }
         return parsed;
     }
@@ -2098,6 +2767,166 @@ json phase7ExecutionLedgerReviewInputSchema() {
         {"oneOf", json::array({
             json{{"required", json::array({"execution_ledger_manifest_path", "entry_ids", "review_status", "actor"})}},
             json{{"required", json::array({"execution_ledger_artifact_id", "entry_ids", "review_status", "actor"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalRefInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_journal_manifest_path", stringSchema()},
+            {"execution_journal_artifact_id", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_journal_manifest_path"})}},
+            json{{"required", json::array({"execution_journal_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_ledger_manifest_path", stringSchema()},
+            {"execution_ledger_artifact_id", stringSchema()},
+            {"actor", stringSchema()},
+            {"execution_capability", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_ledger_manifest_path", "actor", "execution_capability"})}},
+            json{{"required", json::array({"execution_ledger_artifact_id", "actor", "execution_capability"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalInventoryInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"limit", positiveIntegerSchema()},
+            {"execution_ledger_artifact_id", stringSchema()},
+            {"playbook_artifact_id", stringSchema()},
+            {"analysis_artifact_id", stringSchema()},
+            {"source_artifact_id", stringSchema()},
+            {"journal_status", phase7ExecutionJournalAggregateStatusSchema()},
+            {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})}
+        }},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalDispatchInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_journal_manifest_path", stringSchema()},
+            {"execution_journal_artifact_id", stringSchema()},
+            {"entry_ids", json{{"type", "array"}, {"items", stringSchema()}, {"minItems", 1}}},
+            {"actor", stringSchema()},
+            {"execution_capability", stringSchema()},
+            {"comment", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_journal_manifest_path", "actor", "execution_capability"})}},
+            json{{"required", json::array({"execution_journal_artifact_id", "actor", "execution_capability"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionJournalEventInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_journal_manifest_path", stringSchema()},
+            {"execution_journal_artifact_id", stringSchema()},
+            {"entry_ids", json{{"type", "array"}, {"items", stringSchema()}, {"minItems", 1}}},
+            {"execution_status", phase7ExecutionJournalEntryStatusSchema()},
+            {"actor", stringSchema()},
+            {"comment", stringSchema()},
+            {"failure_code", stringSchema()},
+            {"failure_message", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_journal_manifest_path", "entry_ids", "execution_status", "actor"})}},
+            json{{"required", json::array({"execution_journal_artifact_id", "entry_ids", "execution_status", "actor"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyRefInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_apply_manifest_path", stringSchema()},
+            {"execution_apply_artifact_id", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_apply_manifest_path"})}},
+            json{{"required", json::array({"execution_apply_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_journal_manifest_path", stringSchema()},
+            {"execution_journal_artifact_id", stringSchema()},
+            {"entry_ids", json{{"type", "array"}, {"items", stringSchema()}, {"minItems", 1}}},
+            {"actor", stringSchema()},
+            {"execution_capability", stringSchema()},
+            {"comment", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_journal_manifest_path", "actor", "execution_capability"})}},
+            json{{"required", json::array({"execution_journal_artifact_id", "actor", "execution_capability"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyInventoryInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"limit", positiveIntegerSchema()},
+            {"execution_journal_artifact_id", stringSchema()},
+            {"execution_ledger_artifact_id", stringSchema()},
+            {"playbook_artifact_id", stringSchema()},
+            {"analysis_artifact_id", stringSchema()},
+            {"source_artifact_id", stringSchema()},
+            {"apply_status", phase7ExecutionJournalAggregateStatusSchema()},
+            {"sort_by", stringEnumSchema({"generated_at_desc", "attention_desc", "source_artifact_asc"})}
+        }},
+        {"additionalProperties", false}
+    };
+}
+
+json phase7ExecutionApplyEventInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"execution_apply_manifest_path", stringSchema()},
+            {"execution_apply_artifact_id", stringSchema()},
+            {"entry_ids", json{{"type", "array"}, {"items", stringSchema()}, {"minItems", 1}}},
+            {"execution_status", phase7ExecutionJournalEntryStatusSchema()},
+            {"actor", stringSchema()},
+            {"comment", stringSchema()},
+            {"failure_code", stringSchema()},
+            {"failure_message", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"execution_apply_manifest_path", "entry_ids", "execution_status", "actor"})}},
+            json{{"required", json::array({"execution_apply_artifact_id", "entry_ids", "execution_status", "actor"})}}
         })},
         {"additionalProperties", false}
     };
@@ -2576,7 +3405,97 @@ std::vector<ToolSpec> buildToolSpecs() {
          tape_engine::QueryOperation::Unknown,
          false,
          kPhase7ContractVersion,
-         "phase7_record_execution_ledger_review_local"}
+         "phase7_record_execution_ledger_review_local"},
+        {ToolId::StartExecutionJournal,
+         "tapescript_start_execution_journal",
+         "Create or reopen a durable Phase 7 execution journal from a ready execution ledger.",
+         phase7ExecutionJournalInputSchema(),
+         phase7ExecutionJournalStartResultSchema(),
+         "phase7.execution-journal.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_start_execution_journal_local"},
+        {ToolId::ListExecutionJournals,
+         "tapescript_list_execution_journals",
+         "List persisted local Phase 7 execution journal artifacts.",
+         phase7ExecutionJournalInventoryInputSchema(),
+         phase7ExecutionJournalListResultSchema(),
+         "phase7.execution-journal-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_list_execution_journals_local"},
+        {ToolId::ReadExecutionJournal,
+         "tapescript_read_execution_journal",
+         "Read a stored local Phase 7 execution journal artifact by id or manifest path.",
+         phase7ExecutionJournalRefInputSchema(),
+         phase7ExecutionJournalResultSchema(),
+         "phase7.execution-journal-read.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_read_execution_journal_local"},
+        {ToolId::DispatchExecutionJournal,
+         "tapescript_dispatch_execution_journal",
+         "Dispatch queued Phase 7 execution journal entries into the controlled execution path.",
+         phase7ExecutionJournalDispatchInputSchema(),
+         phase7ExecutionJournalEventResultSchema(),
+         "phase7.execution-journal-event.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_dispatch_execution_journal_local"},
+        {ToolId::RecordExecutionJournalEvent,
+         "tapescript_record_execution_journal_event",
+         "Append an execution lifecycle update to one or more Phase 7 execution journal entries.",
+         phase7ExecutionJournalEventInputSchema(),
+         phase7ExecutionJournalEventResultSchema(),
+         "phase7.execution-journal-event.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_record_execution_journal_event_local"},
+        {ToolId::StartExecutionApply,
+         "tapescript_start_execution_apply",
+         "Create or reopen a durable Phase 7 execution-apply artifact from submitted journal entries.",
+         phase7ExecutionApplyInputSchema(),
+         phase7ExecutionApplyStartResultSchema(),
+         "phase7.execution-apply.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_start_execution_apply_local"},
+        {ToolId::ListExecutionApplies,
+         "tapescript_list_execution_applies",
+         "List persisted local Phase 7 execution-apply artifacts.",
+         phase7ExecutionApplyInventoryInputSchema(),
+         phase7ExecutionApplyListResultSchema(),
+         "phase7.execution-apply-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_list_execution_applies_local"},
+        {ToolId::ReadExecutionApply,
+         "tapescript_read_execution_apply",
+         "Read a stored local Phase 7 execution-apply artifact by id or manifest path.",
+         phase7ExecutionApplyRefInputSchema(),
+         phase7ExecutionApplyResultSchema(),
+         "phase7.execution-apply-read.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_read_execution_apply_local"},
+        {ToolId::RecordExecutionApplyEvent,
+         "tapescript_record_execution_apply_event",
+         "Synchronize execution results into a Phase 7 execution-apply artifact and its source journal.",
+         phase7ExecutionApplyEventInputSchema(),
+         phase7ExecutionApplyEventResultSchema(),
+         "phase7.execution-apply-event.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase7ContractVersion,
+         "phase7_record_execution_apply_event_local"}
     };
 }
 
@@ -2793,6 +3712,67 @@ struct Phase7ExecutionLedgerReviewSelection {
     std::string reviewStatus;
     std::string actor;
     std::string comment;
+};
+
+struct Phase7ExecutionJournalInventorySelection {
+    std::size_t limit = 25;
+    std::string ledgerArtifactId;
+    std::string playbookArtifactId;
+    std::string analysisArtifactId;
+    std::string sourceArtifactId;
+    std::string journalStatus;
+    std::string sortBy = "generated_at_desc";
+};
+
+struct Phase7ExecutionJournalDispatchSelection {
+    std::string manifestPath;
+    std::string artifactId;
+    std::vector<std::string> entryIds;
+    std::string actor;
+    std::string executionCapability;
+    std::string comment;
+};
+
+struct Phase7ExecutionJournalEventSelection {
+    std::string manifestPath;
+    std::string artifactId;
+    std::vector<std::string> entryIds;
+    std::string executionStatus;
+    std::string actor;
+    std::string comment;
+    std::string failureCode;
+    std::string failureMessage;
+};
+
+struct Phase7ExecutionApplySelection {
+    std::string manifestPath;
+    std::string artifactId;
+    std::vector<std::string> entryIds;
+    std::string actor;
+    std::string executionCapability;
+    std::string comment;
+};
+
+struct Phase7ExecutionApplyInventorySelection {
+    std::size_t limit = 25;
+    std::string journalArtifactId;
+    std::string ledgerArtifactId;
+    std::string playbookArtifactId;
+    std::string analysisArtifactId;
+    std::string sourceArtifactId;
+    std::string applyStatus;
+    std::string sortBy = "generated_at_desc";
+};
+
+struct Phase7ExecutionApplyEventSelection {
+    std::string manifestPath;
+    std::string artifactId;
+    std::vector<std::string> entryIds;
+    std::string executionStatus;
+    std::string actor;
+    std::string comment;
+    std::string failureCode;
+    std::string failureMessage;
 };
 
 std::optional<int> phase7SeverityRank(std::string_view severity) {
@@ -3096,6 +4076,494 @@ bool parsePhase7ExecutionLedgerReviewArgs(const json& args,
     return true;
 }
 
+bool parsePhase7ExecutionJournalRefArgs(const json& args,
+                                        std::string* outManifestPath,
+                                        std::string* outArtifactId,
+                                        std::string* outCode,
+                                        std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"execution_journal_manifest_path", "execution_journal_artifact_id"})) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_journal_manifest_path or execution_journal_artifact_id is required");
+    }
+
+    const bool hasManifest = args.contains("execution_journal_manifest_path");
+    const bool hasArtifactId = args.contains("execution_journal_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_journal_manifest_path or execution_journal_artifact_id is required");
+    }
+
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("execution_journal_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "execution_journal_manifest_path must be a non-empty string");
+        }
+        if (outManifestPath != nullptr) {
+            *outManifestPath = *manifestPath;
+        }
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("execution_journal_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "execution_journal_artifact_id must be a non-empty string");
+        }
+        if (outArtifactId != nullptr) {
+            *outArtifactId = *artifactId;
+        }
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionJournalDispatchArgs(const json& args,
+                                             Phase7ExecutionJournalDispatchSelection* outSelection,
+                                             std::string* outCode,
+                                             std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args,
+                          {"execution_journal_manifest_path",
+                           "execution_journal_artifact_id",
+                           "entry_ids",
+                           "actor",
+                           "execution_capability",
+                           "comment"})) {
+        return fail("invalid_arguments",
+                    "execution journal dispatch arguments support one journal reference plus optional entry_ids, actor, execution_capability, and comment");
+    }
+
+    Phase7ExecutionJournalDispatchSelection selection;
+    const bool hasManifest = args.contains("execution_journal_manifest_path");
+    const bool hasArtifactId = args.contains("execution_journal_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_journal_manifest_path or execution_journal_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("execution_journal_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "execution_journal_manifest_path must be a non-empty string");
+        }
+        selection.manifestPath = *manifestPath;
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("execution_journal_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "execution_journal_artifact_id must be a non-empty string");
+        }
+        selection.artifactId = *artifactId;
+    }
+    if (!args.contains("actor")) {
+        return fail("invalid_arguments", "actor is required");
+    }
+    const auto actor = asNonEmptyString(args.at("actor"));
+    if (!actor.has_value()) {
+        return fail("invalid_arguments", "actor must be a non-empty string");
+    }
+    selection.actor = *actor;
+    if (!args.contains("execution_capability")) {
+        return fail("invalid_arguments", "execution_capability is required");
+    }
+    const auto executionCapability = asNonEmptyString(args.at("execution_capability"));
+    if (!executionCapability.has_value()) {
+        return fail("invalid_arguments", "execution_capability must be a non-empty string");
+    }
+    selection.executionCapability = *executionCapability;
+    if (args.contains("entry_ids")) {
+        const auto entryIds = asNonEmptyStringArray(args.at("entry_ids"));
+        if (!entryIds.has_value() || entryIds->empty()) {
+            return fail("invalid_arguments", "entry_ids must be an array of non-empty strings when provided");
+        }
+        selection.entryIds = *entryIds;
+    }
+    if (args.contains("comment")) {
+        const auto comment = asNonEmptyString(args.at("comment"));
+        if (!comment.has_value()) {
+            return fail("invalid_arguments", "comment must be a non-empty string");
+        }
+        selection.comment = *comment;
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionJournalEventArgs(const json& args,
+                                          Phase7ExecutionJournalEventSelection* outSelection,
+                                          std::string* outCode,
+                                          std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args,
+                          {"execution_journal_manifest_path",
+                           "execution_journal_artifact_id",
+                           "entry_ids",
+                           "execution_status",
+                           "actor",
+                           "comment",
+                           "failure_code",
+                           "failure_message"})) {
+        return fail("invalid_arguments",
+                    "execution journal event arguments support one journal reference plus entry_ids, execution_status, actor, comment, and optional failure details");
+    }
+
+    Phase7ExecutionJournalEventSelection selection;
+    const bool hasManifest = args.contains("execution_journal_manifest_path");
+    const bool hasArtifactId = args.contains("execution_journal_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_journal_manifest_path or execution_journal_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("execution_journal_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "execution_journal_manifest_path must be a non-empty string");
+        }
+        selection.manifestPath = *manifestPath;
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("execution_journal_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "execution_journal_artifact_id must be a non-empty string");
+        }
+        selection.artifactId = *artifactId;
+    }
+    if (!args.contains("entry_ids")) {
+        return fail("invalid_arguments", "entry_ids is required");
+    }
+    const auto entryIds = asNonEmptyStringArray(args.at("entry_ids"));
+    if (!entryIds.has_value() || entryIds->empty()) {
+        return fail("invalid_arguments", "entry_ids must be an array of non-empty strings");
+    }
+    selection.entryIds = *entryIds;
+    if (!args.contains("execution_status")) {
+        return fail("invalid_arguments", "execution_status is required");
+    }
+    const auto executionStatus = asNonEmptyString(args.at("execution_status"));
+    if (!executionStatus.has_value() ||
+        (*executionStatus != tape_phase7::kExecutionEntryStatusQueued &&
+         *executionStatus != tape_phase7::kExecutionEntryStatusSubmitted &&
+         *executionStatus != tape_phase7::kExecutionEntryStatusSucceeded &&
+         *executionStatus != tape_phase7::kExecutionEntryStatusFailed &&
+         *executionStatus != tape_phase7::kExecutionEntryStatusCancelled)) {
+        return fail("invalid_arguments",
+                    "execution_status must be one of queued, submitted, succeeded, failed, or cancelled");
+    }
+    selection.executionStatus = *executionStatus;
+    if (!args.contains("actor")) {
+        return fail("invalid_arguments", "actor is required");
+    }
+    const auto actor = asNonEmptyString(args.at("actor"));
+    if (!actor.has_value()) {
+        return fail("invalid_arguments", "actor must be a non-empty string");
+    }
+    selection.actor = *actor;
+    if (args.contains("comment")) {
+        const auto comment = asNonEmptyString(args.at("comment"));
+        if (!comment.has_value()) {
+            return fail("invalid_arguments", "comment must be a non-empty string");
+        }
+        selection.comment = *comment;
+    }
+    if (args.contains("failure_code")) {
+        const auto failureCode = asNonEmptyString(args.at("failure_code"));
+        if (!failureCode.has_value()) {
+            return fail("invalid_arguments", "failure_code must be a non-empty string");
+        }
+        selection.failureCode = *failureCode;
+    }
+    if (args.contains("failure_message")) {
+        const auto failureMessage = asNonEmptyString(args.at("failure_message"));
+        if (!failureMessage.has_value()) {
+            return fail("invalid_arguments", "failure_message must be a non-empty string");
+        }
+        selection.failureMessage = *failureMessage;
+    }
+    if ((selection.executionStatus == tape_phase7::kExecutionEntryStatusFailed ||
+         selection.executionStatus == tape_phase7::kExecutionEntryStatusCancelled) &&
+        selection.comment.empty()) {
+        return fail("invalid_arguments", "comment is required for failed and cancelled execution updates");
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionApplyRefArgs(const json& args,
+                                      std::string* outManifestPath,
+                                      std::string* outArtifactId,
+                                      std::string* outCode,
+                                      std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"execution_apply_manifest_path", "execution_apply_artifact_id"})) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_apply_manifest_path or execution_apply_artifact_id is required");
+    }
+
+    const bool hasManifest = args.contains("execution_apply_manifest_path");
+    const bool hasArtifactId = args.contains("execution_apply_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_apply_manifest_path or execution_apply_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("execution_apply_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "execution_apply_manifest_path must be a non-empty string");
+        }
+        if (outManifestPath != nullptr) {
+            *outManifestPath = *manifestPath;
+        }
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("execution_apply_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "execution_apply_artifact_id must be a non-empty string");
+        }
+        if (outArtifactId != nullptr) {
+            *outArtifactId = *artifactId;
+        }
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionApplyArgs(const json& args,
+                                   Phase7ExecutionApplySelection* outSelection,
+                                   std::string* outCode,
+                                   std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args,
+                          {"execution_journal_manifest_path",
+                           "execution_journal_artifact_id",
+                           "entry_ids",
+                           "actor",
+                           "execution_capability",
+                           "comment"})) {
+        return fail("invalid_arguments",
+                    "execution apply arguments support one journal reference plus optional entry_ids, actor, execution_capability, and comment");
+    }
+
+    Phase7ExecutionApplySelection selection;
+    const bool hasManifest = args.contains("execution_journal_manifest_path");
+    const bool hasArtifactId = args.contains("execution_journal_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_journal_manifest_path or execution_journal_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("execution_journal_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "execution_journal_manifest_path must be a non-empty string");
+        }
+        selection.manifestPath = *manifestPath;
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("execution_journal_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "execution_journal_artifact_id must be a non-empty string");
+        }
+        selection.artifactId = *artifactId;
+    }
+    if (!args.contains("actor")) {
+        return fail("invalid_arguments", "actor is required");
+    }
+    const auto actor = asNonEmptyString(args.at("actor"));
+    if (!actor.has_value()) {
+        return fail("invalid_arguments", "actor must be a non-empty string");
+    }
+    selection.actor = *actor;
+    if (!args.contains("execution_capability")) {
+        return fail("invalid_arguments", "execution_capability is required");
+    }
+    const auto executionCapability = asNonEmptyString(args.at("execution_capability"));
+    if (!executionCapability.has_value()) {
+        return fail("invalid_arguments", "execution_capability must be a non-empty string");
+    }
+    selection.executionCapability = *executionCapability;
+    if (args.contains("entry_ids")) {
+        const auto entryIds = asNonEmptyStringArray(args.at("entry_ids"));
+        if (!entryIds.has_value() || entryIds->empty()) {
+            return fail("invalid_arguments", "entry_ids must be an array of non-empty strings when provided");
+        }
+        selection.entryIds = *entryIds;
+    }
+    if (args.contains("comment")) {
+        const auto comment = asNonEmptyString(args.at("comment"));
+        if (!comment.has_value()) {
+            return fail("invalid_arguments", "comment must be a non-empty string");
+        }
+        selection.comment = *comment;
+    }
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionApplyEventArgs(const json& args,
+                                        Phase7ExecutionApplyEventSelection* outSelection,
+                                        std::string* outCode,
+                                        std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args,
+                          {"execution_apply_manifest_path",
+                           "execution_apply_artifact_id",
+                           "entry_ids",
+                           "execution_status",
+                           "actor",
+                           "comment",
+                           "failure_code",
+                           "failure_message"})) {
+        return fail("invalid_arguments",
+                    "execution apply event arguments support one apply reference plus entry_ids, execution_status, actor, comment, and optional failure details");
+    }
+
+    Phase7ExecutionApplyEventSelection selection;
+    const bool hasManifest = args.contains("execution_apply_manifest_path");
+    const bool hasArtifactId = args.contains("execution_apply_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments",
+                    "exactly one of execution_apply_manifest_path or execution_apply_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("execution_apply_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "execution_apply_manifest_path must be a non-empty string");
+        }
+        selection.manifestPath = *manifestPath;
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("execution_apply_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "execution_apply_artifact_id must be a non-empty string");
+        }
+        selection.artifactId = *artifactId;
+    }
+    if (!args.contains("entry_ids")) {
+        return fail("invalid_arguments", "entry_ids is required");
+    }
+    const auto entryIds = asNonEmptyStringArray(args.at("entry_ids"));
+    if (!entryIds.has_value() || entryIds->empty()) {
+        return fail("invalid_arguments", "entry_ids must be an array of non-empty strings");
+    }
+    selection.entryIds = *entryIds;
+    if (!args.contains("execution_status")) {
+        return fail("invalid_arguments", "execution_status is required");
+    }
+    const auto executionStatus = asNonEmptyString(args.at("execution_status"));
+    if (!executionStatus.has_value()) {
+        return fail("invalid_arguments", "execution_status must be a non-empty string");
+    }
+    selection.executionStatus = *executionStatus;
+    if (!args.contains("actor")) {
+        return fail("invalid_arguments", "actor is required");
+    }
+    const auto actor = asNonEmptyString(args.at("actor"));
+    if (!actor.has_value()) {
+        return fail("invalid_arguments", "actor must be a non-empty string");
+    }
+    selection.actor = *actor;
+    if (args.contains("comment")) {
+        const auto comment = asNonEmptyString(args.at("comment"));
+        if (!comment.has_value()) {
+            return fail("invalid_arguments", "comment must be a non-empty string");
+        }
+        selection.comment = *comment;
+    }
+    if (args.contains("failure_code")) {
+        const auto failureCode = asNonEmptyString(args.at("failure_code"));
+        if (!failureCode.has_value()) {
+            return fail("invalid_arguments", "failure_code must be a non-empty string");
+        }
+        selection.failureCode = *failureCode;
+    }
+    if (args.contains("failure_message")) {
+        const auto failureMessage = asNonEmptyString(args.at("failure_message"));
+        if (!failureMessage.has_value()) {
+            return fail("invalid_arguments", "failure_message must be a non-empty string");
+        }
+        selection.failureMessage = *failureMessage;
+    }
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
 bool parsePhase7AnalysisInventoryArgs(const json& args,
                                       Phase7AnalysisInventorySelection* outSelection,
                                       std::string* outCode,
@@ -3270,6 +4738,204 @@ bool parsePhase7ExecutionLedgerInventoryArgs(const json& args,
                         "ledger_status must be one of review_pending, review_in_progress, review_blocked, needs_information, review_completed, review_waiting_approval, or ready_for_execution");
         }
         selection.ledgerStatus = *ledgerStatus;
+    }
+    if (args.contains("sort_by")) {
+        const auto sortBy = asNonEmptyString(args.at("sort_by"));
+        if (!sortBy.has_value() ||
+            (*sortBy != "generated_at_desc" && *sortBy != "attention_desc" && *sortBy != "source_artifact_asc")) {
+            return fail("invalid_arguments",
+                        "sort_by must be one of generated_at_desc, attention_desc, or source_artifact_asc");
+        }
+        selection.sortBy = *sortBy;
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionJournalInventoryArgs(const json& args,
+                                              Phase7ExecutionJournalInventorySelection* outSelection,
+                                              std::string* outCode,
+                                              std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args,
+                          {"limit",
+                           "execution_ledger_artifact_id",
+                           "playbook_artifact_id",
+                           "analysis_artifact_id",
+                           "source_artifact_id",
+                           "journal_status",
+                           "sort_by"})) {
+        return fail("invalid_arguments",
+                    "execution journal inventory arguments support only limit, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, journal_status, and sort_by");
+    }
+
+    Phase7ExecutionJournalInventorySelection selection;
+    if (args.contains("limit")) {
+        const auto limit = asPositiveUInt64(args.at("limit"));
+        if (!limit.has_value()) {
+            return fail("invalid_arguments", "limit must be a positive integer");
+        }
+        selection.limit = static_cast<std::size_t>(*limit);
+    }
+    if (args.contains("execution_ledger_artifact_id")) {
+        const auto ledgerArtifactId = asNonEmptyString(args.at("execution_ledger_artifact_id"));
+        if (!ledgerArtifactId.has_value()) {
+            return fail("invalid_arguments", "execution_ledger_artifact_id must be a non-empty string");
+        }
+        selection.ledgerArtifactId = *ledgerArtifactId;
+    }
+    if (args.contains("playbook_artifact_id")) {
+        const auto playbookArtifactId = asNonEmptyString(args.at("playbook_artifact_id"));
+        if (!playbookArtifactId.has_value()) {
+            return fail("invalid_arguments", "playbook_artifact_id must be a non-empty string");
+        }
+        selection.playbookArtifactId = *playbookArtifactId;
+    }
+    if (args.contains("analysis_artifact_id")) {
+        const auto analysisArtifactId = asNonEmptyString(args.at("analysis_artifact_id"));
+        if (!analysisArtifactId.has_value()) {
+            return fail("invalid_arguments", "analysis_artifact_id must be a non-empty string");
+        }
+        selection.analysisArtifactId = *analysisArtifactId;
+    }
+    if (args.contains("source_artifact_id")) {
+        const auto sourceArtifactId = asNonEmptyString(args.at("source_artifact_id"));
+        if (!sourceArtifactId.has_value()) {
+            return fail("invalid_arguments", "source_artifact_id must be a non-empty string");
+        }
+        selection.sourceArtifactId = *sourceArtifactId;
+    }
+    if (args.contains("journal_status")) {
+        const auto journalStatus = asNonEmptyString(args.at("journal_status"));
+        if (!journalStatus.has_value() ||
+            (*journalStatus != tape_phase7::kExecutionJournalStatusQueued &&
+             *journalStatus != tape_phase7::kExecutionJournalStatusInProgress &&
+             *journalStatus != tape_phase7::kExecutionJournalStatusSucceeded &&
+             *journalStatus != tape_phase7::kExecutionJournalStatusPartiallySucceeded &&
+             *journalStatus != tape_phase7::kExecutionJournalStatusFailed &&
+             *journalStatus != tape_phase7::kExecutionJournalStatusCancelled)) {
+            return fail("invalid_arguments",
+                        "journal_status must be one of execution_queued, execution_in_progress, execution_succeeded, execution_partially_succeeded, execution_failed, or execution_cancelled");
+        }
+        selection.journalStatus = *journalStatus;
+    }
+    if (args.contains("sort_by")) {
+        const auto sortBy = asNonEmptyString(args.at("sort_by"));
+        if (!sortBy.has_value() ||
+            (*sortBy != "generated_at_desc" && *sortBy != "attention_desc" && *sortBy != "source_artifact_asc")) {
+            return fail("invalid_arguments",
+                        "sort_by must be one of generated_at_desc, attention_desc, or source_artifact_asc");
+        }
+        selection.sortBy = *sortBy;
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase7ExecutionApplyInventoryArgs(const json& args,
+                                            Phase7ExecutionApplyInventorySelection* outSelection,
+                                            std::string* outCode,
+                                            std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args,
+                          {"limit",
+                           "execution_journal_artifact_id",
+                           "execution_ledger_artifact_id",
+                           "playbook_artifact_id",
+                           "analysis_artifact_id",
+                           "source_artifact_id",
+                           "apply_status",
+                           "sort_by"})) {
+        return fail("invalid_arguments",
+                    "execution apply inventory arguments support only limit, execution_journal_artifact_id, execution_ledger_artifact_id, playbook_artifact_id, analysis_artifact_id, source_artifact_id, apply_status, and sort_by");
+    }
+
+    Phase7ExecutionApplyInventorySelection selection;
+    if (args.contains("limit")) {
+        const auto limit = asPositiveUInt64(args.at("limit"));
+        if (!limit.has_value()) {
+            return fail("invalid_arguments", "limit must be a positive integer");
+        }
+        selection.limit = static_cast<std::size_t>(*limit);
+    }
+    if (args.contains("execution_journal_artifact_id")) {
+        const auto journalArtifactId = asNonEmptyString(args.at("execution_journal_artifact_id"));
+        if (!journalArtifactId.has_value()) {
+            return fail("invalid_arguments", "execution_journal_artifact_id must be a non-empty string");
+        }
+        selection.journalArtifactId = *journalArtifactId;
+    }
+    if (args.contains("execution_ledger_artifact_id")) {
+        const auto ledgerArtifactId = asNonEmptyString(args.at("execution_ledger_artifact_id"));
+        if (!ledgerArtifactId.has_value()) {
+            return fail("invalid_arguments", "execution_ledger_artifact_id must be a non-empty string");
+        }
+        selection.ledgerArtifactId = *ledgerArtifactId;
+    }
+    if (args.contains("playbook_artifact_id")) {
+        const auto playbookArtifactId = asNonEmptyString(args.at("playbook_artifact_id"));
+        if (!playbookArtifactId.has_value()) {
+            return fail("invalid_arguments", "playbook_artifact_id must be a non-empty string");
+        }
+        selection.playbookArtifactId = *playbookArtifactId;
+    }
+    if (args.contains("analysis_artifact_id")) {
+        const auto analysisArtifactId = asNonEmptyString(args.at("analysis_artifact_id"));
+        if (!analysisArtifactId.has_value()) {
+            return fail("invalid_arguments", "analysis_artifact_id must be a non-empty string");
+        }
+        selection.analysisArtifactId = *analysisArtifactId;
+    }
+    if (args.contains("source_artifact_id")) {
+        const auto sourceArtifactId = asNonEmptyString(args.at("source_artifact_id"));
+        if (!sourceArtifactId.has_value()) {
+            return fail("invalid_arguments", "source_artifact_id must be a non-empty string");
+        }
+        selection.sourceArtifactId = *sourceArtifactId;
+    }
+    if (args.contains("apply_status")) {
+        const auto applyStatus = asNonEmptyString(args.at("apply_status"));
+        if (!applyStatus.has_value() ||
+            (*applyStatus != tape_phase7::kExecutionJournalStatusQueued &&
+             *applyStatus != tape_phase7::kExecutionJournalStatusInProgress &&
+             *applyStatus != tape_phase7::kExecutionJournalStatusSucceeded &&
+             *applyStatus != tape_phase7::kExecutionJournalStatusPartiallySucceeded &&
+             *applyStatus != tape_phase7::kExecutionJournalStatusFailed &&
+             *applyStatus != tape_phase7::kExecutionJournalStatusCancelled)) {
+            return fail("invalid_arguments",
+                        "apply_status must be one of execution_queued, execution_in_progress, execution_succeeded, execution_partially_succeeded, execution_failed, or execution_cancelled");
+        }
+        selection.applyStatus = *applyStatus;
     }
     if (args.contains("sort_by")) {
         const auto sortBy = asNonEmptyString(args.at("sort_by"));
@@ -3638,6 +5304,167 @@ json phase7ExecutionLedgerInventoryPayload(const std::vector<tape_phase7::Execut
             {"matched_count", matchedCount}
         }},
         {"execution_ledgers", std::move(rows)}
+    };
+}
+
+json phase7ExecutionJournalPayload(const tape_phase7::ExecutionJournalArtifact& journal,
+                                   std::string_view artifactStatus = {}) {
+    json entries = json::array();
+    for (const auto& entry : journal.entries) {
+        entries.push_back(tape_phase7::executionJournalEntryToJson(entry));
+    }
+    const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(journal);
+    json payload = {
+        {"source_artifact", tape_phase7::artifactRefToJson(journal.sourceArtifact)},
+        {"analysis_artifact", tape_phase7::artifactRefToJson(journal.analysisArtifact)},
+        {"playbook_artifact", tape_phase7::artifactRefToJson(journal.playbookArtifact)},
+        {"execution_ledger", tape_phase7::artifactRefToJson(journal.ledgerArtifact)},
+        {"execution_journal", tape_phase7::artifactRefToJson(journal.journalArtifact)},
+        {"mode", journal.mode},
+        {"generated_at_utc", journal.generatedAtUtc},
+        {"initiated_by", journal.initiatedBy},
+        {"execution_capability", journal.executionCapability},
+        {"journal_status", journal.journalStatus},
+        {"execution_policy", journal.executionPolicy},
+        {"filtered_finding_ids", journal.filteredFindingIds},
+        {"entry_count", journal.entries.size()},
+        {"execution_summary", tape_phase7::executionJournalSummaryToJson(executionSummary)},
+        {"latest_audit_event", tape_phase7::latestExecutionJournalAuditSummary(journal)},
+        {"entries", std::move(entries)},
+        {"audit_trail", journal.auditTrail},
+        {"replay_context", journal.replayContext}
+    };
+    if (!artifactStatus.empty()) {
+        payload["artifact_status"] = std::string(artifactStatus);
+    }
+    return payload;
+}
+
+json phase7ExecutionJournalEventPayload(const tape_phase7::ExecutionJournalArtifact& journal,
+                                        const std::vector<std::string>& updatedEntryIds,
+                                        std::string_view auditEventId) {
+    json payload = phase7ExecutionJournalPayload(journal);
+    payload["updated_entry_ids"] = updatedEntryIds;
+    payload["audit_event_id"] = std::string(auditEventId);
+    return payload;
+}
+
+json phase7ExecutionJournalInventoryPayload(const std::vector<tape_phase7::ExecutionJournalArtifact>& artifacts,
+                                            const Phase7ExecutionJournalInventorySelection& selection,
+                                            std::size_t matchedCount) {
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        const auto executionSummary = tape_phase7::summarizeExecutionJournalSummary(artifact);
+        rows.push_back({
+            {"execution_journal", tape_phase7::artifactRefToJson(artifact.journalArtifact)},
+            {"execution_ledger", tape_phase7::artifactRefToJson(artifact.ledgerArtifact)},
+            {"playbook_artifact", tape_phase7::artifactRefToJson(artifact.playbookArtifact)},
+            {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+            {"source_artifact", tape_phase7::artifactRefToJson(artifact.sourceArtifact)},
+            {"mode", artifact.mode},
+            {"generated_at_utc", artifact.generatedAtUtc},
+            {"journal_status", artifact.journalStatus},
+            {"entry_count", artifact.entries.size()},
+            {"execution_summary", tape_phase7::executionJournalSummaryToJson(executionSummary)},
+            {"latest_audit_event", tape_phase7::latestExecutionJournalAuditSummary(artifact)},
+            {"replay_context", artifact.replayContext}
+        });
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"applied_filters", {
+            {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
+            {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
+            {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
+            {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+            {"journal_status", selection.journalStatus.empty() ? json(nullptr) : json(selection.journalStatus)},
+            {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
+            {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+            {"matched_count", matchedCount}
+        }},
+        {"execution_journals", std::move(rows)}
+    };
+}
+
+json phase7ExecutionApplyPayload(const tape_phase7::ExecutionApplyArtifact& apply,
+                                 std::string_view artifactStatus = {}) {
+    json entries = json::array();
+    for (const auto& entry : apply.entries) {
+        entries.push_back(tape_phase7::executionApplyEntryToJson(entry));
+    }
+    const auto executionSummary = tape_phase7::summarizeExecutionApplySummary(apply);
+    json payload = {
+        {"source_artifact", tape_phase7::artifactRefToJson(apply.sourceArtifact)},
+        {"analysis_artifact", tape_phase7::artifactRefToJson(apply.analysisArtifact)},
+        {"playbook_artifact", tape_phase7::artifactRefToJson(apply.playbookArtifact)},
+        {"execution_ledger", tape_phase7::artifactRefToJson(apply.ledgerArtifact)},
+        {"execution_journal", tape_phase7::artifactRefToJson(apply.journalArtifact)},
+        {"execution_apply", tape_phase7::artifactRefToJson(apply.applyArtifact)},
+        {"mode", apply.mode},
+        {"generated_at_utc", apply.generatedAtUtc},
+        {"initiated_by", apply.initiatedBy},
+        {"execution_capability", apply.executionCapability},
+        {"apply_status", apply.applyStatus},
+        {"execution_policy", apply.executionPolicy},
+        {"filtered_finding_ids", apply.filteredFindingIds},
+        {"entry_count", apply.entries.size()},
+        {"execution_summary", tape_phase7::executionApplySummaryToJson(executionSummary)},
+        {"latest_audit_event", tape_phase7::latestExecutionApplyAuditSummary(apply)},
+        {"entries", std::move(entries)},
+        {"audit_trail", apply.auditTrail},
+        {"replay_context", apply.replayContext}
+    };
+    if (!artifactStatus.empty()) {
+        payload["artifact_status"] = std::string(artifactStatus);
+    }
+    return payload;
+}
+
+json phase7ExecutionApplyEventPayload(const tape_phase7::ExecutionApplyArtifact& apply,
+                                      const std::vector<std::string>& updatedEntryIds,
+                                      std::string_view auditEventId) {
+    json payload = phase7ExecutionApplyPayload(apply);
+    payload["updated_entry_ids"] = updatedEntryIds;
+    payload["audit_event_id"] = std::string(auditEventId);
+    return payload;
+}
+
+json phase7ExecutionApplyInventoryPayload(const std::vector<tape_phase7::ExecutionApplyArtifact>& artifacts,
+                                          const Phase7ExecutionApplyInventorySelection& selection,
+                                          std::size_t matchedCount) {
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        const auto executionSummary = tape_phase7::summarizeExecutionApplySummary(artifact);
+        rows.push_back({
+            {"execution_apply", tape_phase7::artifactRefToJson(artifact.applyArtifact)},
+            {"execution_journal", tape_phase7::artifactRefToJson(artifact.journalArtifact)},
+            {"execution_ledger", tape_phase7::artifactRefToJson(artifact.ledgerArtifact)},
+            {"playbook_artifact", tape_phase7::artifactRefToJson(artifact.playbookArtifact)},
+            {"analysis_artifact", tape_phase7::artifactRefToJson(artifact.analysisArtifact)},
+            {"source_artifact", tape_phase7::artifactRefToJson(artifact.sourceArtifact)},
+            {"mode", artifact.mode},
+            {"generated_at_utc", artifact.generatedAtUtc},
+            {"apply_status", artifact.applyStatus},
+            {"entry_count", artifact.entries.size()},
+            {"execution_summary", tape_phase7::executionApplySummaryToJson(executionSummary)},
+            {"latest_audit_event", tape_phase7::latestExecutionApplyAuditSummary(artifact)},
+            {"replay_context", artifact.replayContext}
+        });
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"applied_filters", {
+            {"execution_journal_artifact_id", selection.journalArtifactId.empty() ? json(nullptr) : json(selection.journalArtifactId)},
+            {"execution_ledger_artifact_id", selection.ledgerArtifactId.empty() ? json(nullptr) : json(selection.ledgerArtifactId)},
+            {"playbook_artifact_id", selection.playbookArtifactId.empty() ? json(nullptr) : json(selection.playbookArtifactId)},
+            {"analysis_artifact_id", selection.analysisArtifactId.empty() ? json(nullptr) : json(selection.analysisArtifactId)},
+            {"source_artifact_id", selection.sourceArtifactId.empty() ? json(nullptr) : json(selection.sourceArtifactId)},
+            {"apply_status", selection.applyStatus.empty() ? json(nullptr) : json(selection.applyStatus)},
+            {"sort_by", selection.sortBy.empty() ? json("generated_at_desc") : json(selection.sortBy)},
+            {"limit", selection.limit == 0 ? json(nullptr) : json(selection.limit)},
+            {"matched_count", matchedCount}
+        }},
+        {"execution_applies", std::move(rows)}
     };
 }
 
@@ -4601,6 +6428,20 @@ json Adapter::listResourcesResult() const {
             {"meta", resourceErrorMeta(phase7Code, phase7Message)}
         };
     }
+    std::vector<tape_phase7::ExecutionJournalArtifact> executionJournals;
+    if (!tape_phase7::listExecutionJournals(25, &executionJournals, &phase7Code, &phase7Message)) {
+        return json{
+            {"resources", json::array()},
+            {"meta", resourceErrorMeta(phase7Code, phase7Message)}
+        };
+    }
+    std::vector<tape_phase7::ExecutionApplyArtifact> executionApplies;
+    if (!tape_phase7::listExecutionApplies(25, &executionApplies, &phase7Code, &phase7Message)) {
+        return json{
+            {"resources", json::array()},
+            {"meta", resourceErrorMeta(phase7Code, phase7Message)}
+        };
+    }
 
     json resources = json::array();
     for (const auto& report : sessionReports.value.sessionReports) {
@@ -4697,6 +6538,38 @@ json Adapter::listResourcesResult() const {
             {"mimeType", "text/markdown"}
         });
     }
+    for (const auto& artifact : executionJournals) {
+        resources.push_back({
+            {"uri", phase7ExecutionJournalUri(artifact.journalArtifact.artifactId)},
+            {"name", artifact.journalArtifact.artifactId},
+            {"title", "Phase 7 execution journal: " + artifact.journalArtifact.artifactId},
+            {"description", "Persisted Phase 7 execution journal JSON view."},
+            {"mimeType", "application/json"}
+        });
+        resources.push_back({
+            {"uri", phase7ExecutionJournalMarkdownUri(artifact.journalArtifact.artifactId)},
+            {"name", artifact.journalArtifact.artifactId + ":markdown"},
+            {"title", "Phase 7 execution journal markdown: " + artifact.journalArtifact.artifactId},
+            {"description", "Persisted Phase 7 execution journal markdown summary."},
+            {"mimeType", "text/markdown"}
+        });
+    }
+    for (const auto& artifact : executionApplies) {
+        resources.push_back({
+            {"uri", phase7ExecutionApplyUri(artifact.applyArtifact.artifactId)},
+            {"name", artifact.applyArtifact.artifactId},
+            {"title", "Phase 7 execution apply: " + artifact.applyArtifact.artifactId},
+            {"description", "Persisted Phase 7 execution apply JSON view."},
+            {"mimeType", "application/json"}
+        });
+        resources.push_back({
+            {"uri", phase7ExecutionApplyMarkdownUri(artifact.applyArtifact.artifactId)},
+            {"name", artifact.applyArtifact.artifactId + ":markdown"},
+            {"title", "Phase 7 execution apply markdown: " + artifact.applyArtifact.artifactId},
+            {"description", "Persisted Phase 7 execution apply markdown summary."},
+            {"mimeType", "text/markdown"}
+        });
+    }
 
     std::sort(resources.begin(), resources.end(), [](const json& left, const json& right) {
         return left.value("uri", std::string()) < right.value("uri", std::string());
@@ -4723,7 +6596,11 @@ json Adapter::readResourceResult(const std::string& resourceUri) const {
          parsed.kind == ResourceKind::Phase7PlaybookJson ||
          parsed.kind == ResourceKind::Phase7PlaybookMarkdown ||
          parsed.kind == ResourceKind::Phase7ExecutionLedgerJson ||
-         parsed.kind == ResourceKind::Phase7ExecutionLedgerMarkdown) &&
+         parsed.kind == ResourceKind::Phase7ExecutionLedgerMarkdown ||
+         parsed.kind == ResourceKind::Phase7ExecutionJournalJson ||
+         parsed.kind == ResourceKind::Phase7ExecutionJournalMarkdown ||
+         parsed.kind == ResourceKind::Phase7ExecutionApplyJson ||
+         parsed.kind == ResourceKind::Phase7ExecutionApplyMarkdown) &&
         parsed.artifactId.empty();
     if (parsed.kind == ResourceKind::Unknown || missingReportId || missingArtifactId) {
         return json{
@@ -4839,6 +6716,32 @@ json Adapter::readResourceResult(const std::string& resourceUri) const {
                 return textContents(resourceUri, tape_phase7::executionLedgerArtifactMarkdown(artifact), "text/markdown");
             }
             return jsonContents(resourceUri, phase7ExecutionLedgerPayload(artifact));
+        }
+        case ResourceKind::Phase7ExecutionJournalJson:
+        case ResourceKind::Phase7ExecutionJournalMarkdown: {
+            tape_phase7::ExecutionJournalArtifact artifact;
+            std::string code;
+            std::string message;
+            if (!tape_phase7::loadExecutionJournalArtifact({}, parsed.artifactId, &artifact, &code, &message)) {
+                return json{{"contents", json::array()}, {"meta", resourceErrorMeta(code, message)}};
+            }
+            if (parsed.kind == ResourceKind::Phase7ExecutionJournalMarkdown) {
+                return textContents(resourceUri, tape_phase7::executionJournalArtifactMarkdown(artifact), "text/markdown");
+            }
+            return jsonContents(resourceUri, phase7ExecutionJournalPayload(artifact));
+        }
+        case ResourceKind::Phase7ExecutionApplyJson:
+        case ResourceKind::Phase7ExecutionApplyMarkdown: {
+            tape_phase7::ExecutionApplyArtifact artifact;
+            std::string code;
+            std::string message;
+            if (!tape_phase7::loadExecutionApplyArtifact({}, parsed.artifactId, &artifact, &code, &message)) {
+                return json{{"contents", json::array()}, {"meta", resourceErrorMeta(code, message)}};
+            }
+            if (parsed.kind == ResourceKind::Phase7ExecutionApplyMarkdown) {
+                return textContents(resourceUri, tape_phase7::executionApplyArtifactMarkdown(artifact), "text/markdown");
+            }
+            return jsonContents(resourceUri, phase7ExecutionApplyPayload(artifact));
         }
         case ResourceKind::Unknown:
             break;
@@ -4970,6 +6873,24 @@ json Adapter::invokeTool(const ToolSpec& tool, const json& args) const {
             return invokeReadExecutionLedgerTool(tool, args);
         case ToolId::RecordExecutionLedgerReview:
             return invokeRecordExecutionLedgerReviewTool(tool, args);
+        case ToolId::StartExecutionJournal:
+            return invokeStartExecutionJournalTool(tool, args);
+        case ToolId::ListExecutionJournals:
+            return invokeListExecutionJournalsTool(tool, args);
+        case ToolId::ReadExecutionJournal:
+            return invokeReadExecutionJournalTool(tool, args);
+        case ToolId::DispatchExecutionJournal:
+            return invokeDispatchExecutionJournalTool(tool, args);
+        case ToolId::RecordExecutionJournalEvent:
+            return invokeRecordExecutionJournalEventTool(tool, args);
+        case ToolId::StartExecutionApply:
+            return invokeStartExecutionApplyTool(tool, args);
+        case ToolId::ListExecutionApplies:
+            return invokeListExecutionAppliesTool(tool, args);
+        case ToolId::ReadExecutionApply:
+            return invokeReadExecutionApplyTool(tool, args);
+        case ToolId::RecordExecutionApplyEvent:
+            return invokeRecordExecutionApplyEventTool(tool, args);
     }
     return makeToolResult(makeErrorEnvelope(
         tool.name,
@@ -6702,7 +8623,14 @@ json Adapter::invokeReadExecutionLedgerTool(const ToolSpec& tool, const json& ar
     std::string artifactId;
     std::string code;
     std::string message;
-    if (!parsePhase7ExecutionLedgerRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+    json ledgerRefArgs = json::object();
+    if (args.contains("execution_ledger_manifest_path")) {
+        ledgerRefArgs["execution_ledger_manifest_path"] = args.at("execution_ledger_manifest_path");
+    }
+    if (args.contains("execution_ledger_artifact_id")) {
+        ledgerRefArgs["execution_ledger_artifact_id"] = args.at("execution_ledger_artifact_id");
+    }
+    if (!parsePhase7ExecutionLedgerRefArgs(ledgerRefArgs, &manifestPath, &artifactId, &code, &message)) {
         return makeToolResult(makeErrorEnvelope(tool.name,
                                                 toolEngineCommand(tool),
                                                 tool.outputSchemaId,
@@ -6779,6 +8707,576 @@ json Adapter::invokeRecordExecutionLedgerReviewTool(const ToolSpec& tool, const 
 
     return makeToolResult(makeSuccessEnvelope(tool,
                                               phase7ExecutionLedgerReviewPayload(artifact, updatedEntryIds, auditEventId),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeStartExecutionJournalTool(const ToolSpec& tool, const json& args) const {
+    if (!args.is_object() ||
+        hasUnexpectedKeys(args, {"execution_ledger_manifest_path", "execution_ledger_artifact_id", "actor", "execution_capability"})) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "execution journal start requires one ledger reference plus actor and execution_capability",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    json ledgerRefArgs = json::object();
+    if (args.contains("execution_ledger_manifest_path")) {
+        ledgerRefArgs["execution_ledger_manifest_path"] = args.at("execution_ledger_manifest_path");
+    }
+    if (args.contains("execution_ledger_artifact_id")) {
+        ledgerRefArgs["execution_ledger_artifact_id"] = args.at("execution_ledger_artifact_id");
+    }
+    if (!parsePhase7ExecutionLedgerRefArgs(ledgerRefArgs, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    const auto actor = asNonEmptyString(args.value("actor", json()));
+    const auto executionCapability = asNonEmptyString(args.value("execution_capability", json()));
+    if (!actor.has_value() || !executionCapability.has_value()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "actor and execution_capability are required",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionJournalArtifact artifact;
+    bool created = false;
+    if (!tape_phase7::startExecutionJournal(manifestPath,
+                                            artifactId,
+                                            *actor,
+                                            *executionCapability,
+                                            &artifact,
+                                            &created,
+                                            &code,
+                                            &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionJournalPayload(artifact, created ? "created" : "reused"),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeListExecutionJournalsTool(const ToolSpec& tool, const json& args) const {
+    Phase7ExecutionJournalInventorySelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionJournalInventoryArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase7::ExecutionJournalArtifact> artifacts;
+    if (!tape_phase7::listExecutionJournals(0, &artifacts, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    artifacts.erase(std::remove_if(artifacts.begin(),
+                                   artifacts.end(),
+                                   [&](const tape_phase7::ExecutionJournalArtifact& artifact) {
+                                       if (!selection.ledgerArtifactId.empty() &&
+                                           artifact.ledgerArtifact.artifactId != selection.ledgerArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.playbookArtifactId.empty() &&
+                                           artifact.playbookArtifact.artifactId != selection.playbookArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.analysisArtifactId.empty() &&
+                                           artifact.analysisArtifact.artifactId != selection.analysisArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.sourceArtifactId.empty() &&
+                                           artifact.sourceArtifact.artifactId != selection.sourceArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.journalStatus.empty() &&
+                                           artifact.journalStatus != selection.journalStatus) {
+                                           return true;
+                                       }
+                                       return false;
+                                   }),
+                    artifacts.end());
+    const auto statusRank = [](const std::string& journalStatus) {
+        if (journalStatus == tape_phase7::kExecutionJournalStatusFailed) {
+            return 0;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusCancelled) {
+            return 1;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusInProgress) {
+            return 2;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusQueued) {
+            return 3;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusPartiallySucceeded) {
+            return 4;
+        }
+        if (journalStatus == tape_phase7::kExecutionJournalStatusSucceeded) {
+            return 5;
+        }
+        return 6;
+    };
+    std::sort(artifacts.begin(),
+              artifacts.end(),
+              [&](const tape_phase7::ExecutionJournalArtifact& lhs,
+                  const tape_phase7::ExecutionJournalArtifact& rhs) {
+                  if (selection.sortBy == "attention_desc") {
+                      const int lhsRank = statusRank(lhs.journalStatus);
+                      const int rhsRank = statusRank(rhs.journalStatus);
+                      if (lhsRank != rhsRank) {
+                          return lhsRank < rhsRank;
+                      }
+                  } else if (selection.sortBy == "source_artifact_asc") {
+                      if (lhs.sourceArtifact.artifactId != rhs.sourceArtifact.artifactId) {
+                          return lhs.sourceArtifact.artifactId < rhs.sourceArtifact.artifactId;
+                      }
+                  }
+                  if (lhs.generatedAtUtc != rhs.generatedAtUtc) {
+                      return lhs.generatedAtUtc > rhs.generatedAtUtc;
+                  }
+                  return lhs.journalArtifact.artifactId < rhs.journalArtifact.artifactId;
+              });
+    const std::size_t matchedCount = artifacts.size();
+    if (selection.limit > 0 && artifacts.size() > selection.limit) {
+        artifacts.resize(selection.limit);
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionJournalInventoryPayload(artifacts, selection, matchedCount),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeReadExecutionJournalTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionJournalRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionJournalArtifact artifact;
+    if (!tape_phase7::loadExecutionJournalArtifact(manifestPath, artifactId, &artifact, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionJournalPayload(artifact),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeDispatchExecutionJournalTool(const ToolSpec& tool, const json& args) const {
+    Phase7ExecutionJournalDispatchSelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionJournalDispatchArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionJournalArtifact artifact;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+    if (!tape_phase7::dispatchExecutionJournalEntries(selection.manifestPath,
+                                                      selection.artifactId,
+                                                      selection.entryIds,
+                                                      selection.actor,
+                                                      selection.executionCapability,
+                                                      selection.comment,
+                                                      &artifact,
+                                                      &updatedEntryIds,
+                                                      &auditEventId,
+                                                      &code,
+                                                      &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionJournalEventPayload(artifact, updatedEntryIds, auditEventId),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeRecordExecutionJournalEventTool(const ToolSpec& tool, const json& args) const {
+    Phase7ExecutionJournalEventSelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionJournalEventArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionJournalArtifact artifact;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+    if (!tape_phase7::recordExecutionJournalEvent(selection.manifestPath,
+                                                  selection.artifactId,
+                                                  selection.entryIds,
+                                                  selection.executionStatus,
+                                                  selection.actor,
+                                                  selection.comment,
+                                                  selection.failureCode,
+                                                  selection.failureMessage,
+                                                  &artifact,
+                                                  &updatedEntryIds,
+                                                  &auditEventId,
+                                                  &code,
+                                                  &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionJournalEventPayload(artifact, updatedEntryIds, auditEventId),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeStartExecutionApplyTool(const ToolSpec& tool, const json& args) const {
+    Phase7ExecutionApplySelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionApplyArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionApplyArtifact artifact;
+    bool created = false;
+    if (!tape_phase7::startExecutionApply(selection.manifestPath,
+                                          selection.artifactId,
+                                          selection.entryIds,
+                                          selection.actor,
+                                          selection.executionCapability,
+                                          selection.comment,
+                                          &artifact,
+                                          &created,
+                                          &code,
+                                          &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionApplyPayload(artifact, created ? "created" : "reused"),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeListExecutionAppliesTool(const ToolSpec& tool, const json& args) const {
+    Phase7ExecutionApplyInventorySelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionApplyInventoryArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase7::ExecutionApplyArtifact> artifacts;
+    if (!tape_phase7::listExecutionApplies(0, &artifacts, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    artifacts.erase(std::remove_if(artifacts.begin(),
+                                   artifacts.end(),
+                                   [&](const tape_phase7::ExecutionApplyArtifact& artifact) {
+                                       if (!selection.journalArtifactId.empty() &&
+                                           artifact.journalArtifact.artifactId != selection.journalArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.ledgerArtifactId.empty() &&
+                                           artifact.ledgerArtifact.artifactId != selection.ledgerArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.playbookArtifactId.empty() &&
+                                           artifact.playbookArtifact.artifactId != selection.playbookArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.analysisArtifactId.empty() &&
+                                           artifact.analysisArtifact.artifactId != selection.analysisArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.sourceArtifactId.empty() &&
+                                           artifact.sourceArtifact.artifactId != selection.sourceArtifactId) {
+                                           return true;
+                                       }
+                                       if (!selection.applyStatus.empty() &&
+                                           artifact.applyStatus != selection.applyStatus) {
+                                           return true;
+                                       }
+                                       return false;
+                                   }),
+                    artifacts.end());
+    const auto statusRank = [](const std::string& applyStatus) {
+        if (applyStatus == tape_phase7::kExecutionJournalStatusFailed) {
+            return 0;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusCancelled) {
+            return 1;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusInProgress) {
+            return 2;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusQueued) {
+            return 3;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusPartiallySucceeded) {
+            return 4;
+        }
+        if (applyStatus == tape_phase7::kExecutionJournalStatusSucceeded) {
+            return 5;
+        }
+        return 6;
+    };
+    const std::string sortMode(selection.sortBy.empty() ? "generated_at_desc" : selection.sortBy);
+    std::sort(artifacts.begin(),
+              artifacts.end(),
+              [&](const tape_phase7::ExecutionApplyArtifact& lhs,
+                  const tape_phase7::ExecutionApplyArtifact& rhs) {
+                  if (sortMode == "attention_desc") {
+                      const int lhsRank = statusRank(lhs.applyStatus);
+                      const int rhsRank = statusRank(rhs.applyStatus);
+                      if (lhsRank != rhsRank) {
+                          return lhsRank < rhsRank;
+                      }
+                  } else if (sortMode == "source_artifact_asc") {
+                      if (lhs.sourceArtifact.artifactId != rhs.sourceArtifact.artifactId) {
+                          return lhs.sourceArtifact.artifactId < rhs.sourceArtifact.artifactId;
+                      }
+                  }
+                  if (lhs.generatedAtUtc != rhs.generatedAtUtc) {
+                      return lhs.generatedAtUtc > rhs.generatedAtUtc;
+                  }
+                  return lhs.applyArtifact.artifactId < rhs.applyArtifact.artifactId;
+              });
+    const std::size_t matchedCount = artifacts.size();
+    if (selection.limit > 0 && artifacts.size() > selection.limit) {
+        artifacts.resize(selection.limit);
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionApplyInventoryPayload(artifacts, selection, matchedCount),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeReadExecutionApplyTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionApplyRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionApplyArtifact artifact;
+    if (!tape_phase7::loadExecutionApplyArtifact(manifestPath, artifactId, &artifact, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionApplyPayload(artifact),
+                                              revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeRecordExecutionApplyEventTool(const ToolSpec& tool, const json& args) const {
+    Phase7ExecutionApplyEventSelection selection;
+    std::string code;
+    std::string message;
+    if (!parsePhase7ExecutionApplyEventArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase7::ExecutionApplyArtifact artifact;
+    std::vector<std::string> updatedEntryIds;
+    std::string auditEventId;
+    if (!tape_phase7::recordExecutionApplyEvent(selection.manifestPath,
+                                                selection.artifactId,
+                                                selection.entryIds,
+                                                selection.executionStatus,
+                                                selection.actor,
+                                                selection.comment,
+                                                selection.failureCode,
+                                                selection.failureMessage,
+                                                &artifact,
+                                                &updatedEntryIds,
+                                                &auditEventId,
+                                                &code,
+                                                &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase7ExecutionApplyEventPayload(artifact, updatedEntryIds, auditEventId),
                                               revisionFromPhase7ReplayContext(artifact.replayContext)));
 }
 

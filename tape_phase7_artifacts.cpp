@@ -349,6 +349,40 @@ ArtifactRef executionLedgerArtifactRefForPlaybook(const PlaybookArtifact& playbo
     return artifact;
 }
 
+ArtifactRef executionJournalArtifactRefForLedger(const ExecutionLedgerArtifact& ledger) {
+    const std::string artifactId =
+        "phase7-journal-" + fnv1aHex(ledger.ledgerArtifact.artifactId + "|execution-journal");
+    const fs::path rootDir = phase7RootDir() / "journals" / artifactId;
+    ArtifactRef artifact;
+    artifact.artifactType = kExecutionJournalArtifactType;
+    artifact.contractVersion = kContractVersion;
+    artifact.artifactId = artifactId;
+    artifact.manifestPath = (rootDir / "manifest.json").string();
+    artifact.artifactRootDir = rootDir.string();
+    return artifact;
+}
+
+ArtifactRef executionApplyArtifactRefForJournal(const ExecutionJournalArtifact& journal,
+                                                const std::vector<std::string>& journalEntryIds,
+                                                std::string_view actor,
+                                                std::string_view executionCapability) {
+    std::ostringstream seed;
+    seed << journal.journalArtifact.artifactId << "|execution-apply|" << actor
+         << "|" << executionCapability;
+    for (const auto& entryId : journalEntryIds) {
+        seed << "|" << entryId;
+    }
+    const std::string artifactId = "phase7-apply-" + fnv1aHex(seed.str());
+    const fs::path rootDir = phase7RootDir() / "applies" / artifactId;
+    ArtifactRef artifact;
+    artifact.artifactType = kExecutionApplyArtifactType;
+    artifact.contractVersion = kContractVersion;
+    artifact.artifactId = artifactId;
+    artifact.manifestPath = (rootDir / "manifest.json").string();
+    artifact.artifactRootDir = rootDir.string();
+    return artifact;
+}
+
 json sourceBundleEvidenceRef(const tape_bundle::PortableBundleInspection& inspection) {
     return {
         {"kind", "phase6_bundle"},
@@ -1610,6 +1644,450 @@ void annotateExecutionLedgerReviewState(ExecutionLedgerArtifact* artifact) {
     };
 }
 
+json executionPolicyForJournal() {
+    return {
+        {"apply_supported", true},
+        {"capability_required", "phase7.execution_operator.v1"},
+        {"actor_required", true},
+        {"start_requires_ready_ledger", true},
+        {"comment_required_statuses", json::array({kExecutionEntryStatusFailed, kExecutionEntryStatusCancelled})},
+        {"terminal_statuses", json::array({
+            kExecutionEntryStatusSucceeded,
+            kExecutionEntryStatusFailed,
+            kExecutionEntryStatusCancelled
+        })},
+        {"idempotency_scope", "ledger_entry"},
+        {"lifecycle_states", json::array({
+            kExecutionEntryStatusQueued,
+            kExecutionEntryStatusSubmitted,
+            kExecutionEntryStatusSucceeded,
+            kExecutionEntryStatusFailed,
+            kExecutionEntryStatusCancelled
+        })}
+    };
+}
+
+bool isSupportedExecutionEntryStatus(std::string_view executionStatus) {
+    return executionStatus == kExecutionEntryStatusQueued ||
+        executionStatus == kExecutionEntryStatusSubmitted ||
+        executionStatus == kExecutionEntryStatusSucceeded ||
+        executionStatus == kExecutionEntryStatusFailed ||
+        executionStatus == kExecutionEntryStatusCancelled;
+}
+
+bool isTerminalExecutionEntryStatus(std::string_view executionStatus) {
+    return executionStatus == kExecutionEntryStatusSucceeded ||
+        executionStatus == kExecutionEntryStatusFailed ||
+        executionStatus == kExecutionEntryStatusCancelled;
+}
+
+bool executionPolicyCommentRequired(const json& executionPolicy, std::string_view executionStatus) {
+    const json statuses = executionPolicy.value("comment_required_statuses", json::array());
+    if (!statuses.is_array()) {
+        return executionStatus == kExecutionEntryStatusFailed || executionStatus == kExecutionEntryStatusCancelled;
+    }
+    for (const auto& item : statuses) {
+        if (item.is_string() && item.get_ref<const std::string&>() == executionStatus) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool canTransitionExecutionStatus(std::string_view currentStatus, std::string_view nextStatus) {
+    if (currentStatus == nextStatus) {
+        return true;
+    }
+    if (currentStatus == kExecutionEntryStatusQueued) {
+        return nextStatus == kExecutionEntryStatusSubmitted ||
+            nextStatus == kExecutionEntryStatusFailed ||
+            nextStatus == kExecutionEntryStatusCancelled;
+    }
+    if (currentStatus == kExecutionEntryStatusSubmitted) {
+        return nextStatus == kExecutionEntryStatusSucceeded ||
+            nextStatus == kExecutionEntryStatusFailed ||
+            nextStatus == kExecutionEntryStatusCancelled;
+    }
+    if (currentStatus == kExecutionEntryStatusFailed || currentStatus == kExecutionEntryStatusCancelled) {
+        return nextStatus == kExecutionEntryStatusQueued;
+    }
+    return false;
+}
+
+std::string summarizeExecutionJournalStatus(const std::vector<ExecutionJournalEntry>& entries) {
+    if (entries.empty()) {
+        return kExecutionJournalStatusQueued;
+    }
+    std::size_t queuedCount = 0;
+    std::size_t submittedCount = 0;
+    std::size_t succeededCount = 0;
+    std::size_t failedCount = 0;
+    std::size_t cancelledCount = 0;
+    for (const auto& entry : entries) {
+        if (entry.executionStatus == kExecutionEntryStatusQueued) {
+            ++queuedCount;
+        } else if (entry.executionStatus == kExecutionEntryStatusSubmitted) {
+            ++submittedCount;
+        } else if (entry.executionStatus == kExecutionEntryStatusSucceeded) {
+            ++succeededCount;
+        } else if (entry.executionStatus == kExecutionEntryStatusFailed) {
+            ++failedCount;
+        } else if (entry.executionStatus == kExecutionEntryStatusCancelled) {
+            ++cancelledCount;
+        }
+    }
+    if (submittedCount > 0 || (queuedCount > 0 && (succeededCount > 0 || failedCount > 0 || cancelledCount > 0))) {
+        return kExecutionJournalStatusInProgress;
+    }
+    if (queuedCount == entries.size()) {
+        return kExecutionJournalStatusQueued;
+    }
+    if (succeededCount == entries.size()) {
+        return kExecutionJournalStatusSucceeded;
+    }
+    if (cancelledCount == entries.size()) {
+        return kExecutionJournalStatusCancelled;
+    }
+    if (failedCount > 0 && succeededCount == 0 && cancelledCount == 0 && queuedCount == 0) {
+        return kExecutionJournalStatusFailed;
+    }
+    if ((succeededCount > 0 || failedCount > 0 || cancelledCount > 0) && queuedCount == 0 && submittedCount == 0) {
+        return kExecutionJournalStatusPartiallySucceeded;
+    }
+    return kExecutionJournalStatusInProgress;
+}
+
+ExecutionJournalSummary summarizeExecutionJournalSummaryEntries(const std::vector<ExecutionJournalEntry>& entries,
+                                                               std::string_view journalStatus) {
+    ExecutionJournalSummary summary;
+    summary.actionableEntryCount = entries.size();
+    for (const auto& entry : entries) {
+        if (entry.executionStatus == kExecutionEntryStatusQueued) {
+            ++summary.queuedCount;
+        } else if (entry.executionStatus == kExecutionEntryStatusSubmitted) {
+            ++summary.submittedCount;
+        } else if (entry.executionStatus == kExecutionEntryStatusSucceeded) {
+            ++summary.succeededCount;
+            ++summary.terminalCount;
+        } else if (entry.executionStatus == kExecutionEntryStatusFailed) {
+            ++summary.failedCount;
+            ++summary.terminalCount;
+        } else if (entry.executionStatus == kExecutionEntryStatusCancelled) {
+            ++summary.cancelledCount;
+            ++summary.terminalCount;
+        }
+    }
+    summary.allTerminal = summary.terminalCount == entries.size() && !entries.empty();
+    (void)journalStatus;
+    return summary;
+}
+
+void annotateExecutionJournalState(ExecutionJournalArtifact* artifact) {
+    if (artifact == nullptr) {
+        return;
+    }
+    if (!artifact->executionPolicy.is_object() || artifact->executionPolicy.empty()) {
+        artifact->executionPolicy = executionPolicyForJournal();
+    }
+    for (auto& entry : artifact->entries) {
+        entry.terminal = isTerminalExecutionEntryStatus(entry.executionStatus);
+    }
+    artifact->journalStatus = summarizeExecutionJournalStatus(artifact->entries);
+    const auto summary = summarizeExecutionJournalSummaryEntries(artifact->entries, artifact->journalStatus);
+    artifact->executionPolicy["execution_state"] = {
+        {"aggregate_status", artifact->journalStatus},
+        {"all_terminal", summary.allTerminal},
+        {"queued_count", summary.queuedCount},
+        {"submitted_count", summary.submittedCount},
+        {"succeeded_count", summary.succeededCount},
+        {"failed_count", summary.failedCount},
+        {"cancelled_count", summary.cancelledCount}
+    };
+}
+
+ExecutionJournalEntry executionJournalEntryForLedgerEntry(const ExecutionLedgerArtifact& ledger,
+                                                          const ExecutionLedgerEntry& entry,
+                                                          const std::string& actor,
+                                                          const std::string& generatedAtUtc) {
+    ExecutionJournalEntry journalEntry;
+    journalEntry.journalEntryId =
+        "phase7-journal-entry-" + fnv1aHex(ledger.ledgerArtifact.artifactId + "|" + entry.entryId + "|execution-journal");
+    journalEntry.ledgerEntryId = entry.entryId;
+    journalEntry.actionId = entry.actionId;
+    journalEntry.actionType = entry.actionType;
+    journalEntry.findingId = entry.findingId;
+    journalEntry.executionStatus = kExecutionEntryStatusQueued;
+    journalEntry.idempotencyKey =
+        "phase7-idempotency-" + fnv1aHex(ledger.ledgerArtifact.artifactId + "|" + entry.entryId + "|apply");
+    journalEntry.requiresManualConfirmation = entry.requiresManualConfirmation;
+    journalEntry.title = entry.title;
+    journalEntry.summary = entry.summary;
+    journalEntry.queuedAtUtc = generatedAtUtc;
+    journalEntry.lastUpdatedAtUtc = generatedAtUtc;
+    journalEntry.lastUpdatedBy = actor;
+    journalEntry.executionComment = "Queued from a review-approved execution ledger entry.";
+    journalEntry.suggestedTools = entry.suggestedTools;
+    journalEntry.attemptCount = 0;
+    journalEntry.terminal = false;
+    return journalEntry;
+}
+
+json auditTrailForJournalCreation(const ExecutionLedgerArtifact& ledger,
+                                  const std::string& actor,
+                                  const std::string& executionCapability,
+                                  const std::string& generatedAtUtc,
+                                  std::string_view journalStatus,
+                                  const std::vector<std::string>& queuedEntryIds) {
+    return json::array({
+        json{
+            {"event_id", "phase7-journal-event-" +
+                             fnv1aHex(ledger.ledgerArtifact.artifactId + "|journal-created")},
+            {"event_type", "execution_journal_created"},
+            {"generated_at_utc", generatedAtUtc},
+            {"actor", actor},
+            {"execution_capability", executionCapability},
+            {"journal_status", journalStatus},
+            {"updated_entry_ids", queuedEntryIds},
+            {"message", "Execution journal created from a review-approved ledger; entries are queued for controlled apply."}
+        }
+    });
+}
+
+json auditEventForExecutionTransition(const ExecutionJournalArtifact& journal,
+                                      const std::vector<ExecutionJournalEntry>& previousEntries,
+                                      const std::vector<std::string>& updatedEntryIds,
+                                      std::string_view executionStatus,
+                                      std::string_view actor,
+                                      std::string_view comment,
+                                      std::string_view failureCode,
+                                      std::string_view failureMessage,
+                                      std::string_view previousJournalStatus,
+                                      const std::string& generatedAtUtc) {
+    json previousStatuses = json::array();
+    for (const auto& entry : previousEntries) {
+        previousStatuses.push_back({
+            {"journal_entry_id", entry.journalEntryId},
+            {"execution_status", entry.executionStatus}
+        });
+    }
+
+    std::ostringstream seed;
+    seed << journal.journalArtifact.artifactId << "|" << generatedAtUtc << "|" << executionStatus << "|" << actor;
+    for (const auto& entryId : updatedEntryIds) {
+        seed << "|" << entryId;
+    }
+
+    std::ostringstream message;
+    message << "Recorded " << updatedEntryIds.size() << " execution entr";
+    message << (updatedEntryIds.size() == 1 ? "y" : "ies");
+    message << " as `" << executionStatus << "` by `" << actor << "`.";
+    if (!comment.empty()) {
+        message << " Comment: " << comment;
+    }
+    if (!failureCode.empty()) {
+        message << " failure_code=" << failureCode << ".";
+    }
+
+    return json{
+        {"event_id", "phase7-journal-event-" + fnv1aHex(seed.str())},
+        {"event_type", "execution_status_recorded"},
+        {"generated_at_utc", generatedAtUtc},
+        {"actor", actor},
+        {"execution_status", executionStatus},
+        {"comment", comment.empty() ? json(nullptr) : json(comment)},
+        {"failure_code", failureCode.empty() ? json(nullptr) : json(failureCode)},
+        {"failure_message", failureMessage.empty() ? json(nullptr) : json(failureMessage)},
+        {"updated_entry_ids", updatedEntryIds},
+        {"previous_entry_statuses", std::move(previousStatuses)},
+        {"previous_journal_status", previousJournalStatus.empty() ? json(nullptr) : json(previousJournalStatus)},
+        {"journal_status", journal.journalStatus},
+        {"message", message.str()}
+    };
+}
+
+void synchronizeExecutionApplyEntriesFromJournal(ExecutionApplyArtifact* artifact,
+                                                 const ExecutionJournalArtifact& journal) {
+    if (artifact == nullptr) {
+        return;
+    }
+    for (auto& entry : artifact->entries) {
+        const auto it = std::find_if(journal.entries.begin(),
+                                     journal.entries.end(),
+                                     [&](const ExecutionJournalEntry& journalEntry) {
+                                         return journalEntry.journalEntryId == entry.journalEntryId;
+                                     });
+        if (it == journal.entries.end()) {
+            continue;
+        }
+        entry.executionStatus = it->executionStatus;
+        entry.idempotencyKey = it->idempotencyKey;
+        entry.requiresManualConfirmation = it->requiresManualConfirmation;
+        entry.title = it->title;
+        entry.summary = it->summary;
+        entry.submittedAtUtc = !it->startedAtUtc.empty() ? it->startedAtUtc : it->lastUpdatedAtUtc;
+        entry.completedAtUtc = it->completedAtUtc;
+        entry.lastUpdatedAtUtc = it->lastUpdatedAtUtc;
+        entry.lastUpdatedBy = it->lastUpdatedBy;
+        entry.executionComment = it->executionComment;
+        entry.failureCode = it->failureCode;
+        entry.failureMessage = it->failureMessage;
+        entry.attemptCount = it->attemptCount;
+        entry.terminal = it->terminal;
+        entry.suggestedTools = it->suggestedTools;
+    }
+}
+
+ExecutionApplyEntry executionApplyEntryForJournalEntry(const ExecutionApplyArtifact& artifact,
+                                                       const ExecutionJournalEntry& journalEntry) {
+    ExecutionApplyEntry entry;
+    entry.applyEntryId =
+        "phase7-apply-entry-" + fnv1aHex(artifact.applyArtifact.artifactId + "|" + journalEntry.journalEntryId);
+    entry.journalEntryId = journalEntry.journalEntryId;
+    entry.ledgerEntryId = journalEntry.ledgerEntryId;
+    entry.actionId = journalEntry.actionId;
+    entry.actionType = journalEntry.actionType;
+    entry.findingId = journalEntry.findingId;
+    entry.executionStatus = journalEntry.executionStatus;
+    entry.idempotencyKey = journalEntry.idempotencyKey;
+    entry.requiresManualConfirmation = journalEntry.requiresManualConfirmation;
+    entry.title = journalEntry.title;
+    entry.summary = journalEntry.summary;
+    entry.submittedAtUtc = !journalEntry.startedAtUtc.empty()
+        ? journalEntry.startedAtUtc
+        : journalEntry.lastUpdatedAtUtc;
+    entry.completedAtUtc = journalEntry.completedAtUtc;
+    entry.lastUpdatedAtUtc = journalEntry.lastUpdatedAtUtc;
+    entry.lastUpdatedBy = journalEntry.lastUpdatedBy;
+    entry.executionComment = journalEntry.executionComment;
+    entry.failureCode = journalEntry.failureCode;
+    entry.failureMessage = journalEntry.failureMessage;
+    entry.attemptCount = journalEntry.attemptCount;
+    entry.terminal = journalEntry.terminal;
+    entry.suggestedTools = journalEntry.suggestedTools;
+    return entry;
+}
+
+void annotateExecutionApplyState(ExecutionApplyArtifact* artifact) {
+    if (artifact == nullptr) {
+        return;
+    }
+    if (!artifact->executionPolicy.is_object() || artifact->executionPolicy.empty()) {
+        artifact->executionPolicy = executionPolicyForJournal();
+    }
+    for (auto& entry : artifact->entries) {
+        entry.terminal = isTerminalExecutionEntryStatus(entry.executionStatus);
+    }
+    artifact->applyStatus = summarizeExecutionJournalStatus(
+        [&]() {
+            std::vector<ExecutionJournalEntry> mirrored;
+            mirrored.reserve(artifact->entries.size());
+            for (const auto& entry : artifact->entries) {
+                ExecutionJournalEntry mirror;
+                mirror.executionStatus = entry.executionStatus;
+                mirror.terminal = entry.terminal;
+                mirrored.push_back(std::move(mirror));
+            }
+            return mirrored;
+        }());
+    const auto summary = summarizeExecutionJournalSummaryEntries(
+        [&]() {
+            std::vector<ExecutionJournalEntry> mirrored;
+            mirrored.reserve(artifact->entries.size());
+            for (const auto& entry : artifact->entries) {
+                ExecutionJournalEntry mirror;
+                mirror.executionStatus = entry.executionStatus;
+                mirror.terminal = entry.terminal;
+                mirrored.push_back(std::move(mirror));
+            }
+            return mirrored;
+        }(),
+        artifact->applyStatus);
+    artifact->executionPolicy["apply_state"] = {
+        {"aggregate_status", artifact->applyStatus},
+        {"all_terminal", summary.allTerminal},
+        {"submitted_count", summary.submittedCount},
+        {"succeeded_count", summary.succeededCount},
+        {"failed_count", summary.failedCount},
+        {"cancelled_count", summary.cancelledCount},
+        {"queued_count", summary.queuedCount}
+    };
+}
+
+json auditTrailForExecutionApplyCreation(const ExecutionJournalArtifact& journal,
+                                         const std::string& actor,
+                                         const std::string& executionCapability,
+                                         const std::string& comment,
+                                         const std::string& generatedAtUtc,
+                                         std::string_view applyStatus,
+                                         const std::vector<std::string>& applyEntryIds) {
+    return json::array({
+        json{
+            {"event_id", "phase7-apply-event-" +
+                             fnv1aHex(journal.journalArtifact.artifactId + "|apply-created|" + actor)},
+            {"event_type", "execution_apply_created"},
+            {"generated_at_utc", generatedAtUtc},
+            {"actor", actor},
+            {"execution_capability", executionCapability},
+            {"apply_status", applyStatus},
+            {"updated_entry_ids", applyEntryIds},
+            {"comment", comment.empty() ? json(nullptr) : json(comment)},
+            {"message", "Execution apply artifact created from submitted journal entries for controlled execution."}
+        }
+    });
+}
+
+json auditEventForExecutionApplyTransition(const ExecutionApplyArtifact& artifact,
+                                           const std::vector<ExecutionApplyEntry>& previousEntries,
+                                           const std::vector<std::string>& updatedEntryIds,
+                                           std::string_view executionStatus,
+                                           std::string_view actor,
+                                           std::string_view comment,
+                                           std::string_view failureCode,
+                                           std::string_view failureMessage,
+                                           std::string_view previousApplyStatus,
+                                           const std::string& generatedAtUtc) {
+    json previousStatuses = json::array();
+    for (const auto& entry : previousEntries) {
+        previousStatuses.push_back({
+            {"apply_entry_id", entry.applyEntryId},
+            {"execution_status", entry.executionStatus}
+        });
+    }
+
+    std::ostringstream seed;
+    seed << artifact.applyArtifact.artifactId << "|" << generatedAtUtc << "|" << executionStatus << "|" << actor;
+    for (const auto& entryId : updatedEntryIds) {
+        seed << "|" << entryId;
+    }
+
+    std::ostringstream message;
+    message << "Synchronized " << updatedEntryIds.size() << " execution apply entr";
+    message << (updatedEntryIds.size() == 1 ? "y" : "ies");
+    message << " as `" << executionStatus << "` by `" << actor << "`.";
+    if (!comment.empty()) {
+        message << " Comment: " << comment;
+    }
+    if (!failureCode.empty()) {
+        message << " failure_code=" << failureCode << ".";
+    }
+
+    return json{
+        {"event_id", "phase7-apply-event-" + fnv1aHex(seed.str())},
+        {"event_type", "execution_apply_status_recorded"},
+        {"generated_at_utc", generatedAtUtc},
+        {"actor", actor},
+        {"execution_status", executionStatus},
+        {"comment", comment.empty() ? json(nullptr) : json(comment)},
+        {"failure_code", failureCode.empty() ? json(nullptr) : json(failureCode)},
+        {"failure_message", failureMessage.empty() ? json(nullptr) : json(failureMessage)},
+        {"updated_entry_ids", updatedEntryIds},
+        {"previous_entry_statuses", std::move(previousStatuses)},
+        {"previous_apply_status", previousApplyStatus.empty() ? json(nullptr) : json(previousApplyStatus)},
+        {"apply_status", artifact.applyStatus},
+        {"message", message.str()}
+    };
+}
+
 ExecutionLedgerEntry executionLedgerEntryForAction(const PlaybookArtifact& playbook, const PlaybookAction& action) {
     ExecutionLedgerEntry entry;
     entry.entryId = "phase7-ledger-entry-" +
@@ -1769,6 +2247,170 @@ json manifestForExecutionLedger(const ExecutionLedgerArtifact& ledger) {
     };
 }
 
+bool parseExecutionJournalEntry(const json& payload, ExecutionJournalEntry* out) {
+    if (out == nullptr || !payload.is_object()) {
+        return false;
+    }
+    out->journalEntryId = payload.value("journal_entry_id", std::string());
+    out->ledgerEntryId = payload.value("ledger_entry_id", std::string());
+    out->actionId = payload.value("action_id", std::string());
+    out->actionType = payload.value("action_type", std::string());
+    out->findingId = payload.value("finding_id", std::string());
+    out->executionStatus = payload.value("execution_status", std::string(kExecutionEntryStatusQueued));
+    out->idempotencyKey = payload.value("idempotency_key", std::string());
+    out->requiresManualConfirmation = payload.value("requires_manual_confirmation", true);
+    out->title = payload.value("title", std::string());
+    out->summary = payload.value("summary", std::string());
+    out->queuedAtUtc = payload.value("queued_at_utc", std::string());
+    out->startedAtUtc = payload.contains("started_at_utc") && payload.at("started_at_utc").is_string()
+        ? payload.at("started_at_utc").get<std::string>()
+        : std::string();
+    out->completedAtUtc = payload.contains("completed_at_utc") && payload.at("completed_at_utc").is_string()
+        ? payload.at("completed_at_utc").get<std::string>()
+        : std::string();
+    out->lastUpdatedAtUtc = payload.value("last_updated_at_utc", std::string());
+    out->lastUpdatedBy = payload.contains("last_updated_by") && payload.at("last_updated_by").is_string()
+        ? payload.at("last_updated_by").get<std::string>()
+        : std::string();
+    out->executionComment = payload.contains("execution_comment") && payload.at("execution_comment").is_string()
+        ? payload.at("execution_comment").get<std::string>()
+        : std::string();
+    out->failureCode = payload.contains("failure_code") && payload.at("failure_code").is_string()
+        ? payload.at("failure_code").get<std::string>()
+        : std::string();
+    out->failureMessage = payload.contains("failure_message") && payload.at("failure_message").is_string()
+        ? payload.at("failure_message").get<std::string>()
+        : std::string();
+    if (payload.contains("attempt_count") && payload.at("attempt_count").is_number_unsigned()) {
+        out->attemptCount = payload.at("attempt_count").get<std::size_t>();
+    } else if (payload.contains("attempt_count") && payload.at("attempt_count").is_number_integer()) {
+        const auto value = payload.at("attempt_count").get<long long>();
+        out->attemptCount = value > 0 ? static_cast<std::size_t>(value) : 0ULL;
+    }
+    out->terminal = payload.value("terminal", isTerminalExecutionEntryStatus(out->executionStatus));
+    out->suggestedTools = payload.value("suggested_tools", json::array());
+    return !out->journalEntryId.empty() && !out->ledgerEntryId.empty() && !out->actionId.empty() &&
+        !out->actionType.empty() && !out->idempotencyKey.empty() &&
+        isSupportedExecutionEntryStatus(out->executionStatus);
+}
+
+bool parseExecutionApplyEntry(const json& payload, ExecutionApplyEntry* out) {
+    if (!payload.is_object() || out == nullptr) {
+        return false;
+    }
+
+    out->applyEntryId = payload.value("apply_entry_id", std::string());
+    out->journalEntryId = payload.value("journal_entry_id", std::string());
+    out->ledgerEntryId = payload.value("ledger_entry_id", std::string());
+    out->actionId = payload.value("action_id", std::string());
+    out->actionType = payload.value("action_type", std::string());
+    out->findingId = payload.value("finding_id", std::string());
+    out->executionStatus = payload.value("execution_status", std::string(kExecutionEntryStatusSubmitted));
+    out->idempotencyKey = payload.value("idempotency_key", std::string());
+    out->requiresManualConfirmation = payload.value("requires_manual_confirmation", true);
+    out->title = payload.value("title", std::string());
+    out->summary = payload.value("summary", std::string());
+    out->submittedAtUtc = payload.value("submitted_at_utc", std::string());
+    out->completedAtUtc = payload.contains("completed_at_utc") && payload.at("completed_at_utc").is_string()
+        ? payload.at("completed_at_utc").get<std::string>()
+        : std::string();
+    out->lastUpdatedAtUtc = payload.contains("last_updated_at_utc") && payload.at("last_updated_at_utc").is_string()
+        ? payload.at("last_updated_at_utc").get<std::string>()
+        : std::string();
+    out->lastUpdatedBy = payload.contains("last_updated_by") && payload.at("last_updated_by").is_string()
+        ? payload.at("last_updated_by").get<std::string>()
+        : std::string();
+    out->executionComment = payload.contains("execution_comment") && payload.at("execution_comment").is_string()
+        ? payload.at("execution_comment").get<std::string>()
+        : std::string();
+    out->failureCode = payload.contains("failure_code") && payload.at("failure_code").is_string()
+        ? payload.at("failure_code").get<std::string>()
+        : std::string();
+    out->failureMessage = payload.contains("failure_message") && payload.at("failure_message").is_string()
+        ? payload.at("failure_message").get<std::string>()
+        : std::string();
+    if (payload.contains("attempt_count") && payload.at("attempt_count").is_number_unsigned()) {
+        out->attemptCount = payload.at("attempt_count").get<std::size_t>();
+    } else if (payload.contains("attempt_count") && payload.at("attempt_count").is_number_integer()) {
+        const auto value = payload.at("attempt_count").get<long long>();
+        out->attemptCount = value > 0 ? static_cast<std::size_t>(value) : 0ULL;
+    }
+    out->terminal = payload.value("terminal", isTerminalExecutionEntryStatus(out->executionStatus));
+    out->suggestedTools = payload.value("suggested_tools", json::array());
+    return !out->applyEntryId.empty() && !out->journalEntryId.empty() && !out->ledgerEntryId.empty() &&
+        !out->actionId.empty() && !out->actionType.empty() && !out->idempotencyKey.empty() &&
+        isSupportedExecutionEntryStatus(out->executionStatus);
+}
+
+json manifestForExecutionJournal(const ExecutionJournalArtifact& journal) {
+    json filteredFindingIds = json::array();
+    for (const auto& findingId : journal.filteredFindingIds) {
+        filteredFindingIds.push_back(findingId);
+    }
+    json entries = json::array();
+    for (const auto& entry : journal.entries) {
+        entries.push_back(executionJournalEntryToJson(entry));
+    }
+    return {
+        {"artifact_type", journal.journalArtifact.artifactType},
+        {"contract_version", journal.journalArtifact.contractVersion},
+        {"artifact_id", journal.journalArtifact.artifactId},
+        {"manifest_path", journal.journalArtifact.manifestPath},
+        {"artifact_root_dir", journal.journalArtifact.artifactRootDir},
+        {"mode", journal.mode},
+        {"generated_at_utc", journal.generatedAtUtc},
+        {"initiated_by", journal.initiatedBy},
+        {"execution_capability", journal.executionCapability},
+        {"journal_status", journal.journalStatus},
+        {"source_artifact", artifactRefToJson(journal.sourceArtifact)},
+        {"analysis_artifact", artifactRefToJson(journal.analysisArtifact)},
+        {"playbook_artifact", artifactRefToJson(journal.playbookArtifact)},
+        {"execution_ledger", artifactRefToJson(journal.ledgerArtifact)},
+        {"execution_journal", artifactRefToJson(journal.journalArtifact)},
+        {"execution_policy", journal.executionPolicy},
+        {"replay_context", journal.replayContext},
+        {"filtered_finding_ids", std::move(filteredFindingIds)},
+        {"entry_count", entries.size()},
+        {"entries", std::move(entries)},
+        {"audit_trail", journal.auditTrail}
+    };
+}
+
+json manifestForExecutionApply(const ExecutionApplyArtifact& apply) {
+    json filteredFindingIds = json::array();
+    for (const auto& findingId : apply.filteredFindingIds) {
+        filteredFindingIds.push_back(findingId);
+    }
+    json entries = json::array();
+    for (const auto& entry : apply.entries) {
+        entries.push_back(executionApplyEntryToJson(entry));
+    }
+    return {
+        {"artifact_type", apply.applyArtifact.artifactType},
+        {"contract_version", apply.applyArtifact.contractVersion},
+        {"artifact_id", apply.applyArtifact.artifactId},
+        {"manifest_path", apply.applyArtifact.manifestPath},
+        {"artifact_root_dir", apply.applyArtifact.artifactRootDir},
+        {"mode", apply.mode},
+        {"generated_at_utc", apply.generatedAtUtc},
+        {"initiated_by", apply.initiatedBy},
+        {"execution_capability", apply.executionCapability},
+        {"apply_status", apply.applyStatus},
+        {"source_artifact", artifactRefToJson(apply.sourceArtifact)},
+        {"analysis_artifact", artifactRefToJson(apply.analysisArtifact)},
+        {"playbook_artifact", artifactRefToJson(apply.playbookArtifact)},
+        {"execution_ledger", artifactRefToJson(apply.ledgerArtifact)},
+        {"execution_journal", artifactRefToJson(apply.journalArtifact)},
+        {"execution_apply", artifactRefToJson(apply.applyArtifact)},
+        {"execution_policy", apply.executionPolicy},
+        {"replay_context", apply.replayContext},
+        {"filtered_finding_ids", std::move(filteredFindingIds)},
+        {"entry_count", entries.size()},
+        {"entries", std::move(entries)},
+        {"audit_trail", apply.auditTrail}
+    };
+}
+
 bool loadExecutionLedgerFromManifestJson(const json& manifest,
                                          ExecutionLedgerArtifact* out,
                                          std::string* errorCode,
@@ -1854,6 +2496,190 @@ bool loadExecutionLedgerFromManifestJson(const json& manifest,
     return true;
 }
 
+bool loadExecutionJournalFromManifestJson(const json& manifest,
+                                          ExecutionJournalArtifact* out,
+                                          std::string* errorCode,
+                                          std::string* errorMessage) {
+    if (!manifest.is_object()) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution journal manifest must be a json object";
+        }
+        return false;
+    }
+    if (manifest.value("artifact_type", std::string()) != kExecutionJournalArtifactType ||
+        manifest.value("contract_version", std::string()) != kContractVersion) {
+        if (errorCode != nullptr) {
+            *errorCode = "unsupported_source_contract";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution journal manifest contract/version is not supported";
+        }
+        return false;
+    }
+    if (out == nullptr) {
+        return true;
+    }
+
+    ExecutionJournalArtifact artifact;
+    artifact.mode = manifest.value("mode", std::string(kDefaultPlaybookMode));
+    artifact.generatedAtUtc = manifest.value("generated_at_utc",
+                                             manifest.value("replay_context", json::object())
+                                                 .value("generated_at_utc", std::string()));
+    artifact.initiatedBy = manifest.value("initiated_by", std::string());
+    artifact.executionCapability = manifest.value("execution_capability", std::string());
+    artifact.journalStatus = manifest.value("journal_status", std::string(kExecutionJournalStatusQueued));
+    artifact.executionPolicy = manifest.value("execution_policy", json::object());
+    artifact.replayContext = manifest.value("replay_context", json::object());
+    artifact.auditTrail = manifest.value("audit_trail", json::array());
+    artifact.manifest = manifest;
+
+    if (!parseArtifactRef(manifest.value("source_artifact", json::object()), &artifact.sourceArtifact) ||
+        !parseArtifactRef(manifest.value("analysis_artifact", json::object()), &artifact.analysisArtifact) ||
+        !parseArtifactRef(manifest.value("playbook_artifact", json::object()), &artifact.playbookArtifact) ||
+        !parseArtifactRef(manifest.value("execution_ledger", json::object()), &artifact.ledgerArtifact) ||
+        !parseArtifactRef(manifest.value("execution_journal", manifest), &artifact.journalArtifact)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution journal manifest is missing artifact identity";
+        }
+        return false;
+    }
+
+    for (const auto& findingId : manifest.value("filtered_finding_ids", json::array())) {
+        if (!findingId.is_string() || findingId.get_ref<const std::string&>().empty()) {
+            if (errorCode != nullptr) {
+                *errorCode = "artifact_load_failed";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution journal manifest contains an invalid filtered finding id";
+            }
+            return false;
+        }
+        artifact.filteredFindingIds.push_back(findingId.get<std::string>());
+    }
+
+    for (const auto& entry : manifest.value("entries", json::array())) {
+        ExecutionJournalEntry parsed;
+        if (!parseExecutionJournalEntry(entry, &parsed)) {
+            if (errorCode != nullptr) {
+                *errorCode = "artifact_load_failed";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution journal manifest contains an incomplete entry";
+            }
+            return false;
+        }
+        artifact.entries.push_back(std::move(parsed));
+    }
+
+    annotateExecutionJournalState(&artifact);
+
+    *out = std::move(artifact);
+    return true;
+}
+
+bool loadExecutionApplyFromManifestJson(const json& manifest,
+                                        ExecutionApplyArtifact* out,
+                                        std::string* errorCode,
+                                        std::string* errorMessage) {
+    if (!manifest.is_object()) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution apply manifest must be a json object";
+        }
+        return false;
+    }
+    if (manifest.value("artifact_type", std::string()) != kExecutionApplyArtifactType ||
+        manifest.value("contract_version", std::string()) != kContractVersion) {
+        if (errorCode != nullptr) {
+            *errorCode = "unsupported_source_contract";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution apply manifest contract/version is not supported";
+        }
+        return false;
+    }
+    if (out == nullptr) {
+        return true;
+    }
+
+    ExecutionApplyArtifact artifact;
+    artifact.mode = manifest.value("mode", std::string(kDefaultPlaybookMode));
+    artifact.generatedAtUtc = manifest.value("generated_at_utc",
+                                             manifest.value("replay_context", json::object())
+                                                 .value("generated_at_utc", std::string()));
+    artifact.initiatedBy = manifest.value("initiated_by", std::string());
+    artifact.executionCapability = manifest.value("execution_capability", std::string());
+    artifact.applyStatus = manifest.value("apply_status", std::string(kExecutionJournalStatusInProgress));
+    artifact.executionPolicy = manifest.value("execution_policy", json::object());
+    artifact.replayContext = manifest.value("replay_context", json::object());
+    artifact.auditTrail = manifest.value("audit_trail", json::array());
+    artifact.manifest = manifest;
+
+    if (!parseArtifactRef(manifest.value("source_artifact", json::object()), &artifact.sourceArtifact) ||
+        !parseArtifactRef(manifest.value("analysis_artifact", json::object()), &artifact.analysisArtifact) ||
+        !parseArtifactRef(manifest.value("playbook_artifact", json::object()), &artifact.playbookArtifact) ||
+        !parseArtifactRef(manifest.value("execution_ledger", json::object()), &artifact.ledgerArtifact) ||
+        !parseArtifactRef(manifest.value("execution_journal", json::object()), &artifact.journalArtifact) ||
+        !parseArtifactRef(manifest.value("execution_apply", manifest), &artifact.applyArtifact)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution apply manifest is missing artifact identity";
+        }
+        return false;
+    }
+
+    for (const auto& findingId : manifest.value("filtered_finding_ids", json::array())) {
+        if (!findingId.is_string() || findingId.get_ref<const std::string&>().empty()) {
+            if (errorCode != nullptr) {
+                *errorCode = "artifact_load_failed";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution apply manifest contains an invalid filtered finding id";
+            }
+            return false;
+        }
+        artifact.filteredFindingIds.push_back(findingId.get<std::string>());
+    }
+
+    for (const auto& entry : manifest.value("entries", json::array())) {
+        ExecutionApplyEntry parsed;
+        if (!parseExecutionApplyEntry(entry, &parsed)) {
+            if (errorCode != nullptr) {
+                *errorCode = "artifact_load_failed";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution apply manifest contains an incomplete entry";
+            }
+            return false;
+        }
+        artifact.entries.push_back(std::move(parsed));
+    }
+
+    annotateExecutionApplyState(&artifact);
+
+    ExecutionJournalArtifact journal;
+    if (loadExecutionJournalArtifact(artifact.journalArtifact.manifestPath, {}, &journal, nullptr, nullptr)) {
+        synchronizeExecutionApplyEntriesFromJournal(&artifact, journal);
+        annotateExecutionApplyState(&artifact);
+        artifact.manifest = manifestForExecutionApply(artifact);
+        std::string ignoredWriteError;
+        writeJsonTextFile(artifact.applyArtifact.manifestPath, artifact.manifest, &ignoredWriteError);
+    }
+
+    *out = std::move(artifact);
+    return true;
+}
+
 bool loadExecutionLedgerFromPath(const fs::path& manifestPath,
                                  ExecutionLedgerArtifact* out,
                                  std::string* errorCode,
@@ -1879,6 +2705,60 @@ bool loadExecutionLedgerFromPath(const fs::path& manifestPath,
         return false;
     }
     return loadExecutionLedgerFromManifestJson(manifest, out, errorCode, errorMessage);
+}
+
+bool loadExecutionJournalFromPath(const fs::path& manifestPath,
+                                  ExecutionJournalArtifact* out,
+                                  std::string* errorCode,
+                                  std::string* errorMessage) {
+    if (!fs::exists(manifestPath)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_not_found";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution journal manifest was not found";
+        }
+        return false;
+    }
+    json manifest;
+    std::string readError;
+    if (!readJsonFile(manifestPath, &manifest, &readError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = readError;
+        }
+        return false;
+    }
+    return loadExecutionJournalFromManifestJson(manifest, out, errorCode, errorMessage);
+}
+
+bool loadExecutionApplyFromPath(const fs::path& manifestPath,
+                                ExecutionApplyArtifact* out,
+                                std::string* errorCode,
+                                std::string* errorMessage) {
+    if (!fs::exists(manifestPath)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_not_found";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution apply manifest was not found";
+        }
+        return false;
+    }
+    json manifest;
+    std::string readError;
+    if (!readJsonFile(manifestPath, &manifest, &readError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "artifact_load_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = readError;
+        }
+        return false;
+    }
+    return loadExecutionApplyFromManifestJson(manifest, out, errorCode, errorMessage);
 }
 
 } // namespace
@@ -1930,6 +2810,58 @@ json executionLedgerEntryToJson(const ExecutionLedgerEntry& entry) {
         {"distinct_reviewer_count", entry.distinctReviewerCount},
         {"approval_reviewer_count", entry.approvalReviewerCount},
         {"approval_threshold_met", entry.approvalThresholdMet},
+        {"suggested_tools", entry.suggestedTools}
+    };
+}
+
+json executionJournalEntryToJson(const ExecutionJournalEntry& entry) {
+    return {
+        {"journal_entry_id", entry.journalEntryId},
+        {"ledger_entry_id", entry.ledgerEntryId},
+        {"action_id", entry.actionId},
+        {"action_type", entry.actionType},
+        {"finding_id", entry.findingId},
+        {"execution_status", entry.executionStatus},
+        {"idempotency_key", entry.idempotencyKey},
+        {"requires_manual_confirmation", entry.requiresManualConfirmation},
+        {"title", entry.title},
+        {"summary", entry.summary},
+        {"queued_at_utc", entry.queuedAtUtc},
+        {"started_at_utc", entry.startedAtUtc.empty() ? json(nullptr) : json(entry.startedAtUtc)},
+        {"completed_at_utc", entry.completedAtUtc.empty() ? json(nullptr) : json(entry.completedAtUtc)},
+        {"last_updated_at_utc", entry.lastUpdatedAtUtc.empty() ? json(nullptr) : json(entry.lastUpdatedAtUtc)},
+        {"last_updated_by", entry.lastUpdatedBy.empty() ? json(nullptr) : json(entry.lastUpdatedBy)},
+        {"execution_comment", entry.executionComment.empty() ? json(nullptr) : json(entry.executionComment)},
+        {"failure_code", entry.failureCode.empty() ? json(nullptr) : json(entry.failureCode)},
+        {"failure_message", entry.failureMessage.empty() ? json(nullptr) : json(entry.failureMessage)},
+        {"attempt_count", entry.attemptCount},
+        {"terminal", entry.terminal},
+        {"suggested_tools", entry.suggestedTools}
+    };
+}
+
+json executionApplyEntryToJson(const ExecutionApplyEntry& entry) {
+    return {
+        {"apply_entry_id", entry.applyEntryId},
+        {"journal_entry_id", entry.journalEntryId},
+        {"ledger_entry_id", entry.ledgerEntryId},
+        {"action_id", entry.actionId},
+        {"action_type", entry.actionType},
+        {"finding_id", entry.findingId},
+        {"execution_status", entry.executionStatus},
+        {"idempotency_key", entry.idempotencyKey},
+        {"requires_manual_confirmation", entry.requiresManualConfirmation},
+        {"title", entry.title},
+        {"summary", entry.summary},
+        {"submitted_at_utc", entry.submittedAtUtc},
+        {"completed_at_utc", entry.completedAtUtc.empty() ? json(nullptr) : json(entry.completedAtUtc)},
+        {"last_updated_at_utc", entry.lastUpdatedAtUtc.empty() ? json(nullptr) : json(entry.lastUpdatedAtUtc)},
+        {"last_updated_by", entry.lastUpdatedBy.empty() ? json(nullptr) : json(entry.lastUpdatedBy)},
+        {"execution_comment", entry.executionComment.empty() ? json(nullptr) : json(entry.executionComment)},
+        {"failure_code", entry.failureCode.empty() ? json(nullptr) : json(entry.failureCode)},
+        {"failure_message", entry.failureMessage.empty() ? json(nullptr) : json(entry.failureMessage)},
+        {"attempt_count", entry.attemptCount},
+        {"terminal", entry.terminal},
         {"suggested_tools", entry.suggestedTools}
     };
 }
@@ -1992,6 +2924,107 @@ json latestExecutionLedgerAuditSummary(const ExecutionLedgerArtifact& artifact) 
                               : event.contains("status") && event.at("status").is_string()
                                     ? event.at("status")
                                     : json(nullptr)}
+    };
+}
+
+ExecutionJournalSummary summarizeExecutionJournalSummary(const ExecutionJournalArtifact& artifact) {
+    return summarizeExecutionJournalSummaryEntries(artifact.entries, artifact.journalStatus);
+}
+
+json executionJournalSummaryToJson(const ExecutionJournalSummary& summary) {
+    return {
+        {"queued_count", summary.queuedCount},
+        {"submitted_count", summary.submittedCount},
+        {"succeeded_count", summary.succeededCount},
+        {"failed_count", summary.failedCount},
+        {"cancelled_count", summary.cancelledCount},
+        {"terminal_count", summary.terminalCount},
+        {"actionable_entry_count", summary.actionableEntryCount},
+        {"all_terminal", summary.allTerminal}
+    };
+}
+
+json latestExecutionJournalAuditSummary(const ExecutionJournalArtifact& artifact) {
+    if (!artifact.auditTrail.is_array() || artifact.auditTrail.empty()) {
+        return {
+            {"event_type", nullptr},
+            {"generated_at_utc", nullptr},
+            {"actor", nullptr},
+            {"execution_status", nullptr},
+            {"message", nullptr},
+            {"journal_status", nullptr}
+        };
+    }
+    const auto& event = artifact.auditTrail.back();
+    return {
+        {"event_type", event.contains("event_type") && event.at("event_type").is_string()
+                           ? event.at("event_type")
+                           : json(nullptr)},
+        {"generated_at_utc", event.contains("generated_at_utc") && event.at("generated_at_utc").is_string()
+                                 ? event.at("generated_at_utc")
+                                 : json(nullptr)},
+        {"actor", event.contains("actor") && event.at("actor").is_string()
+                      ? event.at("actor")
+                      : json(nullptr)},
+        {"execution_status", event.contains("execution_status") && event.at("execution_status").is_string()
+                                  ? event.at("execution_status")
+                                  : json(nullptr)},
+        {"message", event.contains("message") && event.at("message").is_string()
+                        ? event.at("message")
+                        : json(nullptr)},
+        {"journal_status", event.contains("journal_status") && event.at("journal_status").is_string()
+                               ? event.at("journal_status")
+                               : json(nullptr)}
+    };
+}
+
+ExecutionApplySummary summarizeExecutionApplySummary(const ExecutionApplyArtifact& artifact) {
+    std::vector<ExecutionJournalEntry> mirrored;
+    mirrored.reserve(artifact.entries.size());
+    for (const auto& entry : artifact.entries) {
+        ExecutionJournalEntry mirror;
+        mirror.executionStatus = entry.executionStatus;
+        mirror.terminal = entry.terminal;
+        mirrored.push_back(std::move(mirror));
+    }
+    return summarizeExecutionJournalSummaryEntries(mirrored, artifact.applyStatus);
+}
+
+json executionApplySummaryToJson(const ExecutionApplySummary& summary) {
+    return executionJournalSummaryToJson(summary);
+}
+
+json latestExecutionApplyAuditSummary(const ExecutionApplyArtifact& artifact) {
+    if (!artifact.auditTrail.is_array() || artifact.auditTrail.empty()) {
+        return {
+            {"event_type", nullptr},
+            {"generated_at_utc", nullptr},
+            {"actor", nullptr},
+            {"execution_status", nullptr},
+            {"message", nullptr},
+            {"apply_status", nullptr}
+        };
+    }
+    const auto& event = artifact.auditTrail.back();
+    return {
+        {"event_type", event.contains("event_type") && event.at("event_type").is_string()
+                           ? event.at("event_type")
+                           : json(nullptr)},
+        {"generated_at_utc", event.contains("generated_at_utc") && event.at("generated_at_utc").is_string()
+                                 ? event.at("generated_at_utc")
+                                 : json(nullptr)},
+        {"actor", event.contains("actor") && event.at("actor").is_string()
+                      ? event.at("actor")
+                      : json(nullptr)},
+        {"execution_status", event.contains("execution_status") && event.at("execution_status").is_string()
+                                  ? event.at("execution_status")
+                                  : json(nullptr)},
+        {"message", event.contains("message") && event.at("message").is_string()
+                        ? event.at("message")
+                        : json(nullptr)},
+        {"apply_status", event.contains("apply_status") && event.at("apply_status").is_string()
+                             ? event.at("apply_status")
+                             : json(nullptr)}
     };
 }
 
@@ -2542,6 +3575,842 @@ bool recordExecutionLedgerReview(const std::string& manifestPath,
     return true;
 }
 
+bool startExecutionJournal(const std::string& manifestPath,
+                           const std::string& artifactId,
+                           const std::string& actor,
+                           const std::string& executionCapability,
+                           ExecutionJournalArtifact* out,
+                           bool* created,
+                           std::string* errorCode,
+                           std::string* errorMessage) {
+    ExecutionLedgerArtifact ledger;
+    if (!loadExecutionLedgerArtifact(manifestPath, artifactId, &ledger, errorCode, errorMessage)) {
+        return false;
+    }
+    annotateExecutionLedgerReviewState(&ledger);
+
+    const json journalPolicy = executionPolicyForJournal();
+    const std::string normalizedActor = trimAscii(actor);
+    const std::string normalizedCapability = trimAscii(executionCapability);
+    if (journalPolicy.value("actor_required", true) && normalizedActor.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "actor is required by the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+    if (!trimAscii(journalPolicy.value("capability_required", std::string())).empty() && normalizedCapability.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution_capability is required by the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+    if (journalPolicy.value("start_requires_ready_ledger", true) &&
+        ledger.ledgerStatus != kLedgerStatusReadyForExecution) {
+        if (errorCode != nullptr) {
+            *errorCode = "ledger_not_ready";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution journal start requires a ledger that is ready_for_execution";
+        }
+        return false;
+    }
+
+    ExecutionJournalArtifact journal;
+    journal.sourceArtifact = ledger.sourceArtifact;
+    journal.analysisArtifact = ledger.analysisArtifact;
+    journal.playbookArtifact = ledger.playbookArtifact;
+    journal.ledgerArtifact = ledger.ledgerArtifact;
+    journal.journalArtifact = executionJournalArtifactRefForLedger(ledger);
+    journal.mode = ledger.mode;
+    journal.initiatedBy = normalizedActor;
+    journal.executionCapability = normalizedCapability;
+    journal.executionPolicy = journalPolicy;
+    journal.replayContext = ledger.replayContext;
+    journal.filteredFindingIds = ledger.filteredFindingIds;
+
+    const fs::path manifestFile = journal.journalArtifact.manifestPath;
+    if (fs::exists(manifestFile)) {
+        if (created != nullptr) {
+            *created = false;
+        }
+        return loadExecutionJournalFromPath(manifestFile, out, errorCode, errorMessage);
+    }
+
+    std::vector<std::string> queuedEntryIds;
+    for (const auto& entry : ledger.entries) {
+        if (entry.reviewStatus != kLedgerEntryStatusApproved || !entry.approvalThresholdMet) {
+            continue;
+        }
+        journal.entries.push_back(executionJournalEntryForLedgerEntry(
+            ledger, entry, normalizedActor, utcTimestampIso8601Now()));
+        queuedEntryIds.push_back(journal.entries.back().journalEntryId);
+    }
+
+    if (journal.entries.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "ledger_not_ready";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution journal start requires at least one approved ledger entry that met the approval threshold";
+        }
+        return false;
+    }
+
+    journal.generatedAtUtc = utcTimestampIso8601Now();
+    for (auto& entry : journal.entries) {
+        entry.queuedAtUtc = journal.generatedAtUtc;
+        entry.lastUpdatedAtUtc = journal.generatedAtUtc;
+    }
+    annotateExecutionJournalState(&journal);
+    journal.auditTrail = auditTrailForJournalCreation(ledger,
+                                                      normalizedActor,
+                                                      normalizedCapability,
+                                                      journal.generatedAtUtc,
+                                                      journal.journalStatus,
+                                                      queuedEntryIds);
+    journal.manifest = manifestForExecutionJournal(journal);
+
+    std::string directoryError;
+    if (!ensureDirectoryExists(journal.journalArtifact.artifactRootDir, &directoryError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = directoryError;
+        }
+        return false;
+    }
+
+    std::string writeError;
+    if (!writeJsonTextFile(journal.journalArtifact.manifestPath, journal.manifest, &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+
+    if (out != nullptr) {
+        *out = std::move(journal);
+    }
+    if (created != nullptr) {
+        *created = true;
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+bool loadExecutionJournalArtifact(const std::string& manifestPath,
+                                  const std::string& artifactId,
+                                  ExecutionJournalArtifact* out,
+                                  std::string* errorCode,
+                                  std::string* errorMessage) {
+    const bool hasManifest = !manifestPath.empty();
+    const bool hasArtifactId = !artifactId.empty();
+    if (hasManifest == hasArtifactId) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "exactly one of execution_journal_manifest_path or execution_journal_artifact_id is required";
+        }
+        return false;
+    }
+
+    const fs::path resolvedPath = hasManifest
+        ? fs::path(manifestPath)
+        : phase7RootDir() / "journals" / artifactId / "manifest.json";
+    return loadExecutionJournalFromPath(resolvedPath, out, errorCode, errorMessage);
+}
+
+bool listExecutionJournals(std::size_t limit,
+                           std::vector<ExecutionJournalArtifact>* out,
+                           std::string* errorCode,
+                           std::string* errorMessage) {
+    return listArtifactsUnder<ExecutionJournalArtifact>(
+        phase7RootDir() / "journals",
+        limit,
+        out,
+        errorCode,
+        errorMessage,
+        [](const fs::path& manifestPath, ExecutionJournalArtifact* artifact, std::string* code, std::string* message) {
+            return loadExecutionJournalFromPath(manifestPath, artifact, code, message);
+        });
+}
+
+bool recordExecutionJournalEvent(const std::string& manifestPath,
+                                 const std::string& artifactId,
+                                 const std::vector<std::string>& entryIds,
+                                 const std::string& executionStatus,
+                                 const std::string& actor,
+                                 const std::string& comment,
+                                 const std::string& failureCode,
+                                 const std::string& failureMessage,
+                                 ExecutionJournalArtifact* out,
+                                 std::vector<std::string>* updatedEntryIds,
+                                 std::string* auditEventId,
+                                 std::string* errorCode,
+                                 std::string* errorMessage) {
+    if (entryIds.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "entry_ids must include at least one execution journal entry id";
+        }
+        return false;
+    }
+    if (!isSupportedExecutionEntryStatus(executionStatus)) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution_status must be one of queued, submitted, succeeded, failed, or cancelled";
+        }
+        return false;
+    }
+
+    ExecutionJournalArtifact artifact;
+    if (!loadExecutionJournalArtifact(manifestPath, artifactId, &artifact, errorCode, errorMessage)) {
+        return false;
+    }
+    annotateExecutionJournalState(&artifact);
+
+    const std::string normalizedActor = trimAscii(actor);
+    if (artifact.executionPolicy.value("actor_required", true) && normalizedActor.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "actor is required by the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+    const std::string normalizedComment = trimAscii(comment);
+    if (executionPolicyCommentRequired(artifact.executionPolicy, executionStatus) && normalizedComment.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "comment is required when execution_status is failed or cancelled";
+        }
+        return false;
+    }
+    const std::string normalizedFailureCode = trimAscii(failureCode);
+    const std::string normalizedFailureMessage = trimAscii(failureMessage);
+    if (executionStatus == kExecutionEntryStatusFailed &&
+        normalizedFailureCode.empty() &&
+        normalizedFailureMessage.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "failure_code or failure_message is required when execution_status is failed";
+        }
+        return false;
+    }
+
+    std::vector<std::string> uniqueEntryIds = entryIds;
+    std::sort(uniqueEntryIds.begin(), uniqueEntryIds.end());
+    uniqueEntryIds.erase(std::unique(uniqueEntryIds.begin(), uniqueEntryIds.end()), uniqueEntryIds.end());
+
+    std::vector<ExecutionJournalEntry> previousEntries;
+    previousEntries.reserve(uniqueEntryIds.size());
+    for (const auto& entryId : uniqueEntryIds) {
+        const auto it = std::find_if(
+            artifact.entries.begin(),
+            artifact.entries.end(),
+            [&](const ExecutionJournalEntry& entry) { return entry.journalEntryId == entryId; });
+        if (it == artifact.entries.end()) {
+            if (errorCode != nullptr) {
+                *errorCode = "entry_not_found";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution journal update references an entry that does not exist";
+            }
+            return false;
+        }
+        if (!canTransitionExecutionStatus(it->executionStatus, executionStatus)) {
+            if (errorCode != nullptr) {
+                *errorCode = "invalid_execution_transition";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution journal update requested an unsupported lifecycle transition";
+            }
+            return false;
+        }
+        previousEntries.push_back(*it);
+    }
+
+    const std::string generatedAtUtc = utcTimestampIso8601Now();
+    const std::string previousJournalStatus = artifact.journalStatus;
+    for (auto& entry : artifact.entries) {
+        if (std::find(uniqueEntryIds.begin(), uniqueEntryIds.end(), entry.journalEntryId) == uniqueEntryIds.end()) {
+            continue;
+        }
+
+        const std::string previousStatus = entry.executionStatus;
+        entry.executionStatus = executionStatus;
+        entry.lastUpdatedAtUtc = generatedAtUtc;
+        entry.lastUpdatedBy = normalizedActor;
+        entry.executionComment = normalizedComment;
+
+        if (executionStatus == kExecutionEntryStatusQueued) {
+            entry.queuedAtUtc = generatedAtUtc;
+            entry.startedAtUtc.clear();
+            entry.completedAtUtc.clear();
+            entry.failureCode.clear();
+            entry.failureMessage.clear();
+        } else if (executionStatus == kExecutionEntryStatusSubmitted) {
+            if (previousStatus != kExecutionEntryStatusSubmitted) {
+                entry.startedAtUtc = generatedAtUtc;
+                entry.completedAtUtc.clear();
+                entry.failureCode.clear();
+                entry.failureMessage.clear();
+                entry.attemptCount += 1;
+            }
+        } else {
+            if (entry.startedAtUtc.empty()) {
+                entry.startedAtUtc = generatedAtUtc;
+            }
+            entry.completedAtUtc = generatedAtUtc;
+            if (executionStatus == kExecutionEntryStatusSucceeded) {
+                entry.failureCode.clear();
+                entry.failureMessage.clear();
+            } else if (executionStatus == kExecutionEntryStatusFailed) {
+                entry.failureCode = normalizedFailureCode;
+                entry.failureMessage = normalizedFailureMessage;
+            } else if (executionStatus == kExecutionEntryStatusCancelled) {
+                entry.failureCode = normalizedFailureCode;
+                entry.failureMessage = normalizedFailureMessage;
+            }
+        }
+    }
+
+    annotateExecutionJournalState(&artifact);
+    json auditEvent = auditEventForExecutionTransition(artifact,
+                                                       previousEntries,
+                                                       uniqueEntryIds,
+                                                       executionStatus,
+                                                       normalizedActor,
+                                                       normalizedComment,
+                                                       normalizedFailureCode,
+                                                       normalizedFailureMessage,
+                                                       previousJournalStatus,
+                                                       generatedAtUtc);
+    artifact.auditTrail.push_back(auditEvent);
+    artifact.manifest = manifestForExecutionJournal(artifact);
+
+    std::string writeError;
+    if (!writeJsonTextFile(artifact.journalArtifact.manifestPath, artifact.manifest, &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+
+    if (updatedEntryIds != nullptr) {
+        *updatedEntryIds = uniqueEntryIds;
+    }
+    if (auditEventId != nullptr) {
+        *auditEventId = auditEvent.value("event_id", std::string());
+    }
+    if (out != nullptr) {
+        *out = std::move(artifact);
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+bool dispatchExecutionJournalEntries(const std::string& manifestPath,
+                                     const std::string& artifactId,
+                                     const std::vector<std::string>& entryIds,
+                                     const std::string& actor,
+                                     const std::string& executionCapability,
+                                     const std::string& comment,
+                                     ExecutionJournalArtifact* out,
+                                     std::vector<std::string>* updatedEntryIds,
+                                     std::string* auditEventId,
+                                     std::string* errorCode,
+                                     std::string* errorMessage) {
+    ExecutionJournalArtifact artifact;
+    if (!loadExecutionJournalArtifact(manifestPath, artifactId, &artifact, errorCode, errorMessage)) {
+        return false;
+    }
+    annotateExecutionJournalState(&artifact);
+
+    const std::string normalizedActor = trimAscii(actor);
+    if (artifact.executionPolicy.value("actor_required", true) && normalizedActor.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "actor is required by the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+
+    const std::string requiredCapability =
+        trimAscii(artifact.executionPolicy.value("capability_required", std::string()));
+    const std::string normalizedCapability = trimAscii(executionCapability);
+    if (!requiredCapability.empty() && normalizedCapability.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution_capability is required by the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+    if (!requiredCapability.empty() && normalizedCapability != requiredCapability) {
+        if (errorCode != nullptr) {
+            *errorCode = "capability_mismatch";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution_capability does not satisfy the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+
+    std::vector<std::string> dispatchEntryIds;
+    if (entryIds.empty()) {
+        for (const auto& entry : artifact.entries) {
+            if (entry.executionStatus == kExecutionEntryStatusQueued) {
+                dispatchEntryIds.push_back(entry.journalEntryId);
+            }
+        }
+    } else {
+        dispatchEntryIds = entryIds;
+    }
+    std::sort(dispatchEntryIds.begin(), dispatchEntryIds.end());
+    dispatchEntryIds.erase(std::unique(dispatchEntryIds.begin(), dispatchEntryIds.end()), dispatchEntryIds.end());
+
+    if (dispatchEntryIds.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "nothing_dispatchable";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution journal dispatch requires at least one queued entry";
+        }
+        return false;
+    }
+
+    for (const auto& entryId : dispatchEntryIds) {
+        const auto it = std::find_if(
+            artifact.entries.begin(),
+            artifact.entries.end(),
+            [&](const ExecutionJournalEntry& entry) { return entry.journalEntryId == entryId; });
+        if (it == artifact.entries.end()) {
+            if (errorCode != nullptr) {
+                *errorCode = "entry_not_found";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution journal dispatch references an entry that does not exist";
+            }
+            return false;
+        }
+        if (it->executionStatus != kExecutionEntryStatusQueued) {
+            if (errorCode != nullptr) {
+                *errorCode = "nothing_dispatchable";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution journal dispatch only supports queued entries";
+            }
+            return false;
+        }
+    }
+
+    const std::string normalizedComment = trimAscii(comment);
+    const std::string dispatchComment =
+        !normalizedComment.empty() ? normalizedComment : "Dispatched for controlled execution.";
+    return recordExecutionJournalEvent(manifestPath,
+                                       artifactId,
+                                       dispatchEntryIds,
+                                       kExecutionEntryStatusSubmitted,
+                                       normalizedActor,
+                                       dispatchComment,
+                                       {},
+                                       {},
+                                       out,
+                                       updatedEntryIds,
+                                       auditEventId,
+                                       errorCode,
+                                       errorMessage);
+}
+
+bool startExecutionApply(const std::string& manifestPath,
+                         const std::string& artifactId,
+                         const std::vector<std::string>& entryIds,
+                         const std::string& actor,
+                         const std::string& executionCapability,
+                         const std::string& comment,
+                         ExecutionApplyArtifact* out,
+                         bool* created,
+                         std::string* errorCode,
+                         std::string* errorMessage) {
+    ExecutionJournalArtifact journal;
+    if (!loadExecutionJournalArtifact(manifestPath, artifactId, &journal, errorCode, errorMessage)) {
+        return false;
+    }
+    annotateExecutionJournalState(&journal);
+
+    const std::string normalizedActor = trimAscii(actor);
+    if (journal.executionPolicy.value("actor_required", true) && normalizedActor.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "actor is required by the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+    const std::string requiredCapability =
+        trimAscii(journal.executionPolicy.value("capability_required", std::string()));
+    const std::string normalizedCapability = trimAscii(executionCapability);
+    if (!requiredCapability.empty() && normalizedCapability.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution_capability is required by the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+    if (!requiredCapability.empty() && normalizedCapability != requiredCapability) {
+        if (errorCode != nullptr) {
+            *errorCode = "capability_mismatch";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution_capability does not satisfy the Phase 7 execution journal policy";
+        }
+        return false;
+    }
+
+    std::vector<std::string> selectedJournalEntryIds;
+    if (entryIds.empty()) {
+        for (const auto& entry : journal.entries) {
+            if (entry.executionStatus == kExecutionEntryStatusSubmitted) {
+                selectedJournalEntryIds.push_back(entry.journalEntryId);
+            }
+        }
+    } else {
+        selectedJournalEntryIds = entryIds;
+    }
+    std::sort(selectedJournalEntryIds.begin(), selectedJournalEntryIds.end());
+    selectedJournalEntryIds.erase(
+        std::unique(selectedJournalEntryIds.begin(), selectedJournalEntryIds.end()),
+        selectedJournalEntryIds.end());
+
+    if (selectedJournalEntryIds.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "nothing_applicable";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "execution apply start requires at least one submitted journal entry";
+        }
+        return false;
+    }
+
+    for (const auto& journalEntryId : selectedJournalEntryIds) {
+        const auto it = std::find_if(
+            journal.entries.begin(),
+            journal.entries.end(),
+            [&](const ExecutionJournalEntry& entry) { return entry.journalEntryId == journalEntryId; });
+        if (it == journal.entries.end()) {
+            if (errorCode != nullptr) {
+                *errorCode = "entry_not_found";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution apply start references a journal entry that does not exist";
+            }
+            return false;
+        }
+        if (it->executionStatus != kExecutionEntryStatusSubmitted) {
+            if (errorCode != nullptr) {
+                *errorCode = "journal_not_submitted";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution apply start only supports submitted journal entries";
+            }
+            return false;
+        }
+    }
+
+    ExecutionApplyArtifact apply;
+    apply.sourceArtifact = journal.sourceArtifact;
+    apply.analysisArtifact = journal.analysisArtifact;
+    apply.playbookArtifact = journal.playbookArtifact;
+    apply.ledgerArtifact = journal.ledgerArtifact;
+    apply.journalArtifact = journal.journalArtifact;
+    apply.applyArtifact = executionApplyArtifactRefForJournal(journal,
+                                                              selectedJournalEntryIds,
+                                                              normalizedActor,
+                                                              normalizedCapability);
+    apply.mode = journal.mode;
+    apply.initiatedBy = normalizedActor;
+    apply.executionCapability = normalizedCapability;
+    apply.executionPolicy = journal.executionPolicy;
+    apply.replayContext = journal.replayContext;
+    apply.filteredFindingIds = journal.filteredFindingIds;
+
+    const fs::path manifestFile = apply.applyArtifact.manifestPath;
+    if (fs::exists(manifestFile)) {
+        if (created != nullptr) {
+            *created = false;
+        }
+        return loadExecutionApplyFromPath(manifestFile, out, errorCode, errorMessage);
+    }
+
+    std::vector<std::string> applyEntryIds;
+    for (const auto& journalEntryId : selectedJournalEntryIds) {
+        const auto it = std::find_if(
+            journal.entries.begin(),
+            journal.entries.end(),
+            [&](const ExecutionJournalEntry& entry) { return entry.journalEntryId == journalEntryId; });
+        if (it == journal.entries.end()) {
+            continue;
+        }
+        apply.entries.push_back(executionApplyEntryForJournalEntry(apply, *it));
+        applyEntryIds.push_back(apply.entries.back().applyEntryId);
+    }
+
+    apply.generatedAtUtc = utcTimestampIso8601Now();
+    for (auto& entry : apply.entries) {
+        if (entry.submittedAtUtc.empty()) {
+            entry.submittedAtUtc = apply.generatedAtUtc;
+        }
+        if (entry.lastUpdatedAtUtc.empty()) {
+            entry.lastUpdatedAtUtc = apply.generatedAtUtc;
+        }
+    }
+    annotateExecutionApplyState(&apply);
+    apply.auditTrail = auditTrailForExecutionApplyCreation(journal,
+                                                           normalizedActor,
+                                                           normalizedCapability,
+                                                           trimAscii(comment),
+                                                           apply.generatedAtUtc,
+                                                           apply.applyStatus,
+                                                           applyEntryIds);
+    apply.manifest = manifestForExecutionApply(apply);
+
+    std::string directoryError;
+    if (!ensureDirectoryExists(apply.applyArtifact.artifactRootDir, &directoryError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = directoryError;
+        }
+        return false;
+    }
+
+    std::string writeError;
+    if (!writeJsonTextFile(apply.applyArtifact.manifestPath, apply.manifest, &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+
+    if (out != nullptr) {
+        *out = std::move(apply);
+    }
+    if (created != nullptr) {
+        *created = true;
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+bool loadExecutionApplyArtifact(const std::string& manifestPath,
+                                const std::string& artifactId,
+                                ExecutionApplyArtifact* out,
+                                std::string* errorCode,
+                                std::string* errorMessage) {
+    const bool hasManifest = !manifestPath.empty();
+    const bool hasArtifactId = !artifactId.empty();
+    if (hasManifest == hasArtifactId) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "exactly one of execution_apply_manifest_path or execution_apply_artifact_id is required";
+        }
+        return false;
+    }
+
+    const fs::path resolvedPath = hasManifest
+        ? fs::path(manifestPath)
+        : phase7RootDir() / "applies" / artifactId / "manifest.json";
+    return loadExecutionApplyFromPath(resolvedPath, out, errorCode, errorMessage);
+}
+
+bool listExecutionApplies(std::size_t limit,
+                          std::vector<ExecutionApplyArtifact>* out,
+                          std::string* errorCode,
+                          std::string* errorMessage) {
+    return listArtifactsUnder<ExecutionApplyArtifact>(
+        phase7RootDir() / "applies",
+        limit,
+        out,
+        errorCode,
+        errorMessage,
+        [](const fs::path& manifestPath, ExecutionApplyArtifact* artifact, std::string* code, std::string* message) {
+            return loadExecutionApplyFromPath(manifestPath, artifact, code, message);
+        });
+}
+
+bool recordExecutionApplyEvent(const std::string& manifestPath,
+                               const std::string& artifactId,
+                               const std::vector<std::string>& entryIds,
+                               const std::string& executionStatus,
+                               const std::string& actor,
+                               const std::string& comment,
+                               const std::string& failureCode,
+                               const std::string& failureMessage,
+                               ExecutionApplyArtifact* out,
+                               std::vector<std::string>* updatedEntryIds,
+                               std::string* auditEventId,
+                               std::string* errorCode,
+                               std::string* errorMessage) {
+    if (entryIds.empty()) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "entry_ids must include at least one execution apply entry id";
+        }
+        return false;
+    }
+
+    ExecutionApplyArtifact apply;
+    if (!loadExecutionApplyArtifact(manifestPath, artifactId, &apply, errorCode, errorMessage)) {
+        return false;
+    }
+
+    std::vector<std::string> uniqueApplyEntryIds = entryIds;
+    std::sort(uniqueApplyEntryIds.begin(), uniqueApplyEntryIds.end());
+    uniqueApplyEntryIds.erase(std::unique(uniqueApplyEntryIds.begin(), uniqueApplyEntryIds.end()),
+                              uniqueApplyEntryIds.end());
+
+    std::vector<ExecutionApplyEntry> previousEntries;
+    std::vector<std::string> journalEntryIds;
+    previousEntries.reserve(uniqueApplyEntryIds.size());
+    journalEntryIds.reserve(uniqueApplyEntryIds.size());
+    for (const auto& entryId : uniqueApplyEntryIds) {
+        const auto it = std::find_if(apply.entries.begin(),
+                                     apply.entries.end(),
+                                     [&](const ExecutionApplyEntry& entry) { return entry.applyEntryId == entryId; });
+        if (it == apply.entries.end()) {
+            if (errorCode != nullptr) {
+                *errorCode = "entry_not_found";
+            }
+            if (errorMessage != nullptr) {
+                *errorMessage = "execution apply update references an entry that does not exist";
+            }
+            return false;
+        }
+        previousEntries.push_back(*it);
+        journalEntryIds.push_back(it->journalEntryId);
+    }
+
+    ExecutionJournalArtifact journal;
+    std::vector<std::string> ignoredUpdatedJournalIds;
+    std::string ignoredJournalAuditEventId;
+    if (!recordExecutionJournalEvent({},
+                                     apply.journalArtifact.artifactId,
+                                     journalEntryIds,
+                                     executionStatus,
+                                     actor,
+                                     comment,
+                                     failureCode,
+                                     failureMessage,
+                                     &journal,
+                                     &ignoredUpdatedJournalIds,
+                                     &ignoredJournalAuditEventId,
+                                     errorCode,
+                                     errorMessage)) {
+        return false;
+    }
+
+    const std::string previousApplyStatus = apply.applyStatus;
+    synchronizeExecutionApplyEntriesFromJournal(&apply, journal);
+    annotateExecutionApplyState(&apply);
+    const std::string normalizedComment = trimAscii(comment);
+    const std::string normalizedFailureCode = trimAscii(failureCode);
+    const std::string normalizedFailureMessage = trimAscii(failureMessage);
+    const std::string generatedAtUtc = utcTimestampIso8601Now();
+    json auditEvent = auditEventForExecutionApplyTransition(apply,
+                                                            previousEntries,
+                                                            uniqueApplyEntryIds,
+                                                            executionStatus,
+                                                            trimAscii(actor),
+                                                            normalizedComment,
+                                                            normalizedFailureCode,
+                                                            normalizedFailureMessage,
+                                                            previousApplyStatus,
+                                                            generatedAtUtc);
+    apply.auditTrail.push_back(auditEvent);
+    apply.manifest = manifestForExecutionApply(apply);
+
+    std::string writeError;
+    if (!writeJsonTextFile(apply.applyArtifact.manifestPath, apply.manifest, &writeError)) {
+        if (errorCode != nullptr) {
+            *errorCode = "analysis_failed";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = writeError;
+        }
+        return false;
+    }
+
+    if (updatedEntryIds != nullptr) {
+        *updatedEntryIds = uniqueApplyEntryIds;
+    }
+    if (auditEventId != nullptr) {
+        *auditEventId = auditEvent.value("event_id", std::string());
+    }
+    if (out != nullptr) {
+        *out = std::move(apply);
+    }
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
 std::string analysisArtifactMarkdown(const AnalysisArtifact& artifact) {
     std::ostringstream out;
     out << "# Phase 7 Analysis\n\n"
@@ -2635,6 +4504,155 @@ std::string executionLedgerArtifactMarkdown(const ExecutionLedgerArtifact& artif
         }
         if (!entry.reviewComment.empty()) {
             out << "  comment: " << entry.reviewComment << "\n";
+        }
+    }
+    if (artifact.auditTrail.is_array() && !artifact.auditTrail.empty()) {
+        out << "\n## Audit Trail\n";
+        for (const auto& event : artifact.auditTrail) {
+            out << "- `" << event.value("event_type", std::string()) << "`";
+            if (event.contains("generated_at_utc") && event.at("generated_at_utc").is_string()) {
+                out << " at `" << event.at("generated_at_utc").get<std::string>() << "`";
+            }
+            if (event.contains("actor") && event.at("actor").is_string()) {
+                out << " by `" << event.at("actor").get<std::string>() << "`";
+            }
+            out << ": " << event.value("message", std::string()) << "\n";
+            if (event.contains("comment") && event.at("comment").is_string()) {
+                out << "  comment: " << event.at("comment").get<std::string>() << "\n";
+            }
+        }
+    }
+    return out.str();
+}
+
+std::string executionJournalArtifactMarkdown(const ExecutionJournalArtifact& artifact) {
+    const ExecutionJournalSummary summary = summarizeExecutionJournalSummary(artifact);
+    const json latestAudit = latestExecutionJournalAuditSummary(artifact);
+    std::ostringstream out;
+    out << "# Phase 7 Execution Journal\n\n"
+        << "- Artifact: `" << artifact.journalArtifact.artifactId << "`\n"
+        << "- Ledger artifact: `" << artifact.ledgerArtifact.artifactId << "`\n"
+        << "- Playbook artifact: `" << artifact.playbookArtifact.artifactId << "`\n"
+        << "- Analysis artifact: `" << artifact.analysisArtifact.artifactId << "`\n"
+        << "- Source artifact: `" << artifact.sourceArtifact.artifactId << "`\n"
+        << "- Mode: `" << artifact.mode << "`\n"
+        << "- Journal status: `" << artifact.journalStatus << "`\n"
+        << "- Initiated by: `" << artifact.initiatedBy << "`\n"
+        << "- Execution capability: `" << artifact.executionCapability << "`\n"
+        << "- Entries: " << artifact.entries.size() << "\n"
+        << "- Execution summary: queued=" << summary.queuedCount
+        << ", submitted=" << summary.submittedCount
+        << ", succeeded=" << summary.succeededCount
+        << ", failed=" << summary.failedCount
+        << ", cancelled=" << summary.cancelledCount
+        << ", terminal=" << summary.terminalCount << "\n"
+        << "- All terminal: `" << (summary.allTerminal ? "true" : "false") << "`\n";
+    if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+        out << "- Latest audit event: `" << latestAudit.value("event_type", std::string()) << "`";
+        if (latestAudit.contains("generated_at_utc") && latestAudit.at("generated_at_utc").is_string()) {
+            out << " at `" << latestAudit.at("generated_at_utc").get<std::string>() << "`";
+        }
+        if (latestAudit.contains("actor") && latestAudit.at("actor").is_string()) {
+            out << " by `" << latestAudit.at("actor").get<std::string>() << "`";
+        }
+        out << "\n  " << latestAudit.at("message").get<std::string>() << "\n";
+    }
+    out << "\n## Execution Entries\n";
+    for (const auto& entry : artifact.entries) {
+        out << "- [" << entry.executionStatus << "] `" << entry.actionType << "` for `"
+            << entry.findingId << "`: " << entry.title
+            << " (idempotency=`" << entry.idempotencyKey << "`)\n";
+        if (!entry.lastUpdatedBy.empty()) {
+            out << "  last_updated_by: `" << entry.lastUpdatedBy << "`";
+            if (!entry.lastUpdatedAtUtc.empty()) {
+                out << " at `" << entry.lastUpdatedAtUtc << "`";
+            }
+            out << "\n";
+        }
+        if (!entry.executionComment.empty()) {
+            out << "  comment: " << entry.executionComment << "\n";
+        }
+        if (!entry.failureCode.empty() || !entry.failureMessage.empty()) {
+            out << "  failure: `" << entry.failureCode << "`";
+            if (!entry.failureMessage.empty()) {
+                out << " " << entry.failureMessage;
+            }
+            out << "\n";
+        }
+    }
+    if (artifact.auditTrail.is_array() && !artifact.auditTrail.empty()) {
+        out << "\n## Audit Trail\n";
+        for (const auto& event : artifact.auditTrail) {
+            out << "- `" << event.value("event_type", std::string()) << "`";
+            if (event.contains("generated_at_utc") && event.at("generated_at_utc").is_string()) {
+                out << " at `" << event.at("generated_at_utc").get<std::string>() << "`";
+            }
+            if (event.contains("actor") && event.at("actor").is_string()) {
+                out << " by `" << event.at("actor").get<std::string>() << "`";
+            }
+            out << ": " << event.value("message", std::string()) << "\n";
+            if (event.contains("comment") && event.at("comment").is_string()) {
+                out << "  comment: " << event.at("comment").get<std::string>() << "\n";
+            }
+        }
+    }
+    return out.str();
+}
+
+std::string executionApplyArtifactMarkdown(const ExecutionApplyArtifact& artifact) {
+    const ExecutionApplySummary summary = summarizeExecutionApplySummary(artifact);
+    const json latestAudit = latestExecutionApplyAuditSummary(artifact);
+    std::ostringstream out;
+    out << "# Phase 7 Execution Apply\n\n"
+        << "- Artifact: `" << artifact.applyArtifact.artifactId << "`\n"
+        << "- Journal artifact: `" << artifact.journalArtifact.artifactId << "`\n"
+        << "- Ledger artifact: `" << artifact.ledgerArtifact.artifactId << "`\n"
+        << "- Playbook artifact: `" << artifact.playbookArtifact.artifactId << "`\n"
+        << "- Analysis artifact: `" << artifact.analysisArtifact.artifactId << "`\n"
+        << "- Source artifact: `" << artifact.sourceArtifact.artifactId << "`\n"
+        << "- Mode: `" << artifact.mode << "`\n"
+        << "- Apply status: `" << artifact.applyStatus << "`\n"
+        << "- Initiated by: `" << artifact.initiatedBy << "`\n"
+        << "- Execution capability: `" << artifact.executionCapability << "`\n"
+        << "- Entries: " << artifact.entries.size() << "\n"
+        << "- Execution summary: queued=" << summary.queuedCount
+        << ", submitted=" << summary.submittedCount
+        << ", succeeded=" << summary.succeededCount
+        << ", failed=" << summary.failedCount
+        << ", cancelled=" << summary.cancelledCount
+        << ", terminal=" << summary.terminalCount << "\n"
+        << "- All terminal: `" << (summary.allTerminal ? "true" : "false") << "`\n";
+    if (latestAudit.is_object() && latestAudit.contains("message") && latestAudit.at("message").is_string()) {
+        out << "- Latest audit event: `" << latestAudit.value("event_type", std::string()) << "`";
+        if (latestAudit.contains("generated_at_utc") && latestAudit.at("generated_at_utc").is_string()) {
+            out << " at `" << latestAudit.at("generated_at_utc").get<std::string>() << "`";
+        }
+        if (latestAudit.contains("actor") && latestAudit.at("actor").is_string()) {
+            out << " by `" << latestAudit.at("actor").get<std::string>() << "`";
+        }
+        out << "\n  " << latestAudit.at("message").get<std::string>() << "\n";
+    }
+    out << "\n## Apply Entries\n";
+    for (const auto& entry : artifact.entries) {
+        out << "- [" << entry.executionStatus << "] `" << entry.actionType << "` for `"
+            << entry.findingId << "`: " << entry.title
+            << " (journal=`" << entry.journalEntryId << "`, idempotency=`" << entry.idempotencyKey << "`)\n";
+        if (!entry.lastUpdatedBy.empty()) {
+            out << "  last_updated_by: `" << entry.lastUpdatedBy << "`";
+            if (!entry.lastUpdatedAtUtc.empty()) {
+                out << " at `" << entry.lastUpdatedAtUtc << "`";
+            }
+            out << "\n";
+        }
+        if (!entry.executionComment.empty()) {
+            out << "  comment: " << entry.executionComment << "\n";
+        }
+        if (!entry.failureCode.empty() || !entry.failureMessage.empty()) {
+            out << "  failure: `" << entry.failureCode << "`";
+            if (!entry.failureMessage.empty()) {
+                out << " " << entry.failureMessage;
+            }
+            out << "\n";
         }
     }
     if (artifact.auditTrail.is_array() && !artifact.auditTrail.empty()) {
