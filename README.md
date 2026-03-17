@@ -176,23 +176,24 @@ Phase-1 bridge sender notes:
 - Phase 5 adds a native `tape_mcp` stdio server on top of the engine query socket. The current tool slice now mirrors the stable engine investigation seam: `status`, `read_live_tail`, `read_range`, `replay_snapshot`, `find_order_anchor`, `list_incidents`, `list_order_anchors`, `list_protected_windows`, `list_findings`, `read_session_overview`, `scan_session_report`, `read_session_report`, `list_session_reports`, `scan_incident_report`, `scan_order_case_report`, `read_case_report`, `list_case_reports`, `seek_order_anchor`, `read_finding`, `read_order_case`, `read_order_anchor`, `read_protected_window`, `read_incident`, `read_artifact`, `export_artifact`, and `read_session_quality`, all backed by typed request/result helpers instead of raw UI-side JSON unpacking.
 - The UW/Gemini enrichment path now also carries over the standalone spike's live WebSocket lane as an optional secondary provider. `refresh_external_context` and other live-tail-biased enrichments can blend short-lived UW `wss` captures (`option_trades`, `flow-alerts`, `gex`, `price`, and `news`) alongside the existing mediated MCP/REST path, while `LONG_ENABLE_UW_WEBSOCKET_CONTEXT=1` forces that lane on for other enrichments, `LONG_UW_WS_SAMPLE_MS` caps the live capture budget, and `LONG_UW_WS_FIXTURE_FILE` lets tests or offline runs inject saved websocket frames deterministically.
 - Explicit `refresh_external_context` calls now get a longer websocket capture budget by default than background enrichments, so the live lane is more likely to return real data without having to export a custom sample window first. `LONG_UW_WS_SAMPLE_MS` still overrides that policy when you want tighter or longer captures.
+- The smoke examples below use a generic `build` directory. If you configured a different build root locally, substitute that path in the commands.
 - `uw_ws_smoke` is now a first-class repo tool for validating the same websocket connector `long` uses in production. From the repo root:
-  - `cmake --build build-phase3 --target uw_ws_smoke -j8`
-  - `./build-phase3/uw_ws_smoke --symbol SPY --facets option_trades,flow-alerts,price,news,gex --sample-ms 15000 --max-frames 16`
+  - `cmake --build build --target uw_ws_smoke -j8`
+  - `./build/uw_ws_smoke --symbol SPY --facets option_trades,flow-alerts,price,news,gex --sample-ms 15000 --max-frames 16`
   - The smoke tool auto-loads `.env.local`, forces the websocket lane on for the process, and returns both raw connector metadata and a compact `triage_summary` with per-channel outcomes.
   - `--second-pass-sample-ms`, `--second-pass-total-ms`, and `--second-pass-limit` let you tune the adaptive retry path for a single run without editing env vars.
   - It distinguishes `ok`, `join_ack_only`, `ambient_global_only`, `already_in_room_only`, `error_frames_only`, `unparsed_frames_only`, and transport/runtime failures. In practice, `news` is often the first live data channel to yield records, so 15s+ windows are a better smoke default than the very short production live-tail budget.
 - `uw_mcp_smoke` is the companion repo tool for the remote UW MCP server. It exercises the real `initialize` / `tools/list` / `tools/call` flow against `https://api.unusualwhales.com/api/mcp`, using the same bearer-token lookup as the in-app connector:
-  - `cmake --build build-phase3 --target uw_mcp_smoke -j8`
-  - `./build-phase3/uw_mcp_smoke --symbol SPY --facets options_flow,news,gex`
-  - `./build-phase3/uw_mcp_smoke --list-tools`
-  - `./build-phase3/uw_mcp_smoke --tool get_option_trades --symbol SPY`
-  - `./build-phase3/uw_mcp_smoke --tool get_market_events --arg start_date=2026-03-16 --arg end_date=2026-03-20`
+  - `cmake --build build --target uw_mcp_smoke -j8`
+  - `./build/uw_mcp_smoke --symbol SPY --facets options_flow,news,gex`
+  - `./build/uw_mcp_smoke --list-tools`
+  - `./build/uw_mcp_smoke --tool get_option_trades --symbol SPY`
+  - `./build/uw_mcp_smoke --tool get_market_events --arg start_date=2026-03-16 --arg end_date=2026-03-20`
   - The tool prints raw remote MCP handshake/results plus the mediated `UWMcpConnector` step, so it is easy to compare “what UW MCP returned” with “what `long` accepted into enrichment.” It now also prints a shared `facet_resolution` block, so you can see which requested facets the current UW MCP catalog really supports directly and which facets (`news` and `gex` at the moment) still need REST/websocket backfill.
   - `long` now treats remote UW MCP coverage honestly: direct MCP is preferred for `options_flow`, `alerts`, and `stock_state`, while any uncovered requested facets are backfilled through the existing REST/websocket lanes instead of being silently dropped after a partial MCP success.
 - `uw_context_smoke` is the merged-provider smoke for the real enrichment path. It drives `uw_context_service` with synthetic local evidence and shows the compact provider merge triage plus the full typed enrichment result:
-  - `cmake --build build-phase3 --target uw_context_smoke -j8`
-  - `./build-phase3/uw_context_smoke --symbol SPY --sample-ms 8000 --max-frames 12 --second-pass-sample-ms 1200 --second-pass-total-ms 3600 --second-pass-limit 3`
+  - `cmake --build build --target uw_context_smoke -j8`
+  - `./build/uw_context_smoke --symbol SPY --sample-ms 8000 --max-frames 12 --second-pass-sample-ms 1200 --second-pass-total-ms 3600 --second-pass-limit 3`
   - The `triage_summary` shows which facets MCP covered directly, which facets REST backfilled, whether websocket produced live data or only join acks, the final normalized item mix by provider/kind, and whether the merged result still degraded.
 - Enrichment results now also expose a stable `live_capture_summary` alongside raw provider metadata, so MCP clients and TapeScope can tell whether the UW websocket lane produced live data, only join acks, duplicate-join errors, or no frames at all without decoding `uw_ws` provider-step internals.
 - Global UW websocket channels are now symbol-filtered before normalization, so widened live subscriptions like `news` and `flow-alerts` can be used for refreshes without smuggling unrelated symbols into a symbol-scoped enrichment. The websocket diagnostics also record how many frames were dropped as symbol mismatches.
