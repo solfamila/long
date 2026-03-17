@@ -563,6 +563,82 @@ QueryResult<InvestigationPayload> packInvestigationPayload(const QueryResult<tap
     return makeSuccess(std::move(payload));
 }
 
+QueryResult<EnrichmentPayload> packEnrichmentPayload(const QueryResult<tape_engine::QueryResponse>& response) {
+    if (!response.ok()) {
+        return propagateError<EnrichmentPayload>(response.error);
+    }
+    const json* typedResultPtr = typedResultOrNull(response.value, tape_engine::kEnrichmentResultSchema);
+    if (typedResultPtr == nullptr || !typedResultPtr->is_object()) {
+        return makeError<EnrichmentPayload>(QueryErrorKind::MalformedResponse,
+                                            "enrichment result must be an object");
+    }
+
+    const json& typedResult = *typedResultPtr;
+    const json localEvidenceResult = typedResult.value("local_evidence", json::object());
+    if (!localEvidenceResult.is_object()) {
+        return makeError<EnrichmentPayload>(QueryErrorKind::MalformedResponse,
+                                            "enrichment local_evidence must be an object");
+    }
+
+    InvestigationPayload localEvidence;
+    localEvidence.raw = json::object();
+    localEvidence.raw["result"] = localEvidenceResult;
+    localEvidence.raw["summary"] = response.value.summary;
+    localEvidence.raw["events"] = response.value.events;
+    localEvidence.summary = response.value.summary.is_object() ? response.value.summary : json::object();
+    const json localEvents = localEvidenceResult.value("events", json::array());
+    if (!localEvents.is_array()) {
+        return makeError<EnrichmentPayload>(QueryErrorKind::MalformedResponse,
+                                            "enrichment local_evidence events must be an array");
+    }
+    localEvidence.events.reserve(localEvents.size());
+    for (const auto& event : localEvents) {
+        localEvidence.events.push_back(event);
+    }
+    localEvidence.incidents = parseIncidentRows(localEvidenceResult.value("incident_rows", json::array()));
+    const json localCitationRows = localEvidenceResult.value("citation_rows", json::array());
+    if (localCitationRows.is_array()) {
+        for (const auto& item : localCitationRows) {
+            EvidenceCitation citation;
+            citation.raw = item;
+            if (item.is_object()) {
+                citation.kind = item.value("kind", std::string());
+                citation.artifactId = item.value("artifact_id", std::string());
+                citation.label = item.value("label", std::string());
+            }
+            localEvidence.evidence.push_back(std::move(citation));
+        }
+    }
+    localEvidence.artifactId = localEvidenceResult.value("artifact_id", std::string());
+    localEvidence.artifactKind = localEvidenceResult.value("artifact_kind", std::string());
+    localEvidence.headline = localEvidenceResult.value("headline", std::string());
+    localEvidence.detail = localEvidenceResult.value("detail", std::string());
+    const json replayRangeJson = localEvidenceResult.value("replay_range", json(nullptr));
+    if (replayRangeJson.is_object()) {
+        localEvidence.replayRange = RangeQuery{
+            replayRangeJson.value("first_session_seq", 1ULL),
+            replayRangeJson.value("last_session_seq", 0ULL)
+        };
+    }
+
+    EnrichmentPayload payload;
+    payload.raw = json::object();
+    payload.raw["result"] = typedResult;
+    payload.raw["summary"] = response.value.summary;
+    payload.raw["events"] = response.value.events;
+    payload.localEvidence = std::move(localEvidence);
+    payload.externalContext = typedResult.value("external_context", json::object());
+    payload.interpretation = typedResult.value("interpretation", json::object());
+    payload.providerMetadata = typedResult.value("provider_metadata", json::object());
+    payload.degradation = typedResult.value("degradation", json::object());
+    payload.cache = typedResult.value("cache", json::object());
+    payload.requestKind = typedResult.value("request_kind", std::string());
+    payload.artifactId = typedResult.value("artifact_id", payload.localEvidence.artifactId);
+    payload.headline = typedResult.value("headline", payload.localEvidence.headline);
+    payload.detail = typedResult.value("detail", payload.localEvidence.detail);
+    return makeSuccess(std::move(payload));
+}
+
 QueryResult<EventListPayload> packEventListPayload(const QueryResult<tape_engine::QueryResponse>& response) {
     if (!response.ok()) {
         return propagateError<EventListPayload>(response.error);

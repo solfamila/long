@@ -330,6 +330,77 @@ std::string DescribeInvestigationPayload(const std::string& heading,
     return DescribeInvestigationPayload(heading, descriptor, proxy);
 }
 
+std::string DescribeEnrichmentPayload(const std::string& heading,
+                                      const std::string& descriptor,
+                                      const tapescope::QueryResult<tapescope::EnrichmentPayload>& result) {
+    std::ostringstream out;
+    out << heading << '\n';
+    if (!descriptor.empty()) {
+        out << "query: " << descriptor << "\n\n";
+    } else {
+        out << '\n';
+    }
+    if (!result.ok()) {
+        out << tapescope::QueryClient::describeError(result.error) << '\n';
+        return out.str();
+    }
+
+    const auto& payload = result.value;
+    out << "request_kind: " << payload.requestKind << "\n";
+    out << "artifact_id: " << payload.artifactId << "\n";
+    if (!payload.headline.empty()) {
+        out << "headline: " << payload.headline << "\n";
+    }
+    if (!payload.detail.empty()) {
+        out << "detail: " << payload.detail << "\n";
+    }
+    out << '\n';
+
+    out << "local_evidence:\n";
+    out << "  artifact_kind: " << payload.localEvidence.artifactKind << "\n";
+    out << "  citations: " << payload.localEvidence.evidence.size() << "\n";
+    out << "  incidents: " << payload.localEvidence.incidents.size() << "\n";
+    if (payload.localEvidence.replayRange.has_value()) {
+        out << "  replay_range: [" << payload.localEvidence.replayRange->firstSessionSeq
+            << ", " << payload.localEvidence.replayRange->lastSessionSeq << "]\n";
+    }
+    out << "  headline: " << payload.localEvidence.headline << "\n";
+    out << "  detail: " << payload.localEvidence.detail << "\n\n";
+
+    const json externalContext = payload.externalContext.is_object() ? payload.externalContext : json::object();
+    const json externalItems = externalContext.value("items", json::array());
+    const json externalSummaries = externalContext.value("summaries", json::array());
+    out << "external_context:\n";
+    out << "  provider: " << externalContext.value("provider", std::string("--")) << "\n";
+    out << "  fetched_at: " << externalContext.value("fetched_at", std::string("--")) << "\n";
+    out << "  cache_status: " << externalContext.value("cache_status", std::string("--")) << "\n";
+    out << "  items: " << (externalItems.is_array() ? externalItems.size() : 0) << "\n";
+    out << "  summaries: " << (externalSummaries.is_array() ? externalSummaries.size() : 0) << "\n";
+    if (externalContext.contains("warnings")) {
+        out << "  warnings: " << externalContext.value("warnings", json::array()).dump() << "\n";
+    }
+    out << '\n';
+
+    out << "interpretation:\n";
+    out << "  status: " << payload.interpretation.value("status", std::string("--")) << "\n";
+    out << "  lane: " << payload.interpretation.value("lane", std::string("--")) << "\n";
+    out << "  task: " << payload.interpretation.value("task", std::string("--")) << "\n";
+    out << "  model: " << payload.interpretation.value("model", std::string("--")) << "\n";
+    out << "  finish_reason: " << payload.interpretation.value("finish_reason", std::string("--")) << "\n";
+    if (payload.interpretation.contains("content") && !payload.interpretation["content"].is_null()) {
+        out << "  content:\n" << payload.interpretation["content"].dump(2) << "\n";
+    }
+    if (payload.interpretation.contains("error")) {
+        out << "  error: " << payload.interpretation.value("error", std::string()) << "\n";
+    }
+    out << '\n';
+
+    out << "provider_metadata:\n" << payload.providerMetadata.dump(2) << "\n\n";
+    out << "degradation:\n" << payload.degradation.dump(2) << "\n\n";
+    out << "cache:\n" << payload.cache.dump(2) << '\n';
+    return out.str();
+}
+
 std::string DescribeSeekOrderResult(const std::string& descriptor,
                                     const tapescope::QueryResult<json>& result) {
     std::ostringstream out;

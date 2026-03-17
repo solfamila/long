@@ -47,6 +47,10 @@ enum class ToolId {
     ReadProtectedWindow,
     ReplaySnapshot,
     ReadIncident,
+    EnrichIncident,
+    ExplainIncident,
+    EnrichOrderCase,
+    RefreshExternalContext,
     ReadArtifact,
     ExportArtifact,
     ExportSessionBundle,
@@ -135,6 +139,10 @@ private:
     [[nodiscard]] json invokeReadProtectedWindowTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReplaySnapshotTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadIncidentTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeEnrichIncidentTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeExplainIncidentTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeEnrichOrderCaseTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeRefreshExternalContextTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadArtifactTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeExportArtifactTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeExportSessionBundleTool(const ToolSpec& tool, const json& args) const;

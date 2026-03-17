@@ -98,6 +98,20 @@ struct InvestigationPayload {
     std::string detail;
 };
 
+struct EnrichmentPayload {
+    json raw;
+    InvestigationPayload localEvidence;
+    json externalContext = json::object();
+    json interpretation = json::object();
+    json providerMetadata = json::object();
+    json degradation = json::object();
+    json cache = json::object();
+    std::string requestKind;
+    std::string artifactId;
+    std::string headline;
+    std::string detail;
+};
+
 struct SessionQualityPayload {
     json raw;
     json summary;
@@ -280,6 +294,7 @@ std::vector<ReportInventoryRow> parseReportRows(const json& events);
 
 QueryResult<StatusSnapshot> packStatusPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<InvestigationPayload> packInvestigationPayload(const QueryResult<tape_engine::QueryResponse>& response);
+QueryResult<EnrichmentPayload> packEnrichmentPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<EventListPayload> packEventListPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<SessionQualityPayload> packSessionQualityPayload(const QueryResult<tape_engine::QueryResponse>& response);
 QueryResult<SeekOrderPayload> packSeekOrderPayload(const QueryResult<tape_engine::QueryResponse>& response);

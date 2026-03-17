@@ -150,6 +150,8 @@ struct ProbeSnapshot {
     NSTextField* _orderCaseAnchorInputField;
     NSButton* _orderCaseFetchButton;
     NSButton* _orderCaseScanButton;
+    NSButton* _orderCaseEnrichButton;
+    NSButton* _orderCaseRefreshContextButton;
     NSButton* _orderCaseLoadReplayButton;
     NSButton* _orderCaseOpenSelectedEvidenceButton;
     NSTextField* _orderCaseStateLabel;
@@ -171,6 +173,9 @@ struct ProbeSnapshot {
     NSTextField* _incidentIdField;
     NSButton* _incidentFetchButton;
     NSButton* _incidentRefreshButton;
+    NSButton* _incidentEnrichButton;
+    NSButton* _incidentExplainButton;
+    NSButton* _incidentRefreshContextButton;
     NSButton* _incidentLoadReplayButton;
     NSButton* _incidentOpenSelectedButton;
     NSButton* _incidentOpenSelectedEvidenceButton;
@@ -379,6 +384,10 @@ struct ProbeSnapshot {
                   paneController:(tapescope::InvestigationPaneController*)pane
                      successText:(NSString*)successText
                 syncArtifactField:(BOOL)syncArtifactField;
+- (void)applyEnrichmentResult:(const tapescope::QueryResult<tapescope::EnrichmentPayload>&)result
+                    paneController:(tapescope::InvestigationPaneController*)pane
+                        successText:(NSString*)successText
+                 syncArtifactField:(BOOL)syncArtifactField;
 - (void)loadReplayWindowForPane:(tapescope::InvestigationPaneController*)pane;
 - (void)openSelectedEvidenceForPane:(tapescope::InvestigationPaneController*)pane;
 - (BOOL)renderSelectionForPane:(tapescope::InvestigationPaneController*)pane;
@@ -424,6 +433,8 @@ struct ProbeSnapshot {
 - (void)seekAnchorTypeChanged:(id)sender;
 - (void)fetchOrderCase:(id)sender;
 - (void)scanOrderCaseReport:(id)sender;
+- (void)fetchOrderCaseEnrichment:(id)sender;
+- (void)refreshOrderCaseExternalContext:(id)sender;
 - (void)fetchSeekOrder:(id)sender;
 - (void)loadReplayWindowFromSeek:(id)sender;
 - (void)loadReplayWindowFromOrderCase:(id)sender;
@@ -434,6 +445,9 @@ struct ProbeSnapshot {
 @interface TapeScopeWindowController (ArtifactQueries)
 
 - (void)fetchIncident:(id)sender;
+- (void)fetchIncidentEnrichment:(id)sender;
+- (void)fetchIncidentExplanation:(id)sender;
+- (void)refreshIncidentExternalContext:(id)sender;
 - (void)loadReplayWindowFromIncident:(id)sender;
 - (void)openSelectedIncidentEvidence:(id)sender;
 - (void)openSelectedOverviewIncident:(id)sender;

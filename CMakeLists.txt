@@ -32,6 +32,7 @@ find_package(Threads REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 include(CTest)
 include(FetchContent)
+find_package(CURL REQUIRED)
 
 set(APP_BUNDLE_NAME "TWS Trading GUI")
 set(APP_BUNDLE_IDENTIFIER "com.foxy.twstradinggui")
@@ -122,6 +123,14 @@ set(TAPE_ENGINE_SOURCES
     phase3_analyzers.cpp
     bridge_batch_codec.cpp
     runtime_qos.cpp
+    uw_context_cache.cpp
+    uw_context_connectors.cpp
+    uw_gemini_executor.cpp
+    uw_http.cpp
+    uw_context_normalizer.cpp
+    uw_runtime.cpp
+    uw_context_service.cpp
+    uw_packet_builder.cpp
 )
 
 set(TAPESCOPE_SOURCES
@@ -234,6 +243,7 @@ target_link_libraries(tws_gui PRIVATE
 
 target_link_libraries(tape_engine PRIVATE
     Threads::Threads
+    CURL::libcurl
 )
 
 target_link_libraries(tape_engine_ctl PRIVATE
@@ -543,6 +553,14 @@ if(BUILD_TESTING)
         tape_engine.cpp
         tape_engine_client.cpp
         tape_engine_protocol.cpp
+        uw_context_cache.cpp
+        uw_context_connectors.cpp
+        uw_gemini_executor.cpp
+        uw_http.cpp
+        uw_context_normalizer.cpp
+        uw_runtime.cpp
+        uw_context_service.cpp
+        uw_packet_builder.cpp
         tapescope_bundle_preview.cpp
         tapescope_client.cpp
         tape_query_payloads.cpp
@@ -567,6 +585,7 @@ if(BUILD_TESTING)
 
     target_link_libraries(tws_gui_tests PRIVATE
         Threads::Threads
+        CURL::libcurl
         ixwebsocket::ixwebsocket
         ${APP_KIT_LIBRARY}
         ${GAME_CONTROLLER_LIBRARY}
@@ -604,6 +623,14 @@ if(BUILD_TESTING)
         tape_engine.cpp
         tape_engine_client.cpp
         tape_engine_protocol.cpp
+        uw_context_cache.cpp
+        uw_context_connectors.cpp
+        uw_gemini_executor.cpp
+        uw_http.cpp
+        uw_context_normalizer.cpp
+        uw_runtime.cpp
+        uw_context_service.cpp
+        uw_packet_builder.cpp
         phase3_analyzers.cpp
         bridge_batch_codec.cpp
         bridge_batch_transport.cpp
@@ -629,6 +656,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(tape_mcp_contract_tests PRIVATE
         Threads::Threads
+        CURL::libcurl
         ixwebsocket::ixwebsocket
         ${APP_KIT_LIBRARY}
         ${GAME_CONTROLLER_LIBRARY}

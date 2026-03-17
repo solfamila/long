@@ -79,6 +79,14 @@ const char* queryOperationName(QueryOperation operation) {
             return "read_incident";
         case QueryOperation::ListIncidents:
             return "list_incidents";
+        case QueryOperation::EnrichIncident:
+            return "enrich_incident";
+        case QueryOperation::ExplainIncident:
+            return "explain_incident";
+        case QueryOperation::EnrichOrderCase:
+            return "enrich_order_case";
+        case QueryOperation::RefreshExternalContext:
+            return "refresh_external_context";
         case QueryOperation::ReadArtifact:
             return "read_artifact";
         case QueryOperation::ExportArtifact:
@@ -176,6 +184,18 @@ QueryOperation queryOperationFromString(std::string_view operationName) {
     }
     if (normalized == "list_incidents") {
         return QueryOperation::ListIncidents;
+    }
+    if (normalized == "enrich_incident") {
+        return QueryOperation::EnrichIncident;
+    }
+    if (normalized == "explain_incident") {
+        return QueryOperation::ExplainIncident;
+    }
+    if (normalized == "enrich_order_case") {
+        return QueryOperation::EnrichOrderCase;
+    }
+    if (normalized == "refresh_external_context") {
+        return QueryOperation::RefreshExternalContext;
     }
     if (normalized == "read_artifact") {
         return QueryOperation::ReadArtifact;

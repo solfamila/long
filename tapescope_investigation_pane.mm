@@ -102,6 +102,48 @@ void InvestigationPaneController::applyResult(const QueryResult<InvestigationPay
     }
 }
 
+void InvestigationPaneController::applyResult(const QueryResult<EnrichmentPayload>& result,
+                                              NSString* successText) {
+    if (!result.ok()) {
+        if (stateLabel_ != nil) {
+            stateLabel_.stringValue = ToNSString(QueryClient::describeError(result.error));
+            stateLabel_.textColor = [NSColor systemRedColor];
+        }
+        hasReplayRange_ = false;
+        if (loadReplayButton_ != nil) {
+            loadReplayButton_.enabled = NO;
+        }
+        resetEvidence();
+        return;
+    }
+
+    if (stateLabel_ != nil) {
+        stateLabel_.stringValue = successText ?: @"Loaded.";
+        stateLabel_.textColor = [NSColor systemGreenColor];
+    }
+
+    artifactId_ = !result.value.artifactId.empty() ? result.value.artifactId : result.value.localEvidence.artifactId;
+    evidenceItems_ = result.value.localEvidence.evidence;
+    if (evidenceTableView_ != nil) {
+        [evidenceTableView_ reloadData];
+    }
+    const bool hasRows = !evidenceItems_.empty();
+    if (openEvidenceButton_ != nil) {
+        openEvidenceButton_.enabled = hasRows;
+    }
+    if (hasRows && evidenceTableView_ != nil) {
+        [evidenceTableView_ selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    }
+
+    hasReplayRange_ = result.value.localEvidence.replayRange.has_value();
+    if (hasReplayRange_) {
+        replayRange_ = *result.value.localEvidence.replayRange;
+    }
+    if (loadReplayButton_ != nil) {
+        loadReplayButton_.enabled = hasReplayRange_;
+    }
+}
+
 void InvestigationPaneController::syncArtifactField(NSTextField* artifactField) const {
     if (artifactField == nil) {
         return;

@@ -945,6 +945,49 @@ QueryResult<InvestigationPayload> QueryClient::readIncidentPayload(std::uint64_t
     return packInvestigationPayload(performQuery(request));
 }
 
+QueryResult<EnrichmentPayload> QueryClient::enrichIncidentPayload(std::uint64_t logicalIncidentId,
+                                                                  bool includeLiveTail) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::EnrichIncident,
+                                                    "tapescope-enrich-incident");
+    request.logicalIncidentId = logicalIncidentId;
+    request.includeLiveTail = includeLiveTail;
+    return packEnrichmentPayload(performQuery(request));
+}
+
+QueryResult<EnrichmentPayload> QueryClient::explainIncidentPayload(std::uint64_t logicalIncidentId,
+                                                                   bool includeLiveTail) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ExplainIncident,
+                                                    "tapescope-explain-incident");
+    request.logicalIncidentId = logicalIncidentId;
+    request.includeLiveTail = includeLiveTail;
+    return packEnrichmentPayload(performQuery(request));
+}
+
+QueryResult<EnrichmentPayload> QueryClient::enrichOrderCasePayload(const OrderAnchorQuery& query) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::EnrichOrderCase,
+                                                    "tapescope-enrich-order-case");
+    applyOrderAnchorQuery(&request, query);
+    return packEnrichmentPayload(performQuery(request));
+}
+
+QueryResult<EnrichmentPayload> QueryClient::refreshIncidentExternalContextPayload(
+    std::uint64_t logicalIncidentId,
+    bool includeLiveTail) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::RefreshExternalContext,
+                                                    "tapescope-refresh-external-context");
+    request.logicalIncidentId = logicalIncidentId;
+    request.includeLiveTail = includeLiveTail;
+    return packEnrichmentPayload(performQuery(request));
+}
+
+QueryResult<EnrichmentPayload> QueryClient::refreshOrderCaseExternalContextPayload(
+    const OrderAnchorQuery& query) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::RefreshExternalContext,
+                                                    "tapescope-refresh-external-context");
+    applyOrderAnchorQuery(&request, query);
+    return packEnrichmentPayload(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readOrderAnchor(std::uint64_t anchorId) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadOrderAnchor,
                                                     "tapescope-read-order-anchor");

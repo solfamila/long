@@ -335,6 +335,52 @@ EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readIncide
     return convertPackedResult(tape_payloads::packInvestigationPayload(performRawQuery(request)));
 }
 
+EngineRpcResult<tape_payloads::EnrichmentPayload> EngineRpcClient::enrichIncident(
+    const IncidentQuery& query) const {
+    auto request = makeRequest(tape_engine::QueryOperation::EnrichIncident, "tape-mcp-enrich-incident");
+    request.logicalIncidentId = query.logicalIncidentId;
+    request.revisionId = query.revisionId;
+    request.limit = query.limit;
+    request.includeLiveTail = query.includeLiveTail;
+    return convertPackedResult(tape_payloads::packEnrichmentPayload(performRawQuery(request)));
+}
+
+EngineRpcResult<tape_payloads::EnrichmentPayload> EngineRpcClient::explainIncident(
+    const IncidentQuery& query) const {
+    auto request = makeRequest(tape_engine::QueryOperation::ExplainIncident, "tape-mcp-explain-incident");
+    request.logicalIncidentId = query.logicalIncidentId;
+    request.revisionId = query.revisionId;
+    request.limit = query.limit;
+    request.includeLiveTail = query.includeLiveTail;
+    return convertPackedResult(tape_payloads::packEnrichmentPayload(performRawQuery(request)));
+}
+
+EngineRpcResult<tape_payloads::EnrichmentPayload> EngineRpcClient::enrichOrderCase(
+    const OrderCaseQuery& query) const {
+    auto request = makeRequest(tape_engine::QueryOperation::EnrichOrderCase, "tape-mcp-enrich-order-case");
+    applyOrderAnchor(&request, query);
+    return convertPackedResult(tape_payloads::packEnrichmentPayload(performRawQuery(request)));
+}
+
+EngineRpcResult<tape_payloads::EnrichmentPayload> EngineRpcClient::refreshExternalContextIncident(
+    const IncidentQuery& query) const {
+    auto request = makeRequest(tape_engine::QueryOperation::RefreshExternalContext,
+                               "tape-mcp-refresh-external-context");
+    request.logicalIncidentId = query.logicalIncidentId;
+    request.revisionId = query.revisionId;
+    request.limit = query.limit;
+    request.includeLiveTail = query.includeLiveTail;
+    return convertPackedResult(tape_payloads::packEnrichmentPayload(performRawQuery(request)));
+}
+
+EngineRpcResult<tape_payloads::EnrichmentPayload> EngineRpcClient::refreshExternalContextOrderCase(
+    const OrderCaseQuery& query) const {
+    auto request = makeRequest(tape_engine::QueryOperation::RefreshExternalContext,
+                               "tape-mcp-refresh-external-context");
+    applyOrderAnchor(&request, query);
+    return convertPackedResult(tape_payloads::packEnrichmentPayload(performRawQuery(request)));
+}
+
 EngineRpcResult<tape_payloads::InvestigationPayload> EngineRpcClient::readOrderAnchor(
     const NumericIdQuery& query) const {
     auto request = makeRequest(tape_engine::QueryOperation::ReadOrderAnchor, "tape-mcp-read-order-anchor");

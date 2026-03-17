@@ -400,6 +400,175 @@ std::string ExtractSourceArtifactId(const tapescope::InvestigationPayload& paylo
     });
 }
 
+- (void)fetchIncidentEnrichment:(id)sender {
+    (void)sender;
+    if (_incidentInFlight || !_client) {
+        return;
+    }
+
+    std::uint64_t logicalIncidentId = 0;
+    if (!ParsePositiveUInt64(ToStdString(_incidentIdField.stringValue), &logicalIncidentId)) {
+        _incidentStateLabel.stringValue = @"logical_incident_id must be a positive integer.";
+        _incidentStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _incidentInFlight = YES;
+    _incidentFetchButton.enabled = NO;
+    _incidentRefreshButton.enabled = NO;
+    _incidentEnrichButton.enabled = NO;
+    _incidentExplainButton.enabled = NO;
+    _incidentRefreshContextButton.enabled = NO;
+    _incidentOpenSelectedButton.enabled = NO;
+    const std::uint64_t token = _incidentPane->beginRequest(@"Building fast incident enrichment…");
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_interactiveQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->enrichIncidentPayload(logicalIncidentId);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || !innerSelf->_incidentPane->isCurrent(token)) {
+                return;
+            }
+            innerSelf->_incidentInFlight = NO;
+            innerSelf->_incidentFetchButton.enabled = YES;
+            innerSelf->_incidentRefreshButton.enabled = YES;
+            innerSelf->_incidentEnrichButton.enabled = YES;
+            innerSelf->_incidentExplainButton.enabled = YES;
+            innerSelf->_incidentRefreshContextButton.enabled = YES;
+            innerSelf->_incidentOpenSelectedButton.enabled = (innerSelf->_incidentTableView.selectedRow >= 0);
+            [innerSelf applyEnrichmentResult:result
+                              paneController:innerSelf->_incidentPane.get()
+                                 successText:@"Incident enrichment loaded."
+                            syncArtifactField:YES];
+            if (result.ok()) {
+                [innerSelf recordRecentHistoryForKind:"incident"
+                                             targetId:std::to_string(logicalIncidentId)
+                                              payload:result.value.localEvidence
+                                        fallbackTitle:"Incident " + std::to_string(logicalIncidentId)
+                                       fallbackDetail:"Reopen the incident drilldown."
+                                             metadata:tapescope::json{{"logical_incident_id", logicalIncidentId}}];
+            }
+            innerSelf->_incidentTextView.string =
+                ToNSString(DescribeEnrichmentPayload("incident_enrichment", "logical_incident_id=" + std::to_string(logicalIncidentId), result));
+        });
+    });
+}
+
+- (void)fetchIncidentExplanation:(id)sender {
+    (void)sender;
+    if (_incidentInFlight || !_client) {
+        return;
+    }
+
+    std::uint64_t logicalIncidentId = 0;
+    if (!ParsePositiveUInt64(ToStdString(_incidentIdField.stringValue), &logicalIncidentId)) {
+        _incidentStateLabel.stringValue = @"logical_incident_id must be a positive integer.";
+        _incidentStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _incidentInFlight = YES;
+    _incidentFetchButton.enabled = NO;
+    _incidentRefreshButton.enabled = NO;
+    _incidentEnrichButton.enabled = NO;
+    _incidentExplainButton.enabled = NO;
+    _incidentRefreshContextButton.enabled = NO;
+    _incidentOpenSelectedButton.enabled = NO;
+    const std::uint64_t token = _incidentPane->beginRequest(@"Building deep incident explanation…");
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_interactiveQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->explainIncidentPayload(logicalIncidentId);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || !innerSelf->_incidentPane->isCurrent(token)) {
+                return;
+            }
+            innerSelf->_incidentInFlight = NO;
+            innerSelf->_incidentFetchButton.enabled = YES;
+            innerSelf->_incidentRefreshButton.enabled = YES;
+            innerSelf->_incidentEnrichButton.enabled = YES;
+            innerSelf->_incidentExplainButton.enabled = YES;
+            innerSelf->_incidentRefreshContextButton.enabled = YES;
+            innerSelf->_incidentOpenSelectedButton.enabled = (innerSelf->_incidentTableView.selectedRow >= 0);
+            [innerSelf applyEnrichmentResult:result
+                              paneController:innerSelf->_incidentPane.get()
+                                 successText:@"Incident explanation loaded."
+                            syncArtifactField:YES];
+            if (result.ok()) {
+                [innerSelf recordRecentHistoryForKind:"incident"
+                                             targetId:std::to_string(logicalIncidentId)
+                                              payload:result.value.localEvidence
+                                        fallbackTitle:"Incident " + std::to_string(logicalIncidentId)
+                                       fallbackDetail:"Reopen the incident drilldown."
+                                             metadata:tapescope::json{{"logical_incident_id", logicalIncidentId}}];
+            }
+            innerSelf->_incidentTextView.string =
+                ToNSString(DescribeEnrichmentPayload("incident_explanation", "logical_incident_id=" + std::to_string(logicalIncidentId), result));
+        });
+    });
+}
+
+- (void)refreshIncidentExternalContext:(id)sender {
+    (void)sender;
+    if (_incidentInFlight || !_client) {
+        return;
+    }
+
+    std::uint64_t logicalIncidentId = 0;
+    if (!ParsePositiveUInt64(ToStdString(_incidentIdField.stringValue), &logicalIncidentId)) {
+        _incidentStateLabel.stringValue = @"logical_incident_id must be a positive integer.";
+        _incidentStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _incidentInFlight = YES;
+    _incidentFetchButton.enabled = NO;
+    _incidentRefreshButton.enabled = NO;
+    _incidentEnrichButton.enabled = NO;
+    _incidentExplainButton.enabled = NO;
+    _incidentRefreshContextButton.enabled = NO;
+    _incidentOpenSelectedButton.enabled = NO;
+    const std::uint64_t token = _incidentPane->beginRequest(@"Refreshing incident external context…");
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_interactiveQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->refreshIncidentExternalContextPayload(logicalIncidentId);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || !innerSelf->_incidentPane->isCurrent(token)) {
+                return;
+            }
+            innerSelf->_incidentInFlight = NO;
+            innerSelf->_incidentFetchButton.enabled = YES;
+            innerSelf->_incidentRefreshButton.enabled = YES;
+            innerSelf->_incidentEnrichButton.enabled = YES;
+            innerSelf->_incidentExplainButton.enabled = YES;
+            innerSelf->_incidentRefreshContextButton.enabled = YES;
+            innerSelf->_incidentOpenSelectedButton.enabled = (innerSelf->_incidentTableView.selectedRow >= 0);
+            [innerSelf applyEnrichmentResult:result
+                              paneController:innerSelf->_incidentPane.get()
+                                 successText:@"Incident external context refreshed."
+                            syncArtifactField:YES];
+            innerSelf->_incidentTextView.string =
+                ToNSString(DescribeEnrichmentPayload("incident_refresh", "logical_incident_id=" + std::to_string(logicalIncidentId), result));
+        });
+    });
+}
+
 - (void)loadReplayWindowFromIncident:(id)sender {
     (void)sender;
     [self loadReplayWindowForPane:_incidentPane.get()];

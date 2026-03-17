@@ -209,6 +209,123 @@ using namespace tapescope_support;
     });
 }
 
+- (void)fetchOrderCaseEnrichment:(id)sender {
+    (void)sender;
+    if (_orderCaseInFlight || !_client) {
+        return;
+    }
+
+    tapescope::OrderAnchorQuery query;
+    std::string descriptor;
+    std::string errorMessage;
+    if (![self buildOrderAnchorQueryFromPopup:_orderCaseAnchorTypePopup
+                                   inputField:_orderCaseAnchorInputField
+                                    outQuery:&query
+                                  descriptor:&descriptor
+                                       error:&errorMessage]) {
+        _orderCaseStateLabel.stringValue = ToNSString(errorMessage);
+        _orderCaseStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _orderCaseInFlight = YES;
+    _orderCaseFetchButton.enabled = NO;
+    _orderCaseScanButton.enabled = NO;
+    _orderCaseEnrichButton.enabled = NO;
+    _orderCaseRefreshContextButton.enabled = NO;
+    const std::uint64_t token = _orderCasePane->beginRequest(@"Building fast order-case enrichment…");
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_interactiveQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->enrichOrderCasePayload(query);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || !innerSelf->_orderCasePane->isCurrent(token)) {
+                return;
+            }
+            innerSelf->_orderCaseInFlight = NO;
+            innerSelf->_orderCaseFetchButton.enabled = YES;
+            innerSelf->_orderCaseScanButton.enabled = YES;
+            innerSelf->_orderCaseEnrichButton.enabled = YES;
+            innerSelf->_orderCaseRefreshContextButton.enabled = YES;
+            [innerSelf applyEnrichmentResult:result
+                              paneController:innerSelf->_orderCasePane.get()
+                                 successText:@"Order-case enrichment loaded."
+                            syncArtifactField:YES];
+            if (result.ok()) {
+                [innerSelf recordRecentHistoryForKind:"order_case"
+                                             targetId:descriptor
+                                              payload:result.value.localEvidence
+                                        fallbackTitle:"Order case " + descriptor
+                                       fallbackDetail:"Reopen the recent order-case investigation."
+                                             metadata:tapescope::json{{"anchor_kind",
+                                                                       OrderAnchorTypeKey(OrderAnchorTypeFromIndex(innerSelf->_orderCaseAnchorTypePopup.indexOfSelectedItem))},
+                                                                      {"anchor_value",
+                                                                       ToStdString(innerSelf->_orderCaseAnchorInputField.stringValue)}}];
+            }
+            innerSelf->_orderCaseTextView.string =
+                ToNSString(DescribeEnrichmentPayload("order_case_enrichment", descriptor, result));
+        });
+    });
+}
+
+- (void)refreshOrderCaseExternalContext:(id)sender {
+    (void)sender;
+    if (_orderCaseInFlight || !_client) {
+        return;
+    }
+
+    tapescope::OrderAnchorQuery query;
+    std::string descriptor;
+    std::string errorMessage;
+    if (![self buildOrderAnchorQueryFromPopup:_orderCaseAnchorTypePopup
+                                   inputField:_orderCaseAnchorInputField
+                                    outQuery:&query
+                                  descriptor:&descriptor
+                                       error:&errorMessage]) {
+        _orderCaseStateLabel.stringValue = ToNSString(errorMessage);
+        _orderCaseStateLabel.textColor = [NSColor systemRedColor];
+        return;
+    }
+
+    _orderCaseInFlight = YES;
+    _orderCaseFetchButton.enabled = NO;
+    _orderCaseScanButton.enabled = NO;
+    _orderCaseEnrichButton.enabled = NO;
+    _orderCaseRefreshContextButton.enabled = NO;
+    const std::uint64_t token = _orderCasePane->beginRequest(@"Refreshing order-case external context…");
+
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(_interactiveQueue, ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || !strongSelf->_client) {
+            return;
+        }
+        const auto result = strongSelf->_client->refreshOrderCaseExternalContextPayload(query);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TapeScopeWindowController* innerSelf = weakSelf;
+            if (innerSelf == nil || !innerSelf->_orderCasePane->isCurrent(token)) {
+                return;
+            }
+            innerSelf->_orderCaseInFlight = NO;
+            innerSelf->_orderCaseFetchButton.enabled = YES;
+            innerSelf->_orderCaseScanButton.enabled = YES;
+            innerSelf->_orderCaseEnrichButton.enabled = YES;
+            innerSelf->_orderCaseRefreshContextButton.enabled = YES;
+            [innerSelf applyEnrichmentResult:result
+                              paneController:innerSelf->_orderCasePane.get()
+                                 successText:@"Order-case external context refreshed."
+                            syncArtifactField:YES];
+            innerSelf->_orderCaseTextView.string =
+                ToNSString(DescribeEnrichmentPayload("order_case_refresh", descriptor, result));
+        });
+    });
+}
+
 - (void)scanOrderCaseReport:(id)sender {
     (void)sender;
     if (_orderCaseInFlight || !_client) {

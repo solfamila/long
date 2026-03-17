@@ -334,6 +334,37 @@ json investigationResultSchema() {
     };
 }
 
+json enrichmentResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"request_kind", stringSchema()},
+            {"artifact_id", stringSchema()},
+            {"headline", stringSchema()},
+            {"detail", stringSchema()},
+            {"local_evidence", investigationResultSchema()},
+            {"external_context", json{{"type", "object"}, {"additionalProperties", true}, {"required", json::array({"provider", "fetched_at", "cache_status", "items", "summaries", "warnings"})}}},
+            {"interpretation", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"provider_metadata", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"degradation", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"cache", json{{"type", "object"}, {"additionalProperties", true}}}
+        }},
+        {"required", json::array({
+            "request_kind",
+            "artifact_id",
+            "headline",
+            "detail",
+            "local_evidence",
+            "external_context",
+            "interpretation",
+            "provider_metadata",
+            "degradation",
+            "cache"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
 json qualityResultSchema() {
     return json{
         {"type", "object"},
@@ -1848,6 +1879,14 @@ std::string toolTitle(const ToolSpec& tool) {
             return "Replay Snapshot";
         case ToolId::ReadIncident:
             return "Read Incident";
+        case ToolId::EnrichIncident:
+            return "Enrich Incident";
+        case ToolId::ExplainIncident:
+            return "Explain Incident";
+        case ToolId::EnrichOrderCase:
+            return "Enrich Order Case";
+        case ToolId::RefreshExternalContext:
+            return "Refresh External Context";
         case ToolId::ReadArtifact:
             return "Read Artifact";
         case ToolId::ExportArtifact:
@@ -1961,11 +2000,19 @@ json toolInputSchemaForList(const ToolSpec& tool) {
             return withSchemaExamples(std::move(schema), {json{{"report_id", 1}}});
         case ToolId::ScanIncidentReport:
         case ToolId::ReadIncident:
+        case ToolId::EnrichIncident:
+        case ToolId::ExplainIncident:
             return withSchemaExamples(std::move(schema), {json{{"logical_incident_id", 1}}});
         case ToolId::ScanOrderCaseReport:
         case ToolId::SeekOrderAnchor:
         case ToolId::ReadOrderCase:
+        case ToolId::EnrichOrderCase:
             return withSchemaExamples(std::move(schema), {json{{"order_id", 7401}}, json{{"exec_id", "EXEC-401"}}});
+        case ToolId::RefreshExternalContext:
+            return withSchemaExamples(std::move(schema), {
+                json{{"logical_incident_id", 1}},
+                json{{"order_id", 7401}}
+            });
         case ToolId::ReadFinding:
             return withSchemaExamples(std::move(schema), {json{{"finding_id", 1}}});
         case ToolId::ReadOrderAnchor:
@@ -2779,6 +2826,30 @@ json incidentInputSchema() {
     };
 }
 
+json refreshExternalContextInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"logical_incident_id", positiveIntegerSchema()},
+            {"trace_id", positiveIntegerSchema()},
+            {"order_id", positiveIntegerSchema()},
+            {"perm_id", positiveIntegerSchema()},
+            {"exec_id", json{{"type", "string"}, {"minLength", 1}}},
+            {"revision_id", positiveIntegerSchema()},
+            {"include_live_tail", booleanSchema()},
+            {"limit", positiveIntegerSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"logical_incident_id"})}},
+            json{{"required", json::array({"trace_id"})}},
+            json{{"required", json::array({"order_id"})}},
+            json{{"required", json::array({"perm_id"})}},
+            json{{"required", json::array({"exec_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
 json artifactInputSchema(bool exportTool) {
     json properties{
         {"artifact_id", json{{"type", "string"}, {"minLength", 1}}},
@@ -3428,6 +3499,38 @@ std::vector<ToolSpec> buildToolSpecs() {
          investigationResultSchema(),
          "phase5.investigation.v1",
          tape_engine::QueryOperation::ReadIncident},
+        {ToolId::EnrichIncident,
+         "tapescript_enrich_incident",
+         "Read a mediated fast enrichment result for a logical incident.",
+         incidentInputSchema(),
+         enrichmentResultSchema(),
+         "uw-gemini.enrichment.v1",
+         tape_engine::QueryOperation::EnrichIncident,
+         true},
+        {ToolId::ExplainIncident,
+         "tapescript_explain_incident",
+         "Read a mediated deep explanation result for a logical incident.",
+         incidentInputSchema(),
+         enrichmentResultSchema(),
+         "uw-gemini.enrichment.v1",
+         tape_engine::QueryOperation::ExplainIncident,
+         true},
+        {ToolId::EnrichOrderCase,
+         "tapescript_enrich_order_case",
+         "Read a mediated fast enrichment result for an order or fill anchor.",
+         orderAnchorInputSchema(),
+         enrichmentResultSchema(),
+         "uw-gemini.enrichment.v1",
+         tape_engine::QueryOperation::EnrichOrderCase,
+         true},
+        {ToolId::RefreshExternalContext,
+         "tapescript_refresh_external_context",
+         "Force a mediated external-context refresh for either a logical incident or an order/fill anchor.",
+         refreshExternalContextInputSchema(),
+         enrichmentResultSchema(),
+         "uw-gemini.enrichment.v1",
+         tape_engine::QueryOperation::RefreshExternalContext,
+         true},
         {ToolId::ReadArtifact,
          "tapescript_read_artifact",
          "Read a durable report or selector-style artifact by artifact_id.",
@@ -5976,6 +6079,21 @@ json investigationResultFromPayload(const tape_payloads::InvestigationPayload& p
     };
 }
 
+json enrichmentResultFromPayload(const tape_payloads::EnrichmentPayload& payload) {
+    return json{
+        {"request_kind", payload.requestKind},
+        {"artifact_id", payload.artifactId},
+        {"headline", payload.headline},
+        {"detail", payload.detail},
+        {"local_evidence", investigationResultFromPayload(payload.localEvidence)},
+        {"external_context", payload.externalContext.is_object() ? payload.externalContext : json::object()},
+        {"interpretation", payload.interpretation.is_object() ? payload.interpretation : json::object()},
+        {"provider_metadata", payload.providerMetadata.is_object() ? payload.providerMetadata : json::object()},
+        {"degradation", payload.degradation.is_object() ? payload.degradation : json::object()},
+        {"cache", payload.cache.is_object() ? payload.cache : json::object()}
+    };
+}
+
 json qualityResultFromPayload(const tape_payloads::SessionQualityPayload& payload) {
     return json{
         {"served_revision_id", payload.summary.contains("served_revision_id")
@@ -6585,6 +6703,48 @@ bool parseIncidentArgs(const json& args,
         }
         outQuery->limit = static_cast<std::size_t>(*limit);
     }
+    return true;
+}
+
+struct RefreshExternalContextSelection {
+    bool usesIncident = false;
+    IncidentQuery incidentQuery;
+    OrderCaseQuery orderCaseQuery;
+};
+
+bool parseRefreshExternalContextArgs(const json& args,
+                                     RefreshExternalContextSelection* outSelection,
+                                     std::string* outCode,
+                                     std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (args.contains("logical_incident_id")) {
+        IncidentQuery incidentQuery;
+        if (!parseIncidentArgs(args, &incidentQuery, outCode, outMessage)) {
+            return false;
+        }
+        outSelection->usesIncident = true;
+        outSelection->incidentQuery = std::move(incidentQuery);
+        return true;
+    }
+
+    OrderCaseQuery orderCaseQuery;
+    if (!parseOrderCaseArgs(args, &orderCaseQuery, outCode, outMessage)) {
+        return false;
+    }
+    outSelection->usesIncident = false;
+    outSelection->orderCaseQuery = std::move(orderCaseQuery);
     return true;
 }
 
@@ -7252,6 +7412,14 @@ json Adapter::invokeTool(const ToolSpec& tool, const json& args) const {
             return invokeReplaySnapshotTool(tool, args);
         case ToolId::ReadIncident:
             return invokeReadIncidentTool(tool, args);
+        case ToolId::EnrichIncident:
+            return invokeEnrichIncidentTool(tool, args);
+        case ToolId::ExplainIncident:
+            return invokeExplainIncidentTool(tool, args);
+        case ToolId::EnrichOrderCase:
+            return invokeEnrichOrderCaseTool(tool, args);
+        case ToolId::RefreshExternalContext:
+            return invokeRefreshExternalContextTool(tool, args);
         case ToolId::ReadArtifact:
             return invokeReadArtifactTool(tool, args);
         case ToolId::ExportArtifact:
@@ -8073,6 +8241,137 @@ json Adapter::invokeReadIncidentTool(const ToolSpec& tool, const json& args) con
     return makeToolResult(makeSuccessEnvelope(tool,
                                               investigationResultFromPayload(result.value),
                                               revisionFromSummary(result.value.summary)));
+}
+
+json Adapter::invokeEnrichIncidentTool(const ToolSpec& tool, const json& args) const {
+    IncidentQuery query;
+    std::string code;
+    std::string message;
+    if (!parseIncidentArgs(args, &query, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable()));
+    }
+    const auto result = engineRpc_.enrichIncident(query);
+    if (!result.ok()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                result.error.code,
+                                                result.error.message,
+                                                result.error.retryable,
+                                                revisionUnavailable()));
+    }
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              enrichmentResultFromPayload(result.value),
+                                              revisionFromSummary(result.value.localEvidence.summary)));
+}
+
+json Adapter::invokeExplainIncidentTool(const ToolSpec& tool, const json& args) const {
+    IncidentQuery query;
+    std::string code;
+    std::string message;
+    if (!parseIncidentArgs(args, &query, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable()));
+    }
+    const auto result = engineRpc_.explainIncident(query);
+    if (!result.ok()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                result.error.code,
+                                                result.error.message,
+                                                result.error.retryable,
+                                                revisionUnavailable()));
+    }
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              enrichmentResultFromPayload(result.value),
+                                              revisionFromSummary(result.value.localEvidence.summary)));
+}
+
+json Adapter::invokeEnrichOrderCaseTool(const ToolSpec& tool, const json& args) const {
+    OrderCaseQuery query;
+    std::string code;
+    std::string message;
+    if (!parseOrderCaseArgs(args, &query, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable()));
+    }
+    const auto result = engineRpc_.enrichOrderCase(query);
+    if (!result.ok()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                result.error.code,
+                                                result.error.message,
+                                                result.error.retryable,
+                                                revisionUnavailable()));
+    }
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              enrichmentResultFromPayload(result.value),
+                                              revisionFromSummary(result.value.localEvidence.summary)));
+}
+
+json Adapter::invokeRefreshExternalContextTool(const ToolSpec& tool, const json& args) const {
+    RefreshExternalContextSelection selection;
+    std::string code;
+    std::string message;
+    if (!parseRefreshExternalContextArgs(args, &selection, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable()));
+    }
+
+    const auto result = selection.usesIncident
+        ? engineRpc_.refreshExternalContextIncident(selection.incidentQuery)
+        : engineRpc_.refreshExternalContextOrderCase(selection.orderCaseQuery);
+    if (!result.ok()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                tape_engine::queryOperationName(tool.engineOperation),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                result.error.code,
+                                                result.error.message,
+                                                result.error.retryable,
+                                                revisionUnavailable()));
+    }
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              enrichmentResultFromPayload(result.value),
+                                              revisionFromSummary(result.value.localEvidence.summary)));
 }
 
 json Adapter::invokeReadArtifactTool(const ToolSpec& tool, const json& args) const {

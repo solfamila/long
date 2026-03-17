@@ -38,6 +38,19 @@ using namespace tapescope_support;
     }
 }
 
+- (void)applyEnrichmentResult:(const tapescope::QueryResult<tapescope::EnrichmentPayload>&)result
+               paneController:(tapescope::InvestigationPaneController*)pane
+                  successText:(NSString*)successText
+             syncArtifactField:(BOOL)syncArtifactField {
+    if (pane == nullptr) {
+        return;
+    }
+    pane->applyResult(result, successText);
+    if (syncArtifactField && result.ok()) {
+        pane->syncArtifactField(_artifactIdField);
+    }
+}
+
 - (void)loadReplayWindowForPane:(tapescope::InvestigationPaneController*)pane {
     if (pane == nullptr) {
         return;

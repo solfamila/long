@@ -2,6 +2,7 @@
 #include "tape_bundle_inspection.h"
 #include "phase3_analyzers.h"
 #include "runtime_qos.h"
+#include "uw_context_service.h"
 
 #include <CommonCrypto/CommonDigest.h>
 
@@ -6444,6 +6445,53 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         response.summary["returned_events"] = response.events.size();
         response.result = eventListResultToJson(response.summary, response.events);
         return response;
+    }
+
+    if (operation == QueryOperation::EnrichIncident ||
+        operation == QueryOperation::ExplainIncident ||
+        operation == QueryOperation::EnrichOrderCase ||
+        operation == QueryOperation::RefreshExternalContext) {
+        QueryRequest delegated = request;
+        if (operation == QueryOperation::EnrichIncident ||
+            operation == QueryOperation::ExplainIncident ||
+            (operation == QueryOperation::RefreshExternalContext && request.logicalIncidentId != 0)) {
+            delegated.operationKind = QueryOperation::ReadIncident;
+            delegated.operation = queryOperationName(QueryOperation::ReadIncident);
+        } else {
+            delegated.operationKind = QueryOperation::ReadOrderCase;
+            delegated.operation = queryOperationName(QueryOperation::ReadOrderCase);
+        }
+
+        const QueryResponse localEvidence = processQueryFrame(encodeQueryRequestFrame(delegated));
+        if (localEvidence.status != "ok") {
+            return localEvidence;
+        }
+
+        uw_context_service::BuildRequest buildRequest;
+        if (operation == QueryOperation::ExplainIncident) {
+            buildRequest.requestKind = "deep_enrichment";
+            buildRequest.lane = uw_context_service::Lane::Deep;
+        } else if (operation == QueryOperation::EnrichOrderCase) {
+            buildRequest.requestKind = "order_case_enrichment";
+            buildRequest.lane = uw_context_service::Lane::Fast;
+        } else if (operation == QueryOperation::RefreshExternalContext) {
+            buildRequest.requestKind = "refresh_external_context";
+            buildRequest.forceRefresh = true;
+            buildRequest.lane = uw_context_service::Lane::Fast;
+        } else {
+            buildRequest.requestKind = "fast_enrichment";
+            buildRequest.lane = uw_context_service::Lane::Fast;
+        }
+        buildRequest.dataDir = config_.dataDir;
+        buildRequest.revisionId = localEvidence.summary.value("served_revision_id", request.revisionId);
+        buildRequest.logicalIncidentId = request.logicalIncidentId;
+        buildRequest.traceId = request.traceId;
+        buildRequest.orderId = request.orderId;
+        buildRequest.permId = request.permId;
+        buildRequest.execId = request.execId;
+        buildRequest.limit = request.limit;
+        buildRequest.includeLiveTail = request.includeLiveTail;
+        return uw_context_service::buildEnrichmentResponse(request, localEvidence, buildRequest);
     }
 
     if (operation == QueryOperation::ReadSessionQuality) {

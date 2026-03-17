@@ -88,6 +88,8 @@ fs::path configurePhase7DataDir(const std::string& name) {
     expect(!ec, "failed to create phase7 data dir at " + path.string());
     expect(::setenv("TWS_GUI_DATA_DIR", path.string().c_str(), 1) == 0,
            "failed to set TWS_GUI_DATA_DIR for phase7 tests");
+        expect(::setenv("LONG_DISABLE_EXTERNAL_CONTEXT", "1", 1) == 0,
+            "failed to disable external context for phase7 tests");
     return path;
 }
 
@@ -2310,6 +2312,15 @@ void testTapeMcpPhase5Contracts() {
             {"limit", 10}
         })));
 
+    const json enrichIncidentEnvelopeRaw = envelopeFromToolResult(
+        adapter.callTool("tapescript_enrich_incident", json{{"logical_incident_id", logicalIncidentId}}));
+    const json explainIncidentEnvelopeRaw = envelopeFromToolResult(
+        adapter.callTool("tapescript_explain_incident", json{{"logical_incident_id", logicalIncidentId}}));
+    const json enrichOrderCaseEnvelopeRaw = envelopeFromToolResult(
+        adapter.callTool("tapescript_enrich_order_case", json{{"order_id", 7401}}));
+    const json refreshExternalContextEnvelopeRaw = envelopeFromToolResult(
+        adapter.callTool("tapescript_refresh_external_context", json{{"logical_incident_id", logicalIncidentId}}));
+
     const json orderAnchorEnvelope = projectEnvelope(envelopeFromToolResult(
         adapter.callTool("tapescript_read_order_anchor", json{
             {"anchor_id", anchorId},
@@ -2400,6 +2411,48 @@ void testTapeMcpPhase5Contracts() {
            "phase5 order-case envelope should match golden fixture\nactual:\n" + orderCaseEnvelope.dump(2));
     expect(incidentEnvelope == fixture.value("tapescript_read_incident", json::object()),
            "phase5 incident envelope should match golden fixture\nactual:\n" + incidentEnvelope.dump(2));
+        expect(enrichIncidentEnvelopeRaw.value("ok", false),
+            "phase5 enrich-incident should return ok=true\nactual:\n" + enrichIncidentEnvelopeRaw.dump(2));
+        expect(explainIncidentEnvelopeRaw.value("ok", false),
+            "phase5 explain-incident should return ok=true\nactual:\n" + explainIncidentEnvelopeRaw.dump(2));
+        expect(enrichOrderCaseEnvelopeRaw.value("ok", false),
+            "phase5 enrich-order-case should return ok=true\nactual:\n" + enrichOrderCaseEnvelopeRaw.dump(2));
+        expect(refreshExternalContextEnvelopeRaw.value("ok", false),
+            "phase5 refresh-external-context should return ok=true\nactual:\n" + refreshExternalContextEnvelopeRaw.dump(2));
+        expect(enrichIncidentEnvelopeRaw.value("result", json::object()).value("request_kind", std::string()) == "fast_enrichment" &&
+             explainIncidentEnvelopeRaw.value("result", json::object()).value("request_kind", std::string()) == "deep_enrichment" &&
+             enrichOrderCaseEnvelopeRaw.value("result", json::object()).value("request_kind", std::string()) == "order_case_enrichment" &&
+             refreshExternalContextEnvelopeRaw.value("result", json::object()).value("request_kind", std::string()) == "refresh_external_context",
+            "phase5 enrichment tools should expose the expected request_kind values");
+        expect(enrichIncidentEnvelopeRaw.value("result", json::object())
+                 .value("external_context", json::object())
+                 .value("provider", std::string()) == "unusual_whales" &&
+             enrichIncidentEnvelopeRaw.value("result", json::object())
+                 .value("external_context", json::object())
+                 .value("items", json::array())
+                 .is_array(),
+            "phase5 enrichment tools should expose the normalized external_context object");
+        expect(enrichIncidentEnvelopeRaw.value("result", json::object())
+                 .value("degradation", json::object())
+                 .value("code", std::string()) == "external_context_unavailable" &&
+             explainIncidentEnvelopeRaw.value("result", json::object())
+                 .value("degradation", json::object())
+                 .value("code", std::string()) == "external_context_unavailable" &&
+             enrichOrderCaseEnvelopeRaw.value("result", json::object())
+                 .value("degradation", json::object())
+                 .value("code", std::string()) == "external_context_unavailable" &&
+             refreshExternalContextEnvelopeRaw.value("result", json::object())
+                 .value("degradation", json::object())
+                 .value("code", std::string()) == "external_context_unavailable",
+            "phase5 enrichment tools should degrade explicitly when external connectors are not yet configured");
+        expect(!enrichIncidentEnvelopeRaw.value("result", json::object())
+                  .value("local_evidence", json::object())
+                  .value("artifact_id", std::string())
+                  .empty() &&
+             refreshExternalContextEnvelopeRaw.value("result", json::object())
+                 .value("cache", json::object())
+                 .value("refreshed", false),
+            "phase5 enrichment tools should preserve local evidence and mark refresh requests in cache metadata");
     expect(orderAnchorEnvelope == fixture.value("tapescript_read_order_anchor", json::object()),
            "phase5 read-order-anchor envelope should match golden fixture\nactual:\n" + orderAnchorEnvelope.dump(2));
     expect(protectedWindowEnvelope == fixture.value("tapescript_read_protected_window", json::object()),
@@ -3994,7 +4047,7 @@ void testTapeMcpStdioHarness() {
     });
     const json listResponse = readJsonRpcMessage(child.readFd);
     const json tools = listResponse.value("result", json::object()).value("tools", json::array());
-    expect(tools.is_array() && tools.size() == 53, "tools/list should expose the expanded phase 7 tool slice");
+    expect(tools.is_array() && tools.size() == 57, "tools/list should expose the expanded phase 7 tool slice");
     json overviewTool = json::object();
     for (const auto& tool : tools) {
         if (tool.value("name", std::string()) == "tapescript_read_session_overview") {

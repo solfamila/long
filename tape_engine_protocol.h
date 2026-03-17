@@ -39,6 +39,8 @@ inline constexpr std::uint32_t kArtifactExportResultVersion = 1;
 inline constexpr const char* kArtifactExportResultSchema = "com.foxy.tape-engine.artifact-export-result";
 inline constexpr std::uint32_t kReplaySnapshotResultVersion = 1;
 inline constexpr const char* kReplaySnapshotResultSchema = "com.foxy.tape-engine.replay-snapshot-result";
+inline constexpr std::uint32_t kEnrichmentResultVersion = 1;
+inline constexpr const char* kEnrichmentResultSchema = "com.foxy.tape-engine.enrichment-result";
 inline constexpr std::uint32_t kBundleExportResultVersion = 1;
 inline constexpr const char* kBundleExportResultSchema = "com.foxy.tape-engine.bundle-export-result";
 inline constexpr std::uint32_t kBundleVerifyResultVersion = 1;
@@ -74,6 +76,10 @@ enum class QueryOperation {
     ReadFinding,
     ReadIncident,
     ListIncidents,
+    EnrichIncident,
+    ExplainIncident,
+    EnrichOrderCase,
+    RefreshExternalContext,
     ReadArtifact,
     ExportArtifact,
     ExportSessionBundle,

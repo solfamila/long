@@ -2467,6 +2467,58 @@
     },
     {
       "input_required": [
+        "logical_incident_id"
+      ],
+      "name": "tapescript_enrich_incident",
+      "output_required": [
+        "request_kind",
+        "artifact_id",
+        "headline",
+        "detail",
+        "local_evidence",
+        "external_context",
+        "interpretation",
+        "provider_metadata",
+        "degradation",
+        "cache"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_enrich_order_case",
+      "output_required": [
+        "request_kind",
+        "artifact_id",
+        "headline",
+        "detail",
+        "local_evidence",
+        "external_context",
+        "interpretation",
+        "provider_metadata",
+        "degradation",
+        "cache"
+      ]
+    },
+    {
+      "input_required": [
+        "logical_incident_id"
+      ],
+      "name": "tapescript_explain_incident",
+      "output_required": [
+        "request_kind",
+        "artifact_id",
+        "headline",
+        "detail",
+        "local_evidence",
+        "external_context",
+        "interpretation",
+        "provider_metadata",
+        "degradation",
+        "cache"
+      ]
+    },
+    {
+      "input_required": [
         "artifact_id",
         "export_format"
       ],
@@ -3132,6 +3184,22 @@
         "replay_context",
         "updated_entry_ids",
         "audit_event_id"
+      ]
+    },
+    {
+      "input_required": [],
+      "name": "tapescript_refresh_external_context",
+      "output_required": [
+        "request_kind",
+        "artifact_id",
+        "headline",
+        "detail",
+        "local_evidence",
+        "external_context",
+        "interpretation",
+        "provider_metadata",
+        "degradation",
+        "cache"
       ]
     },
     {

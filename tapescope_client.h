@@ -29,6 +29,7 @@ using EventRow = tape_payloads::EventRow;
 using EventListPayload = tape_payloads::EventListPayload;
 using IncidentListRow = tape_payloads::IncidentListRow;
 using InvestigationPayload = tape_payloads::InvestigationPayload;
+using EnrichmentPayload = tape_payloads::EnrichmentPayload;
 using SessionQualityPayload = tape_payloads::SessionQualityPayload;
 using SeekOrderPayload = tape_payloads::SeekOrderPayload;
 using IncidentListPayload = tape_payloads::IncidentListPayload;
@@ -244,6 +245,16 @@ public:
     [[nodiscard]] [[deprecated("Use readIncidentPayload() for typed TapeScope investigation reads")]]
     QueryResult<json> readIncident(std::uint64_t logicalIncidentId) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readIncidentPayload(std::uint64_t logicalIncidentId) const;
+    [[nodiscard]] QueryResult<EnrichmentPayload> enrichIncidentPayload(std::uint64_t logicalIncidentId,
+                                                                       bool includeLiveTail = false) const;
+    [[nodiscard]] QueryResult<EnrichmentPayload> explainIncidentPayload(std::uint64_t logicalIncidentId,
+                                                                        bool includeLiveTail = false) const;
+    [[nodiscard]] QueryResult<EnrichmentPayload> enrichOrderCasePayload(const OrderAnchorQuery& query) const;
+    [[nodiscard]] QueryResult<EnrichmentPayload> refreshIncidentExternalContextPayload(
+        std::uint64_t logicalIncidentId,
+        bool includeLiveTail = false) const;
+    [[nodiscard]] QueryResult<EnrichmentPayload> refreshOrderCaseExternalContextPayload(
+        const OrderAnchorQuery& query) const;
     [[nodiscard]] [[deprecated("Use readOrderAnchorPayload() for typed TapeScope investigation reads")]]
     QueryResult<json> readOrderAnchor(std::uint64_t anchorId) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readOrderAnchorPayload(std::uint64_t anchorId) const;

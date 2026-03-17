@@ -150,6 +150,16 @@ public:
         const OrderCaseQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readIncident(
         const IncidentQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_payloads::EnrichmentPayload> enrichIncident(
+        const IncidentQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_payloads::EnrichmentPayload> explainIncident(
+        const IncidentQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_payloads::EnrichmentPayload> enrichOrderCase(
+        const OrderCaseQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_payloads::EnrichmentPayload> refreshExternalContextIncident(
+        const IncidentQuery& query) const;
+    [[nodiscard]] EngineRpcResult<tape_payloads::EnrichmentPayload> refreshExternalContextOrderCase(
+        const OrderCaseQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readOrderAnchor(
         const NumericIdQuery& query) const;
     [[nodiscard]] EngineRpcResult<tape_payloads::InvestigationPayload> readProtectedWindow(

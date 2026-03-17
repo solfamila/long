@@ -459,6 +459,14 @@ using namespace tapescope_support;
                                               target:self
                                               action:@selector(scanOrderCaseReport:)];
     [controls addArrangedSubview:_orderCaseScanButton];
+    _orderCaseEnrichButton = [NSButton buttonWithTitle:@"Fast Summary"
+                                                target:self
+                                                action:@selector(fetchOrderCaseEnrichment:)];
+    [controls addArrangedSubview:_orderCaseEnrichButton];
+    _orderCaseRefreshContextButton = [NSButton buttonWithTitle:@"Refresh Context"
+                                                        target:self
+                                                        action:@selector(refreshOrderCaseExternalContext:)];
+    [controls addArrangedSubview:_orderCaseRefreshContextButton];
     [stack addArrangedSubview:controls];
 
     _orderCaseStateLabel = MakeLabel(@"No order case loaded yet.",
@@ -564,6 +572,18 @@ using namespace tapescope_support;
                                               target:self
                                               action:@selector(fetchIncident:)];
     [controls addArrangedSubview:_incidentFetchButton];
+    _incidentEnrichButton = [NSButton buttonWithTitle:@"Fast Summary"
+                                               target:self
+                                               action:@selector(fetchIncidentEnrichment:)];
+    [controls addArrangedSubview:_incidentEnrichButton];
+    _incidentExplainButton = [NSButton buttonWithTitle:@"Deep Explain"
+                                                target:self
+                                                action:@selector(fetchIncidentExplanation:)];
+    [controls addArrangedSubview:_incidentExplainButton];
+    _incidentRefreshContextButton = [NSButton buttonWithTitle:@"Refresh Context"
+                                                       target:self
+                                                       action:@selector(refreshIncidentExternalContext:)];
+    [controls addArrangedSubview:_incidentRefreshContextButton];
     _incidentLoadReplayButton = [NSButton buttonWithTitle:@"Load Replay Window"
                                                    target:self
                                                    action:@selector(loadReplayWindowFromIncident:)];

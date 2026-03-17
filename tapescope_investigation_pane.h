@@ -28,6 +28,7 @@ public:
     [[nodiscard]] bool isCurrent(std::uint64_t token) const;
 
     void applyResult(const QueryResult<InvestigationPayload>& result, NSString* successText);
+    void applyResult(const QueryResult<EnrichmentPayload>& result, NSString* successText);
     void syncArtifactField(NSTextField* artifactField) const;
     void clearEvidence();
 

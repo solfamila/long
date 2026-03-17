@@ -102,6 +102,9 @@ std::string DescribeInvestigationPayload(const std::string& heading,
 std::string DescribeInvestigationPayload(const std::string& heading,
                                          const std::string& descriptor,
                                          const tapescope::QueryResult<tapescope::InvestigationPayload>& result);
+std::string DescribeEnrichmentPayload(const std::string& heading,
+                                      const std::string& descriptor,
+                                      const tapescope::QueryResult<tapescope::EnrichmentPayload>& result);
 std::string DescribeSeekOrderResult(const std::string& descriptor,
                                     const tapescope::QueryResult<json>& result);
 std::string DescribeSeekOrderResult(const std::string& descriptor,
