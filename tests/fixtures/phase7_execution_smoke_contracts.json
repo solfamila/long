@@ -1,0 +1,56 @@
+{
+  "pending_recovery": {
+    "runtime_started": false,
+    "broker_connected": false,
+    "session_ready": false,
+    "connection": {
+      "client_id": 101,
+      "websocket_enabled": true,
+      "controller_enabled": true
+    },
+    "order_count": 1,
+    "reconciling_order_count": 1,
+    "manual_review_order_count": 0,
+    "bridge_outbox_count": 0,
+    "backlog": {
+      "recovery_required_journal_count": 1,
+      "recovery_required_apply_count": 1,
+      "runtime_backed_submitted_journal_entry_count": 1,
+      "runtime_backed_submitted_apply_entry_count": 1,
+      "recovery_required": true,
+      "stale_recovery_required": false
+    },
+    "startup_plan": {
+      "startup_action": "recover_pending",
+      "recovery_sweep_recommended": true,
+      "manual_attention_recommended": false
+    }
+  },
+  "cleared_recovery": {
+    "runtime_started": false,
+    "broker_connected": false,
+    "session_ready": false,
+    "connection": {
+      "client_id": 101,
+      "websocket_enabled": true,
+      "controller_enabled": true
+    },
+    "order_count": 1,
+    "reconciling_order_count": 0,
+    "manual_review_order_count": 0,
+    "bridge_outbox_count": 0,
+    "backlog": {
+      "recovery_required_journal_count": 0,
+      "recovery_required_apply_count": 0,
+      "runtime_backed_submitted_journal_entry_count": 0,
+      "runtime_backed_submitted_apply_entry_count": 0,
+      "recovery_required": false,
+      "stale_recovery_required": false
+    },
+    "startup_plan": {
+      "startup_action": "none",
+      "recovery_sweep_recommended": false,
+      "manual_attention_recommended": false
+    }
+  }
+}

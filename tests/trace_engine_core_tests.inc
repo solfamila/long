@@ -2176,6 +2176,48 @@ void testTapePhase7RuntimeBridgeDispatchesAndReconcilesOrderAnchoredJournal() {
     clearTestFiles();
     std::error_code phase7Ec;
     fs::remove_all(testDataDir() / "phase7_artifacts", phase7Ec);
+    auto projectSmokeReport = [](const tape_phase7::RuntimeSmokeReport& report) {
+        const json payload = tape_phase7::runtimeSmokeReportToJson(report);
+        return json{
+            {"runtime_started", payload.value("runtime_started", false)},
+            {"broker_connected", payload.value("broker_connected", false)},
+            {"session_ready", payload.value("session_ready", false)},
+            {"connection",
+             {
+                 {"client_id", payload.value("connection", json::object()).value("client_id", 0)},
+                 {"websocket_enabled", payload.value("connection", json::object()).value("websocket_enabled", false)},
+                 {"controller_enabled", payload.value("connection", json::object()).value("controller_enabled", false)}
+             }},
+            {"order_count", payload.value("order_count", 0ULL)},
+            {"reconciling_order_count", payload.value("reconciling_order_count", 0ULL)},
+            {"manual_review_order_count", payload.value("manual_review_order_count", 0ULL)},
+            {"bridge_outbox_count", payload.value("bridge_outbox_count", 0ULL)},
+            {"backlog",
+             {
+                 {"recovery_required_journal_count",
+                  payload.value("backlog", json::object()).value("recovery_required_journal_count", 0ULL)},
+                 {"recovery_required_apply_count",
+                  payload.value("backlog", json::object()).value("recovery_required_apply_count", 0ULL)},
+                 {"runtime_backed_submitted_journal_entry_count",
+                  payload.value("backlog", json::object())
+                      .value("runtime_backed_submitted_journal_entry_count", 0ULL)},
+                 {"runtime_backed_submitted_apply_entry_count",
+                  payload.value("backlog", json::object())
+                      .value("runtime_backed_submitted_apply_entry_count", 0ULL)},
+                 {"recovery_required", payload.value("backlog", json::object()).value("recovery_required", false)},
+                 {"stale_recovery_required",
+                  payload.value("backlog", json::object()).value("stale_recovery_required", false)}
+             }},
+            {"startup_plan",
+             {
+                 {"startup_action", payload.value("startup_plan", json::object()).value("startup_action", std::string())},
+                 {"recovery_sweep_recommended",
+                  payload.value("startup_plan", json::object()).value("recovery_sweep_recommended", false)},
+                 {"manual_attention_recommended",
+                  payload.value("startup_plan", json::object()).value("manual_attention_recommended", false)}
+             }}
+        };
+    };
 
     SharedData owner;
     bindSharedDataOwner(&owner);
@@ -2210,6 +2252,8 @@ void testTapePhase7RuntimeBridgeDispatchesAndReconcilesOrderAnchoredJournal() {
         g_data.latestTraceId = trace.traceId;
     }
     publishSharedDataSnapshot();
+    json pendingSmokeProjection = json::object();
+    json clearedSmokeProjection = json::object();
 
     const fs::path rootDir = testDataDir() / "tape-engine-phase7-runtime-bridge";
     const fs::path socketPath = testDataDir() / "tape-engine-phase7-runtime-bridge.sock";
@@ -2540,6 +2584,11 @@ void testTapePhase7RuntimeBridgeDispatchesAndReconcilesOrderAnchoredJournal() {
                    actorPlan.recoverySweepRecommended &&
                    !actorPlan.manualAttentionRecommended,
                "phase 7 runtime bridge startup policy should recommend recovery when an actor is present");
+        tape_phase7::RuntimeSmokeReport smokeReport;
+        expect(tape_phase7::captureRuntimeSmokeReport(nullptr, true, &smokeReport, &phase7Code, &phase7Message),
+               "phase 7 runtime bridge smoke report should succeed while recovery is pending: " +
+                   phase7Code + " " + phase7Message);
+        pendingSmokeProjection = projectSmokeReport(smokeReport);
     }
 
     {
@@ -2822,6 +2871,22 @@ void testTapePhase7RuntimeBridgeDispatchesAndReconcilesOrderAnchoredJournal() {
                    !clearedPlan.recoverySweepRecommended &&
                    !clearedPlan.manualAttentionRecommended,
                "phase 7 runtime bridge startup policy should clear once recovery backlog is resolved");
+        tape_phase7::RuntimeSmokeReport smokeReport;
+        expect(tape_phase7::captureRuntimeSmokeReport(nullptr, true, &smokeReport, &phase7Code, &phase7Message),
+               "phase 7 runtime bridge smoke report should succeed after recovery clears: " +
+                   phase7Code + " " + phase7Message);
+        clearedSmokeProjection = projectSmokeReport(smokeReport);
+    }
+
+    {
+        const json smokeFixture = readJsonFixture("phase7_execution_smoke_contracts.json");
+        const json smokeProjection = {
+            {"pending_recovery", pendingSmokeProjection},
+            {"cleared_recovery", clearedSmokeProjection}
+        };
+        expect(smokeProjection == smokeFixture,
+               "phase 7 runtime smoke report projection should match the golden fixture\nactual:\n" +
+                   smokeProjection.dump(2));
     }
 
     server.stop();

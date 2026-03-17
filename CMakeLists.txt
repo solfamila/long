@@ -230,6 +230,25 @@ add_executable(uw_ws_smoke
     uw_http.cpp
     uw_runtime.cpp
 )
+add_executable(phase7_execution_smoke
+    phase7_execution_smoke_main.cpp
+    tape_phase7_artifacts.cpp
+    tape_phase7_runtime_bridge.cpp
+    tape_bundle_inspection.cpp
+    tape_engine_protocol.cpp
+    app_shared.cpp
+    controller_claim.cpp
+    bridge_batch_codec.cpp
+    bridge_batch_transport.cpp
+    runtime_qos.cpp
+    websocket_handlers.cpp
+    trading_runtime.cpp
+    trading_runtime_host.cpp
+    trace_exporter.cpp
+    trading_ui_format.cpp
+    controller_mac.mm
+    mac_observability.mm
+)
 add_executable(TapeScope MACOSX_BUNDLE ${TAPESCOPE_SOURCES})
 add_executable(tape_mcp ${TAPE_MCP_SOURCES})
 
@@ -273,11 +292,19 @@ target_include_directories(uw_ws_smoke PRIVATE
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
+target_include_directories(phase7_execution_smoke PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${RUNTIME_REGISTRY_GENERATED_DIR}"
+    "${IXWEBSOCKET_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
 add_dependencies(tws_gui generate_runtime_registry)
 add_dependencies(tape_engine generate_runtime_registry)
 add_dependencies(tape_engine_ctl generate_runtime_registry)
 add_dependencies(TapeScope generate_runtime_registry)
 add_dependencies(tape_mcp generate_runtime_registry)
+add_dependencies(phase7_execution_smoke generate_runtime_registry)
 
 target_link_libraries(tws_gui PRIVATE
     Threads::Threads
@@ -299,6 +326,11 @@ target_compile_definitions(uw_ws_smoke PRIVATE
 target_link_libraries(uw_ws_smoke PRIVATE
     Threads::Threads
     tws_gui_curl
+)
+
+target_link_libraries(phase7_execution_smoke PRIVATE
+    Threads::Threads
+    ixwebsocket::ixwebsocket
 )
 
 target_link_libraries(TapeScope PRIVATE
@@ -453,6 +485,10 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
         "${VENDORED_IB_API_DIR}"
         ${IB_API_EXTRA_INCLUDE_DIRS}
     )
+    target_include_directories(phase7_execution_smoke PRIVATE
+        "${VENDORED_IB_API_DIR}"
+        ${IB_API_EXTRA_INCLUDE_DIRS}
+    )
     target_include_directories(TapeScope PRIVATE
         "${VENDORED_IB_API_DIR}"
         ${IB_API_EXTRA_INCLUDE_DIRS}
@@ -460,7 +496,9 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
     target_compile_definitions(tape_engine PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(tape_engine_ctl PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(tape_mcp PRIVATE ${IB_API_COMPILE_DEFINITIONS})
+    target_compile_definitions(phase7_execution_smoke PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(TapeScope PRIVATE ${IB_API_COMPILE_DEFINITIONS})
+    target_link_libraries(phase7_execution_smoke PRIVATE twsapi)
     target_link_libraries(TapeScope PRIVATE twsapi)
     message(STATUS "Using vendored Interactive Brokers API sources from ${VENDORED_IB_API_DIR}")
 elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
@@ -468,12 +506,14 @@ elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
     target_include_directories(tape_engine PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_engine_ctl PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_mcp PRIVATE "${IB_API_INCLUDE_DIR}")
+    target_include_directories(phase7_execution_smoke PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(TapeScope PRIVATE "${IB_API_INCLUDE_DIR}")
     message(STATUS "Using Interactive Brokers API from ${IB_API_INCLUDE_DIR}")
 else()
     target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine_ctl PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+    target_include_directories(phase7_execution_smoke PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(TapeScope PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_mcp PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_compile_definitions(tws_gui PRIVATE
@@ -487,6 +527,11 @@ else()
         TWS_HAS_ORDER_CANCEL_OBJECT=1
     )
     target_compile_definitions(tape_engine_ctl PRIVATE
+        TWS_GUI_MOCK_IBAPI=1
+        TWS_HAS_PROTOBUF_API=1
+        TWS_HAS_ORDER_CANCEL_OBJECT=1
+    )
+    target_compile_definitions(phase7_execution_smoke PRIVATE
         TWS_GUI_MOCK_IBAPI=1
         TWS_HAS_PROTOBUF_API=1
         TWS_HAS_ORDER_CANCEL_OBJECT=1
@@ -513,6 +558,11 @@ target_link_libraries(tws_gui PRIVATE
 )
 
 target_link_libraries(TapeScope PRIVATE
+    ${APP_KIT_LIBRARY}
+    ${GAME_CONTROLLER_LIBRARY}
+)
+
+target_link_libraries(phase7_execution_smoke PRIVATE
     ${APP_KIT_LIBRARY}
     ${GAME_CONTROLLER_LIBRARY}
 )

@@ -42,8 +42,32 @@ struct RuntimeStartupRecoveryPlan {
     std::string detail;
 };
 
+struct RuntimeSmokeReport {
+    RuntimeRecoveryBacklogSummary backlog;
+    RuntimeStartupRecoveryPlan startupPlan;
+    bool actorPresent = false;
+    bool runtimeStarted = false;
+    bool brokerConnected = false;
+    bool sessionReady = false;
+    RuntimeConnectionConfig connection;
+    std::string activeSymbol;
+    std::size_t orderCount = 0;
+    std::size_t reconcilingOrderCount = 0;
+    std::size_t manualReviewOrderCount = 0;
+    std::size_t bridgeOutboxCount = 0;
+    std::size_t bridgeOutboxLossCount = 0;
+};
+
 RuntimeStartupRecoveryPlan runtimeStartupRecoveryPlan(const RuntimeRecoveryBacklogSummary& backlog,
                                                      bool actorPresent);
+
+bool captureRuntimeSmokeReport(TradingRuntime* runtime,
+                               bool actorPresent,
+                               RuntimeSmokeReport* out,
+                               std::string* errorCode,
+                               std::string* errorMessage);
+
+json runtimeSmokeReportToJson(const RuntimeSmokeReport& report);
 
 bool summarizeRuntimeRecoveryBacklog(RuntimeRecoveryBacklogSummary* out,
                                      std::string* errorCode,

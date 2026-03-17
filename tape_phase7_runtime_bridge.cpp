@@ -898,6 +898,109 @@ bool planRuntimeRecoveryStartup(bool actorPresent,
     return true;
 }
 
+bool captureRuntimeSmokeReport(TradingRuntime* runtime,
+                               bool actorPresent,
+                               RuntimeSmokeReport* out,
+                               std::string* errorCode,
+                               std::string* errorMessage) {
+    if (out == nullptr) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "missing runtime smoke output container";
+        }
+        return false;
+    }
+
+    RuntimeRecoveryBacklogSummary backlog;
+    if (!summarizeRuntimeRecoveryBacklog(&backlog, errorCode, errorMessage)) {
+        return false;
+    }
+
+    const RuntimePresentationSnapshot snapshot = captureSnapshot(runtime);
+    const BridgeOutboxSnapshot outbox =
+        runtime != nullptr ? runtime->captureBridgeOutboxSnapshot(100) : captureBridgeOutboxSnapshot(100);
+
+    RuntimeSmokeReport report;
+    report.backlog = backlog;
+    report.startupPlan = runtimeStartupRecoveryPlan(backlog, actorPresent);
+    report.actorPresent = actorPresent;
+    report.runtimeStarted = runtime != nullptr && runtime->isStarted();
+    report.brokerConnected = snapshot.status.connected;
+    report.sessionReady = snapshot.status.sessionReady;
+    report.connection = snapshot.connection;
+    report.activeSymbol = snapshot.activeSymbol;
+    report.orderCount = snapshot.orders.size();
+    report.reconcilingOrderCount = static_cast<std::size_t>(std::count_if(
+        snapshot.orders.begin(),
+        snapshot.orders.end(),
+        [](const auto& item) { return item.second.localState == LocalOrderState::NeedsReconciliation; }));
+    report.manualReviewOrderCount = static_cast<std::size_t>(std::count_if(
+        snapshot.orders.begin(),
+        snapshot.orders.end(),
+        [](const auto& item) { return item.second.localState == LocalOrderState::NeedsManualReview; }));
+    report.bridgeOutboxCount = outbox.records.size();
+    report.bridgeOutboxLossCount = outbox.lossCount;
+
+    *out = std::move(report);
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
+
+json runtimeSmokeReportToJson(const RuntimeSmokeReport& report) {
+    return {
+        {"actor_present", report.actorPresent},
+        {"runtime_started", report.runtimeStarted},
+        {"broker_connected", report.brokerConnected},
+        {"session_ready", report.sessionReady},
+        {"connection",
+         {
+             {"host", report.connection.host},
+             {"port", report.connection.port},
+             {"client_id", report.connection.clientId},
+             {"websocket_enabled", report.connection.websocketEnabled},
+             {"controller_enabled", report.connection.controllerEnabled}
+         }},
+        {"active_symbol", report.activeSymbol.empty() ? json(nullptr) : json(report.activeSymbol)},
+        {"order_count", report.orderCount},
+        {"reconciling_order_count", report.reconcilingOrderCount},
+        {"manual_review_order_count", report.manualReviewOrderCount},
+        {"bridge_outbox_count", report.bridgeOutboxCount},
+        {"bridge_outbox_loss_count", report.bridgeOutboxLossCount},
+        {"backlog",
+         {
+             {"journal_artifact_count", report.backlog.journalArtifactCount},
+             {"apply_artifact_count", report.backlog.applyArtifactCount},
+             {"recovery_required_journal_count", report.backlog.recoveryRequiredJournalCount},
+             {"stale_recovery_required_journal_count", report.backlog.staleRecoveryRequiredJournalCount},
+             {"recovery_required_apply_count", report.backlog.recoveryRequiredApplyCount},
+             {"stale_recovery_required_apply_count", report.backlog.staleRecoveryRequiredApplyCount},
+             {"runtime_backed_submitted_journal_entry_count",
+              report.backlog.runtimeBackedSubmittedJournalEntryCount},
+             {"stale_runtime_backed_journal_entry_count", report.backlog.staleRuntimeBackedJournalEntryCount},
+             {"runtime_backed_submitted_apply_entry_count",
+              report.backlog.runtimeBackedSubmittedApplyEntryCount},
+             {"stale_runtime_backed_apply_entry_count", report.backlog.staleRuntimeBackedApplyEntryCount},
+             {"recovery_required", report.backlog.recoveryRequired},
+             {"stale_recovery_required", report.backlog.staleRecoveryRequired}
+         }},
+        {"startup_plan",
+         {
+             {"actor_present", report.startupPlan.actorPresent},
+             {"startup_action", report.startupPlan.startupAction},
+             {"recovery_sweep_recommended", report.startupPlan.recoverySweepRecommended},
+             {"manual_attention_recommended", report.startupPlan.manualAttentionRecommended},
+             {"detail", report.startupPlan.detail}
+         }}
+    };
+}
+
 bool dispatchExecutionJournalEntriesViaRuntime(TradingRuntime* runtime,
                                                const std::string& manifestPath,
                                                const std::string& artifactId,
