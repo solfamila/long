@@ -16,8 +16,8 @@ constexpr const char* kGeminiGenerateContentBase =
 json fastSchema();
 json deepSchema();
 
-std::string laneModel(const BuildRequest& request) {
-    return request.lane == Lane::Deep ? "gemini-2.5-flash" : "gemini-3.1-flash-lite-preview";
+std::string laneModel(const BuildRequest&) {
+    return "gemini-3.1-flash-lite-preview";
 }
 
 json laneSchema(const BuildRequest& request) {

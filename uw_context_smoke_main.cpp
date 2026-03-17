@@ -71,6 +71,33 @@ std::optional<std::string> normalizeFacet(std::string raw) {
     return std::nullopt;
 }
 
+struct RequestKindSelection {
+    QueryOperation operation = QueryOperation::RefreshExternalContext;
+    std::string requestKind = "refresh_external_context";
+    Lane lane = Lane::Fast;
+};
+
+std::optional<RequestKindSelection> normalizeRequestKind(std::string raw) {
+    for (char& ch : raw) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    if (raw == "refresh" || raw == "refresh_external_context") {
+        return RequestKindSelection{};
+    }
+    if (raw == "fast" || raw == "fast_enrichment" || raw == "enrich_incident") {
+        return RequestKindSelection{QueryOperation::EnrichIncident, "fast_enrichment", Lane::Fast};
+    }
+    if (raw == "deep" || raw == "deep_enrichment" || raw == "explain_incident") {
+        return RequestKindSelection{QueryOperation::ExplainIncident, "deep_enrichment", Lane::Deep};
+    }
+    if (raw == "order" || raw == "order_case" || raw == "order_case_enrichment" || raw == "enrich_order_case") {
+        return RequestKindSelection{QueryOperation::EnrichOrderCase, "order_case_enrichment", Lane::Fast};
+    }
+    return std::nullopt;
+}
+
 std::string normalizeSymbolToken(std::string value) {
     value = trimAscii(std::move(value));
     for (char& ch : value) {
@@ -249,12 +276,14 @@ void printUsage(const char* argv0) {
     std::cout
         << "Usage:\n"
         << "  " << argv0 << " [--symbol SYMBOL] [--facets options_flow,alerts,stock_state,news,gex]\n"
+        << "               [--request-kind refresh|fast|deep|order]\n"
         << "               [--sample-ms N] [--max-frames N]\n"
         << "               [--second-pass-sample-ms N] [--second-pass-total-ms N]\n"
         << "               [--second-pass-limit N] [--disable-websocket] [--include-live-tail]\n\n"
         << "Notes:\n"
         << "  - Calls the real uw_context_service merged provider path with synthetic local evidence.\n"
-        << "  - Forces refresh semantics so MCP, REST backfill, and websocket capture are all exercised.\n"
+        << "  - `refresh` exercises the UW-only external-context refresh path.\n"
+        << "  - `fast`, `deep`, and `order` also run the Gemini interpretation step when credentials exist.\n"
         << "  - Loads credentials from LONG_CREDENTIAL_FILE or " << kSourceDir << "/.env.local.\n"
         << "  - Unsets LONG_DISABLE_EXTERNAL_CONTEXT for the process and enables the websocket lane unless disabled.\n";
 }
@@ -264,6 +293,7 @@ void printUsage(const char* argv0) {
 int main(int argc, char** argv) {
     std::string symbol = "SPY";
     std::vector<std::string> facets = {"options_flow", "alerts", "stock_state", "news", "gex"};
+    RequestKindSelection requestKindSelection;
     bool enableWebsocket = true;
     bool includeLiveTail = false;
     std::optional<std::string> sampleMs;
@@ -295,6 +325,16 @@ int main(int argc, char** argv) {
             if (!parsed.empty()) {
                 facets = std::move(parsed);
             }
+            continue;
+        }
+        if (arg == "--request-kind" && i + 1 < argc) {
+            const std::optional<RequestKindSelection> parsed = normalizeRequestKind(argv[++i]);
+            if (!parsed.has_value()) {
+                std::cerr << "Unsupported request kind.\n";
+                printUsage(argv[0]);
+                return 2;
+            }
+            requestKindSelection = *parsed;
             continue;
         }
         if (arg == "--sample-ms" && i + 1 < argc) {
@@ -357,14 +397,14 @@ int main(int argc, char** argv) {
 
     const fs::path dataDir = makeDataDir();
 
-    QueryRequest request = tape_engine::makeQueryRequest(QueryOperation::RefreshExternalContext, "uw-context-smoke");
+    QueryRequest request = tape_engine::makeQueryRequest(requestKindSelection.operation, "uw-context-smoke");
     request.includeLiveTail = includeLiveTail;
     QueryResponse localEvidence = makeSyntheticLocalEvidence(request.requestId, symbol, includeLiveTail);
 
     BuildRequest buildRequest;
-    buildRequest.requestKind = "refresh_external_context";
-    buildRequest.lane = Lane::Fast;
-    buildRequest.forceRefresh = true;
+    buildRequest.requestKind = requestKindSelection.requestKind;
+    buildRequest.lane = requestKindSelection.lane;
+    buildRequest.forceRefresh = buildRequest.requestKind == "refresh_external_context";
     buildRequest.dataDir = dataDir;
     buildRequest.revisionId = 1ULL;
     buildRequest.includeLiveTail = includeLiveTail;

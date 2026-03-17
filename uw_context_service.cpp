@@ -423,7 +423,7 @@ json buildInterpretation(const BuildRequest& request,
         {"status", hasExternalContext ? "ready_for_inference" : "unavailable"},
         {"lane", deep ? "deep" : "fast"},
         {"task", interpretationTask(request)},
-        {"model", hasExternalContext ? json(deep ? "gemini-2.5-flash" : "gemini-3.1-flash-lite") : json(nullptr)},
+        {"model", hasExternalContext ? json("gemini-3.1-flash-lite-preview") : json(nullptr)},
         {"finish_reason", hasExternalContext ? "pending_execution" : "not_requested"},
         {"content", nullptr},
         {"packet_artifact", packetArtifact}
