@@ -2658,13 +2658,13 @@ void testTapeMcpPhase5WebsocketJoinAckOnlyDiagnostics() {
     expect(logicalIncidentId > 0, "phase5 websocket join-ack setup should expose a logical incident id");
 
     tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{socketPath.string()});
-    const json enrichIncidentEnvelope = envelopeFromToolResult(
-        adapter.callTool("tapescript_enrich_incident", json{{"logical_incident_id", logicalIncidentId}}));
-    expect(enrichIncidentEnvelope.value("ok", false),
-           "phase5 websocket join-ack enrich-incident should return ok=true\nactual:\n" +
-               enrichIncidentEnvelope.dump(2));
+    const json refreshEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_refresh_external_context", json{{"logical_incident_id", logicalIncidentId}}));
+    expect(refreshEnvelope.value("ok", false),
+           "phase5 websocket join-ack refresh-external-context should return ok=true\nactual:\n" +
+               refreshEnvelope.dump(2));
 
-    const json result = enrichIncidentEnvelope.value("result", json::object());
+    const json result = refreshEnvelope.value("result", json::object());
     const json providerSteps = result.value("provider_metadata", json::object()).value("provider_steps", json::array());
     auto stringField = [](const json& object, const char* key) {
         const auto it = object.find(key);
@@ -2692,11 +2692,82 @@ void testTapeMcpPhase5WebsocketJoinAckOnlyDiagnostics() {
         break;
     }
     expect(sawJoinAckOnlyStep,
-           "phase5 websocket join-ack enrich-incident should record join_ack_only diagnostics\nactual:\n" +
-               enrichIncidentEnvelope.dump(2));
+           "phase5 websocket join-ack refresh-external-context should record join_ack_only diagnostics\nactual:\n" +
+               refreshEnvelope.dump(2));
 
     expect(stringField(result.value("degradation", json::object()), "code") == "external_context_unavailable",
-           "phase5 websocket join-ack enrich-incident should still degrade as external_context_unavailable");
+           "phase5 websocket join-ack refresh-external-context should still degrade as external_context_unavailable");
+
+    server->stop();
+}
+
+void testTapeMcpPhase5WebsocketAlreadyInRoomDiagnostics() {
+    configurePhase7DataDir("tape-mcp-phase5-ws-already-in-room-appdata");
+    ScopedEnvVar externalContextDisabled("LONG_DISABLE_EXTERNAL_CONTEXT", std::nullopt);
+    ScopedEnvVar websocketEnabled("LONG_ENABLE_UW_WEBSOCKET_CONTEXT", std::string("1"));
+    ScopedEnvVar websocketFixture("LONG_UW_WS_FIXTURE_FILE",
+                                  fixturePath("uw_ws_fixture_already_in_room.jsonl").string());
+    ScopedEnvVar websocketSampleMs("LONG_UW_WS_SAMPLE_MS", std::string("250"));
+    ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
+    ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
+    ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
+    ScopedEnvVar geminiApiKey("GEMINI_API_KEY", std::nullopt);
+
+    const fs::path rootDir = testDataDir() / "tape-mcp-phase5-ws-already-in-room-engine";
+    const fs::path socketPath = testDataDir() / "tape-mcp-phase5-ws-already-in-room-engine.sock";
+    auto server = startPhase5Engine(rootDir, socketPath);
+    seedPhase5Engine(socketPath);
+
+    waitUntil([&]() {
+        const auto snapshot = server->snapshot();
+        return snapshot.segments.size() >= 2 && snapshot.latestFrozenRevisionId >= 2;
+    }, "phase5 websocket already-in-room setup should freeze fixture batches");
+
+    const std::uint64_t logicalIncidentId = queryFirstLogicalIncidentId(socketPath);
+    expect(logicalIncidentId > 0, "phase5 websocket already-in-room setup should expose a logical incident id");
+
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{socketPath.string()});
+    const json refreshEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_refresh_external_context", json{{"logical_incident_id", logicalIncidentId}}));
+    expect(refreshEnvelope.value("ok", false),
+           "phase5 websocket already-in-room refresh-external-context should return ok=true\nactual:\n" +
+               refreshEnvelope.dump(2));
+
+    const json result = refreshEnvelope.value("result", json::object());
+    const json providerSteps = result.value("provider_metadata", json::object()).value("provider_steps", json::array());
+    auto stringField = [](const json& object, const char* key) {
+        const auto it = object.find(key);
+        if (it != object.end() && it->is_string()) {
+            return it->get<std::string>();
+        }
+        return std::string();
+    };
+
+    bool sawAlreadyInRoomStep = false;
+    for (const auto& step : providerSteps) {
+        if (stringField(step, "provider") != "uw_ws") {
+            continue;
+        }
+        const json metadata = step.value("metadata", json::object());
+        const json previews = metadata.value("frame_previews", json::array());
+        sawAlreadyInRoomStep =
+            stringField(step, "status") == "unavailable" &&
+            stringField(step, "reason") == "already_in_room_only" &&
+            stringField(metadata, "source") == "fixture" &&
+            metadata.value("duplicate_join_frame_count", 0ULL) >= 2 &&
+            metadata.value("error_frame_count", 0ULL) >= 2 &&
+            metadata.value("unparsed_frame_count", 0ULL) == 0ULL &&
+            previews.is_array() && !previews.empty() &&
+            previews.front().value("event_kind", std::string()) == "duplicate_join" &&
+            previews.front().value("error_message", std::string()) == "Already in room";
+        break;
+    }
+    expect(sawAlreadyInRoomStep,
+           "phase5 websocket already-in-room refresh-external-context should record already_in_room_only diagnostics\nactual:\n" +
+               refreshEnvelope.dump(2));
+
+    expect(stringField(result.value("degradation", json::object()), "code") == "external_context_unavailable",
+           "phase5 websocket already-in-room refresh-external-context should still degrade as external_context_unavailable");
 
     server->stop();
 }
@@ -4727,6 +4798,7 @@ int main() {
         testTapeMcpPhase5Contracts();
         testTapeMcpPhase5WebsocketFixtureEnrichment();
         testTapeMcpPhase5WebsocketJoinAckOnlyDiagnostics();
+        testTapeMcpPhase5WebsocketAlreadyInRoomDiagnostics();
         testTapeMcpPhase6BundleTools();
         testTapeMcpPhase7Contracts();
         testTapeMcpStdioHarness();

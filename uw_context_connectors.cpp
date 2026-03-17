@@ -28,6 +28,7 @@ constexpr long kUwWsConnectTimeoutMs = 5000L;
 constexpr long kUwWsPollSliceMs = 100L;
 constexpr long kUwWsReconnectDelayMs = 250L;
 constexpr long kUwWsDefaultSampleMs = 1500L;
+constexpr long kUwWsMaxSampleMs = 60000L;
 constexpr long kUwWsDefaultMaxFrames = 8L;
 constexpr std::size_t kUwWsPreviewFrameLimit = 8U;
 
@@ -257,6 +258,9 @@ std::optional<std::string> websocketChannelForFacet(const std::string& facet, co
     if (facet == "options_flow") {
         return "option_trades:" + symbol;
     }
+    if (facet == "alerts") {
+        return "flow-alerts";
+    }
     if (facet == "gex") {
         return "gex:" + symbol;
     }
@@ -330,6 +334,9 @@ std::string kindForChannelFamily(const std::string& family) {
     if (family == "option_trades") {
         return "options_flow";
     }
+    if (family == "flow-alerts") {
+        return "alerts";
+    }
     if (family == "price") {
         return "stock_state";
     }
@@ -338,22 +345,44 @@ std::string kindForChannelFamily(const std::string& family) {
 
 struct WsEnvelope {
     bool parsed = false;
+    bool channelBound = false;
     std::string channel;
     json payload = json(nullptr);
 };
 
 WsEnvelope parseWsEnvelope(const std::string& frame) {
     const json parsed = json::parse(frame, nullptr, false);
-    if (!parsed.is_array() || parsed.size() < 2 || !parsed.at(0).is_string()) {
-        return {};
+    if (parsed.is_array() && parsed.size() >= 2 && parsed.at(0).is_string()) {
+        return {true, true, parsed.at(0).get<std::string>(), parsed.at(1)};
     }
-    return {true, parsed.at(0).get<std::string>(), parsed.at(1)};
+    if (parsed.is_object()) {
+        return {true, false, {}, parsed};
+    }
+    return {};
 }
 
 bool isJoinAck(const WsEnvelope& envelope) {
-    return envelope.parsed && envelope.payload.is_object() &&
+    return envelope.parsed && envelope.channelBound && envelope.payload.is_object() &&
            envelope.payload.value("status", std::string()) == "ok" &&
            envelope.payload.contains("response");
+}
+
+bool isErrorFrame(const WsEnvelope& envelope) {
+    return envelope.parsed && envelope.payload.is_object() &&
+           envelope.payload.contains("error") &&
+           envelope.payload.find("error")->is_string() &&
+           !envelope.payload.find("error")->get_ref<const std::string&>().empty();
+}
+
+std::string errorMessage(const WsEnvelope& envelope) {
+    if (!isErrorFrame(envelope)) {
+        return {};
+    }
+    return envelope.payload.value("error", std::string());
+}
+
+bool isAlreadyInRoomFrame(const WsEnvelope& envelope) {
+    return errorMessage(envelope) == "Already in room";
 }
 
 std::string websocketEventKind(const WsEnvelope& envelope) {
@@ -362,6 +391,12 @@ std::string websocketEventKind(const WsEnvelope& envelope) {
     }
     if (isJoinAck(envelope)) {
         return "join_ack";
+    }
+    if (isAlreadyInRoomFrame(envelope)) {
+        return "duplicate_join";
+    }
+    if (isErrorFrame(envelope)) {
+        return "error";
     }
     return "data";
 }
@@ -400,8 +435,9 @@ void appendFramePreview(json& metadata,
     }
     previews.push_back({
         {"event_kind", websocketEventKind(envelope)},
-        {"channel", envelope.parsed ? json(envelope.channel) : json(nullptr)},
-        {"channel_family", envelope.parsed ? json(channelFamily(envelope.channel)) : json(nullptr)},
+        {"channel", envelope.channelBound ? json(envelope.channel) : json(nullptr)},
+        {"channel_family", envelope.channelBound ? json(channelFamily(envelope.channel)) : json(nullptr)},
+        {"error_message", errorMessage(envelope).empty() ? json(nullptr) : json(errorMessage(envelope))},
         {"frame_flags", websocketFrameFlags(flags)},
         {"raw_excerpt", payloadPreview(frame, 256U)}
     });
@@ -777,6 +813,8 @@ ProviderStep UWWsConnector::fetch(const FetchPlan& plan) const {
         step.metadata["join_ack_frame_count"] = 0;
         step.metadata["unparsed_frame_count"] = 0;
         step.metadata["frame_previews"] = json::array();
+        step.metadata["error_frame_count"] = 0;
+        step.metadata["duplicate_join_frame_count"] = 0;
         for (const std::string& frame : frames) {
             const WsEnvelope envelope = parseWsEnvelope(frame);
             appendFramePreview(step.metadata, frame, CURLWS_TEXT, envelope);
@@ -788,6 +826,16 @@ ProviderStep UWWsConnector::fetch(const FetchPlan& plan) const {
                 step.metadata["join_ack_frame_count"] = step.metadata.value("join_ack_frame_count", 0ULL) + 1ULL;
                 continue;
             }
+            if (isAlreadyInRoomFrame(envelope)) {
+                step.metadata["error_frame_count"] = step.metadata.value("error_frame_count", 0ULL) + 1ULL;
+                step.metadata["duplicate_join_frame_count"] =
+                    step.metadata.value("duplicate_join_frame_count", 0ULL) + 1ULL;
+                continue;
+            }
+            if (isErrorFrame(envelope)) {
+                step.metadata["error_frame_count"] = step.metadata.value("error_frame_count", 0ULL) + 1ULL;
+                continue;
+            }
             step.rawRecords.push_back(makeWebsocketRawRecord(plan, envelope, frame, nowUnixSeconds() * 1000000000ULL));
             step.metadata["normalized_event_count"] = step.metadata.value("normalized_event_count", 0ULL) + 1ULL;
             step.metadata["data_frame_count"] = step.metadata.value("data_frame_count", 0ULL) + 1ULL;
@@ -795,6 +843,10 @@ ProviderStep UWWsConnector::fetch(const FetchPlan& plan) const {
         step.status = !step.rawRecords.empty() ? "ok" : "unavailable";
         if (!step.rawRecords.empty()) {
             step.reason.clear();
+        } else if (step.metadata.value("duplicate_join_frame_count", 0ULL) > 0ULL) {
+            step.reason = "already_in_room_only";
+        } else if (step.metadata.value("error_frame_count", 0ULL) > 0ULL) {
+            step.reason = "error_frames_only";
         } else if (step.metadata.value("join_ack_frame_count", 0ULL) > 0ULL) {
             step.reason = "join_ack_only";
         } else if (step.metadata.value("unparsed_frame_count", 0ULL) > 0ULL) {
@@ -830,7 +882,7 @@ ProviderStep UWWsConnector::fetch(const FetchPlan& plan) const {
         return step;
     }
 
-    const long sampleMs = envLongOrDefault("LONG_UW_WS_SAMPLE_MS", kUwWsDefaultSampleMs, 100L, 15000L);
+    const long sampleMs = envLongOrDefault("LONG_UW_WS_SAMPLE_MS", kUwWsDefaultSampleMs, 100L, kUwWsMaxSampleMs);
     const long maxFrames = envLongOrDefault("LONG_UW_WS_MAX_FRAMES", kUwWsDefaultMaxFrames, 1L, 64L);
     step.requestPayload["sample_ms"] = sampleMs;
     step.requestPayload["max_frames"] = maxFrames;
@@ -867,6 +919,8 @@ ProviderStep UWWsConnector::fetch(const FetchPlan& plan) const {
     step.metadata["join_ack_frame_count"] = 0;
     step.metadata["unparsed_frame_count"] = 0;
     step.metadata["close_frame_count"] = 0;
+    step.metadata["error_frame_count"] = 0;
+    step.metadata["duplicate_join_frame_count"] = 0;
     step.metadata["frame_previews"] = json::array();
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(sampleMs);
@@ -918,6 +972,16 @@ ProviderStep UWWsConnector::fetch(const FetchPlan& plan) const {
                 }
                 if (isJoinAck(envelope)) {
                     step.metadata["join_ack_frame_count"] = step.metadata.value("join_ack_frame_count", 0ULL) + 1ULL;
+                    continue;
+                }
+                if (isAlreadyInRoomFrame(envelope)) {
+                    step.metadata["error_frame_count"] = step.metadata.value("error_frame_count", 0ULL) + 1ULL;
+                    step.metadata["duplicate_join_frame_count"] =
+                        step.metadata.value("duplicate_join_frame_count", 0ULL) + 1ULL;
+                    continue;
+                }
+                if (isErrorFrame(envelope)) {
+                    step.metadata["error_frame_count"] = step.metadata.value("error_frame_count", 0ULL) + 1ULL;
                     continue;
                 }
                 step.rawRecords.push_back(makeWebsocketRawRecord(plan, envelope, frame, nowUnixSeconds() * 1000000000ULL));
@@ -973,6 +1037,10 @@ ProviderStep UWWsConnector::fetch(const FetchPlan& plan) const {
     if (!step.rawRecords.empty()) {
         step.status = "ok";
         step.reason.clear();
+    } else if (step.reason.empty() && step.metadata.value("duplicate_join_frame_count", 0ULL) > 0ULL) {
+        step.reason = "already_in_room_only";
+    } else if (step.reason.empty() && step.metadata.value("error_frame_count", 0ULL) > 0ULL) {
+        step.reason = "error_frames_only";
     } else if (step.reason.empty() && step.metadata.value("join_ack_frame_count", 0ULL) > 0ULL) {
         step.reason = "join_ack_only";
     } else if (step.reason.empty() && step.metadata.value("unparsed_frame_count", 0ULL) > 0ULL) {

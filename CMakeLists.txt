@@ -224,6 +224,12 @@ add_executable(tape_engine_ctl
     tape_engine_client.cpp
     tape_engine_protocol.cpp
 )
+add_executable(uw_ws_smoke
+    uw_ws_smoke_main.cpp
+    uw_context_connectors.cpp
+    uw_http.cpp
+    uw_runtime.cpp
+)
 add_executable(TapeScope MACOSX_BUNDLE ${TAPESCOPE_SOURCES})
 add_executable(tape_mcp ${TAPE_MCP_SOURCES})
 
@@ -262,6 +268,11 @@ target_include_directories(tape_mcp PRIVATE
     "${NLOHMANN_JSON_DIR}/single_include"
 )
 
+target_include_directories(uw_ws_smoke PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
 add_dependencies(tws_gui generate_runtime_registry)
 add_dependencies(tape_engine generate_runtime_registry)
 add_dependencies(tape_engine_ctl generate_runtime_registry)
@@ -280,6 +291,14 @@ target_link_libraries(tape_engine PRIVATE
 
 target_link_libraries(tape_engine_ctl PRIVATE
     Threads::Threads
+)
+
+target_compile_definitions(uw_ws_smoke PRIVATE
+    TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(uw_ws_smoke PRIVATE
+    Threads::Threads
+    tws_gui_curl
 )
 
 target_link_libraries(TapeScope PRIVATE
