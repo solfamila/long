@@ -657,6 +657,7 @@ void initializeWsCaptureMetadata(json& metadata) {
     metadata["duplicate_join_frame_count"] = 0;
     metadata["filtered_mismatch_frame_count"] = 0;
     metadata["ambient_global_frame_count"] = 0;
+    metadata["ambient_global_policy"] = "diagnostic_only";
     metadata["frame_previews"] = json::array();
     metadata["channel_stats"] = json::object();
 }
@@ -809,6 +810,9 @@ void processWsEnvelope(const FetchPlan& plan,
         if (envelope.channelBound) {
             noteChannelMetric(metadata, envelope.channel, metricKey);
         }
+        // Symbol-less global frames remain diagnostic-only by default. They tell us the
+        // live feed is active, but they are not promoted into symbol-scoped context until
+        // we introduce an explicit opt-in policy for that behavior.
         return;
     }
     rawRecords.push_back(makeWebsocketRawRecord(plan, envelope, frame, receivedNs));

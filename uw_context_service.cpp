@@ -308,6 +308,9 @@ json liveCaptureSummary(const json& providerSteps, bool requested) {
         summary["duplicate_join_frame_count"] = duplicateJoinFrameCount;
         summary["filtered_mismatch_frame_count"] = metadata.value("filtered_mismatch_frame_count", 0ULL);
         summary["ambient_global_frame_count"] = ambientGlobalFrameCount;
+        summary["ambient_global_policy"] =
+            metadata.value("ambient_global_policy", std::string("diagnostic_only"));
+        summary["ambient_global_context_used"] = false;
         summary["unparsed_frame_count"] = unparsedFrameCount;
         summary["close_frame_count"] = metadata.value("close_frame_count", 0ULL);
         summary["frame_preview_count"] = previews.is_array() ? static_cast<std::uint64_t>(previews.size()) : 0ULL;
@@ -372,7 +375,7 @@ json liveCaptureSummary(const json& providerSteps, bool requested) {
         } else if (ambientGlobalFrameCount > 0ULL) {
             summary["summary_text"] =
                 "UW websocket saw " + std::to_string(ambientGlobalFrameCount) +
-                " live global frame(s) without symbol binding, so they were kept out of symbol-scoped context.";
+                " live global frame(s) without symbol binding. They remain diagnostic-only and were kept out of symbol-scoped context.";
         } else if (reason == "join_ack_only") {
             summary["summary_text"] =
                 "UW websocket joined successfully but saw no live data frames in the capture window.";

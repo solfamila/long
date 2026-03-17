@@ -370,6 +370,55 @@ std::string DescribeEnrichmentPayload(const std::string& heading,
     const json externalContext = payload.externalContext.is_object() ? payload.externalContext : json::object();
     const json externalItems = externalContext.value("items", json::array());
     const json externalSummaries = externalContext.value("summaries", json::array());
+    const json degradation = payload.degradation.is_object() ? payload.degradation : json::object();
+    const json liveCapture = payload.liveCaptureSummary.is_object()
+        ? payload.liveCaptureSummary
+        : payload.providerMetadata.value("live_capture_summary", json::object());
+    const std::string providerPath =
+        FirstPresentString(payload.providerMetadata, {"provider_path_used", "provider_path"});
+    const std::string degradationCode = degradation.value("code", std::string("--"));
+    const bool externalContextAvailable =
+        (externalItems.is_array() && !externalItems.empty()) ||
+        (externalSummaries.is_array() && !externalSummaries.empty());
+    std::string externalContextStatus = externalContextAvailable ? "available" : "unavailable";
+    if (!externalContextAvailable && degradationCode != "external_context_unavailable" && degradationCode != "--") {
+        externalContextStatus = "partial";
+    }
+    std::string liveCaptureStatus = "not_requested";
+    if (liveCapture.is_object() && !liveCapture.empty()) {
+        if (!liveCapture.value("requested", false)) {
+            liveCaptureStatus = "not_requested";
+        } else if (liveCapture.value("has_live_data", false)) {
+            liveCaptureStatus = "live_data";
+        } else if (liveCapture.value("outcome", std::string()) == "ambient_global_only") {
+            liveCaptureStatus = "ambient_global_only (diagnostic-only)";
+        } else {
+            liveCaptureStatus = liveCapture.value("outcome", std::string("--"));
+        }
+    }
+    std::string interpretationStatus = payload.interpretation.value("status", std::string("--"));
+    const std::string interpretationModel = payload.interpretation.value("model", std::string());
+
+    out << "operator_summary:\n";
+    out << "  provider_path: "
+        << (!providerPath.empty() ? providerPath : externalContext.value("provider", std::string("--"))) << "\n";
+    out << "  external_context_status: " << externalContextStatus;
+    if (externalContextAvailable) {
+        out << " (" << (externalItems.is_array() ? externalItems.size() : 0) << " items, "
+            << (externalSummaries.is_array() ? externalSummaries.size() : 0) << " summaries)";
+    }
+    out << "\n";
+    out << "  live_capture_status: " << liveCaptureStatus << "\n";
+    if (liveCapture.is_object() && !liveCapture.empty() && liveCapture.contains("summary_text")) {
+        out << "  live_capture_detail: " << liveCapture.value("summary_text", std::string("--")) << "\n";
+    }
+    out << "  interpretation_status: " << interpretationStatus;
+    if (!interpretationModel.empty()) {
+        out << " via " << interpretationModel;
+    }
+    out << "\n";
+    out << "  degradation_code: " << degradationCode << "\n\n";
+
     out << "external_context:\n";
     out << "  provider: " << externalContext.value("provider", std::string("--")) << "\n";
     out << "  fetched_at: " << externalContext.value("fetched_at", std::string("--")) << "\n";
@@ -381,9 +430,6 @@ std::string DescribeEnrichmentPayload(const std::string& heading,
     }
     out << '\n';
 
-    const json liveCapture = payload.liveCaptureSummary.is_object()
-        ? payload.liveCaptureSummary
-        : payload.providerMetadata.value("live_capture_summary", json::object());
     if (liveCapture.is_object() && !liveCapture.empty()) {
         out << "live_capture:\n";
         out << "  requested: " << (liveCapture.value("requested", false) ? "yes" : "no") << "\n";
@@ -391,9 +437,24 @@ std::string DescribeEnrichmentPayload(const std::string& heading,
         out << "  outcome: " << liveCapture.value("outcome", std::string("--")) << "\n";
         out << "  source: " << liveCapture.value("source", std::string("--")) << "\n";
         out << "  channels: " << liveCapture.value("channel_count", 0ULL) << "\n";
+        out << "  candidate_data_frames: " << liveCapture.value("candidate_data_frame_count", 0ULL) << "\n";
         out << "  data_frames: " << liveCapture.value("data_frame_count", 0ULL) << "\n";
         out << "  join_acks: " << liveCapture.value("join_ack_frame_count", 0ULL) << "\n";
         out << "  errors: " << liveCapture.value("error_frame_count", 0ULL) << "\n";
+        if (liveCapture.contains("ambient_global_policy")) {
+            out << "  ambient_policy: " << liveCapture.value("ambient_global_policy", std::string("--")) << "\n";
+        }
+        out << "  ambient_context_used: "
+            << (liveCapture.value("ambient_global_context_used", false) ? "yes" : "no") << "\n";
+        if (liveCapture.value("ambient_global_frame_count", 0ULL) > 0ULL) {
+            out << "  ambient_global_frames: " << liveCapture.value("ambient_global_frame_count", 0ULL) << "\n";
+            out << "  policy_note: symbol-less global frames remain diagnostic-only and were not promoted into symbol-scoped context\n";
+        }
+        if (liveCapture.value("targeted_retry_used", false)) {
+            out << "  targeted_retry: "
+                << (liveCapture.value("rescued_by_targeted_pass", false) ? "used_and_rescued" : "used_no_rescue")
+                << "\n";
+        }
         if (liveCapture.contains("summary_text")) {
             out << "  summary: " << liveCapture.value("summary_text", std::string("--")) << "\n";
         }
@@ -406,6 +467,9 @@ std::string DescribeEnrichmentPayload(const std::string& heading,
                 }
                 out << "    - " << channel.value("channel", std::string("--"))
                     << " => " << channel.value("outcome", std::string("--"));
+                if (channel.value("outcome", std::string()) == "ambient_global_only") {
+                    out << " (diagnostic-only)";
+                }
                 if (channel.value("data_frame_count", 0ULL) > 0ULL) {
                     out << " data=" << channel.value("data_frame_count", 0ULL);
                 }

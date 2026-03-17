@@ -3222,10 +3222,13 @@ void testTapeMcpPhase5WebsocketAmbientGlobalOnly() {
                refreshEnvelope.dump(2));
     expect(liveCaptureSummary.is_object() &&
                stringField(liveCaptureSummary, "outcome") == "ambient_global_only" &&
+               stringField(liveCaptureSummary, "ambient_global_policy") == "diagnostic_only" &&
+               !liveCaptureSummary.value("ambient_global_context_used", true) &&
                liveCaptureSummary.value("targeted_retry_used", false) &&
                !liveCaptureSummary.value("rescued_by_targeted_pass", true) &&
                liveCaptureSummary.value("ambient_global_frame_count", 0ULL) == 2ULL &&
-               liveCaptureSummary.value("candidate_data_frame_count", 0ULL) == 2ULL,
+               liveCaptureSummary.value("candidate_data_frame_count", 0ULL) == 2ULL &&
+               stringField(liveCaptureSummary, "summary_text").find("diagnostic-only") != std::string::npos,
            "phase5 websocket ambient-global refresh-external-context should expose ambient global live_capture_summary\nactual:\n" +
                refreshEnvelope.dump(2));
 
