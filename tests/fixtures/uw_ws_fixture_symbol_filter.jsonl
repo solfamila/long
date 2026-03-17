@@ -1,0 +1,4 @@
+{"channel":"flow-alerts","payload":{"ticker":"MSFT","headline":"MSFT flow alert should be filtered","timestamp":"2026-03-15T09:41:00Z"}}
+{"channel":"news","payload":{"ticker":"AAPL","headline":"AAPL news should be filtered","timestamp":"2026-03-15T09:41:01Z"}}
+{"channel":"flow-alerts","payload":{"ticker":"INTC","headline":"INTC flow alert survives","timestamp":"2026-03-15T09:41:02Z"}}
+{"channel":"news","payload":{"ticker":"INTC","headline":"INTC news survives","timestamp":"2026-03-15T09:41:03Z"}}

@@ -630,6 +630,9 @@ QueryResult<EnrichmentPayload> packEnrichmentPayload(const QueryResult<tape_engi
     payload.externalContext = typedResult.value("external_context", json::object());
     payload.interpretation = typedResult.value("interpretation", json::object());
     payload.providerMetadata = typedResult.value("provider_metadata", json::object());
+    payload.liveCaptureSummary = typedResult.value(
+        "live_capture_summary",
+        payload.providerMetadata.value("live_capture_summary", json::object()));
     payload.degradation = typedResult.value("degradation", json::object());
     payload.cache = typedResult.value("cache", json::object());
     payload.requestKind = typedResult.value("request_kind", std::string());

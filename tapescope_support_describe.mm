@@ -381,6 +381,49 @@ std::string DescribeEnrichmentPayload(const std::string& heading,
     }
     out << '\n';
 
+    const json liveCapture = payload.liveCaptureSummary.is_object()
+        ? payload.liveCaptureSummary
+        : payload.providerMetadata.value("live_capture_summary", json::object());
+    if (liveCapture.is_object() && !liveCapture.empty()) {
+        out << "live_capture:\n";
+        out << "  requested: " << (liveCapture.value("requested", false) ? "yes" : "no") << "\n";
+        out << "  status: " << liveCapture.value("status", std::string("--")) << "\n";
+        out << "  outcome: " << liveCapture.value("outcome", std::string("--")) << "\n";
+        out << "  source: " << liveCapture.value("source", std::string("--")) << "\n";
+        out << "  channels: " << liveCapture.value("channel_count", 0ULL) << "\n";
+        out << "  data_frames: " << liveCapture.value("data_frame_count", 0ULL) << "\n";
+        out << "  join_acks: " << liveCapture.value("join_ack_frame_count", 0ULL) << "\n";
+        out << "  errors: " << liveCapture.value("error_frame_count", 0ULL) << "\n";
+        if (liveCapture.contains("summary_text")) {
+            out << "  summary: " << liveCapture.value("summary_text", std::string("--")) << "\n";
+        }
+        const json channelOutcomes = liveCapture.value("channel_outcomes", json::array());
+        if (channelOutcomes.is_array() && !channelOutcomes.empty()) {
+            out << "  channel_outcomes:\n";
+            for (const auto& channel : channelOutcomes) {
+                if (!channel.is_object()) {
+                    continue;
+                }
+                out << "    - " << channel.value("channel", std::string("--"))
+                    << " => " << channel.value("outcome", std::string("--"));
+                if (channel.value("data_frame_count", 0ULL) > 0ULL) {
+                    out << " data=" << channel.value("data_frame_count", 0ULL);
+                }
+                if (channel.value("join_ack_frame_count", 0ULL) > 0ULL) {
+                    out << " join_ack=" << channel.value("join_ack_frame_count", 0ULL);
+                }
+                if (channel.value("filtered_mismatch_frame_count", 0ULL) > 0ULL) {
+                    out << " filtered=" << channel.value("filtered_mismatch_frame_count", 0ULL);
+                }
+                if (channel.value("ambient_global_frame_count", 0ULL) > 0ULL) {
+                    out << " ambient=" << channel.value("ambient_global_frame_count", 0ULL);
+                }
+                out << "\n";
+            }
+        }
+        out << '\n';
+    }
+
     out << "interpretation:\n";
     out << "  status: " << payload.interpretation.value("status", std::string("--")) << "\n";
     out << "  lane: " << payload.interpretation.value("lane", std::string("--")) << "\n";

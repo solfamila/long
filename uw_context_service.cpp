@@ -33,6 +33,17 @@ std::string firstStringValue(const json& payload,
     return {};
 }
 
+std::string stringValueOrEmpty(const json& payload, const char* key) {
+    if (!payload.is_object()) {
+        return {};
+    }
+    const auto it = payload.find(key);
+    if (it == payload.end() || !it->is_string()) {
+        return {};
+    }
+    return it->get<std::string>();
+}
+
 json localEvidenceResultOrFallback(const tape_engine::QueryResponse& localEvidence) {
     if (localEvidence.result.is_object() &&
         localEvidence.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema) {
@@ -134,6 +145,9 @@ std::vector<std::string> defaultFacetsFor(const BuildRequest& request) {
     if (request.requestKind == "deep_enrichment") {
         return {"options_flow", "alerts", "gex", "news", "stock_state"};
     }
+    if (request.requestKind == "refresh_external_context") {
+        return {"options_flow", "alerts", "gex", "news", "stock_state"};
+    }
     if (request.requestKind == "order_case_enrichment") {
         return {"options_flow", "news", "stock_state"};
     }
@@ -210,6 +224,182 @@ json providerStepToJson(const ProviderStep& step) {
         {"request_payload", step.requestPayload},
         {"metadata", step.metadata}
     };
+}
+
+json liveCaptureSummary(const json& providerSteps, bool requested) {
+    json summary = {
+        {"requested", requested},
+        {"provider", "uw_ws"},
+        {"status", requested ? json("not_attempted") : json("not_requested")},
+        {"outcome", requested ? json("not_attempted") : json("not_requested")},
+        {"reason", requested ? json(nullptr) : json("secondary_lane_not_requested")},
+        {"source", nullptr},
+        {"symbol", nullptr},
+        {"subscription_channels", json::array()},
+        {"channel_count", 0ULL},
+        {"sample_ms", nullptr},
+        {"max_frames", nullptr},
+        {"has_live_data", false},
+        {"raw_frame_count", 0ULL},
+        {"candidate_data_frame_count", 0ULL},
+        {"data_frame_count", 0ULL},
+        {"normalized_event_count", 0ULL},
+        {"join_ack_frame_count", 0ULL},
+        {"error_frame_count", 0ULL},
+        {"duplicate_join_frame_count", 0ULL},
+        {"filtered_mismatch_frame_count", 0ULL},
+        {"ambient_global_frame_count", 0ULL},
+        {"unparsed_frame_count", 0ULL},
+        {"close_frame_count", 0ULL},
+        {"frame_preview_count", 0ULL},
+        {"first_frame_preview", nullptr},
+        {"channel_outcomes", json::array()},
+        {"pass_count", 0ULL},
+        {"targeted_retry_used", false},
+        {"rescued_by_targeted_pass", false},
+        {"last_error", nullptr},
+        {"summary_text", requested
+            ? json("UW websocket capture was requested but not attempted.")
+            : json("UW websocket capture was not requested for this enrichment.")}
+    };
+    if (!providerSteps.is_array()) {
+        return summary;
+    }
+
+    for (const auto& step : providerSteps) {
+        if (!step.is_object() || step.value("provider", std::string()) != "uw_ws") {
+            continue;
+        }
+        const json requestPayload = step.value("request_payload", json::object());
+        const json metadata = step.value("metadata", json::object());
+        const json channels = requestPayload.value("subscription_channels", json::array());
+        const json previews = metadata.value("frame_previews", json::array());
+        const json channelStats = metadata.value("channel_stats", json::object());
+        const json capturePasses = metadata.value("capture_passes", json::array());
+        const std::string status = step.value("status", std::string("unavailable"));
+        const std::string reason = stringValueOrEmpty(step, "reason");
+        const std::uint64_t rawFrameCount = metadata.value("raw_frame_count", 0ULL);
+        const std::uint64_t candidateDataFrameCount = metadata.value("candidate_data_frame_count", 0ULL);
+        const std::uint64_t dataFrameCount = metadata.value("data_frame_count", 0ULL);
+        const std::uint64_t joinAckFrameCount = metadata.value("join_ack_frame_count", 0ULL);
+        const std::uint64_t duplicateJoinFrameCount = metadata.value("duplicate_join_frame_count", 0ULL);
+        const std::uint64_t errorFrameCount = metadata.value("error_frame_count", 0ULL);
+        const std::uint64_t ambientGlobalFrameCount = metadata.value("ambient_global_frame_count", 0ULL);
+        const std::uint64_t unparsedFrameCount = metadata.value("unparsed_frame_count", 0ULL);
+        const bool hasLiveData = dataFrameCount > 0ULL;
+
+        summary["status"] = status;
+        summary["outcome"] = hasLiveData ? json("live_data")
+                                          : json(reason.empty() ? status : reason);
+        summary["reason"] = reason.empty() ? json(nullptr) : json(reason);
+        summary["source"] = metadata.contains("source") ? metadata.at("source") : json(nullptr);
+        summary["symbol"] = requestPayload.contains("symbol") ? requestPayload.at("symbol") : json(nullptr);
+        summary["subscription_channels"] = channels.is_array() ? channels : json::array();
+        summary["channel_count"] = channels.is_array() ? static_cast<std::uint64_t>(channels.size()) : 0ULL;
+        summary["sample_ms"] = requestPayload.contains("sample_ms") ? requestPayload.at("sample_ms") : json(nullptr);
+        summary["max_frames"] = requestPayload.contains("max_frames") ? requestPayload.at("max_frames") : json(nullptr);
+        summary["has_live_data"] = hasLiveData;
+        summary["raw_frame_count"] = rawFrameCount;
+        summary["candidate_data_frame_count"] = candidateDataFrameCount;
+        summary["data_frame_count"] = dataFrameCount;
+        summary["normalized_event_count"] = metadata.value("normalized_event_count", 0ULL);
+        summary["join_ack_frame_count"] = joinAckFrameCount;
+        summary["error_frame_count"] = errorFrameCount;
+        summary["duplicate_join_frame_count"] = duplicateJoinFrameCount;
+        summary["filtered_mismatch_frame_count"] = metadata.value("filtered_mismatch_frame_count", 0ULL);
+        summary["ambient_global_frame_count"] = ambientGlobalFrameCount;
+        summary["unparsed_frame_count"] = unparsedFrameCount;
+        summary["close_frame_count"] = metadata.value("close_frame_count", 0ULL);
+        summary["frame_preview_count"] = previews.is_array() ? static_cast<std::uint64_t>(previews.size()) : 0ULL;
+        summary["first_frame_preview"] = previews.is_array() && !previews.empty() ? previews.front() : json(nullptr);
+        summary["pass_count"] = capturePasses.is_array() ? static_cast<std::uint64_t>(capturePasses.size()) : 0ULL;
+        summary["targeted_retry_used"] = metadata.value("adaptive_retry_used", false);
+        summary["rescued_by_targeted_pass"] = metadata.value("rescued_by_targeted_pass", false);
+        json channelOutcomes = json::array();
+        if (channels.is_array()) {
+            for (const auto& channelValue : channels) {
+                if (!channelValue.is_string()) {
+                    continue;
+                }
+                const std::string channel = channelValue.get<std::string>();
+                const json stats = channelStats.is_object() && channelStats.contains(channel)
+                    ? channelStats.at(channel)
+                    : json::object();
+                const std::uint64_t channelDataCount = stats.value("data_frame_count", 0ULL);
+                const std::uint64_t candidateChannelDataCount = stats.value("candidate_data_frame_count", 0ULL);
+                const std::uint64_t channelJoinAckCount = stats.value("join_ack_frame_count", 0ULL);
+                const std::uint64_t channelDuplicateJoinCount = stats.value("duplicate_join_frame_count", 0ULL);
+                const std::uint64_t channelErrorCount = stats.value("error_frame_count", 0ULL);
+                const std::uint64_t channelMismatchCount = stats.value("filtered_mismatch_frame_count", 0ULL);
+                const std::uint64_t channelAmbientCount = stats.value("ambient_global_frame_count", 0ULL);
+                std::string channelOutcome = "idle";
+                if (channelDataCount > 0ULL) {
+                    channelOutcome = "live_data";
+                } else if (channelAmbientCount > 0ULL) {
+                    channelOutcome = "ambient_global_only";
+                } else if (channelDuplicateJoinCount > 0ULL) {
+                    channelOutcome = "already_in_room_only";
+                } else if (channelErrorCount > 0ULL) {
+                    channelOutcome = "error_frames_only";
+                } else if (channelJoinAckCount > 0ULL) {
+                    channelOutcome = "join_ack_only";
+                } else if (channelMismatchCount > 0ULL) {
+                    channelOutcome = "filtered_mismatch_only";
+                }
+                channelOutcomes.push_back({
+                    {"channel", channel},
+                    {"channel_family", stats.value("channel_family", channel.substr(0, channel.find(':')))},
+                    {"outcome", channelOutcome},
+                    {"raw_frame_count", stats.value("raw_frame_count", 0ULL)},
+                    {"candidate_data_frame_count", candidateChannelDataCount},
+                    {"data_frame_count", channelDataCount},
+                    {"join_ack_frame_count", channelJoinAckCount},
+                    {"error_frame_count", channelErrorCount},
+                    {"filtered_mismatch_frame_count", channelMismatchCount},
+                    {"ambient_global_frame_count", channelAmbientCount}
+                });
+            }
+        }
+        summary["channel_outcomes"] = std::move(channelOutcomes);
+        summary["last_error"] = metadata.contains("last_error") ? metadata.at("last_error") : json(nullptr);
+
+        if (hasLiveData) {
+            summary["summary_text"] =
+                "UW websocket captured " + std::to_string(dataFrameCount) + " live data frame(s)" +
+                (summary.value("rescued_by_targeted_pass", false)
+                    ? " after a targeted retry."
+                    : ".");
+        } else if (ambientGlobalFrameCount > 0ULL) {
+            summary["summary_text"] =
+                "UW websocket saw " + std::to_string(ambientGlobalFrameCount) +
+                " live global frame(s) without symbol binding, so they were kept out of symbol-scoped context.";
+        } else if (reason == "join_ack_only") {
+            summary["summary_text"] =
+                "UW websocket joined successfully but saw no live data frames in the capture window.";
+        } else if (reason == "already_in_room_only") {
+            summary["summary_text"] =
+                "UW websocket reported duplicate joins only and returned no live data frames.";
+        } else if (reason == "error_frames_only") {
+            summary["summary_text"] =
+                "UW websocket returned only error frames and produced no live data.";
+        } else if (reason == "unparsed_frames_only") {
+            summary["summary_text"] =
+                "UW websocket returned frames that could not be parsed into supported live records.";
+        } else if (reason == "no_live_frames") {
+            summary["summary_text"] =
+                "UW websocket connected but the capture window ended without live data frames.";
+        } else if (reason == "blocked_missing_runtime_capability") {
+            summary["summary_text"] =
+                "UW websocket is blocked because the current libcurl runtime lacks wss support.";
+        } else if (!reason.empty()) {
+            summary["summary_text"] = "UW websocket capture did not yield live data: " + reason + ".";
+        } else {
+            summary["summary_text"] = "UW websocket capture produced no live data summary.";
+        }
+        break;
+    }
+
+    return summary;
 }
 
 std::string interpretationTask(const BuildRequest& request) {
@@ -314,8 +504,12 @@ public:
 
             std::vector<ProviderStep> fetchSteps;
             fetchSteps.push_back(mcpConnector_.fetch(plan));
-            if (fetchSteps.back().status != "ok") {
-                fetchSteps.push_back(restConnector_.fetch(plan));
+            const std::vector<std::string> unresolvedMcpFacets =
+                unresolvedUWMcpFacets(fetchSteps.back(), plan.facets);
+            if (!unresolvedMcpFacets.empty()) {
+                FetchPlan restPlan = plan;
+                restPlan.facets = unresolvedMcpFacets;
+                fetchSteps.push_back(restConnector_.fetch(restPlan));
             }
             if (websocketSecondaryLaneRequested(buildRequest)) {
                 fetchSteps.push_back(wsConnector_.fetch(plan));
@@ -387,12 +581,15 @@ public:
                     : json(nullptr))}
         };
 
+        const json liveCapture = liveCaptureSummary(providerSteps, websocketSecondaryLaneRequested(buildRequest));
+
         const json providerMetadata = {
             {"service", "uw_context_service"},
             {"provider_path_used", providerPathUsed},
             {"fetched_at_utc", fetchedAtUtc},
             {"provider_steps", providerSteps},
-            {"packet_artifact", packetArtifact}
+            {"packet_artifact", packetArtifact},
+            {"live_capture_summary", liveCapture}
         };
 
         tape_engine::QueryResponse response;
@@ -418,6 +615,7 @@ public:
             {"external_context", externalContext},
             {"interpretation", interpretation},
             {"provider_metadata", providerMetadata},
+            {"live_capture_summary", liveCapture},
             {"degradation", degradation},
             {"cache", cacheSummary}
         };

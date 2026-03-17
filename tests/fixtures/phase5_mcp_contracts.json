@@ -2479,6 +2479,7 @@
         "external_context",
         "interpretation",
         "provider_metadata",
+        "live_capture_summary",
         "degradation",
         "cache"
       ]
@@ -2495,6 +2496,7 @@
         "external_context",
         "interpretation",
         "provider_metadata",
+        "live_capture_summary",
         "degradation",
         "cache"
       ]
@@ -2513,6 +2515,7 @@
         "external_context",
         "interpretation",
         "provider_metadata",
+        "live_capture_summary",
         "degradation",
         "cache"
       ]
@@ -3198,6 +3201,7 @@
         "external_context",
         "interpretation",
         "provider_metadata",
+        "live_capture_summary",
         "degradation",
         "cache"
       ]

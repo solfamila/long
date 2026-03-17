@@ -346,6 +346,7 @@ json enrichmentResultSchema() {
             {"external_context", json{{"type", "object"}, {"additionalProperties", true}, {"required", json::array({"provider", "fetched_at", "cache_status", "items", "summaries", "warnings"})}}},
             {"interpretation", json{{"type", "object"}, {"additionalProperties", true}}},
             {"provider_metadata", json{{"type", "object"}, {"additionalProperties", true}}},
+            {"live_capture_summary", json{{"type", "object"}, {"additionalProperties", true}}},
             {"degradation", json{{"type", "object"}, {"additionalProperties", true}}},
             {"cache", json{{"type", "object"}, {"additionalProperties", true}}}
         }},
@@ -358,6 +359,7 @@ json enrichmentResultSchema() {
             "external_context",
             "interpretation",
             "provider_metadata",
+            "live_capture_summary",
             "degradation",
             "cache"
         })},
@@ -6089,6 +6091,7 @@ json enrichmentResultFromPayload(const tape_payloads::EnrichmentPayload& payload
         {"external_context", payload.externalContext.is_object() ? payload.externalContext : json::object()},
         {"interpretation", payload.interpretation.is_object() ? payload.interpretation : json::object()},
         {"provider_metadata", payload.providerMetadata.is_object() ? payload.providerMetadata : json::object()},
+        {"live_capture_summary", payload.liveCaptureSummary.is_object() ? payload.liveCaptureSummary : json::object()},
         {"degradation", payload.degradation.is_object() ? payload.degradation : json::object()},
         {"cache", payload.cache.is_object() ? payload.cache : json::object()}
     };

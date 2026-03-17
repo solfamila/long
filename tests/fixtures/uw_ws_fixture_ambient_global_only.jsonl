@@ -1,0 +1,7 @@
+{"pass":"initial","channel":"option_trades:INTC","payload":{"status":"ok","response":"joined"}}
+{"pass":"initial","channel":"flow-alerts","payload":{"status":"ok","response":"joined"}}
+{"pass":"initial","channel":"price:INTC","payload":{"status":"ok","response":"joined"}}
+{"pass":"initial","channel":"news","payload":{"status":"ok","response":"joined"}}
+{"pass":"initial","channel":"gex:INTC","payload":{"status":"ok","response":"joined"}}
+{"pass":"initial","channel":"news","payload":{"headline":"Global market headline without symbol binding","timestamp":"2026-03-15T09:41:05Z","tickers":[]}}
+{"pass":"targeted:news","channel":"news","payload":{"headline":"Second ambient headline without symbol binding","timestamp":"2026-03-15T09:41:10Z","tickers":[]}}

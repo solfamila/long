@@ -230,6 +230,24 @@ add_executable(uw_ws_smoke
     uw_http.cpp
     uw_runtime.cpp
 )
+add_executable(uw_mcp_smoke
+    uw_mcp_smoke_main.cpp
+    uw_context_connectors.cpp
+    uw_http.cpp
+    uw_runtime.cpp
+)
+add_executable(uw_context_smoke
+    uw_context_smoke_main.cpp
+    uw_context_cache.cpp
+    uw_context_connectors.cpp
+    uw_gemini_executor.cpp
+    uw_context_normalizer.cpp
+    uw_http.cpp
+    uw_runtime.cpp
+    uw_context_service.cpp
+    uw_packet_builder.cpp
+    tape_engine_protocol.cpp
+)
 add_executable(phase7_execution_smoke
     phase7_execution_smoke_main.cpp
     tape_phase7_artifacts.cpp
@@ -291,6 +309,14 @@ target_include_directories(uw_ws_smoke PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${NLOHMANN_JSON_DIR}/single_include"
 )
+target_include_directories(uw_mcp_smoke PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+target_include_directories(uw_context_smoke PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
 
 target_include_directories(phase7_execution_smoke PRIVATE
     "${CMAKE_SOURCE_DIR}"
@@ -323,7 +349,21 @@ target_link_libraries(tape_engine_ctl PRIVATE
 target_compile_definitions(uw_ws_smoke PRIVATE
     TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
+target_compile_definitions(uw_mcp_smoke PRIVATE
+    TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+target_compile_definitions(uw_context_smoke PRIVATE
+    TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
 target_link_libraries(uw_ws_smoke PRIVATE
+    Threads::Threads
+    tws_gui_curl
+)
+target_link_libraries(uw_mcp_smoke PRIVATE
+    Threads::Threads
+    tws_gui_curl
+)
+target_link_libraries(uw_context_smoke PRIVATE
     Threads::Threads
     tws_gui_curl
 )

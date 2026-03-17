@@ -104,6 +104,7 @@ struct EnrichmentPayload {
     json externalContext = json::object();
     json interpretation = json::object();
     json providerMetadata = json::object();
+    json liveCaptureSummary = json::object();
     json degradation = json::object();
     json cache = json::object();
     std::string requestKind;
