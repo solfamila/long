@@ -103,4 +103,8 @@ bool httpSuccess(const HttpResponse& response) {
     return response.curlOk && response.statusCode >= 200 && response.statusCode < 300;
 }
 
+void ensureCurlReady() {
+    static_cast<void>(curlGlobalInit());
+}
+
 } // namespace uw_context_service

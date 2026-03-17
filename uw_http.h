@@ -23,5 +23,6 @@ HttpResponse httpPostJson(const std::string& url,
                           const std::string& body,
                           long timeoutMs);
 bool httpSuccess(const HttpResponse& response);
+void ensureCurlReady();
 
 } // namespace uw_context_service

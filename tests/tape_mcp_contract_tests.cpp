@@ -54,6 +54,38 @@ void expectContains(const std::string& text, const std::string& needle, const st
     expect(text.find(needle) != std::string::npos, message + " (missing: " + needle + ")");
 }
 
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(const char* key, std::optional<std::string> value)
+        : key_(key) {
+        if (const char* existing = std::getenv(key); existing != nullptr) {
+            previousValue_ = std::string(existing);
+        }
+        if (value.has_value()) {
+            expect(::setenv(key_.c_str(), value->c_str(), 1) == 0,
+                   "failed to set env var " + key_);
+        } else {
+            expect(::unsetenv(key_.c_str()) == 0,
+                   "failed to unset env var " + key_);
+        }
+    }
+
+    ~ScopedEnvVar() {
+        if (previousValue_.has_value()) {
+            (void)::setenv(key_.c_str(), previousValue_->c_str(), 1);
+        } else {
+            (void)::unsetenv(key_.c_str());
+        }
+    }
+
+    ScopedEnvVar(const ScopedEnvVar&) = delete;
+    ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+private:
+    std::string key_;
+    std::optional<std::string> previousValue_;
+};
+
 template <typename Fn>
 void waitUntil(Fn&& predicate,
                const std::string& message,
@@ -2512,6 +2544,163 @@ void testTapeMcpPhase5Contracts() {
     server->stop();
 }
 
+void testTapeMcpPhase5WebsocketFixtureEnrichment() {
+    configurePhase7DataDir("tape-mcp-phase5-ws-appdata");
+    ScopedEnvVar externalContextDisabled("LONG_DISABLE_EXTERNAL_CONTEXT", std::nullopt);
+    ScopedEnvVar websocketEnabled("LONG_ENABLE_UW_WEBSOCKET_CONTEXT", std::string("1"));
+    ScopedEnvVar websocketFixture("LONG_UW_WS_FIXTURE_FILE",
+                                  fixturePath("uw_ws_fixture_frames.jsonl").string());
+    ScopedEnvVar websocketSampleMs("LONG_UW_WS_SAMPLE_MS", std::string("250"));
+    ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
+    ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
+    ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
+    ScopedEnvVar geminiApiKey("GEMINI_API_KEY", std::nullopt);
+
+    const fs::path rootDir = testDataDir() / "tape-mcp-phase5-ws-engine";
+    const fs::path socketPath = testDataDir() / "tape-mcp-phase5-ws-engine.sock";
+    auto server = startPhase5Engine(rootDir, socketPath);
+    seedPhase5Engine(socketPath);
+
+    waitUntil([&]() {
+        const auto snapshot = server->snapshot();
+        return snapshot.segments.size() >= 2 && snapshot.latestFrozenRevisionId >= 2;
+    }, "phase5 websocket MCP setup should freeze fixture batches");
+
+    const std::uint64_t logicalIncidentId = queryFirstLogicalIncidentId(socketPath);
+    expect(logicalIncidentId > 0, "phase5 websocket MCP setup should expose a logical incident id");
+
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{socketPath.string()});
+    const json enrichIncidentEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_enrich_incident", json{{"logical_incident_id", logicalIncidentId}}));
+    expect(enrichIncidentEnvelope.value("ok", false),
+           "phase5 websocket enrich-incident should return ok=true\nactual:\n" +
+               enrichIncidentEnvelope.dump(2));
+
+    const json result = enrichIncidentEnvelope.value("result", json::object());
+    const json externalContext = result.value("external_context", json::object());
+    const json providerMetadata = result.value("provider_metadata", json::object());
+    const json providerSteps = providerMetadata.value("provider_steps", json::array());
+    const json items = externalContext.value("items", json::array());
+    auto stringField = [](const json& object, const char* key) {
+        const auto it = object.find(key);
+        if (it != object.end() && it->is_string()) {
+            return it->get<std::string>();
+        }
+        return std::string();
+    };
+
+    expect(items.is_array() && items.size() >= 4,
+           "phase5 websocket enrich-incident should expose websocket external_context items\nactual:\n" +
+               enrichIncidentEnvelope.dump(2));
+
+    bool sawWebsocketItem = false;
+    bool sawPriceKind = false;
+    bool sawOptionsFlowKind = false;
+    bool sawNewsKind = false;
+    for (const auto& item : items) {
+        if (stringField(item, "provider") == "uw_ws") {
+            sawWebsocketItem = true;
+        }
+        if (stringField(item, "kind") == "stock_state") {
+            sawPriceKind = true;
+        } else if (stringField(item, "kind") == "options_flow") {
+            sawOptionsFlowKind = true;
+        } else if (stringField(item, "kind") == "news") {
+            sawNewsKind = true;
+        }
+    }
+    expect(sawWebsocketItem && sawPriceKind && sawOptionsFlowKind && sawNewsKind,
+           "phase5 websocket enrich-incident should normalize websocket price, options-flow, and news records\nactual:\n" +
+               enrichIncidentEnvelope.dump(2));
+
+    bool sawWebsocketProviderStep = false;
+    for (const auto& step : providerSteps) {
+        if (stringField(step, "provider") == "uw_ws") {
+            sawWebsocketProviderStep = stringField(step, "status") == "ok" &&
+                stringField(step.value("metadata", json::object()), "source") == "fixture" &&
+                step.value("metadata", json::object()).value("normalized_event_count", 0ULL) >= 4;
+            break;
+        }
+    }
+    expect(sawWebsocketProviderStep,
+           "phase5 websocket enrich-incident should record an ok fixture-backed uw_ws provider step\nactual:\n" +
+               enrichIncidentEnvelope.dump(2));
+
+    expect(stringField(result.value("degradation", json::object()), "code") != "external_context_unavailable",
+           "phase5 websocket enrich-incident should no longer degrade as external_context_unavailable");
+
+    server->stop();
+}
+
+void testTapeMcpPhase5WebsocketJoinAckOnlyDiagnostics() {
+    configurePhase7DataDir("tape-mcp-phase5-ws-join-ack-appdata");
+    ScopedEnvVar externalContextDisabled("LONG_DISABLE_EXTERNAL_CONTEXT", std::nullopt);
+    ScopedEnvVar websocketEnabled("LONG_ENABLE_UW_WEBSOCKET_CONTEXT", std::string("1"));
+    ScopedEnvVar websocketFixture("LONG_UW_WS_FIXTURE_FILE",
+                                  fixturePath("uw_ws_fixture_join_ack_only.jsonl").string());
+    ScopedEnvVar websocketSampleMs("LONG_UW_WS_SAMPLE_MS", std::string("250"));
+    ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
+    ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
+    ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
+    ScopedEnvVar geminiApiKey("GEMINI_API_KEY", std::nullopt);
+
+    const fs::path rootDir = testDataDir() / "tape-mcp-phase5-ws-join-ack-engine";
+    const fs::path socketPath = testDataDir() / "tape-mcp-phase5-ws-join-ack-engine.sock";
+    auto server = startPhase5Engine(rootDir, socketPath);
+    seedPhase5Engine(socketPath);
+
+    waitUntil([&]() {
+        const auto snapshot = server->snapshot();
+        return snapshot.segments.size() >= 2 && snapshot.latestFrozenRevisionId >= 2;
+    }, "phase5 websocket join-ack setup should freeze fixture batches");
+
+    const std::uint64_t logicalIncidentId = queryFirstLogicalIncidentId(socketPath);
+    expect(logicalIncidentId > 0, "phase5 websocket join-ack setup should expose a logical incident id");
+
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{socketPath.string()});
+    const json enrichIncidentEnvelope = envelopeFromToolResult(
+        adapter.callTool("tapescript_enrich_incident", json{{"logical_incident_id", logicalIncidentId}}));
+    expect(enrichIncidentEnvelope.value("ok", false),
+           "phase5 websocket join-ack enrich-incident should return ok=true\nactual:\n" +
+               enrichIncidentEnvelope.dump(2));
+
+    const json result = enrichIncidentEnvelope.value("result", json::object());
+    const json providerSteps = result.value("provider_metadata", json::object()).value("provider_steps", json::array());
+    auto stringField = [](const json& object, const char* key) {
+        const auto it = object.find(key);
+        if (it != object.end() && it->is_string()) {
+            return it->get<std::string>();
+        }
+        return std::string();
+    };
+
+    bool sawJoinAckOnlyStep = false;
+    for (const auto& step : providerSteps) {
+        if (stringField(step, "provider") != "uw_ws") {
+            continue;
+        }
+        const json metadata = step.value("metadata", json::object());
+        sawJoinAckOnlyStep =
+            stringField(step, "status") == "unavailable" &&
+            stringField(step, "reason") == "join_ack_only" &&
+            stringField(metadata, "source") == "fixture" &&
+            metadata.value("join_ack_frame_count", 0ULL) >= 4 &&
+            metadata.value("data_frame_count", 0ULL) == 0ULL &&
+            metadata.value("raw_frame_count", 0ULL) >= 4 &&
+            metadata.value("frame_previews", json::array()).is_array() &&
+            !metadata.value("frame_previews", json::array()).empty();
+        break;
+    }
+    expect(sawJoinAckOnlyStep,
+           "phase5 websocket join-ack enrich-incident should record join_ack_only diagnostics\nactual:\n" +
+               enrichIncidentEnvelope.dump(2));
+
+    expect(stringField(result.value("degradation", json::object()), "code") == "external_context_unavailable",
+           "phase5 websocket join-ack enrich-incident should still degrade as external_context_unavailable");
+
+    server->stop();
+}
+
 void testTapeMcpPhase6BundleTools() {
     const fs::path rootDir = testDataDir() / "tape-mcp-phase6-engine";
     const fs::path socketPath = testDataDir() / "tape-mcp-phase6-engine.sock";
@@ -4536,6 +4725,8 @@ void testTapeMcpStdioHarness() {
 int main() {
     try {
         testTapeMcpPhase5Contracts();
+        testTapeMcpPhase5WebsocketFixtureEnrichment();
+        testTapeMcpPhase5WebsocketJoinAckOnlyDiagnostics();
         testTapeMcpPhase6BundleTools();
         testTapeMcpPhase7Contracts();
         testTapeMcpStdioHarness();

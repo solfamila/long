@@ -9,6 +9,9 @@
 
 #include <initializer_list>
 #include <optional>
+#include <cstdlib>
+#include <algorithm>
+#include <cctype>
 
 namespace uw_context_service {
 namespace {
@@ -59,6 +62,17 @@ json localEvidenceResultOrFallback(const tape_engine::QueryResponse& localEviden
 }
 
 std::string inferSymbol(const json& localEvidence) {
+    auto symbolFromInstrumentId = [](const std::string& instrumentId) {
+        if (instrumentId.empty()) {
+            return std::string();
+        }
+        const std::size_t lastColon = instrumentId.rfind(':');
+        if (lastColon != std::string::npos && lastColon + 1 < instrumentId.size()) {
+            return instrumentId.substr(lastColon + 1);
+        }
+        return std::string();
+    };
+
     const json entity = localEvidence.value("entity", json::object());
     std::string symbol = firstStringValue(entity, {"symbol", "ticker"});
     if (!symbol.empty()) {
@@ -66,14 +80,51 @@ std::string inferSymbol(const json& localEvidence) {
     }
 
     const json artifact = localEvidence.value("artifact", json::object());
-    const std::string instrumentId = artifact.value("instrument_id", std::string());
-    if (!instrumentId.empty()) {
-        const std::size_t lastColon = instrumentId.rfind(':');
-        if (lastColon != std::string::npos && lastColon + 1 < instrumentId.size()) {
-            return instrumentId.substr(lastColon + 1);
+    symbol = symbolFromInstrumentId(artifact.value("instrument_id", std::string()));
+    if (!symbol.empty()) {
+        return symbol;
+    }
+
+    symbol = firstStringValue(localEvidence.value("report", json::object()), {"symbol", "ticker"});
+    if (!symbol.empty()) {
+        return symbol;
+    }
+
+    const json relatedIncidents = localEvidence.value("incident_rows", json::array());
+    if (relatedIncidents.is_array()) {
+        for (const auto& row : relatedIncidents) {
+            if (!row.is_object()) {
+                continue;
+            }
+            symbol = firstStringValue(row, {"symbol", "ticker"});
+            if (!symbol.empty()) {
+                return symbol;
+            }
+            symbol = symbolFromInstrumentId(row.value("instrument_id", std::string()));
+            if (!symbol.empty()) {
+                return symbol;
+            }
         }
     }
-    return firstStringValue(localEvidence.value("report", json::object()), {"symbol", "ticker"});
+
+    const json events = localEvidence.value("events", json::array());
+    if (events.is_array()) {
+        for (const auto& event : events) {
+            if (!event.is_object()) {
+                continue;
+            }
+            symbol = firstStringValue(event, {"symbol", "ticker"});
+            if (!symbol.empty()) {
+                return symbol;
+            }
+            symbol = symbolFromInstrumentId(event.value("instrument_id", std::string()));
+            if (!symbol.empty()) {
+                return symbol;
+            }
+        }
+    }
+
+    return {};
 }
 
 std::vector<std::string> defaultFacetsFor(const BuildRequest& request) {
@@ -122,9 +173,32 @@ std::vector<std::string> evidenceKinds(const json& localEvidence) {
     return kinds;
 }
 
+bool envFlagEnabled(const char* key) {
+    if (const char* raw = std::getenv(key); raw != nullptr && *raw != '\0') {
+        std::string normalized(raw);
+        std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return normalized == "1" || normalized == "true" || normalized == "yes" ||
+               normalized == "on";
+    }
+    return false;
+}
+
+bool websocketSecondaryLaneRequested(const BuildRequest& request) {
+    if (envFlagEnabled("LONG_DISABLE_UW_WEBSOCKET_CONTEXT")) {
+        return false;
+    }
+    if (envFlagEnabled("LONG_ENABLE_UW_WEBSOCKET_CONTEXT")) {
+        return true;
+    }
+    return request.forceRefresh || request.includeLiveTail;
+}
+
 std::string cacheKeyFor(const json& localEvidence, const BuildRequest& request) {
     return localEvidence.value("artifact_id", std::string()) + ":" + request.requestKind + ":" +
-        (request.lane == Lane::Deep ? "deep" : "fast");
+        (request.lane == Lane::Deep ? "deep" : "fast") + ":" +
+        (websocketSecondaryLaneRequested(request) ? "live" : "snapshot");
 }
 
 json providerStepToJson(const ProviderStep& step) {
@@ -233,6 +307,7 @@ public:
                 .windowStartNs = inferWindowNs(localResult).first,
                 .windowEndNs = inferWindowNs(localResult).second,
                 .forceRefresh = buildRequest.forceRefresh,
+                .includeLiveTail = buildRequest.includeLiveTail,
                 .evidenceKinds = evidenceKinds(localResult),
                 .facets = defaultFacetsFor(buildRequest)
             };
@@ -241,6 +316,9 @@ public:
             fetchSteps.push_back(mcpConnector_.fetch(plan));
             if (fetchSteps.back().status != "ok") {
                 fetchSteps.push_back(restConnector_.fetch(plan));
+            }
+            if (websocketSecondaryLaneRequested(buildRequest)) {
+                fetchSteps.push_back(wsConnector_.fetch(plan));
             }
 
             for (const ProviderStep& step : fetchSteps) {
@@ -350,6 +428,7 @@ private:
     ContextCache cache_;
     UWMcpConnector mcpConnector_;
     UWRestConnector restConnector_;
+    UWWsConnector wsConnector_;
 };
 
 ContextService& sharedService() {

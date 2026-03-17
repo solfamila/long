@@ -55,6 +55,7 @@ struct FetchPlan {
     std::uint64_t windowStartNs = 0;
     std::uint64_t windowEndNs = 0;
     bool forceRefresh = false;
+    bool includeLiveTail = false;
     std::vector<std::string> evidenceKinds;
     std::vector<std::string> facets;
 };

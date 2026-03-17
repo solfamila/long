@@ -1,0 +1,4 @@
+{"channel":"price:INTC","payload":{"ticker":"INTC","bid":31.40,"ask":31.44,"last":31.42,"timestamp":"2026-03-15T09:41:00Z"}}
+{"channel":"option_trades:INTC","payload":{"underlying_symbol":"INTC","option_symbol":"INTC 20260320C00031000","price":0.84,"size":12,"timestamp":"2026-03-15T09:41:01Z"}}
+{"channel":"gex:INTC","payload":{"ticker":"INTC","gex":123456.0,"timestamp":"2026-03-15T09:41:02Z"}}
+{"channel":"news","payload":{"ticker":"INTC","headline":"INTC headline activity remains elevated","timestamp":"2026-03-15T09:41:03Z"}}

@@ -32,7 +32,39 @@ find_package(Threads REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 include(CTest)
 include(FetchContent)
+option(TWS_GUI_PREFER_HOMEBREW_CURL "Prefer Homebrew libcurl when available, including websocket-capable builds" ON)
+set(TWS_GUI_HOMEBREW_CURL_PREFIXES
+    "/opt/homebrew/opt/curl"
+    "/usr/local/opt/curl"
+)
+set(TWS_GUI_SELECTED_CURL_PREFIX "")
+if(TWS_GUI_PREFER_HOMEBREW_CURL)
+    foreach(prefix IN LISTS TWS_GUI_HOMEBREW_CURL_PREFIXES)
+        if(EXISTS "${prefix}/lib/libcurl.dylib" AND EXISTS "${prefix}/include/curl/curl.h")
+            set(TWS_GUI_SELECTED_CURL_PREFIX "${prefix}")
+            set(CURL_LIBRARY "${prefix}/lib/libcurl.dylib" CACHE FILEPATH "Preferred libcurl library" FORCE)
+            set(CURL_INCLUDE_DIR "${prefix}/include" CACHE PATH "Preferred libcurl include directory" FORCE)
+            break()
+        endif()
+    endforeach()
+endif()
 find_package(CURL REQUIRED)
+if(TWS_GUI_SELECTED_CURL_PREFIX)
+    message(STATUS "Using Homebrew libcurl from ${TWS_GUI_SELECTED_CURL_PREFIX}")
+else()
+    message(STATUS "Using CMake-discovered libcurl: ${CURL_LIBRARY}")
+endif()
+if(TWS_GUI_SELECTED_CURL_PREFIX)
+    add_library(tws_gui_curl SHARED IMPORTED GLOBAL)
+    set_target_properties(tws_gui_curl PROPERTIES
+        IMPORTED_LOCATION "${TWS_GUI_SELECTED_CURL_PREFIX}/lib/libcurl.dylib"
+        INTERFACE_INCLUDE_DIRECTORIES "${TWS_GUI_SELECTED_CURL_PREFIX}/include"
+        INTERFACE_LINK_OPTIONS "-Wl,-rpath,${TWS_GUI_SELECTED_CURL_PREFIX}/lib"
+    )
+else()
+    add_library(tws_gui_curl INTERFACE)
+    target_link_libraries(tws_gui_curl INTERFACE CURL::libcurl)
+endif()
 
 set(APP_BUNDLE_NAME "TWS Trading GUI")
 set(APP_BUNDLE_IDENTIFIER "com.foxy.twstradinggui")
@@ -243,7 +275,7 @@ target_link_libraries(tws_gui PRIVATE
 
 target_link_libraries(tape_engine PRIVATE
     Threads::Threads
-    CURL::libcurl
+    tws_gui_curl
 )
 
 target_link_libraries(tape_engine_ctl PRIVATE
@@ -585,7 +617,7 @@ if(BUILD_TESTING)
 
     target_link_libraries(tws_gui_tests PRIVATE
         Threads::Threads
-        CURL::libcurl
+        tws_gui_curl
         ixwebsocket::ixwebsocket
         ${APP_KIT_LIBRARY}
         ${GAME_CONTROLLER_LIBRARY}
@@ -656,7 +688,7 @@ if(BUILD_TESTING)
     )
     target_link_libraries(tape_mcp_contract_tests PRIVATE
         Threads::Threads
-        CURL::libcurl
+        tws_gui_curl
         ixwebsocket::ixwebsocket
         ${APP_KIT_LIBRARY}
         ${GAME_CONTROLLER_LIBRARY}

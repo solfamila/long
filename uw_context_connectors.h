@@ -14,4 +14,9 @@ public:
     [[nodiscard]] ProviderStep fetch(const FetchPlan& plan) const;
 };
 
+class UWWsConnector {
+public:
+    [[nodiscard]] ProviderStep fetch(const FetchPlan& plan) const;
+};
+
 } // namespace uw_context_service
