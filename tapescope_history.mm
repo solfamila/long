@@ -79,7 +79,7 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     [stack addArrangedSubview:MakeScrollView(_recentTextView, 250.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"RecentPane"];
-    item.label = @"RecentPane";
+    item.label = @"Recent";
     item.view = pane;
     return item;
 }
@@ -143,7 +143,7 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     [stack addArrangedSubview:MakeScrollView(_bundleHistoryTextView, 250.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"BundleHistoryPane"];
-    item.label = @"BundleHistoryPane";
+    item.label = @"Bundles";
     item.view = pane;
     return item;
 }

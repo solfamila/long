@@ -1465,7 +1465,7 @@ std::string DescribePhase7InventoryStatus(const tapescope::Phase7AnalysisInvento
     [stack addArrangedSubview:MakeScrollView(_phase7TextView, 210.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"Phase7Pane"];
-    item.label = @"Phase7Pane";
+    item.label = @"Phase 7";
     item.view = pane;
     return item;
 }

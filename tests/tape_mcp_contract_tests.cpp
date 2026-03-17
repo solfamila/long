@@ -7,6 +7,7 @@
 #include "tape_engine_client.h"
 #include "tape_engine_protocol.h"
 #include "tape_phase7_artifacts.h"
+#include "tape_phase8_artifacts.h"
 #include "tape_phase7_runtime_bridge.h"
 #include "uw_context_connectors.h"
 
@@ -196,6 +197,12 @@ std::string normalizeArtifactId(std::string artifactId) {
     if (artifactId.rfind("phase7-ledger-", 0) == 0) {
         return "phase7-ledger:<id>";
     }
+    if (artifactId.rfind("watch-", 0) == 0) {
+        return "phase8-watch:<id>";
+    }
+    if (artifactId.rfind("trigger-", 0) == 0) {
+        return "phase8-trigger:<id>";
+    }
     if (artifactId.rfind("session-overview:", 0) == 0) {
         return "session-overview:<revision>:<from>:<to>";
     }
@@ -284,6 +291,22 @@ std::string normalizeResourceUri(std::string uri) {
         }
         return phase7ApplyPrefix + "<id>" + uri.substr(formatPos);
     }
+    const std::string phase8WatchPrefix = "tape://phase8/watch/";
+    if (uri.rfind(phase8WatchPrefix, 0) == 0) {
+        const std::size_t formatPos = uri.find('/', phase8WatchPrefix.size());
+        if (formatPos == std::string::npos) {
+            return phase8WatchPrefix + "<id>";
+        }
+        return phase8WatchPrefix + "<id>" + uri.substr(formatPos);
+    }
+    const std::string phase8TriggerPrefix = "tape://phase8/trigger/";
+    if (uri.rfind(phase8TriggerPrefix, 0) == 0) {
+        const std::size_t formatPos = uri.find('/', phase8TriggerPrefix.size());
+        if (formatPos == std::string::npos) {
+            return phase8TriggerPrefix + "<id>";
+        }
+        return phase8TriggerPrefix + "<id>" + uri.substr(formatPos);
+    }
     return uri;
 }
 
@@ -345,7 +368,10 @@ json projectPhase7ArtifactRef(const json& artifact) {
     if (!artifact.is_object()) {
         return json::object();
     }
-    std::string manifestPath = normalizeTestPath(artifact.value("manifest_path", json(nullptr)));
+    const json normalizedManifestPath = normalizeTestPath(artifact.value("manifest_path", json(nullptr)));
+    std::string manifestPath = normalizedManifestPath.is_string()
+        ? normalizedManifestPath.get<std::string>()
+        : std::string();
     const std::string analysisPrefix = "/phase7_artifacts/analysis/phase7-analysis-";
     const std::string playbookPrefix = "/phase7_artifacts/playbooks/phase7-playbook-";
     const std::string ledgerPrefix = "/phase7_artifacts/ledgers/phase7-ledger-";
@@ -363,6 +389,34 @@ json projectPhase7ArtifactRef(const json& artifact) {
     if (ledgerOffset != std::string::npos) {
         manifestPath = manifestPath.substr(0, ledgerOffset) +
             "/phase7_artifacts/ledgers/phase7-ledger:<id>/manifest.json";
+    }
+    return {
+        {"artifact_id", normalizeArtifactId(stringValueOrEmpty(artifact, "artifact_id"))},
+        {"artifact_type", stringValueOrEmpty(artifact, "artifact_type")},
+        {"contract_version", stringValueOrEmpty(artifact, "contract_version")},
+        {"manifest_path", std::move(manifestPath)}
+    };
+}
+
+json projectPhase8ArtifactRef(const json& artifact) {
+    if (!artifact.is_object()) {
+        return json::object();
+    }
+    const json normalizedManifestPath = normalizeTestPath(artifact.value("manifest_path", json(nullptr)));
+    std::string manifestPath = normalizedManifestPath.is_string()
+        ? normalizedManifestPath.get<std::string>()
+        : std::string();
+    const std::string watchPrefix = "/phase8_artifacts/watch-definitions/watch-";
+    const std::string triggerPrefix = "/phase8_artifacts/trigger-runs/trigger-";
+    const auto watchOffset = manifestPath.find(watchPrefix);
+    if (watchOffset != std::string::npos) {
+        manifestPath = manifestPath.substr(0, watchOffset) +
+            "/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json";
+    }
+    const auto triggerOffset = manifestPath.find(triggerPrefix);
+    if (triggerOffset != std::string::npos) {
+        manifestPath = manifestPath.substr(0, triggerOffset) +
+            "/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json";
     }
     return {
         {"artifact_id", normalizeArtifactId(stringValueOrEmpty(artifact, "artifact_id"))},
@@ -510,6 +564,11 @@ json projectPhase7ExecutionJournalResult(const json& result);
 json projectPhase7ExecutionJournalInventoryResult(const json& result);
 json projectPhase7ExecutionApplyResult(const json& result);
 json projectPhase7ExecutionApplyInventoryResult(const json& result);
+json projectPhase8WatchDefinitionResult(const json& result);
+json projectPhase8TriggerRunResult(const json& result);
+json projectPhase8AttentionInboxResult(const json& result);
+json projectPhase8DueWatchListResult(const json& result);
+json projectPhase8RunDueWatchesResult(const json& result);
 
 json projectResourceList(const json& listResult) {
     json projection = json::array();
@@ -533,6 +592,32 @@ json projectPhase7ResourceList(const json& listResult) {
     for (const auto& resource : resources) {
         const std::string uri = normalizeResourceUri(resource.value("uri", std::string()));
         if (uri.rfind("tape://phase7/", 0) != 0) {
+            continue;
+        }
+        const std::string mimeType = resource.value("mimeType", std::string());
+        const auto key = std::make_pair(uri, mimeType);
+        if (std::find(seen.begin(), seen.end(), key) != seen.end()) {
+            continue;
+        }
+        seen.push_back(key);
+        projection.push_back({
+            {"uri", uri},
+            {"mime_type", mimeType}
+        });
+    }
+    std::sort(projection.begin(), projection.end(), [](const json& left, const json& right) {
+        return left.value("uri", std::string()) < right.value("uri", std::string());
+    });
+    return projection;
+}
+
+json projectPhase8ResourceList(const json& listResult) {
+    json projection = json::array();
+    std::vector<std::pair<std::string, std::string>> seen;
+    json resources = listResult.value("resources", json::array());
+    for (const auto& resource : resources) {
+        const std::string uri = normalizeResourceUri(resource.value("uri", std::string()));
+        if (uri.rfind("tape://phase8/", 0) != 0) {
             continue;
         }
         const std::string mimeType = resource.value("mimeType", std::string());
@@ -581,6 +666,12 @@ json projectResourceRead(const json& readResult) {
             projection["payload"] = projectPhase7ExecutionJournalResult(parsed);
         } else if (parsed.contains("execution_ledger") && parsed.contains("playbook_artifact")) {
             projection["payload"] = projectPhase7ExecutionLedgerResult(parsed);
+        } else if (parsed.contains("trigger_run") && parsed.contains("watch_definition")) {
+            projection["payload"] = projectPhase8TriggerRunResult(parsed);
+        } else if (parsed.contains("watch_definition") && parsed.contains("bundle_path")) {
+            projection["payload"] = projectPhase8WatchDefinitionResult(parsed);
+        } else if (parsed.contains("attention_items")) {
+            projection["payload"] = projectPhase8AttentionInboxResult(parsed);
         } else if (parsed.contains("source_artifact") && parsed.contains("analysis_artifact")) {
             projection["payload"] = {
                 {"analysis_artifact", projectPhase7ArtifactRef(parsed.value("analysis_artifact", json::object()))},
@@ -618,6 +709,8 @@ json projectResourceRead(const json& readResult) {
         projection["contains_phase7_playbook"] = text.find("# Phase 7 Playbook") != std::string::npos;
         projection["contains_phase7_execution_ledger"] = text.find("# Phase 7 Execution Ledger") != std::string::npos;
         projection["contains_phase7_execution_apply"] = text.find("# Phase 7 Execution Apply") != std::string::npos;
+        projection["contains_phase8_watch"] = text.find("watch_artifact_id: `watch-") != std::string::npos;
+        projection["contains_phase8_trigger"] = text.find("trigger_artifact_id: `trigger-") != std::string::npos;
     }
     return projection;
 }
@@ -1494,6 +1587,134 @@ json projectPhase7PlaybookInventoryResult(const json& result) {
     };
 }
 
+json projectPhase8WatchDefinitionResult(const json& result) {
+    return {
+        {"watch_definition", projectPhase8ArtifactRef(result.value("watch_definition", json::object()))},
+        {"title", stringValueOrEmpty(result, "title")},
+        {"bundle_path", normalizeTestPath(result.value("bundle_path", json(nullptr)))},
+        {"analysis_profile", stringValueOrEmpty(result, "analysis_profile")},
+        {"enabled", result.value("enabled", false)},
+        {"evaluation_cadence_minutes", result.value("evaluation_cadence_minutes", 0ULL)},
+        {"minimum_finding_count", result.value("minimum_finding_count", 0ULL)},
+        {"minimum_severity", stringValueOrNull(result, "minimum_severity")},
+        {"required_category", stringValueOrNull(result, "required_category")},
+        {"has_created_at_utc", !stringValueOrEmpty(result, "created_at_utc").empty()},
+        {"has_updated_at_utc", !stringValueOrEmpty(result, "updated_at_utc").empty()},
+        {"has_latest_evaluation_at_utc", !stringValueOrEmpty(result, "latest_evaluation_at_utc").empty()},
+        {"has_next_evaluation_at_utc", !stringValueOrEmpty(result, "next_evaluation_at_utc").empty()},
+        {"latest_trigger_outcome", stringValueOrNull(result, "latest_trigger_outcome")},
+        {"latest_trigger_artifact_id", [&]() -> json {
+            const std::string artifactId = stringValueOrEmpty(result, "latest_trigger_artifact_id");
+            return artifactId.empty() ? json(nullptr) : json(normalizeArtifactId(artifactId));
+        }()},
+        {"bundle_summary", {
+            {"bundle_type", result.value("bundle_summary", json::object()).value("bundle_type", std::string())},
+            {"source_artifact_id", normalizeArtifactId(result.value("bundle_summary", json::object()).value("source_artifact_id", std::string()))},
+            {"first_session_seq", result.value("bundle_summary", json::object()).value("first_session_seq", 0ULL)},
+            {"last_session_seq", result.value("bundle_summary", json::object()).value("last_session_seq", 0ULL)}
+        }}
+    };
+}
+
+json projectPhase8TriggerRunResult(const json& result) {
+    json categories = result.value("finding_categories", json::array());
+    std::sort(categories.begin(), categories.end());
+    json suppressionCodes = json::array();
+    for (const auto& reason : result.value("suppression_reasons", json::array())) {
+        suppressionCodes.push_back(reason.value("code", std::string()));
+    }
+    std::sort(suppressionCodes.begin(), suppressionCodes.end());
+    return {
+        {"watch_definition", projectPhase8ArtifactRef(result.value("watch_definition", json::object()))},
+        {"source_artifact", projectPhase7ArtifactRef(result.value("source_artifact", json::object()))},
+        {"analysis_artifact", projectPhase7ArtifactRef(result.value("analysis_artifact", json::object()))},
+        {"trigger_run", projectPhase8ArtifactRef(result.value("trigger_run", json::object()))},
+        {"title", stringValueOrEmpty(result, "title")},
+        {"headline", stringValueOrEmpty(result, "headline")},
+        {"analysis_profile", stringValueOrEmpty(result, "analysis_profile")},
+        {"trigger_reason", stringValueOrEmpty(result, "trigger_reason")},
+        {"trigger_outcome", stringValueOrEmpty(result, "trigger_outcome")},
+        {"attention_status", stringValueOrEmpty(result, "attention_status")},
+        {"attention_open", result.value("attention_open", false)},
+        {"analysis_created", result.value("analysis_created", false)},
+        {"finding_count", result.value("finding_count", 0ULL)},
+        {"highest_severity", stringValueOrNull(result, "highest_severity")},
+        {"has_generated_at_utc", !stringValueOrEmpty(result, "generated_at_utc").empty()},
+        {"finding_categories", std::move(categories)},
+        {"suppression_reason_codes", std::move(suppressionCodes)}
+    };
+}
+
+json projectPhase8AttentionInboxResult(const json& result) {
+    json rows = json::array();
+    for (const auto& item : result.value("attention_items", json::array())) {
+        rows.push_back({
+            {"trigger_artifact_id", normalizeArtifactId(item.value("trigger_artifact_id", std::string()))},
+            {"watch_artifact_id", normalizeArtifactId(item.value("watch_artifact_id", std::string()))},
+            {"analysis_artifact_id", normalizeArtifactId(item.value("analysis_artifact_id", std::string()))},
+            {"source_artifact_id", normalizeArtifactId(item.value("source_artifact_id", std::string()))},
+            {"title", stringValueOrEmpty(item, "title")},
+            {"headline", stringValueOrEmpty(item, "headline")},
+            {"attention_status", stringValueOrEmpty(item, "attention_status")},
+            {"attention_open", item.value("attention_open", false)},
+            {"trigger_outcome", stringValueOrEmpty(item, "trigger_outcome")},
+            {"highest_severity", stringValueOrNull(item, "highest_severity")},
+            {"analysis_profile", stringValueOrEmpty(item, "analysis_profile")},
+            {"finding_count", item.value("finding_count", 0ULL)},
+            {"has_generated_at_utc", !stringValueOrEmpty(item, "generated_at_utc").empty()}
+        });
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+        return left.value("trigger_artifact_id", std::string()) < right.value("trigger_artifact_id", std::string());
+    });
+    return {
+        {"returned_count", result.value("returned_count", 0ULL)},
+        {"attention_items", std::move(rows)}
+    };
+}
+
+json projectPhase8DueWatchListResult(const json& result) {
+    json rows = json::array();
+    for (const auto& item : result.value("watch_definitions", json::array())) {
+        rows.push_back(projectPhase8WatchDefinitionResult(item));
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+        if (left.value("title", std::string()) != right.value("title", std::string())) {
+            return left.value("title", std::string()) < right.value("title", std::string());
+        }
+        return left.value("analysis_profile", std::string()) <
+               right.value("analysis_profile", std::string());
+    });
+    return {
+        {"returned_count", result.value("returned_count", 0ULL)},
+        {"matched_count", result.value("matched_count", 0ULL)},
+        {"watch_definitions", std::move(rows)}
+    };
+}
+
+json projectPhase8RunDueWatchesResult(const json& result) {
+    json rows = json::array();
+    for (const auto& item : result.value("trigger_runs", json::array())) {
+        rows.push_back(projectPhase8TriggerRunResult(item));
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+        if (left.value("title", std::string()) != right.value("title", std::string())) {
+            return left.value("title", std::string()) < right.value("title", std::string());
+        }
+        return left.value("analysis_profile", std::string()) <
+               right.value("analysis_profile", std::string());
+    });
+    return {
+        {"trigger_reason", stringValueOrEmpty(result, "trigger_reason")},
+        {"matched_watch_count", result.value("matched_watch_count", 0ULL)},
+        {"evaluated_watch_count", result.value("evaluated_watch_count", 0ULL)},
+        {"created_trigger_count", result.value("created_trigger_count", 0ULL)},
+        {"attention_opened_count", result.value("attention_opened_count", 0ULL)},
+        {"suppressed_count", result.value("suppressed_count", 0ULL)},
+        {"trigger_runs", std::move(rows)}
+    };
+}
+
 json projectInvestigationResult(const json& result) {
     json eventKinds = json::array();
     for (const auto& event : result.value("events", json::array())) {
@@ -1873,6 +2094,62 @@ json projectEnvelope(const json& envelope) {
         projection["result"] = projectPhase7ExecutionApplyResult(result);
     } else if (toolName == "tapescript_list_execution_applies") {
         projection["result"] = projectPhase7ExecutionApplyInventoryResult(result);
+    } else if (toolName == "tapescript_create_watch_definition") {
+        projection["result"] = {
+            {"artifact_status", stringValueOrEmpty(result, "artifact_status")},
+            {"watch_definition", projectPhase8WatchDefinitionResult(result)}
+        };
+    } else if (toolName == "tapescript_list_watch_definitions") {
+        json rows = json::array();
+        for (const auto& row : result.value("watch_definitions", json::array())) {
+            rows.push_back(projectPhase8WatchDefinitionResult(row));
+        }
+        std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+            if (left.value("title", std::string()) != right.value("title", std::string())) {
+                return left.value("title", std::string()) < right.value("title", std::string());
+            }
+            return left.value("analysis_profile", std::string()) <
+                   right.value("analysis_profile", std::string());
+        });
+        projection["result"] = {
+            {"returned_count", result.value("returned_count", 0ULL)},
+            {"watch_definitions", std::move(rows)}
+        };
+    } else if (toolName == "tapescript_list_due_watches") {
+        projection["result"] = projectPhase8DueWatchListResult(result);
+    } else if (toolName == "tapescript_read_watch_definition") {
+        projection["result"] = projectPhase8WatchDefinitionResult(result);
+    } else if (toolName == "tapescript_evaluate_watch_definition") {
+        projection["result"] = {
+            {"artifact_status", stringValueOrEmpty(result, "artifact_status")},
+            {"trigger_run", projectPhase8TriggerRunResult(result)}
+        };
+    } else if (toolName == "tapescript_acknowledge_attention_item" ||
+               toolName == "tapescript_snooze_attention_item" ||
+               toolName == "tapescript_resolve_attention_item") {
+        projection["result"] = projectPhase8TriggerRunResult(result);
+    } else if (toolName == "tapescript_run_due_watches") {
+        projection["result"] = projectPhase8RunDueWatchesResult(result);
+    } else if (toolName == "tapescript_list_trigger_runs") {
+        json rows = json::array();
+        for (const auto& row : result.value("trigger_runs", json::array())) {
+            rows.push_back(projectPhase8TriggerRunResult(row));
+        }
+        std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+            if (left.value("title", std::string()) != right.value("title", std::string())) {
+                return left.value("title", std::string()) < right.value("title", std::string());
+            }
+            return left.value("analysis_profile", std::string()) <
+                   right.value("analysis_profile", std::string());
+        });
+        projection["result"] = {
+            {"returned_count", result.value("returned_count", 0ULL)},
+            {"trigger_runs", std::move(rows)}
+        };
+    } else if (toolName == "tapescript_read_trigger_run") {
+        projection["result"] = projectPhase8TriggerRunResult(result);
+    } else if (toolName == "tapescript_list_attention_items") {
+        projection["result"] = projectPhase8AttentionInboxResult(result);
     } else {
         projection["result"] = projectInvestigationResult(result);
     }
@@ -2652,6 +2929,8 @@ void testTapeMcpPhase5WebsocketFixtureEnrichment() {
     ScopedEnvVar websocketFixture("LONG_UW_WS_FIXTURE_FILE",
                                   fixturePath("uw_ws_fixture_frames.jsonl").string());
     ScopedEnvVar websocketSampleMs("LONG_UW_WS_SAMPLE_MS", std::string("250"));
+    ScopedEnvVar credentialFile("LONG_CREDENTIAL_FILE",
+                                (testDataDir() / "missing-uw-credentials.env").string());
     ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
     ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
     ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
@@ -2778,6 +3057,8 @@ void testTapeMcpPhase5WebsocketJoinAckOnlyDiagnostics() {
     ScopedEnvVar websocketFixture("LONG_UW_WS_FIXTURE_FILE",
                                   fixturePath("uw_ws_fixture_join_ack_only.jsonl").string());
     ScopedEnvVar websocketSampleMs("LONG_UW_WS_SAMPLE_MS", std::string("250"));
+    ScopedEnvVar credentialFile("LONG_CREDENTIAL_FILE",
+                                (testDataDir() / "missing-uw-credentials.env").string());
     ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
     ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
     ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
@@ -2861,7 +3142,8 @@ void testTapeMcpPhase5WebsocketJoinAckOnlyDiagnostics() {
                refreshEnvelope.dump(2));
 
     expect(stringField(result.value("degradation", json::object()), "code") == "external_context_unavailable",
-           "phase5 websocket join-ack refresh-external-context should still degrade as external_context_unavailable");
+           "phase5 websocket join-ack refresh-external-context should still degrade as external_context_unavailable\nactual:\n" +
+               refreshEnvelope.dump(2));
 
     server->stop();
 }
@@ -2873,6 +3155,8 @@ void testTapeMcpPhase5WebsocketAlreadyInRoomDiagnostics() {
     ScopedEnvVar websocketFixture("LONG_UW_WS_FIXTURE_FILE",
                                   fixturePath("uw_ws_fixture_already_in_room.jsonl").string());
     ScopedEnvVar websocketSampleMs("LONG_UW_WS_SAMPLE_MS", std::string("250"));
+    ScopedEnvVar credentialFile("LONG_CREDENTIAL_FILE",
+                                (testDataDir() / "missing-uw-credentials.env").string());
     ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
     ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
     ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
@@ -2946,7 +3230,8 @@ void testTapeMcpPhase5WebsocketAlreadyInRoomDiagnostics() {
                refreshEnvelope.dump(2));
 
     expect(stringField(result.value("degradation", json::object()), "code") == "external_context_unavailable",
-           "phase5 websocket already-in-room refresh-external-context should still degrade as external_context_unavailable");
+           "phase5 websocket already-in-room refresh-external-context should still degrade as external_context_unavailable\nactual:\n" +
+               refreshEnvelope.dump(2));
 
     server->stop();
 }
@@ -2958,6 +3243,8 @@ void testTapeMcpPhase5WebsocketSymbolFiltering() {
     ScopedEnvVar websocketFixture("LONG_UW_WS_FIXTURE_FILE",
                                   fixturePath("uw_ws_fixture_symbol_filter.jsonl").string());
     ScopedEnvVar websocketSampleMs("LONG_UW_WS_SAMPLE_MS", std::string("250"));
+    ScopedEnvVar credentialFile("LONG_CREDENTIAL_FILE",
+                                (testDataDir() / "missing-uw-credentials.env").string());
     ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
     ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
     ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
@@ -3076,6 +3363,8 @@ void testTapeMcpPhase5WebsocketTargetedRetryRescue() {
     ScopedEnvVar secondPassSampleMs("LONG_UW_WS_SECOND_PASS_SAMPLE_MS", std::string("250"));
     ScopedEnvVar secondPassTotalMs("LONG_UW_WS_SECOND_PASS_TOTAL_MS", std::string("1000"));
     ScopedEnvVar secondPassChannelLimit("LONG_UW_WS_SECOND_PASS_CHANNEL_LIMIT", std::string("2"));
+    ScopedEnvVar credentialFile("LONG_CREDENTIAL_FILE",
+                                (testDataDir() / "missing-uw-credentials.env").string());
     ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
     ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
     ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
@@ -3181,6 +3470,8 @@ void testTapeMcpPhase5WebsocketAmbientGlobalOnly() {
     ScopedEnvVar secondPassSampleMs("LONG_UW_WS_SECOND_PASS_SAMPLE_MS", std::string("250"));
     ScopedEnvVar secondPassTotalMs("LONG_UW_WS_SECOND_PASS_TOTAL_MS", std::string("1000"));
     ScopedEnvVar secondPassChannelLimit("LONG_UW_WS_SECOND_PASS_CHANNEL_LIMIT", std::string("2"));
+    ScopedEnvVar credentialFile("LONG_CREDENTIAL_FILE",
+                                (testDataDir() / "missing-uw-credentials.env").string());
     ScopedEnvVar uwApiToken("UW_API_TOKEN", std::nullopt);
     ScopedEnvVar uwBearerToken("UW_BEARER_TOKEN", std::nullopt);
     ScopedEnvVar uwRestToken("UNUSUAL_WHALES_API_KEY", std::nullopt);
@@ -3250,7 +3541,8 @@ void testTapeMcpPhase5WebsocketAmbientGlobalOnly() {
                refreshEnvelope.dump(2));
 
     expect(stringField(result.value("degradation", json::object()), "code") == "external_context_unavailable",
-           "phase5 websocket ambient-global refresh-external-context should still degrade as external_context_unavailable");
+           "phase5 websocket ambient-global refresh-external-context should still degrade as external_context_unavailable\nactual:\n" +
+               refreshEnvelope.dump(2));
 
     server->stop();
 }
@@ -4730,6 +5022,364 @@ void testTapeMcpPhase7Contracts() {
     server->stop();
 }
 
+void testTapeMcpPhase8Contracts() {
+    configurePhase7DataDir("tape-mcp-phase8-appdata");
+
+    const fs::path rootDir = testDataDir() / "tape-mcp-phase8-engine";
+    const fs::path socketPath = testDataDir() / "tape-mcp-phase8-engine.sock";
+    auto server = startPhase5Engine(rootDir, socketPath);
+    seedPhase5Engine(socketPath);
+
+    waitUntil([&]() {
+        const auto snapshot = server->snapshot();
+        return snapshot.segments.size() >= 2 && snapshot.latestFrozenRevisionId >= 2;
+    }, "phase8 MCP setup should freeze fixture batches");
+
+    tape_mcp::Adapter adapter(tape_mcp::AdapterConfig{socketPath.string()});
+
+    const json scanCaseEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_scan_order_case_report", json{
+        {"order_id", 7401},
+        {"limit", 10}
+    }));
+    expect(scanCaseEnvelope.value("ok", false), "phase8 scan-order-case-report should return ok=true");
+    const std::uint64_t caseReportId =
+        parseTrailingNumericId(scanCaseEnvelope.value("result", json::object()).value("artifact_id", std::string()),
+                               "case-report:");
+    expect(caseReportId > 0, "phase8 scan-order-case-report should expose a case report id");
+
+    const json exportCaseBundleEnvelope = envelopeFromToolResult(adapter.callTool("tapescript_export_case_bundle", json{
+        {"report_id", caseReportId}
+    }));
+    expect(exportCaseBundleEnvelope.value("ok", false), "phase8 export-case-bundle should return ok=true");
+    const std::string caseBundlePath =
+        exportCaseBundleEnvelope.value("result", json::object()).value("bundle", json::object()).value("bundle_path", std::string());
+    expect(!caseBundlePath.empty() && fs::exists(caseBundlePath),
+           "phase8 export-case-bundle should write a portable case bundle");
+
+    const json createWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_create_watch_definition", json{
+        {"bundle_path", caseBundlePath},
+        {"analysis_profile", tape_phase7::kDefaultAnalyzerProfile},
+        {"title", "INTC Trigger Watch"},
+        {"enabled", true},
+        {"evaluation_cadence_minutes", 15}
+    }));
+    const json createWatchEnvelope = projectEnvelope(createWatchEnvelopeRaw);
+    expect(createWatchEnvelope.value("ok", false), "phase8 create_watch_definition should return ok=true");
+    const std::string watchArtifactId =
+        createWatchEnvelopeRaw.value("result", json::object())
+            .value("watch_definition", json::object())
+            .value("artifact_id", std::string());
+    expect(!watchArtifactId.empty(), "phase8 create_watch_definition should expose a watch artifact id");
+
+    const json reusedWatchEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_create_watch_definition", json{
+        {"bundle_path", caseBundlePath},
+        {"analysis_profile", tape_phase7::kDefaultAnalyzerProfile},
+        {"title", "INTC Trigger Watch"},
+        {"enabled", true},
+        {"evaluation_cadence_minutes", 15}
+    })));
+    expect(reusedWatchEnvelope.value("ok", false), "phase8 watch rerun should return ok=true");
+
+    const json createSuppressedWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_create_watch_definition", json{
+        {"bundle_path", caseBundlePath},
+        {"analysis_profile", tape_phase7::kIncidentTriageAnalyzerProfile},
+        {"title", "INTC Strict Trigger Watch"},
+        {"enabled", true},
+        {"evaluation_cadence_minutes", 15},
+        {"minimum_finding_count", 99},
+        {"required_category", "never_matches"}
+    }));
+    const json createSuppressedWatchEnvelope = projectEnvelope(createSuppressedWatchEnvelopeRaw);
+    expect(createSuppressedWatchEnvelope.value("ok", false), "phase8 strict create_watch_definition should return ok=true");
+    const std::string suppressedWatchArtifactId =
+        createSuppressedWatchEnvelopeRaw.value("result", json::object())
+            .value("watch_definition", json::object())
+            .value("artifact_id", std::string());
+    expect(!suppressedWatchArtifactId.empty(), "phase8 strict create_watch_definition should expose a watch artifact id");
+
+    const json watchListEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_watch_definitions", json{
+        {"limit", 10}
+    })));
+    expect(watchListEnvelope.value("ok", false), "phase8 list_watch_definitions should return ok=true");
+
+    const json readWatchEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_read_watch_definition", json{
+        {"watch_artifact_id", watchArtifactId}
+    })));
+    expect(readWatchEnvelope.value("ok", false), "phase8 read_watch_definition should return ok=true");
+
+    const json evaluateWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_evaluate_watch_definition", json{
+        {"watch_artifact_id", watchArtifactId}
+    }));
+    const json evaluateWatchEnvelope = projectEnvelope(evaluateWatchEnvelopeRaw);
+    expect(evaluateWatchEnvelope.value("ok", false), "phase8 evaluate_watch_definition should return ok=true");
+    const std::string triggerArtifactId =
+        evaluateWatchEnvelopeRaw.value("result", json::object())
+            .value("trigger_run", json::object())
+            .value("artifact_id", std::string());
+    expect(!triggerArtifactId.empty(), "phase8 evaluate_watch_definition should expose a trigger artifact id");
+
+    const json suppressedEvaluateWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_evaluate_watch_definition", json{
+        {"watch_artifact_id", suppressedWatchArtifactId}
+    }));
+    const json suppressedEvaluateWatchEnvelope = projectEnvelope(suppressedEvaluateWatchEnvelopeRaw);
+    expect(suppressedEvaluateWatchEnvelope.value("ok", false), "phase8 suppressed evaluate_watch_definition should return ok=true");
+    const std::string suppressedTriggerArtifactId =
+        suppressedEvaluateWatchEnvelopeRaw.value("result", json::object())
+            .value("trigger_run", json::object())
+            .value("artifact_id", std::string());
+    expect(!suppressedTriggerArtifactId.empty(),
+           "phase8 suppressed evaluate_watch_definition should expose a trigger artifact id");
+
+    const json triggerRunListEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_trigger_runs", json{
+        {"limit", 10}
+    })));
+    expect(triggerRunListEnvelope.value("ok", false), "phase8 list_trigger_runs should return ok=true");
+
+    const json readTriggerRunEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_read_trigger_run", json{
+        {"trigger_artifact_id", triggerArtifactId}
+    })));
+    expect(readTriggerRunEnvelope.value("ok", false), "phase8 read_trigger_run should return ok=true");
+
+    const json readSuppressedTriggerRunEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_read_trigger_run", json{
+        {"trigger_artifact_id", suppressedTriggerArtifactId}
+    })));
+    expect(readSuppressedTriggerRunEnvelope.value("ok", false),
+           "phase8 read suppressed trigger_run should return ok=true");
+
+    const json attentionItemsEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_attention_items", json{
+        {"limit", 10}
+    })));
+    expect(attentionItemsEnvelope.value("ok", false), "phase8 list_attention_items should return ok=true");
+
+    const json createScheduledWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_create_watch_definition", json{
+        {"bundle_path", caseBundlePath},
+        {"analysis_profile", tape_phase7::kFillQualityAnalyzerProfile},
+        {"title", "INTC Scheduled Trigger Watch"},
+        {"enabled", true},
+        {"evaluation_cadence_minutes", 15}
+    }));
+    const json createScheduledWatchEnvelope = projectEnvelope(createScheduledWatchEnvelopeRaw);
+    expect(createScheduledWatchEnvelope.value("ok", false),
+           "phase8 scheduled create_watch_definition should return ok=true");
+
+    const json createScheduledSuppressedWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_create_watch_definition", json{
+        {"bundle_path", caseBundlePath},
+        {"analysis_profile", tape_phase7::kOrderImpactAnalyzerProfile},
+        {"title", "INTC Scheduled Strict Trigger Watch"},
+        {"enabled", true},
+        {"evaluation_cadence_minutes", 15},
+        {"minimum_finding_count", 99},
+        {"required_category", "never_matches"}
+    }));
+    const json createScheduledSuppressedWatchEnvelope = projectEnvelope(createScheduledSuppressedWatchEnvelopeRaw);
+    expect(createScheduledSuppressedWatchEnvelope.value("ok", false),
+           "phase8 scheduled strict create_watch_definition should return ok=true");
+
+    const json dueWatchListEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_due_watches", json{
+        {"limit", 10}
+    })));
+    expect(dueWatchListEnvelope.value("ok", false), "phase8 list_due_watches should return ok=true");
+
+    const json runDueWatchesEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_run_due_watches", json{
+        {"limit", 10}
+    })));
+    expect(runDueWatchesEnvelope.value("ok", false), "phase8 run_due_watches should return ok=true");
+
+    const json invalidWatchCreateEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_create_watch_definition", json::object())));
+    expect(!invalidWatchCreateEnvelope.value("ok", true),
+           "phase8 create_watch_definition without args should return ok=false");
+    expect(invalidWatchCreateEnvelope.value("error", json::object()).value("code", std::string()) == "invalid_arguments",
+           "phase8 create_watch_definition without args should return invalid_arguments");
+
+    const json missingWatchEnvelope = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_read_watch_definition", json{
+        {"watch_artifact_id", "phase8-watch-missing"}
+    })));
+    expect(!missingWatchEnvelope.value("ok", true), "phase8 read missing watch should return ok=false");
+    expect(missingWatchEnvelope.value("error", json::object()).value("code", std::string()) == "artifact_not_found",
+           "phase8 read missing watch should return artifact_not_found");
+
+    const json resourceListResult = adapter.listResourcesResult();
+    const json phase8ResourceList = projectPhase8ResourceList(resourceListResult);
+    const json watchResource = projectResourceRead(adapter.readResourceResult("tape://phase8/watch/" + watchArtifactId));
+    const json watchMarkdownResource = projectResourceRead(
+        adapter.readResourceResult("tape://phase8/watch/" + watchArtifactId + "/markdown"));
+    const json triggerResource = projectResourceRead(adapter.readResourceResult("tape://phase8/trigger/" + triggerArtifactId));
+    const json triggerMarkdownResource = projectResourceRead(
+        adapter.readResourceResult("tape://phase8/trigger/" + triggerArtifactId + "/markdown"));
+    const json attentionResource = projectResourceRead(adapter.readResourceResult("tape://phase8/attention/open"));
+
+    const json createAckWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_create_watch_definition", json{
+        {"bundle_path", caseBundlePath},
+        {"analysis_profile", tape_phase7::kLiquidityBehaviorAnalyzerProfile},
+        {"title", "INTC Ack Trigger Watch"},
+        {"enabled", true},
+        {"evaluation_cadence_minutes", 15}
+    }));
+    expect(createAckWatchEnvelopeRaw.value("ok", false), "phase8 acknowledge watch create should return ok=true");
+    const std::string acknowledgeWatchArtifactId =
+        createAckWatchEnvelopeRaw.value("result", json::object())
+            .value("watch_definition", json::object())
+            .value("artifact_id", std::string());
+
+    const json evaluateAckWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_evaluate_watch_definition", json{
+        {"watch_artifact_id", acknowledgeWatchArtifactId}
+    }));
+    expect(evaluateAckWatchEnvelopeRaw.value("ok", false), "phase8 acknowledge watch evaluation should return ok=true");
+    const std::string acknowledgeTriggerArtifactId =
+        evaluateAckWatchEnvelopeRaw.value("result", json::object())
+            .value("trigger_run", json::object())
+            .value("artifact_id", std::string());
+
+    const json acknowledgeAttentionEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_acknowledge_attention_item", json{
+            {"trigger_artifact_id", acknowledgeTriggerArtifactId},
+            {"actor", "tapescope"},
+            {"comment", "Acknowledged for later follow-up."}
+        })));
+    expect(acknowledgeAttentionEnvelope.value("ok", false), "phase8 acknowledge attention should return ok=true");
+    const json attentionAfterAcknowledge = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_attention_items", json{
+        {"limit", 20}
+    })));
+    const json attentionAfterAcknowledgeItems =
+        attentionAfterAcknowledge.value("result", json::object()).value("attention_items", json::array());
+    expect(std::none_of(attentionAfterAcknowledgeItems.begin(),
+                        attentionAfterAcknowledgeItems.end(),
+                        [&](const json& item) {
+                            return item.value("title", std::string()) == "INTC Ack Trigger Watch";
+                        }),
+           "phase8 acknowledged trigger should leave the open attention inbox");
+
+    const json createSnoozeWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_create_watch_definition", json{
+        {"bundle_path", caseBundlePath},
+        {"analysis_profile", tape_phase7::kAdverseSelectionAnalyzerProfile},
+        {"title", "INTC Snooze Trigger Watch"},
+        {"enabled", true},
+        {"evaluation_cadence_minutes", 15}
+    }));
+    expect(createSnoozeWatchEnvelopeRaw.value("ok", false), "phase8 snooze watch create should return ok=true");
+    const std::string snoozeWatchArtifactId =
+        createSnoozeWatchEnvelopeRaw.value("result", json::object())
+            .value("watch_definition", json::object())
+            .value("artifact_id", std::string());
+
+    const json evaluateSnoozeWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_evaluate_watch_definition", json{
+        {"watch_artifact_id", snoozeWatchArtifactId}
+    }));
+    expect(evaluateSnoozeWatchEnvelopeRaw.value("ok", false), "phase8 snooze watch evaluation should return ok=true");
+    const std::string snoozeTriggerArtifactId =
+        evaluateSnoozeWatchEnvelopeRaw.value("result", json::object())
+            .value("trigger_run", json::object())
+            .value("artifact_id", std::string());
+
+    const json snoozeAttentionEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_snooze_attention_item", json{
+            {"trigger_artifact_id", snoozeTriggerArtifactId},
+            {"snooze_minutes", 30},
+            {"actor", "tapescope"},
+            {"comment", "Snoozed until the next review pass."}
+        })));
+    expect(snoozeAttentionEnvelope.value("ok", false), "phase8 snooze attention should return ok=true");
+    const json attentionAfterSnooze = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_attention_items", json{
+        {"limit", 20}
+    })));
+    const json attentionAfterSnoozeItems =
+        attentionAfterSnooze.value("result", json::object()).value("attention_items", json::array());
+    expect(std::none_of(attentionAfterSnoozeItems.begin(),
+                        attentionAfterSnoozeItems.end(),
+                        [&](const json& item) {
+                            return item.value("title", std::string()) == "INTC Snooze Trigger Watch";
+                        }),
+           "phase8 snoozed trigger should leave the open attention inbox until wake-up");
+
+    const json evaluateResolveWatchEnvelopeRaw = envelopeFromToolResult(adapter.callTool("tapescript_evaluate_watch_definition", json{
+        {"watch_artifact_id", acknowledgeWatchArtifactId}
+    }));
+    expect(evaluateResolveWatchEnvelopeRaw.value("ok", false), "phase8 resolve watch evaluation should return ok=true");
+    const std::string resolveTriggerArtifactId =
+        evaluateResolveWatchEnvelopeRaw.value("result", json::object())
+            .value("trigger_run", json::object())
+            .value("artifact_id", std::string());
+
+    const json resolveAttentionEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_resolve_attention_item", json{
+            {"trigger_artifact_id", resolveTriggerArtifactId},
+            {"actor", "tapescope"},
+            {"comment", "Resolved through the inbox workflow."}
+        })));
+    expect(resolveAttentionEnvelope.value("ok", false), "phase8 resolve attention should return ok=true");
+    const json attentionAfterResolve = projectEnvelope(envelopeFromToolResult(adapter.callTool("tapescript_list_attention_items", json{
+        {"limit", 20}
+    })));
+    const json attentionAfterResolveItems =
+        attentionAfterResolve.value("result", json::object()).value("attention_items", json::array());
+    expect(std::none_of(attentionAfterResolveItems.begin(),
+                        attentionAfterResolveItems.end(),
+                        [&](const json& item) {
+                            return item.value("title", std::string()) == "INTC Ack Trigger Watch";
+                        }),
+           "phase8 resolved trigger should leave the open attention inbox");
+
+    const json fixture = readJsonFixture("phase8_mcp_contracts.json");
+    expect(createWatchEnvelope == fixture.value("tapescript_create_watch_definition", json::object()),
+           "phase8 create_watch_definition envelope should match golden fixture\nactual:\n" + createWatchEnvelope.dump(2));
+    expect(reusedWatchEnvelope == fixture.value("tapescript_create_watch_definition_reused", json::object()),
+           "phase8 create_watch_definition rerun envelope should match golden fixture\nactual:\n" + reusedWatchEnvelope.dump(2));
+    expect(watchListEnvelope == fixture.value("tapescript_list_watch_definitions", json::object()),
+           "phase8 list_watch_definitions envelope should match golden fixture\nactual:\n" + watchListEnvelope.dump(2));
+    expect(readWatchEnvelope == fixture.value("tapescript_read_watch_definition", json::object()),
+           "phase8 read_watch_definition envelope should match golden fixture\nactual:\n" + readWatchEnvelope.dump(2));
+    expect(createSuppressedWatchEnvelope == fixture.value("tapescript_create_watch_definition_suppressed", json::object()),
+           "phase8 strict create_watch_definition envelope should match golden fixture\nactual:\n" +
+               createSuppressedWatchEnvelope.dump(2));
+    expect(createScheduledWatchEnvelope == fixture.value("tapescript_create_watch_definition_scheduled", json::object()),
+           "phase8 scheduled create_watch_definition envelope should match golden fixture\nactual:\n" +
+               createScheduledWatchEnvelope.dump(2));
+    expect(createScheduledSuppressedWatchEnvelope ==
+               fixture.value("tapescript_create_watch_definition_scheduled_suppressed", json::object()),
+           "phase8 scheduled strict create_watch_definition envelope should match golden fixture\nactual:\n" +
+               createScheduledSuppressedWatchEnvelope.dump(2));
+    expect(evaluateWatchEnvelope == fixture.value("tapescript_evaluate_watch_definition", json::object()),
+           "phase8 evaluate_watch_definition envelope should match golden fixture\nactual:\n" + evaluateWatchEnvelope.dump(2));
+    expect(suppressedEvaluateWatchEnvelope == fixture.value("tapescript_evaluate_watch_definition_suppressed", json::object()),
+           "phase8 suppressed evaluate_watch_definition envelope should match golden fixture\nactual:\n" +
+               suppressedEvaluateWatchEnvelope.dump(2));
+    expect(dueWatchListEnvelope == fixture.value("tapescript_list_due_watches", json::object()),
+           "phase8 list_due_watches envelope should match golden fixture\nactual:\n" + dueWatchListEnvelope.dump(2));
+    expect(runDueWatchesEnvelope == fixture.value("tapescript_run_due_watches", json::object()),
+           "phase8 run_due_watches envelope should match golden fixture\nactual:\n" + runDueWatchesEnvelope.dump(2));
+    expect(acknowledgeAttentionEnvelope == fixture.value("tapescript_acknowledge_attention_item", json::object()),
+           "phase8 acknowledge attention envelope should match golden fixture\nactual:\n" +
+               acknowledgeAttentionEnvelope.dump(2));
+    expect(snoozeAttentionEnvelope == fixture.value("tapescript_snooze_attention_item", json::object()),
+           "phase8 snooze attention envelope should match golden fixture\nactual:\n" +
+               snoozeAttentionEnvelope.dump(2));
+    expect(resolveAttentionEnvelope == fixture.value("tapescript_resolve_attention_item", json::object()),
+           "phase8 resolve attention envelope should match golden fixture\nactual:\n" +
+               resolveAttentionEnvelope.dump(2));
+    expect(triggerRunListEnvelope == fixture.value("tapescript_list_trigger_runs", json::object()),
+           "phase8 list_trigger_runs envelope should match golden fixture\nactual:\n" + triggerRunListEnvelope.dump(2));
+    expect(readTriggerRunEnvelope == fixture.value("tapescript_read_trigger_run", json::object()),
+           "phase8 read_trigger_run envelope should match golden fixture\nactual:\n" + readTriggerRunEnvelope.dump(2));
+    expect(readSuppressedTriggerRunEnvelope == fixture.value("tapescript_read_trigger_run_suppressed", json::object()),
+           "phase8 read suppressed trigger_run envelope should match golden fixture\nactual:\n" +
+               readSuppressedTriggerRunEnvelope.dump(2));
+    expect(attentionItemsEnvelope == fixture.value("tapescript_list_attention_items", json::object()),
+           "phase8 list_attention_items envelope should match golden fixture\nactual:\n" + attentionItemsEnvelope.dump(2));
+    expect(phase8ResourceList == fixture.value("resources_list_phase8", json::array()),
+           "phase8 resources/list projection should match golden fixture\nactual:\n" + phase8ResourceList.dump(2));
+    expect(watchResource == fixture.value("resource_read_phase8_watch", json::object()),
+           "phase8 watch resource should match golden fixture\nactual:\n" + watchResource.dump(2));
+    expect(watchMarkdownResource == fixture.value("resource_read_phase8_watch_markdown", json::object()),
+           "phase8 watch markdown resource should match golden fixture\nactual:\n" + watchMarkdownResource.dump(2));
+    expect(triggerResource == fixture.value("resource_read_phase8_trigger", json::object()),
+           "phase8 trigger resource should match golden fixture\nactual:\n" + triggerResource.dump(2));
+    expect(triggerMarkdownResource == fixture.value("resource_read_phase8_trigger_markdown", json::object()),
+           "phase8 trigger markdown resource should match golden fixture\nactual:\n" + triggerMarkdownResource.dump(2));
+    expect(attentionResource == fixture.value("resource_read_phase8_attention", json::object()),
+           "phase8 attention resource should match golden fixture\nactual:\n" + attentionResource.dump(2));
+}
+
 void testTapeMcpStdioHarness() {
     configurePhase7DataDir("tape-mcp-phase7-stdio-appdata");
 
@@ -4790,7 +5440,7 @@ void testTapeMcpStdioHarness() {
     });
     const json listResponse = readJsonRpcMessage(child.readFd);
     const json tools = listResponse.value("result", json::object()).value("tools", json::array());
-    expect(tools.is_array() && tools.size() == 57, "tools/list should expose the expanded phase 7 tool slice");
+    expect(tools.is_array() && tools.size() == 69, "tools/list should expose the expanded phase 8 inbox-action slice");
     json overviewTool = json::object();
     for (const auto& tool : tools) {
         if (tool.value("name", std::string()) == "tapescript_read_session_overview") {
@@ -4836,6 +5486,45 @@ void testTapeMcpStdioHarness() {
     expect(analyzerRunTool.is_object(), "tools/list should include tapescript_analyzer_run");
     expect(analyzerRunTool.value("progressHint", false),
            "tools/list should advertise progressHint for analyzer runs");
+    json createWatchTool = json::object();
+    for (const auto& tool : tools) {
+        if (tool.value("name", std::string()) == "tapescript_create_watch_definition") {
+            createWatchTool = tool;
+            break;
+        }
+    }
+    expect(createWatchTool.is_object(), "tools/list should include tapescript_create_watch_definition");
+    expect(!createWatchTool.value("annotations", json::object()).value("readOnlyHint", true),
+           "tools/list should mark create_watch_definition as mutating");
+    json dueWatchTool = json::object();
+    json runDueWatchesTool = json::object();
+    json acknowledgeAttentionTool = json::object();
+    json snoozeAttentionTool = json::object();
+    json resolveAttentionTool = json::object();
+    for (const auto& tool : tools) {
+        if (tool.value("name", std::string()) == "tapescript_list_due_watches") {
+            dueWatchTool = tool;
+        }
+        if (tool.value("name", std::string()) == "tapescript_run_due_watches") {
+            runDueWatchesTool = tool;
+        }
+        if (tool.value("name", std::string()) == "tapescript_acknowledge_attention_item") {
+            acknowledgeAttentionTool = tool;
+        }
+        if (tool.value("name", std::string()) == "tapescript_snooze_attention_item") {
+            snoozeAttentionTool = tool;
+        }
+        if (tool.value("name", std::string()) == "tapescript_resolve_attention_item") {
+            resolveAttentionTool = tool;
+        }
+    }
+    expect(dueWatchTool.is_object(), "tools/list should include tapescript_list_due_watches");
+    expect(runDueWatchesTool.is_object(), "tools/list should include tapescript_run_due_watches");
+    expect(acknowledgeAttentionTool.is_object(), "tools/list should include tapescript_acknowledge_attention_item");
+    expect(snoozeAttentionTool.is_object(), "tools/list should include tapescript_snooze_attention_item");
+    expect(resolveAttentionTool.is_object(), "tools/list should include tapescript_resolve_attention_item");
+    expect(runDueWatchesTool.value("progressHint", false),
+           "tools/list should advertise progressHint for due watch batch runs");
 
     writeJsonRpcMessage(child.writeFd, json{
         {"jsonrpc", "2.0"},
@@ -5288,6 +5977,7 @@ int main() {
         testTapeMcpPhase5WebsocketAmbientGlobalOnly();
         testTapeMcpPhase6BundleTools();
         testTapeMcpPhase7Contracts();
+        testTapeMcpPhase8Contracts();
         testTapeMcpStdioHarness();
     } catch (const std::exception& error) {
         std::cerr << "tape_mcp_contract_tests failed: " << error.what() << '\n';

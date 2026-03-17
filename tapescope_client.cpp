@@ -1472,6 +1472,191 @@ QueryResult<Phase7ExecutionApplyEventPayload> QueryClient::recordExecutionApplyE
         errorMessage);
 }
 
+QueryResult<Phase8WatchDefinitionCreatePayload> QueryClient::createWatchDefinitionPayload(
+    const std::string& bundlePath,
+    const std::string& analysisProfile,
+    const std::string& title,
+    bool enabled,
+    std::size_t evaluationCadenceMinutes,
+    std::size_t minimumFindingCount,
+    const std::string& minimumSeverity,
+    const std::string& requiredCategory) const {
+    Phase8WatchDefinitionCreatePayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::createWatchDefinition(bundlePath,
+                                                                    analysisProfile,
+                                                                    title,
+                                                                    enabled,
+                                                                    evaluationCadenceMinutes,
+                                                                    minimumFindingCount,
+                                                                    minimumSeverity,
+                                                                    requiredCategory,
+                                                                    &payload.artifact,
+                                                                    &payload.created,
+                                                                    &errorCode,
+                                                                    &errorMessage),
+                                 std::move(payload),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<std::vector<Phase8WatchDefinitionArtifact>> QueryClient::listWatchDefinitionsPayload(std::size_t limit) const {
+    std::vector<Phase8WatchDefinitionArtifact> artifacts;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::listWatchDefinitions(limit, &artifacts, &errorCode, &errorMessage),
+                                 std::move(artifacts),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase8DueWatchInventoryPayload> QueryClient::listDueWatchesPayload(std::size_t limit) const {
+    Phase8DueWatchInventoryPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::listDueWatchDefinitions(limit,
+                                                                      &payload,
+                                                                      &errorCode,
+                                                                      &errorMessage),
+                                 std::move(payload),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase8WatchDefinitionArtifact> QueryClient::readWatchDefinitionPayload(const std::string& artifactId) const {
+    Phase8WatchDefinitionArtifact artifact;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::loadWatchDefinition({}, artifactId, &artifact, &errorCode, &errorMessage),
+                                 std::move(artifact),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase8TriggerRunPayload> QueryClient::evaluateWatchDefinitionPayload(const std::string& artifactId,
+                                                                                 const std::string& triggerReason) const {
+    Phase8TriggerRunPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::evaluateWatchDefinition({},
+                                                                      artifactId,
+                                                                      triggerReason,
+                                                                      &payload.artifact,
+                                                                      &payload.created,
+                                                                      &errorCode,
+                                                                      &errorMessage),
+                                 std::move(payload),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase8DueWatchRunPayload> QueryClient::runDueWatchesPayload(std::size_t limit,
+                                                                        const std::string& triggerReason) const {
+    Phase8DueWatchRunPayload payload;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::runDueWatchDefinitions(limit,
+                                                                     triggerReason,
+                                                                     &payload,
+                                                                     &errorCode,
+                                                                     &errorMessage),
+                                 std::move(payload),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<std::vector<Phase8TriggerRunArtifact>> QueryClient::listTriggerRunsPayload(std::size_t limit) const {
+    std::vector<Phase8TriggerRunArtifact> artifacts;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::listTriggerRuns(limit, &artifacts, &errorCode, &errorMessage),
+                                 std::move(artifacts),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase8TriggerRunArtifact> QueryClient::readTriggerRunPayload(const std::string& artifactId) const {
+    Phase8TriggerRunArtifact artifact;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::loadTriggerRunArtifact({}, artifactId, &artifact, &errorCode, &errorMessage),
+                                 std::move(artifact),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase8TriggerRunArtifact> QueryClient::acknowledgeAttentionItemPayload(const std::string& triggerArtifactId,
+                                                                                   const std::string& actor,
+                                                                                   const std::string& comment) const {
+    Phase8TriggerRunArtifact artifact;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::recordAttentionAction({},
+                                                                    triggerArtifactId,
+                                                                    "acknowledge",
+                                                                    0,
+                                                                    actor,
+                                                                    comment,
+                                                                    &artifact,
+                                                                    &errorCode,
+                                                                    &errorMessage),
+                                 std::move(artifact),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase8TriggerRunArtifact> QueryClient::snoozeAttentionItemPayload(const std::string& triggerArtifactId,
+                                                                              const std::size_t snoozeMinutes,
+                                                                              const std::string& actor,
+                                                                              const std::string& comment) const {
+    Phase8TriggerRunArtifact artifact;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::recordAttentionAction({},
+                                                                    triggerArtifactId,
+                                                                    "snooze",
+                                                                    snoozeMinutes,
+                                                                    actor,
+                                                                    comment,
+                                                                    &artifact,
+                                                                    &errorCode,
+                                                                    &errorMessage),
+                                 std::move(artifact),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<Phase8TriggerRunArtifact> QueryClient::resolveAttentionItemPayload(const std::string& triggerArtifactId,
+                                                                               const std::string& actor,
+                                                                               const std::string& comment) const {
+    Phase8TriggerRunArtifact artifact;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::recordAttentionAction({},
+                                                                    triggerArtifactId,
+                                                                    "resolve",
+                                                                    0,
+                                                                    actor,
+                                                                    comment,
+                                                                    &artifact,
+                                                                    &errorCode,
+                                                                    &errorMessage),
+                                 std::move(artifact),
+                                 errorCode,
+                                 errorMessage);
+}
+
+QueryResult<std::vector<Phase8AttentionInboxItem>> QueryClient::listAttentionInboxPayload(std::size_t limit) const {
+    std::vector<Phase8AttentionInboxItem> items;
+    std::string errorCode;
+    std::string errorMessage;
+    return packPhase7LocalResult(tape_phase8::listAttentionInbox(limit, &items, &errorCode, &errorMessage),
+                                 std::move(items),
+                                 errorCode,
+                                 errorMessage);
+}
+
 std::string QueryClient::describeError(const QueryError& error) {
     switch (error.kind) {
         case QueryErrorKind::None:

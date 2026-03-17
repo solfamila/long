@@ -53,6 +53,17 @@ std::string trimAscii(const std::string& value) {
     return value.substr(begin, end - begin + 1);
 }
 
+std::string jsonStringOrEmpty(const json& payload, const char* key) {
+    if (!payload.is_object()) {
+        return {};
+    }
+    const auto it = payload.find(key);
+    if (it == payload.end() || !it->is_string()) {
+        return {};
+    }
+    return it->get<std::string>();
+}
+
 std::string normalizeSymbolToken(std::string value) {
     value = trimAscii(std::move(value));
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
@@ -188,11 +199,11 @@ std::vector<json> listTools(const json& responsePayload) {
 }
 
 std::string toolCatalogText(const json& tool) {
-    return toLowerAscii(tool.value("name", std::string()) + " " + tool.value("description", std::string()));
+    return toLowerAscii(jsonStringOrEmpty(tool, "name") + " " + jsonStringOrEmpty(tool, "description"));
 }
 
 int scoreToolForFacet(const std::string& facet, const json& tool) {
-    const std::string name = tool.value("name", std::string());
+    const std::string name = jsonStringOrEmpty(tool, "name");
     const std::string text = toolCatalogText(tool);
     if (facet == "options_flow") {
         if (name == "get_option_trades") {
@@ -273,7 +284,7 @@ int scoreToolForFacet(const std::string& facet, const json& tool) {
 }
 
 std::string rationaleForFacetTool(const std::string& facet, const json& tool, int score) {
-    const std::string name = tool.value("name", std::string());
+    const std::string name = jsonStringOrEmpty(tool, "name");
     if (score <= 0) {
         return "no_direct_match";
     }
@@ -319,7 +330,7 @@ std::vector<FacetCandidate> rankedCandidatesForFacet(const json& toolCatalog,
         if (!tool.is_object()) {
             continue;
         }
-        const std::string name = tool.value("name", std::string());
+        const std::string name = jsonStringOrEmpty(tool, "name");
         if (name.empty()) {
             continue;
         }
@@ -548,7 +559,7 @@ WsEnvelope parseWsEnvelope(const std::string& frame) {
 
 bool isJoinAck(const WsEnvelope& envelope) {
     return envelope.parsed && envelope.channelBound && envelope.payload.is_object() &&
-           envelope.payload.value("status", std::string()) == "ok" &&
+           jsonStringOrEmpty(envelope.payload, "status") == "ok" &&
            envelope.payload.contains("response");
 }
 
@@ -563,7 +574,7 @@ std::string errorMessage(const WsEnvelope& envelope) {
     if (!isErrorFrame(envelope)) {
         return {};
     }
-    return envelope.payload.value("error", std::string());
+    return jsonStringOrEmpty(envelope.payload, "error");
 }
 
 bool isAlreadyInRoomFrame(const WsEnvelope& envelope) {
@@ -879,8 +890,12 @@ void mergeChannelStats(json& target, const json& source) {
         if (!entry.is_object()) {
             entry = json::object();
         }
-        entry["channel"] = it.value().value("channel", it.key());
-        entry["channel_family"] = it.value().value("channel_family", channelFamily(it.key()));
+        const std::string channel = jsonStringOrEmpty(it.value(), "channel");
+        const std::string channelFamilyValue = jsonStringOrEmpty(it.value(), "channel_family");
+        entry["channel"] = channel.empty() ? json(it.key()) : json(channel);
+        entry["channel_family"] = channelFamilyValue.empty()
+            ? json(channelFamily(it.key()))
+            : json(channelFamilyValue);
         for (const char* key : {"raw_frame_count",
                                 "candidate_data_frame_count",
                                 "data_frame_count",
@@ -1181,7 +1196,7 @@ std::vector<std::string> unresolvedUWMcpFacets(const ProviderStep& step,
             if (!record.is_object()) {
                 continue;
             }
-            const std::string kind = record.value("kind", std::string());
+            const std::string kind = jsonStringOrEmpty(record, "kind");
             if (!kind.empty()) {
                 coveredKinds.insert(kind);
             }

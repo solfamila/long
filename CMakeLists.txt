@@ -173,10 +173,12 @@ set(TAPESCOPE_SOURCES
     tapescope_order_queries.mm
     tapescope_artifact_queries.mm
     tapescope_phase7_queries.mm
+    tapescope_phase8_queries.mm
     tapescope_phase7_runtime.mm
     tapescope_bundle_preview.cpp
     tapescope_client.cpp
     tape_phase7_artifacts.cpp
+    tape_phase8_artifacts.cpp
     tape_phase7_runtime_bridge.cpp
     tape_bundle_inspection.cpp
     tape_query_payloads.cpp
@@ -205,6 +207,7 @@ set(TAPE_MCP_SOURCES
     tape_mcp_adapter.cpp
     tape_mcp_engine_rpc.cpp
     tape_phase7_artifacts.cpp
+    tape_phase8_artifacts.cpp
     tape_query_payloads.cpp
     tape_bundle_inspection.cpp
     tape_engine_client.cpp
@@ -737,6 +740,7 @@ if(BUILD_TESTING)
         runtime_qos.cpp
         websocket_handlers.cpp
         tape_phase7_artifacts.cpp
+        tape_phase8_artifacts.cpp
         tape_bundle_inspection.cpp
         tape_engine.cpp
         tape_engine_client.cpp
@@ -805,6 +809,7 @@ if(BUILD_TESTING)
         tape_mcp_adapter.cpp
         tape_mcp_engine_rpc.cpp
         tape_phase7_artifacts.cpp
+        tape_phase8_artifacts.cpp
         tape_phase7_runtime_bridge.cpp
         tape_query_payloads.cpp
         tape_bundle_inspection.cpp
@@ -880,6 +885,7 @@ set_source_files_properties(
     tapescope_order_queries.mm
     tapescope_artifact_queries.mm
     tapescope_phase7_queries.mm
+    tapescope_phase8_queries.mm
     tapescope_investigation_pane.mm
     tapescope_support_ui.mm
     tapescope_support_describe.mm

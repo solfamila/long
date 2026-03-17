@@ -56,9 +56,8 @@ std::map<std::string, std::string> parseCredentialFile(const std::filesystem::pa
     return values;
 }
 
-const std::map<std::string, std::string>& localCredentialValues() {
-    static const std::map<std::string, std::string> values = parseCredentialFile(localCredentialFilePath());
-    return values;
+std::map<std::string, std::string> localCredentialValues() {
+    return parseCredentialFile(localCredentialFilePath());
 }
 
 std::tm gmTime(std::time_t value) {

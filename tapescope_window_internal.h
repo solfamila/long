@@ -26,7 +26,7 @@ struct ProbeSnapshot {
 
 }
 
-@interface TapeScopeWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate> {
+@interface TapeScopeWindowController : NSWindowController <NSTableViewDataSource, NSTableViewDelegate, NSTabViewDelegate> {
 @protected
     std::unique_ptr<tapescope::QueryClient> _client;
     dispatch_queue_t _pollQueue;
@@ -44,6 +44,7 @@ struct ProbeSnapshot {
     std::uint64_t _artifactExportRequestToken;
     std::uint64_t _bundleWorkflowRequestToken;
     std::uint64_t _phase7RequestToken;
+    std::uint64_t _phase8RequestToken;
 
     NSBox* _bannerBox;
     NSTextField* _bannerLabel;
@@ -58,6 +59,8 @@ struct ProbeSnapshot {
     NSTextField* _liveCountValue;
     NSTextField* _segmentCountValue;
     NSTextField* _manifestHashValue;
+    NSMutableArray<NSButton*>* _paneButtons;
+    NSTextField* _activePaneLabel;
     NSTabView* _tabView;
 
     NSTextView* _statusTextView;
@@ -342,11 +345,50 @@ struct ProbeSnapshot {
     std::unique_ptr<TradingRuntimeHost> _phase7RuntimeHost;
     int _phase7RuntimeClientId;
 
+    NSButton* _phase8RefreshButton;
+    NSTextField* _phase8BundlePathField;
+    NSTextField* _phase8TitleField;
+    NSTextField* _phase8CadenceMinutesField;
+    NSTextField* _phase8MinimumFindingCountField;
+    NSTextField* _phase8RequiredCategoryField;
+    NSPopUpButton* _phase8ProfilePopup;
+    NSPopUpButton* _phase8MinimumSeverityPopup;
+    NSButton* _phase8EnabledButton;
+    NSButton* _phase8ChooseBundleButton;
+    NSButton* _phase8CreateWatchButton;
+    NSButton* _phase8RunDueButton;
+    NSButton* _phase8EvaluateWatchButton;
+    NSTextField* _phase8AttentionCommentField;
+    NSTextField* _phase8SnoozeMinutesField;
+    NSButton* _phase8AcknowledgeButton;
+    NSButton* _phase8SnoozeButton;
+    NSButton* _phase8ResolveButton;
+    NSButton* _phase8OpenAnalysisButton;
+    NSButton* _phase8OpenSourceArtifactButton;
+    NSPopUpButton* _phase8WatchPopup;
+    NSPopUpButton* _phase8TriggerPopup;
+    NSPopUpButton* _phase8AttentionPopup;
+    NSTextField* _phase8StateLabel;
+    NSTextView* _phase8TextView;
+    BOOL _phase8InFlight;
+    NSInteger _phase8SelectionFocus;
+    std::string _phase8SelectedWatchArtifactId;
+    std::string _phase8SelectedTriggerArtifactId;
+    std::string _phase8SelectedAnalysisArtifactId;
+    std::string _phase8SelectedSourceArtifactId;
+    std::vector<tapescope::Phase8WatchDefinitionArtifact> _latestPhase8WatchDefinitions;
+    std::vector<tapescope::Phase8TriggerRunArtifact> _latestPhase8TriggerRuns;
+    std::vector<tapescope::Phase8AttentionInboxItem> _latestPhase8AttentionItems;
+
     std::vector<std::pair<NSTableView*, tapescope::InvestigationPaneController*>> _evidencePaneBindings;
 }
 
 - (void)updateBannerAppearanceWithColor:(NSColor*)color;
 - (void)updatePollingStatusText;
+- (NSButton*)makePaneNavigationButtonWithTitle:(NSString*)title identifier:(NSString*)identifier;
+- (void)syncPaneSelectionChrome;
+- (void)selectPaneWithIdentifier:(NSString*)identifier;
+- (void)paneNavigationPressed:(id)sender;
 - (tapescope::InvestigationPaneController*)paneControllerForEvidenceTable:(NSTableView*)tableView;
 
 @end
@@ -519,6 +561,26 @@ struct ProbeSnapshot {
 - (void)syncSelectedPhase7ApplyFromJournal:(id)sender;
 - (void)updatePhase7RuntimeControls;
 - (void)shutdownPhase7RuntimeHost;
+
+@end
+
+@interface TapeScopeWindowController (Phase8Queries)
+
+- (NSTabViewItem*)phase8InboxTabItem;
+- (void)refreshPhase8Inbox:(id)sender;
+- (void)choosePhase8BundlePath:(id)sender;
+- (void)createPhase8WatchDefinition:(id)sender;
+- (void)runDuePhase8Watches:(id)sender;
+- (void)evaluateSelectedPhase8Watch:(id)sender;
+- (void)acknowledgeSelectedPhase8Attention:(id)sender;
+- (void)snoozeSelectedPhase8Attention:(id)sender;
+- (void)resolveSelectedPhase8Attention:(id)sender;
+- (void)openSelectedPhase8Analysis:(id)sender;
+- (void)openSelectedPhase8SourceArtifact:(id)sender;
+- (void)phase8WatchSelectionChanged:(id)sender;
+- (void)phase8TriggerSelectionChanged:(id)sender;
+- (void)phase8AttentionSelectionChanged:(id)sender;
+- (void)refreshPhase8DetailText;
 
 @end
 

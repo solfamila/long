@@ -179,7 +179,9 @@
     "has_text": true,
     "mime_type": "text/markdown",
     "ok": true,
-    "uri": "tape://phase7/analysis/<id>/markdown"
+    "uri": "tape://phase7/analysis/<id>/markdown",
+    "contains_phase8_watch": false,
+    "contains_phase8_trigger": false
   },
   "resource_read_phase7_execution_apply": {
     "content_count": 1,
@@ -377,7 +379,9 @@
     "has_text": true,
     "mime_type": "text/markdown",
     "ok": true,
-    "uri": "tape://phase7/apply/<id>/markdown"
+    "uri": "tape://phase7/apply/<id>/markdown",
+    "contains_phase8_watch": false,
+    "contains_phase8_trigger": false
   },
   "resource_read_phase7_execution_journal": {
     "content_count": 1,
@@ -574,7 +578,9 @@
     "has_text": true,
     "mime_type": "text/markdown",
     "ok": true,
-    "uri": "tape://phase7/journal/<id>/markdown"
+    "uri": "tape://phase7/journal/<id>/markdown",
+    "contains_phase8_watch": false,
+    "contains_phase8_trigger": false
   },
   "resource_read_phase7_execution_ledger": {
     "content_count": 1,
@@ -746,7 +752,9 @@
     "has_text": true,
     "mime_type": "text/markdown",
     "ok": true,
-    "uri": "tape://phase7/ledger/<id>/markdown"
+    "uri": "tape://phase7/ledger/<id>/markdown",
+    "contains_phase8_watch": false,
+    "contains_phase8_trigger": false
   },
   "resource_read_phase7_playbook": {
     "content_count": 1,
@@ -810,7 +818,9 @@
     "has_text": true,
     "mime_type": "text/markdown",
     "ok": true,
-    "uri": "tape://phase7/playbook/<id>/markdown"
+    "uri": "tape://phase7/playbook/<id>/markdown",
+    "contains_phase8_watch": false,
+    "contains_phase8_trigger": false
   },
   "resources_list_phase7": [
     {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tape_phase7_artifacts.h"
+#include "tape_phase8_artifacts.h"
 #include "tape_engine_client.h"
 #include "tape_query_payloads.h"
 
@@ -53,6 +54,9 @@ using Phase7ExecutionJournalEntry = tape_phase7::ExecutionJournalEntry;
 using Phase7ExecutionJournalArtifact = tape_phase7::ExecutionJournalArtifact;
 using Phase7ExecutionApplyEntry = tape_phase7::ExecutionApplyEntry;
 using Phase7ExecutionApplyArtifact = tape_phase7::ExecutionApplyArtifact;
+using Phase8WatchDefinitionArtifact = tape_phase8::WatchDefinitionArtifact;
+using Phase8TriggerRunArtifact = tape_phase8::TriggerRunArtifact;
+using Phase8AttentionInboxItem = tape_phase8::AttentionInboxItem;
 
 struct Phase7AnalysisRunPayload {
     Phase7AnalysisArtifact artifact;
@@ -98,6 +102,19 @@ struct Phase7ExecutionApplyEventPayload {
     std::vector<std::string> updatedEntryIds;
     std::string auditEventId;
 };
+
+struct Phase8WatchDefinitionCreatePayload {
+    Phase8WatchDefinitionArtifact artifact;
+    bool created = false;
+};
+
+struct Phase8TriggerRunPayload {
+    Phase8TriggerRunArtifact artifact;
+    bool created = false;
+};
+
+using Phase8DueWatchInventoryPayload = tape_phase8::DueWatchInventoryResult;
+using Phase8DueWatchRunPayload = tape_phase8::DueWatchRunResult;
 
 struct Phase7ExecutionApplyInventorySelection {
     std::string journalArtifactId;
@@ -343,6 +360,46 @@ public:
         const std::string& comment,
         const std::string& failureCode = {},
         const std::string& failureMessage = {}) const;
+    [[nodiscard]] QueryResult<Phase8WatchDefinitionCreatePayload> createWatchDefinitionPayload(
+        const std::string& bundlePath,
+        const std::string& analysisProfile,
+        const std::string& title = {},
+        bool enabled = true,
+        std::size_t evaluationCadenceMinutes = tape_phase8::kDefaultEvaluationCadenceMinutes,
+        std::size_t minimumFindingCount = 1,
+        const std::string& minimumSeverity = {},
+        const std::string& requiredCategory = {}) const;
+    [[nodiscard]] QueryResult<std::vector<Phase8WatchDefinitionArtifact>> listWatchDefinitionsPayload(
+        std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase8DueWatchInventoryPayload> listDueWatchesPayload(
+        std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase8WatchDefinitionArtifact> readWatchDefinitionPayload(
+        const std::string& artifactId) const;
+    [[nodiscard]] QueryResult<Phase8TriggerRunPayload> evaluateWatchDefinitionPayload(
+        const std::string& artifactId,
+        const std::string& triggerReason = {}) const;
+    [[nodiscard]] QueryResult<Phase8DueWatchRunPayload> runDueWatchesPayload(
+        std::size_t limit = 20,
+        const std::string& triggerReason = {}) const;
+    [[nodiscard]] QueryResult<std::vector<Phase8TriggerRunArtifact>> listTriggerRunsPayload(
+        std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase8TriggerRunArtifact> readTriggerRunPayload(
+        const std::string& artifactId) const;
+    [[nodiscard]] QueryResult<Phase8TriggerRunArtifact> acknowledgeAttentionItemPayload(
+        const std::string& triggerArtifactId,
+        const std::string& actor = {},
+        const std::string& comment = {}) const;
+    [[nodiscard]] QueryResult<Phase8TriggerRunArtifact> snoozeAttentionItemPayload(
+        const std::string& triggerArtifactId,
+        std::size_t snoozeMinutes = tape_phase8::kDefaultAttentionSnoozeMinutes,
+        const std::string& actor = {},
+        const std::string& comment = {}) const;
+    [[nodiscard]] QueryResult<Phase8TriggerRunArtifact> resolveAttentionItemPayload(
+        const std::string& triggerArtifactId,
+        const std::string& actor = {},
+        const std::string& comment = {}) const;
+    [[nodiscard]] QueryResult<std::vector<Phase8AttentionInboxItem>> listAttentionInboxPayload(
+        std::size_t limit = 20) const;
 
     [[nodiscard]] static std::string describeError(const QueryError& error);
 

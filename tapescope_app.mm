@@ -17,6 +17,18 @@ namespace {
 
 using namespace tapescope_support;
 
+NSColor* PaneButtonActiveColor() {
+    return [NSColor colorWithCalibratedRed:0.133 green:0.369 blue:0.698 alpha:1.0];
+}
+
+NSColor* PaneButtonIdleColor() {
+    return [NSColor colorWithCalibratedRed:0.933 green:0.915 blue:0.872 alpha:1.0];
+}
+
+NSColor* PaneButtonIdleBorderColor() {
+    return [NSColor colorWithCalibratedRed:0.827 green:0.792 blue:0.714 alpha:1.0];
+}
+
 } // namespace
 
 @implementation TapeScopeWindowController
@@ -37,6 +49,7 @@ using namespace tapescope_support;
 
     window.title = @"TapeScope";
     window.minSize = NSMakeSize(900, 620);
+    window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace;
     if (@available(macOS 11.0, *)) {
         window.toolbarStyle = NSWindowToolbarStyleUnified;
     }
@@ -82,6 +95,21 @@ using namespace tapescope_support;
     return item;
 }
 
+- (NSTabViewItem*)textTabItemWithIdentifier:(NSString*)identifier
+                                     label:(NSString*)label
+                                  textView:(NSTextView* __strong*)outTextView {
+    NSTextView* textView = MakeReadOnlyTextView();
+    NSScrollView* scrollView = MakeScrollView(textView, 420.0);
+
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:identifier];
+    item.label = label;
+    item.view = scrollView;
+    if (outTextView != nullptr) {
+        *outTextView = textView;
+    }
+    return item;
+}
+
 - (NSTabViewItem*)liveEventsTabItem {
     const auto paneWithStack = MakePaneWithStack();
     NSStackView* stack = paneWithStack.stack;
@@ -103,7 +131,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_liveTextView, 240.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"LiveEventsPane"];
-    item.label = @"LiveEventsPane";
+    item.label = @"Live";
     item.view = pane;
     return item;
 }
@@ -115,43 +143,53 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeIntroLabel(@"Session overview: summarize the major incidents and evidence for a frozen session_seq window.",
                                              2)];
 
-    NSStackView* controls = MakeControlRow();
-    [controls addArrangedSubview:MakeLabel(@"first_session_seq",
-                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                           [NSColor secondaryLabelColor])];
+    NSStackView* fieldsRow = MakeControlRow();
+    [fieldsRow addArrangedSubview:MakeLabel(@"first_session_seq",
+                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                            [NSColor secondaryLabelColor])];
     _overviewFirstField = MakeMonospacedField(130.0, UInt64String(_lastOverviewQuery.firstSessionSeq));
-    [controls addArrangedSubview:_overviewFirstField];
-
-    [controls addArrangedSubview:MakeLabel(@"last_session_seq",
-                                           [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
-                                           [NSColor secondaryLabelColor])];
+    [fieldsRow addArrangedSubview:_overviewFirstField];
+    [fieldsRow addArrangedSubview:MakeLabel(@"last_session_seq",
+                                            [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                            [NSColor secondaryLabelColor])];
     _overviewLastField = MakeMonospacedField(130.0, UInt64String(_lastOverviewQuery.lastSessionSeq));
-    [controls addArrangedSubview:_overviewLastField];
+    [fieldsRow addArrangedSubview:_overviewLastField];
+    [stack addArrangedSubview:fieldsRow];
+
+    NSStackView* primaryActions = MakeControlRow();
+    [primaryActions setSpacing:10.0];
 
     _overviewFetchButton = [NSButton buttonWithTitle:@"Read Overview"
                                               target:self
                                               action:@selector(fetchOverview:)];
-    [controls addArrangedSubview:_overviewFetchButton];
+    _overviewFetchButton.bezelColor = PaneButtonIdleColor();
+    [primaryActions addArrangedSubview:_overviewFetchButton];
     _overviewScanButton = [NSButton buttonWithTitle:@"Scan Report"
                                              target:self
                                              action:@selector(scanOverviewReport:)];
-    [controls addArrangedSubview:_overviewScanButton];
+    _overviewScanButton.bezelColor = PaneButtonActiveColor();
+    _overviewScanButton.contentTintColor = [NSColor whiteColor];
+    [primaryActions addArrangedSubview:_overviewScanButton];
+    [stack addArrangedSubview:primaryActions];
+
+    NSStackView* secondaryActions = MakeControlRow();
+    [secondaryActions setSpacing:10.0];
     _overviewLoadReplayButton = [NSButton buttonWithTitle:@"Load Range"
                                                    target:self
                                                    action:@selector(loadReplayWindowFromOverview:)];
     _overviewLoadReplayButton.enabled = NO;
-    [controls addArrangedSubview:_overviewLoadReplayButton];
+    [secondaryActions addArrangedSubview:_overviewLoadReplayButton];
     _overviewOpenSelectedIncidentButton = [NSButton buttonWithTitle:@"Open Selected Incident"
                                                              target:self
                                                              action:@selector(openSelectedOverviewIncident:)];
     _overviewOpenSelectedIncidentButton.enabled = NO;
-    [controls addArrangedSubview:_overviewOpenSelectedIncidentButton];
+    [secondaryActions addArrangedSubview:_overviewOpenSelectedIncidentButton];
     _overviewOpenSelectedEvidenceButton = [NSButton buttonWithTitle:@"Open Selected Evidence"
                                                              target:self
                                                              action:@selector(openSelectedOverviewEvidence:)];
     _overviewOpenSelectedEvidenceButton.enabled = NO;
-    [controls addArrangedSubview:_overviewOpenSelectedEvidenceButton];
-    [stack addArrangedSubview:controls];
+    [secondaryActions addArrangedSubview:_overviewOpenSelectedEvidenceButton];
+    [stack addArrangedSubview:secondaryActions];
 
     _overviewStateLabel = MakeLabel(@"No session overview loaded yet.",
                                     [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
@@ -181,7 +219,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeTableScrollView(_overviewEvidenceTableView, 140.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"SessionOverviewPane"];
-    item.label = @"SessionOverviewPane";
+    item.label = @"Overview";
     item.view = pane;
     return item;
 }
@@ -232,7 +270,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_rangeTextView, 220.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"RangePane"];
-    item.label = @"RangePane";
+    item.label = @"Range";
     item.view = pane;
     return item;
 }
@@ -279,7 +317,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_qualityTextView, 420.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"QualityPane"];
-    item.label = @"QualityPane";
+    item.label = @"Quality";
     item.view = pane;
     return item;
 }
@@ -330,7 +368,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_findingTextView, 220.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"FindingPane"];
-    item.label = @"FindingPane";
+    item.label = @"Finding";
     item.view = pane;
     return item;
 }
@@ -381,7 +419,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_anchorTextView, 220.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"AnchorPane"];
-    item.label = @"AnchorPane";
+    item.label = @"Anchor";
     item.view = pane;
     return item;
 }
@@ -428,7 +466,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_orderTextView, 220.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"OrderLookupPane"];
-    item.label = @"OrderLookupPane";
+    item.label = @"Orders";
     item.view = pane;
     return item;
 }
@@ -500,7 +538,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeTableScrollView(_orderCaseEvidenceTableView, 160.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"OrderCasePane"];
-    item.label = @"OrderCasePane";
+    item.label = @"Order Case";
     item.view = pane;
     return item;
 }
@@ -544,7 +582,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_seekTextView, 320.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"ReplayTargetPane"];
-    item.label = @"ReplayTargetPane";
+    item.label = @"Replay";
     item.view = pane;
     return item;
 }
@@ -626,7 +664,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_incidentTextView, 180.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"IncidentPane"];
-    item.label = @"IncidentPane";
+    item.label = @"Incident";
     item.view = pane;
     return item;
 }
@@ -698,7 +736,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_artifactTextView, 180.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"ArtifactPane"];
-    item.label = @"ArtifactPane";
+    item.label = @"Artifacts";
     item.view = pane;
     return item;
 }
@@ -865,7 +903,7 @@ using namespace tapescope_support;
     [stack addArrangedSubview:MakeScrollView(_bundlePreviewTextView, 160.0)];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"ReportInventoryPane"];
-    item.label = @"ReportInventoryPane";
+    item.label = @"Reports";
     item.view = pane;
     return item;
 }
@@ -955,7 +993,9 @@ using namespace tapescope_support;
 
     _tabView = [[NSTabView alloc] initWithFrame:NSZeroRect];
     _tabView.translatesAutoresizingMaskIntoConstraints = NO;
-    [_tabView addTabViewItem:[self textTabItemWithLabel:@"StatusPane" textView:&_statusTextView]];
+    _tabView.delegate = self;
+    _tabView.tabViewType = NSNoTabsNoBorder;
+    [_tabView addTabViewItem:[self textTabItemWithIdentifier:@"StatusPane" label:@"Status" textView:&_statusTextView]];
     [_tabView addTabViewItem:[self liveEventsTabItem]];
     [_tabView addTabViewItem:[self recentHistoryTabItem]];
     [_tabView addTabViewItem:[self bundleHistoryTabItem]];
@@ -970,6 +1010,7 @@ using namespace tapescope_support;
     [_tabView addTabViewItem:[self orderCaseTabItem]];
     [_tabView addTabViewItem:[self reportInventoryTabItem]];
     [_tabView addTabViewItem:[self phase7ArtifactsTabItem]];
+    [_tabView addTabViewItem:[self phase8InboxTabItem]];
     [_tabView addTabViewItem:[self artifactTabItem]];
     [_tabView.heightAnchor constraintGreaterThanOrEqualToConstant:520.0].active = YES;
 
@@ -977,8 +1018,46 @@ using namespace tapescope_support;
     NSStackView* tabStack = tabCardWithStack.stack;
     NSBox* tabCard = tabCardWithStack.box;
     [tabStack addArrangedSubview:MakeSectionLabel(@"Investigation Surface")];
-    [tabStack addArrangedSubview:_tabView];
+
+    NSStackView* surfaceRow = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    surfaceRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    surfaceRow.alignment = NSLayoutAttributeTop;
+    surfaceRow.spacing = 14.0;
+    surfaceRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+    const auto navCardWithStack = MakeCardWithStack(10.0);
+    NSBox* navCard = navCardWithStack.box;
+    NSStackView* navStack = navCardWithStack.stack;
+    [navCard.widthAnchor constraintEqualToConstant:210.0].active = YES;
+    [navStack addArrangedSubview:MakeSectionLabel(@"Panes")];
+    [navStack addArrangedSubview:MakeIntroLabel(@"Jump between overview, incidents, orders, artifacts, and Phase 7/8 workflows.", 3)];
+    _paneButtons = [[NSMutableArray alloc] init];
+    for (NSTabViewItem* item in _tabView.tabViewItems) {
+        NSButton* button = [self makePaneNavigationButtonWithTitle:item.label ?: @"Pane"
+                                                         identifier:(NSString*)item.identifier];
+        [_paneButtons addObject:button];
+        [navStack addArrangedSubview:button];
+    }
+
+    const auto surfaceCardWithStack = MakeCardWithStack(12.0);
+    NSBox* surfaceCard = surfaceCardWithStack.box;
+    NSStackView* surfaceStack = surfaceCardWithStack.stack;
+    _activePaneLabel = MakeLabel(@"Overview",
+                                 [NSFont systemFontOfSize:18.0 weight:NSFontWeightBold],
+                                 [NSColor labelColor]);
+    [surfaceStack addArrangedSubview:_activePaneLabel];
+    [surfaceStack addArrangedSubview:MakeIntroLabel(@"Use the pane list on the left to move between investigation surfaces. The overview pane auto-loads a report on startup.",
+                                                    2)];
+    [surfaceStack addArrangedSubview:_tabView];
+
+    [surfaceRow addArrangedSubview:navCard];
+    [surfaceRow addArrangedSubview:surfaceCard];
+    [surfaceCard.widthAnchor constraintGreaterThanOrEqualToConstant:760.0].active = YES;
+    [tabStack addArrangedSubview:surfaceRow];
+    [surfaceRow.widthAnchor constraintEqualToAnchor:tabStack.widthAnchor].active = YES;
     [root addArrangedSubview:tabCard];
+
+    [self selectPaneWithIdentifier:@"SessionOverviewPane"];
 
     _overviewPane->bind(_overviewStateLabel,
                         _overviewTextView,
@@ -1049,13 +1128,29 @@ using namespace tapescope_support;
 }
 
 - (void)showWindowAndStart {
+    [self.window center];
     [self showWindow:nil];
+    [self.window deminiaturize:nil];
+    [self.window orderFrontRegardless];
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+
+    if (_tabView.selectedTabViewItem == nil ||
+        [_tabView.selectedTabViewItem.identifier isEqual:@"StatusPane"]) {
+        [self selectPaneWithIdentifier:@"SessionOverviewPane"];
+        [self persistApplicationState];
+    }
+
     [self.window makeFirstResponder:_overviewFirstField];
     [self startPolling];
     [self refreshIncidentList:nil];
     [self refreshReportInventory:nil];
+    if (_tabView.selectedTabViewItem != nil &&
+        [_tabView.selectedTabViewItem.identifier isEqual:@"SessionOverviewPane"] &&
+        _overviewTextView != nil &&
+        [_overviewTextView.string containsString:@"Read a session overview"]) {
+        [self scanOverviewReport:nil];
+    }
 }
 
 - (void)updateBannerAppearanceWithColor:(NSColor*)color {
@@ -1082,6 +1177,66 @@ using namespace tapescope_support;
         _lastProbeLabel.stringValue = @"No probe yet";
     }
     _pollingToggleButton.title = _pollingPaused ? @"Resume Polling" : @"Pause Polling";
+}
+
+- (NSButton*)makePaneNavigationButtonWithTitle:(NSString*)title identifier:(NSString*)identifier {
+    NSButton* button = [NSButton buttonWithTitle:title ?: @"Pane"
+                                          target:self
+                                          action:@selector(paneNavigationPressed:)];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.identifier = identifier;
+    button.bordered = YES;
+    button.bezelStyle = NSBezelStyleRounded;
+    button.buttonType = NSButtonTypeMomentaryPushIn;
+    button.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
+    button.alignment = NSTextAlignmentLeft;
+    [button.heightAnchor constraintEqualToConstant:30.0].active = YES;
+    [button.widthAnchor constraintGreaterThanOrEqualToConstant:170.0].active = YES;
+    return button;
+}
+
+- (void)syncPaneSelectionChrome {
+    if (_tabView == nil || _tabView.selectedTabViewItem == nil) {
+        return;
+    }
+    NSString* identifier = (NSString*)_tabView.selectedTabViewItem.identifier;
+    if (_activePaneLabel != nil) {
+        _activePaneLabel.stringValue = _tabView.selectedTabViewItem.label ?: @"Pane";
+    }
+    for (NSButton* button in _paneButtons) {
+        const bool selected = identifier != nil && [button.identifier isEqualToString:identifier];
+        button.bezelColor = selected ? PaneButtonActiveColor() : PaneButtonIdleColor();
+        button.contentTintColor = selected ? [NSColor whiteColor] : [NSColor labelColor];
+        button.font = [NSFont systemFontOfSize:13.0 weight:selected ? NSFontWeightBold : NSFontWeightSemibold];
+        if (!selected && button.wantsLayer) {
+            button.layer.borderColor = PaneButtonIdleBorderColor().CGColor;
+        }
+    }
+}
+
+- (void)selectPaneWithIdentifier:(NSString*)identifier {
+    if (_tabView == nil || identifier == nil) {
+        return;
+    }
+    [_tabView selectTabViewItemWithIdentifier:identifier];
+    [self syncPaneSelectionChrome];
+}
+
+- (void)paneNavigationPressed:(id)sender {
+    if ([sender isKindOfClass:[NSButton class]]) {
+        NSButton* button = (NSButton*)sender;
+        if (button.identifier != nil) {
+            [self selectPaneWithIdentifier:button.identifier];
+        }
+        [self persistApplicationState];
+    }
+}
+
+- (void)tabView:(NSTabView*)tabView didSelectTabViewItem:(nullable NSTabViewItem*)tabViewItem {
+    if (tabView != _tabView || tabViewItem == nil) {
+        return;
+    }
+    [self syncPaneSelectionChrome];
 }
 
 - (void)refreshNow:(id)sender {

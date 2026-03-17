@@ -1,4 +1,5 @@
 #include "tape_mcp_adapter.h"
+#include "tape_phase8_artifacts.h"
 #include "tape_phase7_artifacts.h"
 #include "tape_query_payloads.h"
 
@@ -18,6 +19,7 @@ namespace {
 
 constexpr const char* kContractVersion = "phase5-mcp-v1";
 constexpr const char* kPhase7ContractVersion = tape_phase7::kContractVersion;
+constexpr const char* kPhase8ContractVersion = tape_phase8::kContractVersion;
 constexpr const char* kServerVersion = "0.1.0";
 constexpr const char* kProtocolVersion = "2024-11-05";
 constexpr std::uint32_t kToolEnvelopeVersion = 1;
@@ -1949,6 +1951,30 @@ std::string toolTitle(const ToolSpec& tool) {
             return "Read Execution Apply";
         case ToolId::RecordExecutionApplyEvent:
             return "Record Execution Apply Event";
+        case ToolId::CreateWatchDefinition:
+            return "Create Watch Definition";
+        case ToolId::ListWatchDefinitions:
+            return "List Watch Definitions";
+        case ToolId::ListDueWatches:
+            return "List Due Watches";
+        case ToolId::ReadWatchDefinition:
+            return "Read Watch Definition";
+        case ToolId::EvaluateWatchDefinition:
+            return "Evaluate Watch Definition";
+        case ToolId::RunDueWatches:
+            return "Run Due Watches";
+        case ToolId::AcknowledgeAttentionItem:
+            return "Acknowledge Attention Item";
+        case ToolId::SnoozeAttentionItem:
+            return "Snooze Attention Item";
+        case ToolId::ResolveAttentionItem:
+            return "Resolve Attention Item";
+        case ToolId::ListTriggerRuns:
+            return "List Trigger Runs";
+        case ToolId::ReadTriggerRun:
+            return "Read Trigger Run";
+        case ToolId::ListAttentionItems:
+            return "List Attention Items";
     }
     return tool.name;
 }
@@ -1964,11 +1990,17 @@ json toolAnnotationsForSpec(const ToolSpec& tool) {
         case ToolId::ImportCaseBundle:
         case ToolId::AnalyzerRun:
         case ToolId::PlaybookApply:
+        case ToolId::CreateWatchDefinition:
         case ToolId::PrepareExecutionLedger:
         case ToolId::RecordExecutionLedgerReview:
         case ToolId::StartExecutionJournal:
         case ToolId::DispatchExecutionJournal:
         case ToolId::RecordExecutionJournalEvent:
+        case ToolId::EvaluateWatchDefinition:
+        case ToolId::RunDueWatches:
+        case ToolId::AcknowledgeAttentionItem:
+        case ToolId::SnoozeAttentionItem:
+        case ToolId::ResolveAttentionItem:
             return toolAnnotations(false, true, false);
         default:
             return toolAnnotations(true, true, false);
@@ -2160,6 +2192,58 @@ json toolInputSchemaForList(const ToolSpec& tool) {
                      {"failure_code", "venue_reject"},
                      {"failure_message", "Exchange rejected the submitted action."}}
             });
+        case ToolId::CreateWatchDefinition:
+            return withSchemaExamples(std::move(schema), {
+                json{{"bundle_path", "/tmp/case-bundle-report-000001.msgpack"}},
+                json{{"bundle_path", "/tmp/case-bundle-report-000001.msgpack"},
+                     {"analysis_profile", "phase7.trace_fill_integrity.v1"},
+                     {"title", "SPY integrity watch"},
+                     {"evaluation_cadence_minutes", 15}}
+            });
+        case ToolId::ListWatchDefinitions:
+            return withSchemaExamples(std::move(schema), {json{{"limit", 10}}});
+        case ToolId::ListDueWatches:
+            return withSchemaExamples(std::move(schema), {json{{"limit", 10}}});
+        case ToolId::ReadWatchDefinition:
+            return withSchemaExamples(std::move(schema), {json{{"watch_artifact_id", "watch-case-bundle-1234abcd"}}});
+        case ToolId::EvaluateWatchDefinition:
+            return withSchemaExamples(std::move(schema), {
+                json{{"watch_artifact_id", "watch-case-bundle-1234abcd"}},
+                json{{"watch_artifact_id", "watch-case-bundle-1234abcd"}, {"trigger_reason", "manual_eval"}}
+            });
+        case ToolId::RunDueWatches:
+            return withSchemaExamples(std::move(schema), {
+                json::object(),
+                json{{"limit", 5}, {"trigger_reason", "scheduled_eval"}}
+            });
+        case ToolId::AcknowledgeAttentionItem:
+            return withSchemaExamples(std::move(schema), {
+                json{{"trigger_artifact_id", "trigger-watch-case-bundle-1234abcd"}},
+                json{{"trigger_artifact_id", "trigger-watch-case-bundle-1234abcd"},
+                     {"actor", "tapescope"},
+                     {"comment", "Reviewed and acknowledged; will follow up later."}}
+            });
+        case ToolId::SnoozeAttentionItem:
+            return withSchemaExamples(std::move(schema), {
+                json{{"trigger_artifact_id", "trigger-watch-case-bundle-1234abcd"}, {"snooze_minutes", 60}},
+                json{{"trigger_artifact_id", "trigger-watch-case-bundle-1234abcd"},
+                     {"snooze_minutes", 30},
+                     {"actor", "tapescope"},
+                     {"comment", "Waiting for a later review window."}}
+            });
+        case ToolId::ResolveAttentionItem:
+            return withSchemaExamples(std::move(schema), {
+                json{{"trigger_artifact_id", "trigger-watch-case-bundle-1234abcd"}},
+                json{{"trigger_artifact_id", "trigger-watch-case-bundle-1234abcd"},
+                     {"actor", "tapescope"},
+                     {"comment", "Handled through existing operator workflow."}}
+            });
+        case ToolId::ListTriggerRuns:
+            return withSchemaExamples(std::move(schema), {json{{"limit", 10}}});
+        case ToolId::ReadTriggerRun:
+            return withSchemaExamples(std::move(schema), {json{{"trigger_artifact_id", "trigger-watch-case-bundle-1234abcd"}}});
+        case ToolId::ListAttentionItems:
+            return withSchemaExamples(std::move(schema), {json{{"limit", 10}}});
         case ToolId::Status:
         default:
             return schema;
@@ -2564,7 +2648,12 @@ enum class ResourceKind {
     Phase7ExecutionJournalJson,
     Phase7ExecutionJournalMarkdown,
     Phase7ExecutionApplyJson,
-    Phase7ExecutionApplyMarkdown
+    Phase7ExecutionApplyMarkdown,
+    Phase8WatchDefinitionJson,
+    Phase8WatchDefinitionMarkdown,
+    Phase8TriggerRunJson,
+    Phase8TriggerRunMarkdown,
+    Phase8AttentionOpenJson
 };
 
 struct ParsedResourceUri {
@@ -2629,6 +2718,26 @@ std::string phase7ExecutionApplyMarkdownUri(std::string_view artifactId) {
     return "tape://phase7/apply/" + std::string(artifactId) + "/markdown";
 }
 
+std::string phase8WatchDefinitionUri(std::string_view artifactId) {
+    return "tape://phase8/watch/" + std::string(artifactId);
+}
+
+std::string phase8WatchDefinitionMarkdownUri(std::string_view artifactId) {
+    return "tape://phase8/watch/" + std::string(artifactId) + "/markdown";
+}
+
+std::string phase8TriggerRunUri(std::string_view artifactId) {
+    return "tape://phase8/trigger/" + std::string(artifactId);
+}
+
+std::string phase8TriggerRunMarkdownUri(std::string_view artifactId) {
+    return "tape://phase8/trigger/" + std::string(artifactId) + "/markdown";
+}
+
+std::string phase8AttentionOpenUri() {
+    return "tape://phase8/attention/open";
+}
+
 ParsedResourceUri parseResourceUri(std::string_view uri) {
     ParsedResourceUri parsed;
     const std::string text(uri);
@@ -2656,6 +2765,9 @@ ParsedResourceUri parseResourceUri(std::string_view uri) {
     constexpr std::string_view kPhase7ExecutionLedgerPrefix = "tape://phase7/ledger/";
     constexpr std::string_view kPhase7ExecutionJournalPrefix = "tape://phase7/journal/";
     constexpr std::string_view kPhase7ExecutionApplyPrefix = "tape://phase7/apply/";
+    constexpr std::string_view kPhase8WatchPrefix = "tape://phase8/watch/";
+    constexpr std::string_view kPhase8TriggerPrefix = "tape://phase8/trigger/";
+    constexpr std::string_view kPhase8AttentionOpen = "tape://phase8/attention/open";
 
     if (text.rfind(std::string(kSessionReportPrefix), 0) == 0) {
         parsed.kind = ResourceKind::SessionReportJson;
@@ -2751,6 +2863,34 @@ ParsedResourceUri parseResourceUri(std::string_view uri) {
         } else if (text.substr(formatPos + 1) == "markdown") {
             parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase7ExecutionApplyMarkdown;
         }
+        return parsed;
+    }
+    if (text.rfind(std::string(kPhase8WatchPrefix), 0) == 0) {
+        const std::size_t formatPos = text.find('/', kPhase8WatchPrefix.size());
+        parsed.artifactId = text.substr(
+            kPhase8WatchPrefix.size(),
+            (formatPos == std::string::npos ? text.size() : formatPos) - kPhase8WatchPrefix.size());
+        if (formatPos == std::string::npos) {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase8WatchDefinitionJson;
+        } else if (text.substr(formatPos + 1) == "markdown") {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase8WatchDefinitionMarkdown;
+        }
+        return parsed;
+    }
+    if (text.rfind(std::string(kPhase8TriggerPrefix), 0) == 0) {
+        const std::size_t formatPos = text.find('/', kPhase8TriggerPrefix.size());
+        parsed.artifactId = text.substr(
+            kPhase8TriggerPrefix.size(),
+            (formatPos == std::string::npos ? text.size() : formatPos) - kPhase8TriggerPrefix.size());
+        if (formatPos == std::string::npos) {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase8TriggerRunJson;
+        } else if (text.substr(formatPos + 1) == "markdown") {
+            parsed.kind = parsed.artifactId.empty() ? ResourceKind::Unknown : ResourceKind::Phase8TriggerRunMarkdown;
+        }
+        return parsed;
+    }
+    if (text == std::string(kPhase8AttentionOpen)) {
+        parsed.kind = ResourceKind::Phase8AttentionOpenJson;
         return parsed;
     }
     return parsed;
@@ -3222,6 +3362,70 @@ json phase7ExecutionApplyEventInputSchema() {
     };
 }
 
+json phase8WatchDefinitionInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"bundle_path", stringSchema()},
+            {"analysis_profile", stringSchema()},
+            {"title", stringSchema()},
+            {"enabled", booleanSchema()},
+            {"evaluation_cadence_minutes", nonNegativeIntegerSchema()},
+            {"minimum_finding_count", nonNegativeIntegerSchema()},
+            {"minimum_severity", stringEnumSchema({"critical", "high", "medium", "low", "info"})},
+            {"required_category", stringSchema()}
+        }},
+        {"required", json::array({"bundle_path"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8WatchRefInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"watch_manifest_path", stringSchema()},
+            {"watch_artifact_id", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"watch_manifest_path"})}},
+            json{{"required", json::array({"watch_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8TriggerRunInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"watch_manifest_path", stringSchema()},
+            {"watch_artifact_id", stringSchema()},
+            {"trigger_reason", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"watch_manifest_path"})}},
+            json{{"required", json::array({"watch_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8TriggerRefInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"trigger_manifest_path", stringSchema()},
+            {"trigger_artifact_id", stringSchema()}
+        }},
+        {"oneOf", json::array({
+            json{{"required", json::array({"trigger_manifest_path"})}},
+            json{{"required", json::array({"trigger_artifact_id"})}}
+        })},
+        {"additionalProperties", false}
+    };
+}
+
 json phase7AnalysisProfileSchema() {
     return json{
         {"type", "object"},
@@ -3253,6 +3457,327 @@ json phase7AnalysisProfileListResultSchema() {
             {"analysis_profiles", json{{"type", "array"}, {"items", phase7AnalysisProfileSchema()}}}
         }},
         {"required", json::array({"returned_count", "analysis_profiles"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8ArtifactRefSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"artifact_type", stringSchema()},
+            {"contract_version", stringSchema()},
+            {"artifact_id", stringSchema()},
+            {"manifest_path", stringSchema()},
+            {"artifact_root_dir", stringSchema()}
+        }},
+        {"required", json::array({
+            "artifact_type",
+            "contract_version",
+            "artifact_id",
+            "manifest_path",
+            "artifact_root_dir"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8BundleSummarySchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"bundle_path", stringSchema()},
+            {"bundle_type", stringSchema()},
+            {"payload_sha256", stringSchema()},
+            {"headline", stringSchema()},
+            {"source_artifact_id", stringSchema()},
+            {"source_report_id", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"source_revision_id", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"first_session_seq", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}},
+            {"last_session_seq", json{{"oneOf", json::array({positiveIntegerSchema(), json{{"type", "null"}}})}}}
+        }},
+        {"required", json::array({
+            "bundle_path",
+            "bundle_type",
+            "payload_sha256",
+            "headline",
+            "source_artifact_id",
+            "source_report_id",
+            "source_revision_id",
+            "first_session_seq",
+            "last_session_seq"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8WatchDefinitionSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"watch_definition", phase8ArtifactRefSchema()},
+            {"title", stringSchema()},
+            {"bundle_path", stringSchema()},
+            {"analysis_profile", stringSchema()},
+            {"enabled", booleanSchema()},
+            {"evaluation_cadence_minutes", nonNegativeIntegerSchema()},
+            {"minimum_finding_count", nonNegativeIntegerSchema()},
+            {"minimum_severity", nullableStringSchema()},
+            {"required_category", nullableStringSchema()},
+            {"created_at_utc", stringSchema()},
+            {"updated_at_utc", stringSchema()},
+            {"latest_evaluation_at_utc", nullableStringSchema()},
+            {"next_evaluation_at_utc", nullableStringSchema()},
+            {"latest_trigger_outcome", nullableStringSchema()},
+            {"latest_trigger_artifact_id", nullableStringSchema()},
+            {"bundle_summary", phase8BundleSummarySchema()}
+        }},
+        {"required", json::array({
+            "watch_definition",
+            "title",
+            "bundle_path",
+            "analysis_profile",
+            "enabled",
+            "evaluation_cadence_minutes",
+            "minimum_finding_count",
+            "minimum_severity",
+            "required_category",
+            "created_at_utc",
+            "updated_at_utc",
+            "latest_evaluation_at_utc",
+            "next_evaluation_at_utc",
+            "latest_trigger_outcome",
+            "latest_trigger_artifact_id",
+            "bundle_summary"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8WatchDefinitionCreateResultSchema() {
+    json schema = phase8WatchDefinitionSchema();
+    schema["properties"]["artifact_status"] = stringEnumSchema({"created", "reused"});
+    schema["required"].push_back("artifact_status");
+    return schema;
+}
+
+json phase8TriggerRunSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"watch_definition", phase8ArtifactRefSchema()},
+            {"source_artifact", phase8ArtifactRefSchema()},
+            {"analysis_artifact", phase8ArtifactRefSchema()},
+            {"trigger_run", phase8ArtifactRefSchema()},
+            {"title", stringSchema()},
+            {"headline", stringSchema()},
+            {"analysis_profile", stringSchema()},
+            {"trigger_reason", stringSchema()},
+            {"trigger_outcome", stringEnumSchema({"triggered", "suppressed"})},
+            {"attention_status", stringSchema()},
+            {"attention_open", booleanSchema()},
+            {"attention_updated_at_utc", nullableStringSchema()},
+            {"attention_actor", nullableStringSchema()},
+            {"attention_comment", nullableStringSchema()},
+            {"snoozed_until_utc", nullableStringSchema()},
+            {"analysis_created", booleanSchema()},
+            {"finding_count", nonNegativeIntegerSchema()},
+            {"highest_severity", nullableStringSchema()},
+            {"generated_at_utc", stringSchema()},
+            {"finding_categories", json{{"type", "array"}, {"items", stringSchema()}}},
+            {"suppression_reasons", json{{"type", "array"}, {"items", json{
+                {"type", "object"},
+                {"properties", {
+                    {"code", stringSchema()},
+                    {"message", stringSchema()},
+                    {"actual_finding_count", nonNegativeIntegerSchema()},
+                    {"required_finding_count", nonNegativeIntegerSchema()},
+                    {"actual_highest_severity", nullableStringSchema()},
+                    {"required_minimum_severity", stringSchema()},
+                    {"required_category", stringSchema()}
+                }},
+                {"required", json::array({"code", "message"})},
+                {"additionalProperties", true}
+            }}}}
+        }},
+        {"required", json::array({
+            "watch_definition",
+            "source_artifact",
+            "analysis_artifact",
+            "trigger_run",
+            "title",
+            "headline",
+            "analysis_profile",
+            "trigger_reason",
+            "trigger_outcome",
+            "attention_status",
+            "attention_open",
+            "attention_updated_at_utc",
+            "attention_actor",
+            "attention_comment",
+            "snoozed_until_utc",
+            "analysis_created",
+            "finding_count",
+            "highest_severity",
+            "generated_at_utc",
+            "finding_categories",
+            "suppression_reasons"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8TriggerRunCreateResultSchema() {
+    json schema = phase8TriggerRunSchema();
+    schema["properties"]["artifact_status"] = stringEnumSchema({"created", "reused"});
+    schema["required"].push_back("artifact_status");
+    return schema;
+}
+
+json phase8AttentionInboxItemSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"trigger_artifact_id", stringSchema()},
+            {"watch_artifact_id", stringSchema()},
+            {"analysis_artifact_id", stringSchema()},
+            {"source_artifact_id", stringSchema()},
+            {"title", stringSchema()},
+            {"headline", stringSchema()},
+            {"attention_status", stringSchema()},
+            {"attention_open", booleanSchema()},
+            {"trigger_outcome", stringEnumSchema({"triggered", "suppressed"})},
+            {"highest_severity", nullableStringSchema()},
+            {"analysis_profile", stringSchema()},
+            {"finding_count", nonNegativeIntegerSchema()},
+            {"generated_at_utc", stringSchema()},
+            {"attention_updated_at_utc", nullableStringSchema()},
+            {"snoozed_until_utc", nullableStringSchema()}
+        }},
+        {"required", json::array({
+            "trigger_artifact_id",
+            "watch_artifact_id",
+            "analysis_artifact_id",
+            "source_artifact_id",
+            "title",
+            "headline",
+            "attention_status",
+            "attention_open",
+            "trigger_outcome",
+            "highest_severity",
+            "analysis_profile",
+            "finding_count",
+            "generated_at_utc",
+            "attention_updated_at_utc",
+            "snoozed_until_utc"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8WatchDefinitionListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"watch_definitions", json{{"type", "array"}, {"items", phase8WatchDefinitionSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "watch_definitions"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8TriggerRunListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"trigger_runs", json{{"type", "array"}, {"items", phase8TriggerRunSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "trigger_runs"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8AttentionInboxResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"attention_items", json{{"type", "array"}, {"items", phase8AttentionInboxItemSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "attention_items"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8DueWatchListResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"returned_count", nonNegativeIntegerSchema()},
+            {"matched_count", nonNegativeIntegerSchema()},
+            {"watch_definitions", json{{"type", "array"}, {"items", phase8WatchDefinitionSchema()}}}
+        }},
+        {"required", json::array({"returned_count", "matched_count", "watch_definitions"})},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8RunDueWatchesInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"limit", positiveIntegerSchema()},
+            {"trigger_reason", stringSchema()}
+        }},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8RunDueWatchesResultSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"trigger_reason", stringSchema()},
+            {"matched_watch_count", nonNegativeIntegerSchema()},
+            {"evaluated_watch_count", nonNegativeIntegerSchema()},
+            {"created_trigger_count", nonNegativeIntegerSchema()},
+            {"attention_opened_count", nonNegativeIntegerSchema()},
+            {"suppressed_count", nonNegativeIntegerSchema()},
+            {"trigger_runs", json{{"type", "array"}, {"items", phase8TriggerRunSchema()}}}
+        }},
+        {"required", json::array({
+            "trigger_reason",
+            "matched_watch_count",
+            "evaluated_watch_count",
+            "created_trigger_count",
+            "attention_opened_count",
+            "suppressed_count",
+            "trigger_runs"
+        })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8AttentionActionInputSchema(bool includeSnoozeMinutes) {
+    json properties = {
+        {"trigger_manifest_path", stringSchema()},
+        {"trigger_artifact_id", stringSchema()},
+        {"actor", stringSchema()},
+        {"comment", stringSchema()}
+    };
+    if (includeSnoozeMinutes) {
+        properties["snooze_minutes"] = positiveIntegerSchema();
+    }
+
+    return json{
+        {"type", "object"},
+        {"properties", std::move(properties)},
+        {"oneOf", json::array({
+            json{{"required", json::array({"trigger_manifest_path"})}},
+            json{{"required", json::array({"trigger_artifact_id"})}}
+        })},
         {"additionalProperties", false}
     };
 }
@@ -3817,7 +4342,127 @@ std::vector<ToolSpec> buildToolSpecs() {
          tape_engine::QueryOperation::Unknown,
          false,
          kPhase7ContractVersion,
-         "phase7_record_execution_apply_event_local"}
+         "phase7_record_execution_apply_event_local"},
+        {ToolId::CreateWatchDefinition,
+         "tapescript_create_watch_definition",
+         "Create or reopen a durable local Phase 8 watch definition for a portable bundle and analyzer profile.",
+         phase8WatchDefinitionInputSchema(),
+         phase8WatchDefinitionCreateResultSchema(),
+         "phase8.watch-definition.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_create_watch_definition_local"},
+        {ToolId::ListWatchDefinitions,
+         "tapescript_list_watch_definitions",
+         "List persisted local Phase 8 watch definitions.",
+         limitOnlyInputSchema(),
+         phase8WatchDefinitionListResultSchema(),
+         "phase8.watch-definition-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_list_watch_definitions_local"},
+        {ToolId::ListDueWatches,
+         "tapescript_list_due_watches",
+         "List enabled Phase 8 watch definitions that are currently due for automatic evaluation.",
+         limitOnlyInputSchema(),
+         phase8DueWatchListResultSchema(),
+         "phase8.due-watch-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_list_due_watches_local"},
+        {ToolId::ReadWatchDefinition,
+         "tapescript_read_watch_definition",
+         "Read one stored local Phase 8 watch definition by id or manifest path.",
+         phase8WatchRefInputSchema(),
+         phase8WatchDefinitionSchema(),
+         "phase8.watch-definition.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_read_watch_definition_local"},
+        {ToolId::EvaluateWatchDefinition,
+         "tapescript_evaluate_watch_definition",
+         "Evaluate a Phase 8 watch definition, auto-running the linked Phase 7 analyzer and creating a trigger artifact.",
+         phase8TriggerRunInputSchema(),
+         phase8TriggerRunCreateResultSchema(),
+         "phase8.trigger-run.v1",
+         tape_engine::QueryOperation::Unknown,
+         true,
+         kPhase8ContractVersion,
+         "phase8_evaluate_watch_definition_local"},
+        {ToolId::RunDueWatches,
+         "tapescript_run_due_watches",
+         "Evaluate all currently due Phase 8 watch definitions and create trigger artifacts for their scheduled runs.",
+         phase8RunDueWatchesInputSchema(),
+         phase8RunDueWatchesResultSchema(),
+         "phase8.run-due-watches.v1",
+         tape_engine::QueryOperation::Unknown,
+         true,
+         kPhase8ContractVersion,
+         "phase8_run_due_watches_local"},
+        {ToolId::AcknowledgeAttentionItem,
+         "tapescript_acknowledge_attention_item",
+         "Mark a triggered Phase 8 attention item as acknowledged and remove it from the open inbox.",
+         phase8AttentionActionInputSchema(false),
+         phase8TriggerRunSchema(),
+         "phase8.trigger-run.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_acknowledge_attention_item_local"},
+        {ToolId::SnoozeAttentionItem,
+         "tapescript_snooze_attention_item",
+         "Snooze a triggered Phase 8 attention item until its wake-up time, removing it from the open inbox until then.",
+         phase8AttentionActionInputSchema(true),
+         phase8TriggerRunSchema(),
+         "phase8.trigger-run.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_snooze_attention_item_local"},
+        {ToolId::ResolveAttentionItem,
+         "tapescript_resolve_attention_item",
+         "Mark a triggered Phase 8 attention item as resolved and close it out of the open inbox.",
+         phase8AttentionActionInputSchema(false),
+         phase8TriggerRunSchema(),
+         "phase8.trigger-run.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_resolve_attention_item_local"},
+        {ToolId::ListTriggerRuns,
+         "tapescript_list_trigger_runs",
+         "List persisted local Phase 8 trigger-run artifacts.",
+         limitOnlyInputSchema(),
+         phase8TriggerRunListResultSchema(),
+         "phase8.trigger-run-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_list_trigger_runs_local"},
+        {ToolId::ReadTriggerRun,
+         "tapescript_read_trigger_run",
+         "Read one stored local Phase 8 trigger-run artifact by id or manifest path.",
+         phase8TriggerRefInputSchema(),
+         phase8TriggerRunSchema(),
+         "phase8.trigger-run.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_read_trigger_run_local"},
+        {ToolId::ListAttentionItems,
+         "tapescript_list_attention_items",
+         "List open Phase 8 attention items that still need operator review.",
+         limitOnlyInputSchema(),
+         phase8AttentionInboxResultSchema(),
+         "phase8.attention-list.v1",
+         tape_engine::QueryOperation::Unknown,
+         false,
+         kPhase8ContractVersion,
+         "phase8_list_attention_items_local"}
     };
 }
 
@@ -3853,6 +4498,19 @@ std::optional<std::uint64_t> asPositiveUInt64(const json& value) {
     if (value.is_number_integer()) {
         const auto number = value.get<long long>();
         if (number > 0) {
+            return static_cast<std::uint64_t>(number);
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint64_t> asNonNegativeUInt64(const json& value) {
+    if (value.is_number_unsigned()) {
+        return value.get<std::uint64_t>();
+    }
+    if (value.is_number_integer()) {
+        const auto number = value.get<long long>();
+        if (number >= 0) {
             return static_cast<std::uint64_t>(number);
         }
     }
@@ -3900,6 +4558,25 @@ bool hasUnexpectedKeys(const json& payload, std::initializer_list<const char*> a
     for (auto it = payload.begin(); it != payload.end(); ++it) {
         bool allowed = false;
         for (const char* key : allowedKeys) {
+            if (it.key() == key) {
+                allowed = true;
+                break;
+            }
+        }
+        if (!allowed) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hasUnexpectedKeys(const json& payload, const std::vector<std::string>& allowedKeys) {
+    if (!payload.is_object()) {
+        return true;
+    }
+    for (auto it = payload.begin(); it != payload.end(); ++it) {
+        bool allowed = false;
+        for (const std::string& key : allowedKeys) {
             if (it.key() == key) {
                 allowed = true;
                 break;
@@ -4890,6 +5567,334 @@ bool parsePhase7ExecutionApplyEventArgs(const json& args,
     }
     if (outSelection != nullptr) {
         *outSelection = std::move(selection);
+    }
+    return true;
+}
+
+bool parsePhase8WatchDefinitionCreateArgs(const json& args,
+                                          std::string* outBundlePath,
+                                          std::string* outAnalysisProfile,
+                                          std::string* outTitle,
+                                          bool* outEnabled,
+                                          std::size_t* outEvaluationCadenceMinutes,
+                                          std::size_t* outMinimumFindingCount,
+                                          std::string* outMinimumSeverity,
+                                          std::string* outRequiredCategory,
+                                          std::string* outCode,
+                                          std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"bundle_path",
+                                 "analysis_profile",
+                                 "title",
+                                 "enabled",
+                                 "evaluation_cadence_minutes",
+                                 "minimum_finding_count",
+                                 "minimum_severity",
+                                 "required_category"})) {
+        return fail("invalid_arguments",
+                    "watch definition arguments support bundle_path, analysis_profile, title, enabled, evaluation_cadence_minutes, minimum_finding_count, minimum_severity, and required_category");
+    }
+    const auto bundlePath = asNonEmptyString(args.value("bundle_path", json()));
+    if (!bundlePath.has_value()) {
+        return fail("invalid_arguments", "bundle_path is required and must be a non-empty string");
+    }
+    const auto analysisProfile = args.contains("analysis_profile")
+        ? asNonEmptyString(args.at("analysis_profile"))
+        : std::optional<std::string>(std::string(tape_phase7::kDefaultAnalyzerProfile));
+    if (!analysisProfile.has_value()) {
+        return fail("invalid_arguments", "analysis_profile must be a non-empty string when provided");
+    }
+    if (outBundlePath != nullptr) {
+        *outBundlePath = *bundlePath;
+    }
+    if (outAnalysisProfile != nullptr) {
+        *outAnalysisProfile = *analysisProfile;
+    }
+    if (outTitle != nullptr) {
+        *outTitle = args.contains("title") ? asNonEmptyString(args.at("title")).value_or(std::string()) : std::string();
+    }
+    if (outEnabled != nullptr) {
+        if (args.contains("enabled")) {
+            const auto enabled = asBoolean(args.at("enabled"));
+            if (!enabled.has_value()) {
+                return fail("invalid_arguments", "enabled must be a boolean when provided");
+            }
+            *outEnabled = *enabled;
+        } else {
+            *outEnabled = true;
+        }
+    }
+    if (outEvaluationCadenceMinutes != nullptr) {
+        if (args.contains("evaluation_cadence_minutes")) {
+            const auto cadenceMinutes = asNonNegativeUInt64(args.at("evaluation_cadence_minutes"));
+            if (!cadenceMinutes.has_value()) {
+                return fail("invalid_arguments", "evaluation_cadence_minutes must be a non-negative integer when provided");
+            }
+            *outEvaluationCadenceMinutes = static_cast<std::size_t>(*cadenceMinutes);
+        } else {
+            *outEvaluationCadenceMinutes = tape_phase8::kDefaultEvaluationCadenceMinutes;
+        }
+    }
+    if (outMinimumFindingCount != nullptr) {
+        if (args.contains("minimum_finding_count")) {
+            const auto minimumFindingCount = asNonNegativeUInt64(args.at("minimum_finding_count"));
+            if (!minimumFindingCount.has_value()) {
+                return fail("invalid_arguments", "minimum_finding_count must be a non-negative integer when provided");
+            }
+            *outMinimumFindingCount = static_cast<std::size_t>(*minimumFindingCount);
+        } else {
+            *outMinimumFindingCount = 1;
+        }
+    }
+    if (outMinimumSeverity != nullptr) {
+        if (args.contains("minimum_severity")) {
+            const auto minimumSeverity = asNonEmptyString(args.at("minimum_severity"));
+            if (!minimumSeverity.has_value()) {
+                return fail("invalid_arguments", "minimum_severity must be a non-empty string when provided");
+            }
+            *outMinimumSeverity = *minimumSeverity;
+        } else {
+            outMinimumSeverity->clear();
+        }
+    }
+    if (outRequiredCategory != nullptr) {
+        *outRequiredCategory =
+            args.contains("required_category") ? asNonEmptyString(args.at("required_category")).value_or(std::string())
+                                               : std::string();
+    }
+    return true;
+}
+
+bool parsePhase8RunDueArgs(const json& args,
+                           std::size_t* outLimit,
+                           std::string* outTriggerReason,
+                           std::string* outCode,
+                           std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"limit", "trigger_reason"})) {
+        return fail("invalid_arguments", "due watch arguments support only limit and trigger_reason");
+    }
+    if (outLimit != nullptr) {
+        *outLimit = 0;
+        if (args.contains("limit")) {
+            const auto limit = asPositiveUInt64(args.at("limit"));
+            if (!limit.has_value()) {
+                return fail("invalid_arguments", "limit must be a positive integer.");
+            }
+            *outLimit = static_cast<std::size_t>(*limit);
+        }
+    }
+    if (outTriggerReason != nullptr) {
+        outTriggerReason->clear();
+        if (args.contains("trigger_reason")) {
+            const auto triggerReason = asNonEmptyString(args.at("trigger_reason"));
+            if (!triggerReason.has_value()) {
+                return fail("invalid_arguments", "trigger_reason must be a non-empty string when provided");
+            }
+            *outTriggerReason = *triggerReason;
+        }
+    }
+    return true;
+}
+
+bool parsePhase8WatchRefArgs(const json& args,
+                             std::string* outManifestPath,
+                             std::string* outArtifactId,
+                             std::string* outCode,
+                             std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"watch_manifest_path", "watch_artifact_id", "trigger_reason"})) {
+        return fail("invalid_arguments",
+                    "watch reference arguments support watch_manifest_path, watch_artifact_id, and optional trigger_reason");
+    }
+    const bool hasManifest = args.contains("watch_manifest_path");
+    const bool hasArtifactId = args.contains("watch_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments", "exactly one of watch_manifest_path or watch_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("watch_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "watch_manifest_path must be a non-empty string");
+        }
+        if (outManifestPath != nullptr) {
+            *outManifestPath = *manifestPath;
+        }
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("watch_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "watch_artifact_id must be a non-empty string");
+        }
+        if (outArtifactId != nullptr) {
+            *outArtifactId = *artifactId;
+        }
+    }
+    return true;
+}
+
+bool parsePhase8TriggerRefArgs(const json& args,
+                               std::string* outManifestPath,
+                               std::string* outArtifactId,
+                               std::string* outCode,
+                               std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"trigger_manifest_path", "trigger_artifact_id"})) {
+        return fail("invalid_arguments",
+                    "exactly one of trigger_manifest_path or trigger_artifact_id is required");
+    }
+    const bool hasManifest = args.contains("trigger_manifest_path");
+    const bool hasArtifactId = args.contains("trigger_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments", "exactly one of trigger_manifest_path or trigger_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("trigger_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "trigger_manifest_path must be a non-empty string");
+        }
+        if (outManifestPath != nullptr) {
+            *outManifestPath = *manifestPath;
+        }
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("trigger_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "trigger_artifact_id must be a non-empty string");
+        }
+        if (outArtifactId != nullptr) {
+            *outArtifactId = *artifactId;
+        }
+    }
+    return true;
+}
+
+bool parsePhase8AttentionActionArgs(const json& args,
+                                    bool requireSnoozeMinutes,
+                                    std::string* outManifestPath,
+                                    std::string* outArtifactId,
+                                    std::size_t* outSnoozeMinutes,
+                                    std::string* outActor,
+                                    std::string* outComment,
+                                    std::string* outCode,
+                                    std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+
+    std::vector<std::string> allowedKeys = {"trigger_manifest_path", "trigger_artifact_id", "actor", "comment"};
+    if (requireSnoozeMinutes) {
+        allowedKeys.push_back("snooze_minutes");
+    }
+    if (hasUnexpectedKeys(args, allowedKeys)) {
+        return fail("invalid_arguments",
+                    requireSnoozeMinutes
+                        ? "attention action arguments support trigger_manifest_path, trigger_artifact_id, snooze_minutes, actor, and comment"
+                        : "attention action arguments support trigger_manifest_path, trigger_artifact_id, actor, and comment");
+    }
+    const bool hasManifest = args.contains("trigger_manifest_path");
+    const bool hasArtifactId = args.contains("trigger_artifact_id");
+    if (hasManifest == hasArtifactId) {
+        return fail("invalid_arguments", "exactly one of trigger_manifest_path or trigger_artifact_id is required");
+    }
+    if (hasManifest) {
+        const auto manifestPath = asNonEmptyString(args.at("trigger_manifest_path"));
+        if (!manifestPath.has_value()) {
+            return fail("invalid_arguments", "trigger_manifest_path must be a non-empty string");
+        }
+        if (outManifestPath != nullptr) {
+            *outManifestPath = *manifestPath;
+        }
+        if (outArtifactId != nullptr) {
+            outArtifactId->clear();
+        }
+    }
+    if (hasArtifactId) {
+        const auto artifactId = asNonEmptyString(args.at("trigger_artifact_id"));
+        if (!artifactId.has_value()) {
+            return fail("invalid_arguments", "trigger_artifact_id must be a non-empty string");
+        }
+        if (outArtifactId != nullptr) {
+            *outArtifactId = *artifactId;
+        }
+        if (outManifestPath != nullptr) {
+            outManifestPath->clear();
+        }
+    }
+    if (outSnoozeMinutes != nullptr) {
+        *outSnoozeMinutes = 0;
+        if (requireSnoozeMinutes) {
+            const auto snoozeMinutes = asPositiveUInt64(args.value("snooze_minutes", json()));
+            if (!snoozeMinutes.has_value()) {
+                return fail("invalid_arguments", "snooze_minutes is required and must be a positive integer");
+            }
+            *outSnoozeMinutes = static_cast<std::size_t>(*snoozeMinutes);
+        }
+    }
+    if (outActor != nullptr) {
+        *outActor = args.contains("actor") ? asNonEmptyString(args.at("actor")).value_or(std::string()) : std::string();
+    }
+    if (outComment != nullptr) {
+        *outComment =
+            args.contains("comment") ? asNonEmptyString(args.at("comment")).value_or(std::string()) : std::string();
     }
     return true;
 }
@@ -5955,6 +6960,85 @@ json phase7ExecutionApplyInventoryPayload(const std::vector<tape_phase7::Executi
         {"returned_count", rows.size()},
         {"applied_filters", std::move(appliedFilters)},
         {"execution_applies", std::move(rows)}
+    };
+}
+
+json phase8WatchDefinitionPayload(const tape_phase8::WatchDefinitionArtifact& artifact,
+                                  std::string_view artifactStatus = {}) {
+    json payload = tape_phase8::watchDefinitionToJson(artifact);
+    if (!artifactStatus.empty()) {
+        payload["artifact_status"] = std::string(artifactStatus);
+    }
+    return payload;
+}
+
+json phase8TriggerRunPayload(const tape_phase8::TriggerRunArtifact& artifact,
+                             std::string_view artifactStatus = {}) {
+    json payload = tape_phase8::triggerRunToJson(artifact);
+    if (!artifactStatus.empty()) {
+        payload["artifact_status"] = std::string(artifactStatus);
+    }
+    return payload;
+}
+
+json phase8WatchDefinitionInventoryPayload(const std::vector<tape_phase8::WatchDefinitionArtifact>& artifacts) {
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        rows.push_back(tape_phase8::watchDefinitionToJson(artifact));
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"watch_definitions", std::move(rows)}
+    };
+}
+
+json phase8DueWatchInventoryPayload(const tape_phase8::DueWatchInventoryResult& inventory) {
+    json rows = json::array();
+    for (const auto& artifact : inventory.watchDefinitions) {
+        rows.push_back(tape_phase8::watchDefinitionToJson(artifact));
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"matched_count", inventory.matchedCount},
+        {"watch_definitions", std::move(rows)}
+    };
+}
+
+json phase8TriggerRunInventoryPayload(const std::vector<tape_phase8::TriggerRunArtifact>& artifacts) {
+    json rows = json::array();
+    for (const auto& artifact : artifacts) {
+        rows.push_back(tape_phase8::triggerRunToJson(artifact));
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"trigger_runs", std::move(rows)}
+    };
+}
+
+json phase8AttentionInboxPayload(const std::vector<tape_phase8::AttentionInboxItem>& items) {
+    json rows = json::array();
+    for (const auto& item : items) {
+        rows.push_back(tape_phase8::attentionInboxItemToJson(item));
+    }
+    return {
+        {"returned_count", rows.size()},
+        {"attention_items", std::move(rows)}
+    };
+}
+
+json phase8RunDueWatchesPayload(const tape_phase8::DueWatchRunResult& result) {
+    json rows = json::array();
+    for (const auto& artifact : result.triggerRuns) {
+        rows.push_back(tape_phase8::triggerRunToJson(artifact));
+    }
+    return {
+        {"trigger_reason", result.triggerReason},
+        {"matched_watch_count", result.matchedWatchCount},
+        {"evaluated_watch_count", result.evaluatedWatchCount},
+        {"created_trigger_count", result.createdTriggerCount},
+        {"attention_opened_count", result.attentionOpenedCount},
+        {"suppressed_count", result.suppressedCount},
+        {"trigger_runs", std::move(rows)}
     };
 }
 
@@ -7026,6 +8110,29 @@ json Adapter::listResourcesResult() const {
             {"meta", resourceErrorMeta(phase7Code, phase7Message)}
         };
     }
+    std::vector<tape_phase8::WatchDefinitionArtifact> phase8Watches;
+    std::string phase8Code;
+    std::string phase8Message;
+    if (!tape_phase8::listWatchDefinitions(25, &phase8Watches, &phase8Code, &phase8Message)) {
+        return json{
+            {"resources", json::array()},
+            {"meta", resourceErrorMeta(phase8Code, phase8Message)}
+        };
+    }
+    std::vector<tape_phase8::TriggerRunArtifact> phase8Triggers;
+    if (!tape_phase8::listTriggerRuns(25, &phase8Triggers, &phase8Code, &phase8Message)) {
+        return json{
+            {"resources", json::array()},
+            {"meta", resourceErrorMeta(phase8Code, phase8Message)}
+        };
+    }
+    std::vector<tape_phase8::AttentionInboxItem> phase8Attention;
+    if (!tape_phase8::listAttentionInbox(25, &phase8Attention, &phase8Code, &phase8Message)) {
+        return json{
+            {"resources", json::array()},
+            {"meta", resourceErrorMeta(phase8Code, phase8Message)}
+        };
+    }
 
     json resources = json::array();
     for (const auto& report : sessionReports.value.sessionReports) {
@@ -7154,6 +8261,47 @@ json Adapter::listResourcesResult() const {
             {"mimeType", "text/markdown"}
         });
     }
+    for (const auto& artifact : phase8Watches) {
+        resources.push_back({
+            {"uri", phase8WatchDefinitionUri(artifact.watchArtifact.artifactId)},
+            {"name", artifact.watchArtifact.artifactId},
+            {"title", "Phase 8 watch: " + artifact.title},
+            {"description", "Persisted Phase 8 watch definition JSON view."},
+            {"mimeType", "application/json"}
+        });
+        resources.push_back({
+            {"uri", phase8WatchDefinitionMarkdownUri(artifact.watchArtifact.artifactId)},
+            {"name", artifact.watchArtifact.artifactId + ":markdown"},
+            {"title", "Phase 8 watch markdown: " + artifact.title},
+            {"description", "Persisted Phase 8 watch definition markdown summary."},
+            {"mimeType", "text/markdown"}
+        });
+    }
+    for (const auto& artifact : phase8Triggers) {
+        resources.push_back({
+            {"uri", phase8TriggerRunUri(artifact.triggerArtifact.artifactId)},
+            {"name", artifact.triggerArtifact.artifactId},
+            {"title", "Phase 8 trigger: " + artifact.headline},
+            {"description", "Persisted Phase 8 trigger-run JSON view."},
+            {"mimeType", "application/json"}
+        });
+        resources.push_back({
+            {"uri", phase8TriggerRunMarkdownUri(artifact.triggerArtifact.artifactId)},
+            {"name", artifact.triggerArtifact.artifactId + ":markdown"},
+            {"title", "Phase 8 trigger markdown: " + artifact.headline},
+            {"description", "Persisted Phase 8 trigger-run markdown summary."},
+            {"mimeType", "text/markdown"}
+        });
+    }
+    if (!phase8Attention.empty()) {
+        resources.push_back({
+            {"uri", phase8AttentionOpenUri()},
+            {"name", "phase8-attention-open"},
+            {"title", "Phase 8 attention inbox"},
+            {"description", "Open Phase 8 trigger runs that still need operator attention."},
+            {"mimeType", "application/json"}
+        });
+    }
 
     std::sort(resources.begin(), resources.end(), [](const json& left, const json& right) {
         return left.value("uri", std::string()) < right.value("uri", std::string());
@@ -7184,7 +8332,11 @@ json Adapter::readResourceResult(const std::string& resourceUri) const {
          parsed.kind == ResourceKind::Phase7ExecutionJournalJson ||
          parsed.kind == ResourceKind::Phase7ExecutionJournalMarkdown ||
          parsed.kind == ResourceKind::Phase7ExecutionApplyJson ||
-         parsed.kind == ResourceKind::Phase7ExecutionApplyMarkdown) &&
+         parsed.kind == ResourceKind::Phase7ExecutionApplyMarkdown ||
+         parsed.kind == ResourceKind::Phase8WatchDefinitionJson ||
+         parsed.kind == ResourceKind::Phase8WatchDefinitionMarkdown ||
+         parsed.kind == ResourceKind::Phase8TriggerRunJson ||
+         parsed.kind == ResourceKind::Phase8TriggerRunMarkdown) &&
         parsed.artifactId.empty();
     if (parsed.kind == ResourceKind::Unknown || missingReportId || missingArtifactId) {
         return json{
@@ -7326,6 +8478,41 @@ json Adapter::readResourceResult(const std::string& resourceUri) const {
                 return textContents(resourceUri, tape_phase7::executionApplyArtifactMarkdown(artifact), "text/markdown");
             }
             return jsonContents(resourceUri, phase7ExecutionApplyPayload(artifact));
+        }
+        case ResourceKind::Phase8WatchDefinitionJson:
+        case ResourceKind::Phase8WatchDefinitionMarkdown: {
+            tape_phase8::WatchDefinitionArtifact artifact;
+            std::string code;
+            std::string message;
+            if (!tape_phase8::loadWatchDefinition({}, parsed.artifactId, &artifact, &code, &message)) {
+                return json{{"contents", json::array()}, {"meta", resourceErrorMeta(code, message)}};
+            }
+            if (parsed.kind == ResourceKind::Phase8WatchDefinitionMarkdown) {
+                return textContents(resourceUri, tape_phase8::watchDefinitionArtifactMarkdown(artifact), "text/markdown");
+            }
+            return jsonContents(resourceUri, phase8WatchDefinitionPayload(artifact));
+        }
+        case ResourceKind::Phase8TriggerRunJson:
+        case ResourceKind::Phase8TriggerRunMarkdown: {
+            tape_phase8::TriggerRunArtifact artifact;
+            std::string code;
+            std::string message;
+            if (!tape_phase8::loadTriggerRunArtifact({}, parsed.artifactId, &artifact, &code, &message)) {
+                return json{{"contents", json::array()}, {"meta", resourceErrorMeta(code, message)}};
+            }
+            if (parsed.kind == ResourceKind::Phase8TriggerRunMarkdown) {
+                return textContents(resourceUri, tape_phase8::triggerRunArtifactMarkdown(artifact), "text/markdown");
+            }
+            return jsonContents(resourceUri, phase8TriggerRunPayload(artifact));
+        }
+        case ResourceKind::Phase8AttentionOpenJson: {
+            std::vector<tape_phase8::AttentionInboxItem> items;
+            std::string code;
+            std::string message;
+            if (!tape_phase8::listAttentionInbox(25, &items, &code, &message)) {
+                return json{{"contents", json::array()}, {"meta", resourceErrorMeta(code, message)}};
+            }
+            return jsonContents(resourceUri, phase8AttentionInboxPayload(items));
         }
         case ResourceKind::Unknown:
             break;
@@ -7483,6 +8670,30 @@ json Adapter::invokeTool(const ToolSpec& tool, const json& args) const {
             return invokeReadExecutionApplyTool(tool, args);
         case ToolId::RecordExecutionApplyEvent:
             return invokeRecordExecutionApplyEventTool(tool, args);
+        case ToolId::CreateWatchDefinition:
+            return invokeCreateWatchDefinitionTool(tool, args);
+        case ToolId::ListWatchDefinitions:
+            return invokeListWatchDefinitionsTool(tool, args);
+        case ToolId::ListDueWatches:
+            return invokeListDueWatchesTool(tool, args);
+        case ToolId::ReadWatchDefinition:
+            return invokeReadWatchDefinitionTool(tool, args);
+        case ToolId::EvaluateWatchDefinition:
+            return invokeEvaluateWatchDefinitionTool(tool, args);
+        case ToolId::RunDueWatches:
+            return invokeRunDueWatchesTool(tool, args);
+        case ToolId::AcknowledgeAttentionItem:
+            return invokeAcknowledgeAttentionItemTool(tool, args);
+        case ToolId::SnoozeAttentionItem:
+            return invokeSnoozeAttentionItemTool(tool, args);
+        case ToolId::ResolveAttentionItem:
+            return invokeResolveAttentionItemTool(tool, args);
+        case ToolId::ListTriggerRuns:
+            return invokeListTriggerRunsTool(tool, args);
+        case ToolId::ReadTriggerRun:
+            return invokeReadTriggerRunTool(tool, args);
+        case ToolId::ListAttentionItems:
+            return invokeListAttentionItemsTool(tool, args);
     }
     return makeToolResult(makeErrorEnvelope(
         tool.name,
@@ -10037,6 +11248,556 @@ json Adapter::invokeRecordExecutionApplyEventTool(const ToolSpec& tool, const js
     return makeToolResult(makeSuccessEnvelope(tool,
                                               phase7ExecutionApplyEventPayload(artifact, updatedEntryIds, auditEventId),
                                               revisionFromPhase7ReplayContext(artifact.replayContext)));
+}
+
+json Adapter::invokeCreateWatchDefinitionTool(const ToolSpec& tool, const json& args) const {
+    std::string bundlePath;
+    std::string analysisProfile;
+    std::string title;
+    bool enabled = true;
+    std::size_t evaluationCadenceMinutes = tape_phase8::kDefaultEvaluationCadenceMinutes;
+    std::size_t minimumFindingCount = 1;
+    std::string minimumSeverity;
+    std::string requiredCategory;
+    std::string code;
+    std::string message;
+    if (!parsePhase8WatchDefinitionCreateArgs(args,
+                                              &bundlePath,
+                                              &analysisProfile,
+                                              &title,
+                                              &enabled,
+                                              &evaluationCadenceMinutes,
+                                              &minimumFindingCount,
+                                              &minimumSeverity,
+                                              &requiredCategory,
+                                              &code,
+                                              &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::WatchDefinitionArtifact artifact;
+    bool created = false;
+    if (!tape_phase8::createWatchDefinition(bundlePath,
+                                            analysisProfile,
+                                            title,
+                                            enabled,
+                                            evaluationCadenceMinutes,
+                                            minimumFindingCount,
+                                            minimumSeverity,
+                                            requiredCategory,
+                                            &artifact,
+                                            &created,
+                                            &code,
+                                            &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8WatchDefinitionPayload(artifact, created ? "created" : "reused"),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeListWatchDefinitionsTool(const ToolSpec& tool, const json& args) const {
+    std::size_t limit = 0;
+    std::string code;
+    std::string message;
+    if (!parseLimitOnlyArgs(args, &limit, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase8::WatchDefinitionArtifact> artifacts;
+    if (!tape_phase8::listWatchDefinitions(limit == 0 ? 25 : limit, &artifacts, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8WatchDefinitionInventoryPayload(artifacts),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeListDueWatchesTool(const ToolSpec& tool, const json& args) const {
+    std::size_t limit = 0;
+    std::string code;
+    std::string message;
+    if (!parseLimitOnlyArgs(args, &limit, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::DueWatchInventoryResult inventory;
+    if (!tape_phase8::listDueWatchDefinitions(limit == 0 ? 25 : limit, &inventory, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8DueWatchInventoryPayload(inventory),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeReadWatchDefinitionTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    if (!parsePhase8WatchRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::WatchDefinitionArtifact artifact;
+    if (!tape_phase8::loadWatchDefinition(manifestPath, artifactId, &artifact, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8WatchDefinitionPayload(artifact),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeEvaluateWatchDefinitionTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    if (!parsePhase8WatchRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+    const std::string triggerReason =
+        args.contains("trigger_reason") ? asNonEmptyString(args.at("trigger_reason")).value_or(std::string()) : std::string();
+    if (args.contains("trigger_reason") && triggerReason.empty()) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                "invalid_arguments",
+                                                "trigger_reason must be a non-empty string when provided",
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::TriggerRunArtifact artifact;
+    bool created = false;
+    if (!tape_phase8::evaluateWatchDefinition(manifestPath,
+                                              artifactId,
+                                              triggerReason,
+                                              &artifact,
+                                              &created,
+                                              &code,
+                                              &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8TriggerRunPayload(artifact, created ? "created" : "reused"),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeRunDueWatchesTool(const ToolSpec& tool, const json& args) const {
+    std::size_t limit = 0;
+    std::string triggerReason;
+    std::string code;
+    std::string message;
+    if (!parsePhase8RunDueArgs(args, &limit, &triggerReason, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::DueWatchRunResult result;
+    if (!tape_phase8::runDueWatchDefinitions(limit == 0 ? 25 : limit,
+                                             triggerReason,
+                                             &result,
+                                             &code,
+                                             &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8RunDueWatchesPayload(result),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeAcknowledgeAttentionItemTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::size_t snoozeMinutes = 0;
+    std::string actor;
+    std::string comment;
+    std::string code;
+    std::string message;
+    if (!parsePhase8AttentionActionArgs(args,
+                                        false,
+                                        &manifestPath,
+                                        &artifactId,
+                                        &snoozeMinutes,
+                                        &actor,
+                                        &comment,
+                                        &code,
+                                        &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::TriggerRunArtifact artifact;
+    if (!tape_phase8::recordAttentionAction(manifestPath,
+                                            artifactId,
+                                            "acknowledge",
+                                            0,
+                                            actor,
+                                            comment,
+                                            &artifact,
+                                            &code,
+                                            &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8TriggerRunPayload(artifact),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeSnoozeAttentionItemTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::size_t snoozeMinutes = 0;
+    std::string actor;
+    std::string comment;
+    std::string code;
+    std::string message;
+    if (!parsePhase8AttentionActionArgs(args,
+                                        true,
+                                        &manifestPath,
+                                        &artifactId,
+                                        &snoozeMinutes,
+                                        &actor,
+                                        &comment,
+                                        &code,
+                                        &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::TriggerRunArtifact artifact;
+    if (!tape_phase8::recordAttentionAction(manifestPath,
+                                            artifactId,
+                                            "snooze",
+                                            snoozeMinutes,
+                                            actor,
+                                            comment,
+                                            &artifact,
+                                            &code,
+                                            &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8TriggerRunPayload(artifact),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeResolveAttentionItemTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::size_t snoozeMinutes = 0;
+    std::string actor;
+    std::string comment;
+    std::string code;
+    std::string message;
+    if (!parsePhase8AttentionActionArgs(args,
+                                        false,
+                                        &manifestPath,
+                                        &artifactId,
+                                        &snoozeMinutes,
+                                        &actor,
+                                        &comment,
+                                        &code,
+                                        &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::TriggerRunArtifact artifact;
+    if (!tape_phase8::recordAttentionAction(manifestPath,
+                                            artifactId,
+                                            "resolve",
+                                            0,
+                                            actor,
+                                            comment,
+                                            &artifact,
+                                            &code,
+                                            &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8TriggerRunPayload(artifact),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeListTriggerRunsTool(const ToolSpec& tool, const json& args) const {
+    std::size_t limit = 0;
+    std::string code;
+    std::string message;
+    if (!parseLimitOnlyArgs(args, &limit, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase8::TriggerRunArtifact> artifacts;
+    if (!tape_phase8::listTriggerRuns(limit == 0 ? 25 : limit, &artifacts, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8TriggerRunInventoryPayload(artifacts),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeReadTriggerRunTool(const ToolSpec& tool, const json& args) const {
+    std::string manifestPath;
+    std::string artifactId;
+    std::string code;
+    std::string message;
+    if (!parsePhase8TriggerRefArgs(args, &manifestPath, &artifactId, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    tape_phase8::TriggerRunArtifact artifact;
+    if (!tape_phase8::loadTriggerRunArtifact(manifestPath, artifactId, &artifact, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8TriggerRunPayload(artifact),
+                                              revisionUnavailable()));
+}
+
+json Adapter::invokeListAttentionItemsTool(const ToolSpec& tool, const json& args) const {
+    std::size_t limit = 0;
+    std::string code;
+    std::string message;
+    if (!parseLimitOnlyArgs(args, &limit, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    std::vector<tape_phase8::AttentionInboxItem> items;
+    if (!tape_phase8::listAttentionInbox(limit == 0 ? 25 : limit, &items, &code, &message)) {
+        return makeToolResult(makeErrorEnvelope(tool.name,
+                                                toolEngineCommand(tool),
+                                                tool.outputSchemaId,
+                                                true,
+                                                false,
+                                                code,
+                                                message,
+                                                false,
+                                                revisionUnavailable(),
+                                                toolContractVersion(tool)));
+    }
+
+    return makeToolResult(makeSuccessEnvelope(tool,
+                                              phase8AttentionInboxPayload(items),
+                                              revisionUnavailable()));
 }
 
 json Adapter::makeToolResult(const json& envelope) const {

@@ -46,7 +46,7 @@ std::string stringValueOrEmpty(const json& payload, const char* key) {
 
 json localEvidenceResultOrFallback(const tape_engine::QueryResponse& localEvidence) {
     if (localEvidence.result.is_object() &&
-        localEvidence.result.value("schema", std::string()) == tape_engine::kInvestigationResultSchema) {
+        stringValueOrEmpty(localEvidence.result, "schema") == tape_engine::kInvestigationResultSchema) {
         return localEvidence.result;
     }
     const json artifact = localEvidence.summary.value("artifact", json::object());
@@ -54,8 +54,8 @@ json localEvidenceResultOrFallback(const tape_engine::QueryResponse& localEviden
     return {
         {"schema", tape_engine::kInvestigationResultSchema},
         {"version", tape_engine::kInvestigationResultVersion},
-        {"artifact_id", artifact.value("artifact_id", std::string())},
-        {"artifact_kind", artifact.value("artifact_type", std::string())},
+        {"artifact_id", stringValueOrEmpty(artifact, "artifact_id")},
+        {"artifact_kind", stringValueOrEmpty(artifact, "artifact_type")},
         {"headline", firstStringValue(report, {"headline", "title", "summary"})},
         {"detail", firstStringValue(report, {"summary", "why_it_matters"})},
         {"served_revision_id", localEvidence.summary.value("served_revision_id", 0ULL)},
@@ -91,7 +91,7 @@ std::string inferSymbol(const json& localEvidence) {
     }
 
     const json artifact = localEvidence.value("artifact", json::object());
-    symbol = symbolFromInstrumentId(artifact.value("instrument_id", std::string()));
+    symbol = symbolFromInstrumentId(stringValueOrEmpty(artifact, "instrument_id"));
     if (!symbol.empty()) {
         return symbol;
     }
@@ -111,7 +111,7 @@ std::string inferSymbol(const json& localEvidence) {
             if (!symbol.empty()) {
                 return symbol;
             }
-            symbol = symbolFromInstrumentId(row.value("instrument_id", std::string()));
+            symbol = symbolFromInstrumentId(stringValueOrEmpty(row, "instrument_id"));
             if (!symbol.empty()) {
                 return symbol;
             }
@@ -128,7 +128,7 @@ std::string inferSymbol(const json& localEvidence) {
             if (!symbol.empty()) {
                 return symbol;
             }
-            symbol = symbolFromInstrumentId(event.value("instrument_id", std::string()));
+            symbol = symbolFromInstrumentId(stringValueOrEmpty(event, "instrument_id"));
             if (!symbol.empty()) {
                 return symbol;
             }
@@ -179,7 +179,7 @@ std::vector<std::string> evidenceKinds(const json& localEvidence) {
         if (!citation.is_object()) {
             continue;
         }
-        const std::string kind = citation.value("kind", std::string());
+        const std::string kind = stringValueOrEmpty(citation, "kind");
         if (!kind.empty()) {
             kinds.push_back(kind);
         }
@@ -210,7 +210,7 @@ bool websocketSecondaryLaneRequested(const BuildRequest& request) {
 }
 
 std::string cacheKeyFor(const json& localEvidence, const BuildRequest& request) {
-    return localEvidence.value("artifact_id", std::string()) + ":" + request.requestKind + ":" +
+    return stringValueOrEmpty(localEvidence, "artifact_id") + ":" + request.requestKind + ":" +
         (request.lane == Lane::Deep ? "deep" : "fast") + ":" +
         (websocketSecondaryLaneRequested(request) ? "live" : "snapshot");
 }
@@ -267,7 +267,7 @@ json liveCaptureSummary(const json& providerSteps, bool requested) {
     }
 
     for (const auto& step : providerSteps) {
-        if (!step.is_object() || step.value("provider", std::string()) != "uw_ws") {
+        if (!step.is_object() || stringValueOrEmpty(step, "provider") != "uw_ws") {
             continue;
         }
         const json requestPayload = step.value("request_payload", json::object());
@@ -276,7 +276,10 @@ json liveCaptureSummary(const json& providerSteps, bool requested) {
         const json previews = metadata.value("frame_previews", json::array());
         const json channelStats = metadata.value("channel_stats", json::object());
         const json capturePasses = metadata.value("capture_passes", json::array());
-        const std::string status = step.value("status", std::string("unavailable"));
+        std::string status = stringValueOrEmpty(step, "status");
+        if (status.empty()) {
+            status = "unavailable";
+        }
         const std::string reason = stringValueOrEmpty(step, "reason");
         const std::uint64_t rawFrameCount = metadata.value("raw_frame_count", 0ULL);
         const std::uint64_t candidateDataFrameCount = metadata.value("candidate_data_frame_count", 0ULL);
@@ -308,8 +311,11 @@ json liveCaptureSummary(const json& providerSteps, bool requested) {
         summary["duplicate_join_frame_count"] = duplicateJoinFrameCount;
         summary["filtered_mismatch_frame_count"] = metadata.value("filtered_mismatch_frame_count", 0ULL);
         summary["ambient_global_frame_count"] = ambientGlobalFrameCount;
-        summary["ambient_global_policy"] =
-            metadata.value("ambient_global_policy", std::string("diagnostic_only"));
+        const std::string ambientGlobalPolicy = [&]() {
+            const std::string value = stringValueOrEmpty(metadata, "ambient_global_policy");
+            return value.empty() ? std::string("diagnostic_only") : value;
+        }();
+        summary["ambient_global_policy"] = ambientGlobalPolicy;
         summary["ambient_global_context_used"] = false;
         summary["unparsed_frame_count"] = unparsedFrameCount;
         summary["close_frame_count"] = metadata.value("close_frame_count", 0ULL);
@@ -351,7 +357,10 @@ json liveCaptureSummary(const json& providerSteps, bool requested) {
                 }
                 channelOutcomes.push_back({
                     {"channel", channel},
-                    {"channel_family", stats.value("channel_family", channel.substr(0, channel.find(':')))},
+                    {"channel_family", [&]() {
+                        const std::string value = stringValueOrEmpty(stats, "channel_family");
+                        return value.empty() ? channel.substr(0, channel.find(':')) : value;
+                    }()},
                     {"outcome", channelOutcome},
                     {"raw_frame_count", stats.value("raw_frame_count", 0ULL)},
                     {"candidate_data_frame_count", candidateChannelDataCount},
@@ -476,11 +485,12 @@ public:
                 fetchedAtUtc = cached->fetchedAtUtc;
                 providerPathUsed = cached->providerPathUsed.empty() ? "cache" : cached->providerPathUsed;
                 cacheSummary["context_status"] = "hit";
-                cacheSummary["interpretation_status"] = interpretation.value("status", std::string()) == "completed" ? "hit" : "miss";
+                cacheSummary["interpretation_status"] =
+                    stringValueOrEmpty(interpretation, "status") == "completed" ? "hit" : "miss";
             }
         }
 
-        if (!cacheSummary.value("context_status", std::string()).starts_with("hit")) {
+        if (!stringValueOrEmpty(cacheSummary, "context_status").starts_with("hit")) {
             providerSteps.push_back({
                 {"provider", "cache"},
                 {"status", buildRequest.forceRefresh ? "bypassed" : "miss"},
@@ -488,7 +498,7 @@ public:
             });
 
             const FetchPlan plan{
-                .artifactId = localResult.value("artifact_id", std::string()),
+                .artifactId = stringValueOrEmpty(localResult, "artifact_id"),
                 .requestKind = buildRequest.requestKind,
                 .symbol = inferSymbol(localResult),
                 .revisionId = buildRequest.revisionId,
@@ -539,7 +549,9 @@ public:
             interpretation = buildInterpretation(buildRequest, packetArtifact, hasExternalContext);
             interpretation["status"] = geminiResult.status;
             interpretation["model"] = geminiResult.model.empty() ? interpretation.value("model", json(nullptr)) : json(geminiResult.model);
-            interpretation["finish_reason"] = geminiResult.finishReason.empty() ? interpretation.value("finish_reason", std::string()) : geminiResult.finishReason;
+            interpretation["finish_reason"] = geminiResult.finishReason.empty()
+                ? json(stringValueOrEmpty(interpretation, "finish_reason"))
+                : json(geminiResult.finishReason);
             interpretation["content"] = geminiResult.content;
             interpretation["warnings"] = geminiResult.warnings;
             interpretation["latency_ms"] = geminiResult.latencyMs;
@@ -568,8 +580,8 @@ public:
 
         const bool hasExternalContext = externalContext.value("items", json::array()).is_array() &&
             !externalContext.value("items", json::array()).empty();
-        const bool hasInterpretation = interpretation.value("status", std::string()) == "completed" &&
-            interpretation.value("content", json(nullptr)).is_object();
+        const bool hasInterpretation = stringValueOrEmpty(interpretation, "status") == "completed" &&
+                                       interpretation.value("content", json(nullptr)).is_object();
         const json degradation = {
             {"is_degraded", !hasExternalContext || (!hasInterpretation && buildRequest.requestKind != "refresh_external_context")},
             {"code", !hasExternalContext
@@ -611,9 +623,9 @@ public:
             {"schema", tape_engine::kEnrichmentResultSchema},
             {"version", tape_engine::kEnrichmentResultVersion},
             {"request_kind", buildRequest.requestKind},
-            {"artifact_id", localResult.value("artifact_id", std::string())},
-            {"headline", localResult.value("headline", std::string())},
-            {"detail", localResult.value("detail", std::string())},
+            {"artifact_id", stringValueOrEmpty(localResult, "artifact_id")},
+            {"headline", stringValueOrEmpty(localResult, "headline")},
+            {"detail", stringValueOrEmpty(localResult, "detail")},
             {"local_evidence", localResult},
             {"external_context", externalContext},
             {"interpretation", interpretation},

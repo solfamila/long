@@ -80,7 +80,19 @@ enum class ToolId {
     StartExecutionApply,
     ListExecutionApplies,
     ReadExecutionApply,
-    RecordExecutionApplyEvent
+    RecordExecutionApplyEvent,
+    CreateWatchDefinition,
+    ListWatchDefinitions,
+    ListDueWatches,
+    ReadWatchDefinition,
+    EvaluateWatchDefinition,
+    RunDueWatches,
+    AcknowledgeAttentionItem,
+    SnoozeAttentionItem,
+    ResolveAttentionItem,
+    ListTriggerRuns,
+    ReadTriggerRun,
+    ListAttentionItems
 };
 
 struct ToolSpec {
@@ -173,6 +185,18 @@ private:
     [[nodiscard]] json invokeListExecutionAppliesTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeReadExecutionApplyTool(const ToolSpec& tool, const json& args) const;
     [[nodiscard]] json invokeRecordExecutionApplyEventTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeCreateWatchDefinitionTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListWatchDefinitionsTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListDueWatchesTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadWatchDefinitionTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeEvaluateWatchDefinitionTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeRunDueWatchesTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeAcknowledgeAttentionItemTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeSnoozeAttentionItemTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeResolveAttentionItemTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListTriggerRunsTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeReadTriggerRunTool(const ToolSpec& tool, const json& args) const;
+    [[nodiscard]] json invokeListAttentionItemsTool(const ToolSpec& tool, const json& args) const;
 
     [[nodiscard]] json makeToolResult(const json& envelope) const;
     [[nodiscard]] json makeSuccessEnvelope(const ToolSpec& tool, json result, json revision) const;

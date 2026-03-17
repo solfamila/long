@@ -489,6 +489,264 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                        }),
            "TapeScope typed order-impact phase7 analysis should emit order-impact categories");
 
+    const auto phase8WatchCreate = client.createWatchDefinitionPayload(movedCaseBundlePath.string(),
+                                                                       tape_phase7::kDefaultAnalyzerProfile,
+                                                                       "INTC Phase 8 Watch",
+                                                                       true,
+                                                                       15);
+    expect(phase8WatchCreate.ok(), "TapeScope typed phase8 watch create should succeed: " +
+                                       tapescope::QueryClient::describeError(phase8WatchCreate.error));
+    expect(phase8WatchCreate.value.created,
+           "TapeScope typed phase8 watch create should create the durable watch on first run");
+    const auto reusedPhase8WatchCreate = client.createWatchDefinitionPayload(movedCaseBundlePath.string(),
+                                                                             tape_phase7::kDefaultAnalyzerProfile,
+                                                                             "INTC Phase 8 Watch",
+                                                                             true,
+                                                                             15);
+    expect(reusedPhase8WatchCreate.ok(), "TapeScope typed phase8 watch rerun should succeed: " +
+                                             tapescope::QueryClient::describeError(reusedPhase8WatchCreate.error));
+    expect(!reusedPhase8WatchCreate.value.created,
+           "TapeScope typed phase8 watch rerun should reuse the deterministic watch artifact");
+    const auto typedPhase8WatchList = client.listWatchDefinitionsPayload(10);
+    expect(typedPhase8WatchList.ok(), "TapeScope typed phase8 watch inventory should succeed: " +
+                                          tapescope::QueryClient::describeError(typedPhase8WatchList.error));
+    expect(!typedPhase8WatchList.value.empty(),
+           "TapeScope typed phase8 watch inventory should expose stored watches");
+    const auto typedPhase8WatchRead =
+        client.readWatchDefinitionPayload(phase8WatchCreate.value.artifact.watchArtifact.artifactId);
+    expect(typedPhase8WatchRead.ok(), "TapeScope typed phase8 watch read should succeed: " +
+                                          tapescope::QueryClient::describeError(typedPhase8WatchRead.error));
+    expect(typedPhase8WatchRead.value.watchArtifact.artifactId ==
+               phase8WatchCreate.value.artifact.watchArtifact.artifactId,
+           "TapeScope typed phase8 watch read should preserve the requested watch artifact id");
+    const auto phase8TriggerRun =
+        client.evaluateWatchDefinitionPayload(phase8WatchCreate.value.artifact.watchArtifact.artifactId);
+    expect(phase8TriggerRun.ok(), "TapeScope typed phase8 watch evaluation should succeed: " +
+                                      tapescope::QueryClient::describeError(phase8TriggerRun.error));
+    expect(phase8TriggerRun.value.created,
+           "TapeScope typed phase8 watch evaluation should create a trigger artifact on first run");
+    expect(phase8TriggerRun.value.artifact.watchArtifact.artifactId ==
+               phase8WatchCreate.value.artifact.watchArtifact.artifactId,
+           "TapeScope typed phase8 watch evaluation should preserve the linked watch artifact");
+    expect(phase8TriggerRun.value.artifact.analysisArtifact.artifactId ==
+               phase7AnalysisArtifact.analysisArtifact.artifactId,
+           "TapeScope typed phase8 watch evaluation should reuse the matching durable analysis artifact");
+    const auto typedPhase8TriggerList = client.listTriggerRunsPayload(10);
+    expect(typedPhase8TriggerList.ok(), "TapeScope typed phase8 trigger inventory should succeed: " +
+                                            tapescope::QueryClient::describeError(typedPhase8TriggerList.error));
+    expect(!typedPhase8TriggerList.value.empty(),
+           "TapeScope typed phase8 trigger inventory should expose stored trigger runs");
+    const auto typedPhase8TriggerRead =
+        client.readTriggerRunPayload(phase8TriggerRun.value.artifact.triggerArtifact.artifactId);
+    expect(typedPhase8TriggerRead.ok(), "TapeScope typed phase8 trigger read should succeed: " +
+                                            tapescope::QueryClient::describeError(typedPhase8TriggerRead.error));
+    expect(typedPhase8TriggerRead.value.triggerArtifact.artifactId ==
+               phase8TriggerRun.value.artifact.triggerArtifact.artifactId,
+           "TapeScope typed phase8 trigger read should preserve the requested trigger artifact id");
+    const auto typedPhase8AttentionList = client.listAttentionInboxPayload(10);
+    expect(typedPhase8AttentionList.ok(), "TapeScope typed phase8 attention inbox should succeed: " +
+                                              tapescope::QueryClient::describeError(typedPhase8AttentionList.error));
+    expect(!typedPhase8AttentionList.value.empty(),
+           "TapeScope typed phase8 attention inbox should expose open attention items");
+    expect(typedPhase8AttentionList.value.front().triggerArtifactId ==
+               phase8TriggerRun.value.artifact.triggerArtifact.artifactId,
+           "TapeScope typed phase8 attention inbox should preserve the linked trigger artifact id");
+    const auto phase8SuppressedWatchCreate = client.createWatchDefinitionPayload(movedCaseBundlePath.string(),
+                                                                                 tape_phase7::kIncidentTriageAnalyzerProfile,
+                                                                                 "INTC Strict Phase 8 Watch",
+                                                                                 true,
+                                                                                 15,
+                                                                                 99,
+                                                                                 {},
+                                                                                 "never_matches");
+    expect(phase8SuppressedWatchCreate.ok(), "TapeScope typed strict phase8 watch create should succeed: " +
+                                                 tapescope::QueryClient::describeError(phase8SuppressedWatchCreate.error));
+    expect(phase8SuppressedWatchCreate.value.created,
+           "TapeScope typed strict phase8 watch create should create a distinct durable watch");
+    const auto phase8SuppressedTriggerRun =
+        client.evaluateWatchDefinitionPayload(phase8SuppressedWatchCreate.value.artifact.watchArtifact.artifactId);
+    expect(phase8SuppressedTriggerRun.ok(), "TapeScope typed strict phase8 watch evaluation should succeed: " +
+                                                tapescope::QueryClient::describeError(phase8SuppressedTriggerRun.error));
+    expect(phase8SuppressedTriggerRun.value.artifact.triggerOutcome == tape_phase8::kTriggerOutcomeSuppressed &&
+               !phase8SuppressedTriggerRun.value.artifact.attentionOpen,
+           "TapeScope typed strict phase8 watch evaluation should persist a suppressed non-attention trigger");
+    expect(phase8SuppressedTriggerRun.value.artifact.suppressionReasons.is_array() &&
+               !phase8SuppressedTriggerRun.value.artifact.suppressionReasons.empty(),
+           "TapeScope typed strict phase8 watch evaluation should explain why the trigger was suppressed");
+    const auto typedPhase8TriggerReadSuppressed =
+        client.readTriggerRunPayload(phase8SuppressedTriggerRun.value.artifact.triggerArtifact.artifactId);
+    expect(typedPhase8TriggerReadSuppressed.ok(),
+           "TapeScope typed suppressed phase8 trigger read should succeed: " +
+               tapescope::QueryClient::describeError(typedPhase8TriggerReadSuppressed.error));
+    expect(typedPhase8TriggerReadSuppressed.value.triggerOutcome == tape_phase8::kTriggerOutcomeSuppressed,
+           "TapeScope typed suppressed phase8 trigger read should preserve the suppression outcome");
+    const auto typedPhase8AttentionListAfterSuppression = client.listAttentionInboxPayload(10);
+    expect(typedPhase8AttentionListAfterSuppression.ok(),
+           "TapeScope typed phase8 attention inbox after suppression should succeed: " +
+               tapescope::QueryClient::describeError(typedPhase8AttentionListAfterSuppression.error));
+    expect(std::none_of(typedPhase8AttentionListAfterSuppression.value.begin(),
+                        typedPhase8AttentionListAfterSuppression.value.end(),
+                        [&](const tapescope::Phase8AttentionInboxItem& item) {
+                            return item.triggerArtifactId ==
+                                phase8SuppressedTriggerRun.value.artifact.triggerArtifact.artifactId;
+                        }),
+           "TapeScope typed phase8 attention inbox should exclude suppressed trigger runs");
+
+    const auto phase8AcknowledgeWatchCreate =
+        client.createWatchDefinitionPayload(movedCaseBundlePath.string(),
+                                            tape_phase7::kLiquidityBehaviorAnalyzerProfile,
+                                            "INTC Ack Phase 8 Watch",
+                                            true,
+                                            15);
+    expect(phase8AcknowledgeWatchCreate.ok(),
+           "TapeScope typed phase8 acknowledge watch create should succeed: " +
+               tapescope::QueryClient::describeError(phase8AcknowledgeWatchCreate.error));
+    const auto phase8AcknowledgeTrigger =
+        client.evaluateWatchDefinitionPayload(phase8AcknowledgeWatchCreate.value.artifact.watchArtifact.artifactId);
+    expect(phase8AcknowledgeTrigger.ok(),
+           "TapeScope typed phase8 acknowledge trigger should succeed: " +
+               tapescope::QueryClient::describeError(phase8AcknowledgeTrigger.error));
+    const auto phase8AcknowledgeResult =
+        client.acknowledgeAttentionItemPayload(phase8AcknowledgeTrigger.value.artifact.triggerArtifact.artifactId,
+                                               "tapescope",
+                                               "Acknowledged for later operator follow-up.");
+    expect(phase8AcknowledgeResult.ok(),
+           "TapeScope typed phase8 acknowledge action should succeed: " +
+               tapescope::QueryClient::describeError(phase8AcknowledgeResult.error));
+    expect(phase8AcknowledgeResult.value.attentionStatus == tape_phase8::kAttentionStatusAcknowledged &&
+               !phase8AcknowledgeResult.value.attentionOpen,
+           "TapeScope typed phase8 acknowledge action should close the open attention item");
+    const auto typedPhase8AttentionListAfterAcknowledge = client.listAttentionInboxPayload(10);
+    expect(typedPhase8AttentionListAfterAcknowledge.ok(),
+           "TapeScope typed phase8 attention inbox after acknowledge should succeed: " +
+               tapescope::QueryClient::describeError(typedPhase8AttentionListAfterAcknowledge.error));
+    expect(std::none_of(typedPhase8AttentionListAfterAcknowledge.value.begin(),
+                        typedPhase8AttentionListAfterAcknowledge.value.end(),
+                        [&](const tapescope::Phase8AttentionInboxItem& item) {
+                            return item.triggerArtifactId ==
+                                phase8AcknowledgeTrigger.value.artifact.triggerArtifact.artifactId;
+                        }),
+           "TapeScope typed phase8 attention inbox should exclude acknowledged items");
+
+    const auto phase8SnoozeWatchCreate =
+        client.createWatchDefinitionPayload(movedCaseBundlePath.string(),
+                                            tape_phase7::kAdverseSelectionAnalyzerProfile,
+                                            "INTC Snooze Phase 8 Watch",
+                                            true,
+                                            15);
+    expect(phase8SnoozeWatchCreate.ok(),
+           "TapeScope typed phase8 snooze watch create should succeed: " +
+               tapescope::QueryClient::describeError(phase8SnoozeWatchCreate.error));
+    const auto phase8SnoozeTrigger =
+        client.evaluateWatchDefinitionPayload(phase8SnoozeWatchCreate.value.artifact.watchArtifact.artifactId);
+    expect(phase8SnoozeTrigger.ok(),
+           "TapeScope typed phase8 snooze trigger should succeed: " +
+               tapescope::QueryClient::describeError(phase8SnoozeTrigger.error));
+    const auto phase8SnoozeResult =
+        client.snoozeAttentionItemPayload(phase8SnoozeTrigger.value.artifact.triggerArtifact.artifactId,
+                                          30,
+                                          "tapescope",
+                                          "Snoozed until the next operator review pass.");
+    expect(phase8SnoozeResult.ok(),
+           "TapeScope typed phase8 snooze action should succeed: " +
+               tapescope::QueryClient::describeError(phase8SnoozeResult.error));
+    expect(phase8SnoozeResult.value.attentionStatus == tape_phase8::kAttentionStatusSnoozed &&
+               !phase8SnoozeResult.value.attentionOpen &&
+               !phase8SnoozeResult.value.snoozedUntilUtc.empty(),
+           "TapeScope typed phase8 snooze action should persist a closed snoozed attention item with wake-up time");
+    const auto typedPhase8AttentionListAfterSnooze = client.listAttentionInboxPayload(10);
+    expect(typedPhase8AttentionListAfterSnooze.ok(),
+           "TapeScope typed phase8 attention inbox after snooze should succeed: " +
+               tapescope::QueryClient::describeError(typedPhase8AttentionListAfterSnooze.error));
+    expect(std::none_of(typedPhase8AttentionListAfterSnooze.value.begin(),
+                        typedPhase8AttentionListAfterSnooze.value.end(),
+                        [&](const tapescope::Phase8AttentionInboxItem& item) {
+                            return item.triggerArtifactId ==
+                                phase8SnoozeTrigger.value.artifact.triggerArtifact.artifactId;
+                        }),
+           "TapeScope typed phase8 attention inbox should hide snoozed items until they wake up");
+
+    const auto phase8ResolveTrigger =
+        client.evaluateWatchDefinitionPayload(phase8AcknowledgeWatchCreate.value.artifact.watchArtifact.artifactId);
+    expect(phase8ResolveTrigger.ok(),
+           "TapeScope typed phase8 resolve trigger should succeed: " +
+               tapescope::QueryClient::describeError(phase8ResolveTrigger.error));
+    const auto phase8ResolveResult =
+        client.resolveAttentionItemPayload(phase8ResolveTrigger.value.artifact.triggerArtifact.artifactId,
+                                           "tapescope",
+                                           "Resolved through the operator inbox workflow.");
+    expect(phase8ResolveResult.ok(),
+           "TapeScope typed phase8 resolve action should succeed: " +
+               tapescope::QueryClient::describeError(phase8ResolveResult.error));
+    expect(phase8ResolveResult.value.attentionStatus == tape_phase8::kAttentionStatusResolved &&
+               !phase8ResolveResult.value.attentionOpen,
+           "TapeScope typed phase8 resolve action should close the open attention item as resolved");
+    const auto typedPhase8AttentionListAfterResolve = client.listAttentionInboxPayload(10);
+    expect(typedPhase8AttentionListAfterResolve.ok(),
+           "TapeScope typed phase8 attention inbox after resolve should succeed: " +
+               tapescope::QueryClient::describeError(typedPhase8AttentionListAfterResolve.error));
+    expect(std::none_of(typedPhase8AttentionListAfterResolve.value.begin(),
+                        typedPhase8AttentionListAfterResolve.value.end(),
+                        [&](const tapescope::Phase8AttentionInboxItem& item) {
+                            return item.triggerArtifactId ==
+                                phase8ResolveTrigger.value.artifact.triggerArtifact.artifactId;
+                        }),
+           "TapeScope typed phase8 attention inbox should exclude resolved items");
+
+    const auto scheduledPhase8WatchCreate = client.createWatchDefinitionPayload(movedCaseBundlePath.string(),
+                                                                                tape_phase7::kFillQualityAnalyzerProfile,
+                                                                                "INTC Scheduled Phase 8 Watch",
+                                                                                true,
+                                                                                15);
+    expect(scheduledPhase8WatchCreate.ok(), "TapeScope typed scheduled phase8 watch create should succeed: " +
+                                                tapescope::QueryClient::describeError(scheduledPhase8WatchCreate.error));
+    const auto scheduledStrictPhase8WatchCreate = client.createWatchDefinitionPayload(movedCaseBundlePath.string(),
+                                                                                      tape_phase7::kOrderImpactAnalyzerProfile,
+                                                                                      "INTC Scheduled Strict Phase 8 Watch",
+                                                                                      true,
+                                                                                      15,
+                                                                                      99,
+                                                                                      {},
+                                                                                      "never_matches");
+    expect(scheduledStrictPhase8WatchCreate.ok(),
+           "TapeScope typed scheduled strict phase8 watch create should succeed: " +
+               tapescope::QueryClient::describeError(scheduledStrictPhase8WatchCreate.error));
+
+    const auto typedPhase8DueWatchList = client.listDueWatchesPayload(10);
+    expect(typedPhase8DueWatchList.ok(), "TapeScope typed phase8 due watch inventory should succeed: " +
+                                             tapescope::QueryClient::describeError(typedPhase8DueWatchList.error));
+    expect(typedPhase8DueWatchList.value.matchedCount >= 2,
+           "TapeScope typed phase8 due watch inventory should expose newly scheduled watches as due");
+    expect(std::any_of(typedPhase8DueWatchList.value.watchDefinitions.begin(),
+                       typedPhase8DueWatchList.value.watchDefinitions.end(),
+                       [&](const tapescope::Phase8WatchDefinitionArtifact& artifact) {
+                           return artifact.watchArtifact.artifactId ==
+                               scheduledPhase8WatchCreate.value.artifact.watchArtifact.artifactId;
+                       }),
+           "TapeScope typed phase8 due watch inventory should include the scheduled triggered watch");
+
+    const auto scheduledDueRun = client.runDueWatchesPayload(10);
+    expect(scheduledDueRun.ok(), "TapeScope typed phase8 run_due_watches should succeed: " +
+                                     tapescope::QueryClient::describeError(scheduledDueRun.error));
+    expect(scheduledDueRun.value.evaluatedWatchCount >= 2,
+           "TapeScope typed phase8 run_due_watches should evaluate the due scheduled watches");
+    expect(scheduledDueRun.value.attentionOpenedCount >= 1,
+           "TapeScope typed phase8 run_due_watches should open attention for at least one due watch");
+    expect(scheduledDueRun.value.suppressedCount >= 1,
+           "TapeScope typed phase8 run_due_watches should preserve suppression for strict due watches");
+
+    const auto typedPhase8DueWatchListAfterRun = client.listDueWatchesPayload(10);
+    expect(typedPhase8DueWatchListAfterRun.ok(),
+           "TapeScope typed phase8 due watch inventory after run should succeed: " +
+               tapescope::QueryClient::describeError(typedPhase8DueWatchListAfterRun.error));
+    expect(std::none_of(typedPhase8DueWatchListAfterRun.value.watchDefinitions.begin(),
+                        typedPhase8DueWatchListAfterRun.value.watchDefinitions.end(),
+                        [&](const tapescope::Phase8WatchDefinitionArtifact& artifact) {
+                            return artifact.watchArtifact.artifactId ==
+                                scheduledPhase8WatchCreate.value.artifact.watchArtifact.artifactId;
+                        }),
+           "TapeScope typed phase8 due watch inventory should advance next_evaluation_at_utc after a due run");
+
     const auto phase7PlaybookBuild =
         client.buildPlaybookPayload(phase7AnalysisArtifact.analysisArtifact.artifactId, selectedFindingIds);
     expect(phase7PlaybookBuild.ok(), "TapeScope typed phase7 playbook build should succeed: " +

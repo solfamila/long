@@ -1,0 +1,1350 @@
+{
+  "resource_read_phase8_attention": {
+    "content_count": 1,
+    "mime_type": "application/json",
+    "ok": true,
+    "payload": {
+      "returned_count": 2,
+      "attention_items": [
+        {
+          "trigger_artifact_id": "phase8-trigger:<id>",
+          "watch_artifact_id": "phase8-watch:<id>",
+          "analysis_artifact_id": "phase7-analysis:<id>",
+          "source_artifact_id": "case-bundle:report:<id>",
+          "title": "INTC Scheduled Trigger Watch",
+          "headline": "INTC Scheduled Trigger Watch: 1 finding (warning highest severity)",
+          "attention_status": "attention_new",
+          "attention_open": true,
+          "trigger_outcome": "triggered",
+          "highest_severity": "warning",
+          "analysis_profile": "phase7.fill_quality_review.v1",
+          "finding_count": 1,
+          "has_generated_at_utc": true
+        },
+        {
+          "trigger_artifact_id": "phase8-trigger:<id>",
+          "watch_artifact_id": "phase8-watch:<id>",
+          "analysis_artifact_id": "phase7-analysis:<id>",
+          "source_artifact_id": "case-bundle:report:<id>",
+          "title": "INTC Trigger Watch",
+          "headline": "INTC Trigger Watch: 2 findings (warning highest severity)",
+          "attention_status": "attention_new",
+          "attention_open": true,
+          "trigger_outcome": "triggered",
+          "highest_severity": "warning",
+          "analysis_profile": "phase7.trace_fill_integrity.v1",
+          "finding_count": 2,
+          "has_generated_at_utc": true
+        }
+      ]
+    },
+    "uri": "tape://phase8/attention/open"
+  },
+  "resource_read_phase8_trigger": {
+    "content_count": 1,
+    "mime_type": "application/json",
+    "ok": true,
+    "payload": {
+      "watch_definition": {
+        "artifact_id": "phase8-watch:<id>",
+        "artifact_type": "phase8.watch_definition.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "trigger_run": {
+        "artifact_id": "phase8-trigger:<id>",
+        "artifact_type": "phase8.trigger_run.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+      },
+      "title": "INTC Trigger Watch",
+      "headline": "INTC Trigger Watch: 2 findings (warning highest severity)",
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "trigger_reason": "manual_eval",
+      "trigger_outcome": "triggered",
+      "attention_status": "attention_new",
+      "attention_open": true,
+      "analysis_created": true,
+      "finding_count": 2,
+      "highest_severity": "warning",
+      "has_generated_at_utc": true,
+      "finding_categories": [
+        "evidence_confidence",
+        "trace_integrity"
+      ],
+      "suppression_reason_codes": []
+    },
+    "uri": "tape://phase8/trigger/<id>"
+  },
+  "resource_read_phase8_trigger_markdown": {
+    "contains_order_case": false,
+    "contains_phase7_analysis": false,
+    "contains_phase7_execution_apply": false,
+    "contains_phase7_execution_ledger": false,
+    "contains_phase7_playbook": false,
+    "contains_phase8_trigger": true,
+    "contains_phase8_watch": true,
+    "contains_session_overview": false,
+    "content_count": 1,
+    "has_text": true,
+    "mime_type": "text/markdown",
+    "ok": true,
+    "uri": "tape://phase8/trigger/<id>/markdown"
+  },
+  "resource_read_phase8_watch": {
+    "content_count": 1,
+    "mime_type": "application/json",
+    "ok": true,
+    "payload": {
+      "watch_definition": {
+        "artifact_id": "phase8-watch:<id>",
+        "artifact_type": "phase8.watch_definition.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+      },
+      "title": "INTC Trigger Watch",
+      "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "enabled": true,
+      "evaluation_cadence_minutes": 15,
+      "minimum_finding_count": 1,
+      "minimum_severity": null,
+      "required_category": null,
+      "has_created_at_utc": true,
+      "has_updated_at_utc": true,
+      "has_latest_evaluation_at_utc": true,
+      "has_next_evaluation_at_utc": true,
+      "latest_trigger_outcome": "triggered",
+      "latest_trigger_artifact_id": "phase8-trigger:<id>",
+      "bundle_summary": {
+        "bundle_type": "case_bundle",
+        "first_session_seq": 1,
+        "last_session_seq": 4,
+        "source_artifact_id": "case-report:<id>"
+      }
+    },
+    "uri": "tape://phase8/watch/<id>"
+  },
+  "resource_read_phase8_watch_markdown": {
+    "contains_order_case": false,
+    "contains_phase7_analysis": false,
+    "contains_phase7_execution_apply": false,
+    "contains_phase7_execution_ledger": false,
+    "contains_phase7_playbook": false,
+    "contains_phase8_trigger": true,
+    "contains_phase8_watch": true,
+    "contains_session_overview": false,
+    "content_count": 1,
+    "has_text": true,
+    "mime_type": "text/markdown",
+    "ok": true,
+    "uri": "tape://phase8/watch/<id>/markdown"
+  },
+  "resources_list_phase8": [
+    {
+      "mime_type": "application/json",
+      "uri": "tape://phase8/attention/open"
+    },
+    {
+      "mime_type": "application/json",
+      "uri": "tape://phase8/trigger/<id>"
+    },
+    {
+      "mime_type": "text/markdown",
+      "uri": "tape://phase8/trigger/<id>/markdown"
+    },
+    {
+      "mime_type": "application/json",
+      "uri": "tape://phase8/watch/<id>"
+    },
+    {
+      "mime_type": "text/markdown",
+      "uri": "tape://phase8/watch/<id>/markdown"
+    }
+  ],
+  "tapescript_create_watch_definition": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_create_watch_definition_local",
+      "result_schema": "phase8.watch-definition.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_create_watch_definition"
+    },
+    "ok": true,
+    "result": {
+      "artifact_status": "created",
+      "watch_definition": {
+        "watch_definition": {
+          "artifact_id": "phase8-watch:<id>",
+          "artifact_type": "phase8.watch_definition.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+        },
+        "title": "INTC Trigger Watch",
+        "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+        "analysis_profile": "phase7.trace_fill_integrity.v1",
+        "enabled": true,
+        "evaluation_cadence_minutes": 15,
+        "minimum_finding_count": 1,
+        "minimum_severity": null,
+        "required_category": null,
+        "has_created_at_utc": true,
+        "has_updated_at_utc": true,
+        "has_latest_evaluation_at_utc": false,
+        "has_next_evaluation_at_utc": true,
+        "latest_trigger_outcome": null,
+        "latest_trigger_artifact_id": null,
+        "bundle_summary": {
+          "bundle_type": "case_bundle",
+          "first_session_seq": 1,
+          "last_session_seq": 4,
+          "source_artifact_id": "case-report:<id>"
+        }
+      }
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_create_watch_definition_reused": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_create_watch_definition_local",
+      "result_schema": "phase8.watch-definition.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_create_watch_definition"
+    },
+    "ok": true,
+    "result": {
+      "artifact_status": "reused",
+      "watch_definition": {
+        "watch_definition": {
+          "artifact_id": "phase8-watch:<id>",
+          "artifact_type": "phase8.watch_definition.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+        },
+        "title": "INTC Trigger Watch",
+        "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+        "analysis_profile": "phase7.trace_fill_integrity.v1",
+        "enabled": true,
+        "evaluation_cadence_minutes": 15,
+        "minimum_finding_count": 1,
+        "minimum_severity": null,
+        "required_category": null,
+        "has_created_at_utc": true,
+        "has_updated_at_utc": true,
+        "has_latest_evaluation_at_utc": false,
+        "has_next_evaluation_at_utc": true,
+        "latest_trigger_outcome": null,
+        "latest_trigger_artifact_id": null,
+        "bundle_summary": {
+          "bundle_type": "case_bundle",
+          "first_session_seq": 1,
+          "last_session_seq": 4,
+          "source_artifact_id": "case-report:<id>"
+        }
+      }
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_create_watch_definition_suppressed": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_create_watch_definition_local",
+      "result_schema": "phase8.watch-definition.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_create_watch_definition"
+    },
+    "ok": true,
+    "result": {
+      "artifact_status": "created",
+      "watch_definition": {
+        "watch_definition": {
+          "artifact_id": "phase8-watch:<id>",
+          "artifact_type": "phase8.watch_definition.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+        },
+        "title": "INTC Strict Trigger Watch",
+        "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+        "analysis_profile": "phase7.incident_triage.v1",
+        "enabled": true,
+        "evaluation_cadence_minutes": 15,
+        "minimum_finding_count": 99,
+        "minimum_severity": null,
+        "required_category": "never_matches",
+        "has_created_at_utc": true,
+        "has_updated_at_utc": true,
+        "has_latest_evaluation_at_utc": false,
+        "has_next_evaluation_at_utc": true,
+        "latest_trigger_outcome": null,
+        "latest_trigger_artifact_id": null,
+        "bundle_summary": {
+          "bundle_type": "case_bundle",
+          "first_session_seq": 1,
+          "last_session_seq": 4,
+          "source_artifact_id": "case-report:<id>"
+        }
+      }
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_create_watch_definition_scheduled": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_create_watch_definition_local",
+      "result_schema": "phase8.watch-definition.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_create_watch_definition"
+    },
+    "ok": true,
+    "result": {
+      "artifact_status": "created",
+      "watch_definition": {
+        "watch_definition": {
+          "artifact_id": "phase8-watch:<id>",
+          "artifact_type": "phase8.watch_definition.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+        },
+        "title": "INTC Scheduled Trigger Watch",
+        "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+        "analysis_profile": "phase7.fill_quality_review.v1",
+        "enabled": true,
+        "evaluation_cadence_minutes": 15,
+        "minimum_finding_count": 1,
+        "minimum_severity": null,
+        "required_category": null,
+        "has_created_at_utc": true,
+        "has_updated_at_utc": true,
+        "has_latest_evaluation_at_utc": false,
+        "has_next_evaluation_at_utc": true,
+        "latest_trigger_outcome": null,
+        "latest_trigger_artifact_id": null,
+        "bundle_summary": {
+          "bundle_type": "case_bundle",
+          "first_session_seq": 1,
+          "last_session_seq": 4,
+          "source_artifact_id": "case-report:<id>"
+        }
+      }
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_create_watch_definition_scheduled_suppressed": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_create_watch_definition_local",
+      "result_schema": "phase8.watch-definition.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_create_watch_definition"
+    },
+    "ok": true,
+    "result": {
+      "artifact_status": "created",
+      "watch_definition": {
+        "watch_definition": {
+          "artifact_id": "phase8-watch:<id>",
+          "artifact_type": "phase8.watch_definition.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+        },
+        "title": "INTC Scheduled Strict Trigger Watch",
+        "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+        "analysis_profile": "phase7.order_impact_review.v1",
+        "enabled": true,
+        "evaluation_cadence_minutes": 15,
+        "minimum_finding_count": 99,
+        "minimum_severity": null,
+        "required_category": "never_matches",
+        "has_created_at_utc": true,
+        "has_updated_at_utc": true,
+        "has_latest_evaluation_at_utc": false,
+        "has_next_evaluation_at_utc": true,
+        "latest_trigger_outcome": null,
+        "latest_trigger_artifact_id": null,
+        "bundle_summary": {
+          "bundle_type": "case_bundle",
+          "first_session_seq": 1,
+          "last_session_seq": 4,
+          "source_artifact_id": "case-report:<id>"
+        }
+      }
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_evaluate_watch_definition": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_evaluate_watch_definition_local",
+      "result_schema": "phase8.trigger-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_evaluate_watch_definition"
+    },
+    "ok": true,
+    "result": {
+      "artifact_status": "created",
+      "trigger_run": {
+        "watch_definition": {
+          "artifact_id": "phase8-watch:<id>",
+          "artifact_type": "phase8.watch_definition.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+        },
+        "source_artifact": {
+          "artifact_id": "case-bundle:report:<id>",
+          "artifact_type": "phase6.case_bundle.v1",
+          "contract_version": "phase6-portable-bundle-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+        },
+        "analysis_artifact": {
+          "artifact_id": "phase7-analysis:<id>",
+          "artifact_type": "phase7.analysis_output.v1",
+          "contract_version": "phase7-analyzer-playbook-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+        },
+        "trigger_run": {
+          "artifact_id": "phase8-trigger:<id>",
+          "artifact_type": "phase8.trigger_run.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+        },
+        "title": "INTC Trigger Watch",
+        "headline": "INTC Trigger Watch: 2 findings (warning highest severity)",
+        "analysis_profile": "phase7.trace_fill_integrity.v1",
+        "trigger_reason": "manual_eval",
+        "trigger_outcome": "triggered",
+        "attention_status": "attention_new",
+        "attention_open": true,
+        "analysis_created": true,
+        "finding_count": 2,
+        "highest_severity": "warning",
+        "has_generated_at_utc": true,
+        "finding_categories": [
+          "evidence_confidence",
+          "trace_integrity"
+        ],
+        "suppression_reason_codes": []
+      }
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_evaluate_watch_definition_suppressed": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_evaluate_watch_definition_local",
+      "result_schema": "phase8.trigger-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_evaluate_watch_definition"
+    },
+    "ok": true,
+    "result": {
+      "artifact_status": "created",
+      "trigger_run": {
+        "watch_definition": {
+          "artifact_id": "phase8-watch:<id>",
+          "artifact_type": "phase8.watch_definition.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+        },
+        "source_artifact": {
+          "artifact_id": "case-bundle:report:<id>",
+          "artifact_type": "phase6.case_bundle.v1",
+          "contract_version": "phase6-portable-bundle-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+        },
+        "analysis_artifact": {
+          "artifact_id": "phase7-analysis:<id>",
+          "artifact_type": "phase7.analysis_output.v1",
+          "contract_version": "phase7-analyzer-playbook-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+        },
+        "trigger_run": {
+          "artifact_id": "phase8-trigger:<id>",
+          "artifact_type": "phase8.trigger_run.v1",
+          "contract_version": "phase8-trigger-inbox-v1",
+          "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+        },
+        "title": "INTC Strict Trigger Watch",
+        "headline": "INTC Strict Trigger Watch: suppressed (finding_count below configured minimum)",
+        "analysis_profile": "phase7.incident_triage.v1",
+        "trigger_reason": "manual_eval",
+        "trigger_outcome": "suppressed",
+        "attention_status": "attention_suppressed",
+        "attention_open": false,
+        "analysis_created": true,
+        "finding_count": 1,
+        "highest_severity": "info",
+        "has_generated_at_utc": true,
+        "finding_categories": [
+          "timeline_hotspot"
+        ],
+        "suppression_reason_codes": [
+          "minimum_finding_count_not_met",
+          "required_category_missing"
+        ]
+      }
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_due_watches": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_list_due_watches_local",
+      "result_schema": "phase8.due-watch-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_due_watches"
+    },
+    "ok": true,
+    "result": {
+      "matched_count": 2,
+      "returned_count": 2,
+      "watch_definitions": [
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "title": "INTC Scheduled Strict Trigger Watch",
+          "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+          "analysis_profile": "phase7.order_impact_review.v1",
+          "enabled": true,
+          "evaluation_cadence_minutes": 15,
+          "minimum_finding_count": 99,
+          "minimum_severity": null,
+          "required_category": "never_matches",
+          "has_created_at_utc": true,
+          "has_updated_at_utc": true,
+          "has_latest_evaluation_at_utc": false,
+          "has_next_evaluation_at_utc": true,
+          "latest_trigger_outcome": null,
+          "latest_trigger_artifact_id": null,
+          "bundle_summary": {
+            "bundle_type": "case_bundle",
+            "first_session_seq": 1,
+            "last_session_seq": 4,
+            "source_artifact_id": "case-report:<id>"
+          }
+        },
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "title": "INTC Scheduled Trigger Watch",
+          "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+          "analysis_profile": "phase7.fill_quality_review.v1",
+          "enabled": true,
+          "evaluation_cadence_minutes": 15,
+          "minimum_finding_count": 1,
+          "minimum_severity": null,
+          "required_category": null,
+          "has_created_at_utc": true,
+          "has_updated_at_utc": true,
+          "has_latest_evaluation_at_utc": false,
+          "has_next_evaluation_at_utc": true,
+          "latest_trigger_outcome": null,
+          "latest_trigger_artifact_id": null,
+          "bundle_summary": {
+            "bundle_type": "case_bundle",
+            "first_session_seq": 1,
+            "last_session_seq": 4,
+            "source_artifact_id": "case-report:<id>"
+          }
+        }
+      ]
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_attention_items": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_list_attention_items_local",
+      "result_schema": "phase8.attention-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_attention_items"
+    },
+    "ok": true,
+    "result": {
+      "returned_count": 1,
+      "attention_items": [
+        {
+          "trigger_artifact_id": "phase8-trigger:<id>",
+          "watch_artifact_id": "phase8-watch:<id>",
+          "analysis_artifact_id": "phase7-analysis:<id>",
+          "source_artifact_id": "case-bundle:report:<id>",
+          "title": "INTC Trigger Watch",
+          "headline": "INTC Trigger Watch: 2 findings (warning highest severity)",
+          "attention_status": "attention_new",
+          "attention_open": true,
+          "trigger_outcome": "triggered",
+          "highest_severity": "warning",
+          "analysis_profile": "phase7.trace_fill_integrity.v1",
+          "finding_count": 2,
+          "has_generated_at_utc": true
+        }
+      ]
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_trigger_runs": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_list_trigger_runs_local",
+      "result_schema": "phase8.trigger-run-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_trigger_runs"
+    },
+    "ok": true,
+    "result": {
+      "returned_count": 2,
+      "trigger_runs": [
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "trigger_run": {
+            "artifact_id": "phase8-trigger:<id>",
+            "artifact_type": "phase8.trigger_run.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+          },
+          "title": "INTC Strict Trigger Watch",
+          "headline": "INTC Strict Trigger Watch: suppressed (finding_count below configured minimum)",
+          "analysis_profile": "phase7.incident_triage.v1",
+          "trigger_reason": "manual_eval",
+          "trigger_outcome": "suppressed",
+          "attention_status": "attention_suppressed",
+          "attention_open": false,
+          "analysis_created": true,
+          "finding_count": 1,
+          "highest_severity": "info",
+          "has_generated_at_utc": true,
+          "finding_categories": [
+            "timeline_hotspot"
+          ],
+          "suppression_reason_codes": [
+            "minimum_finding_count_not_met",
+            "required_category_missing"
+          ]
+        },
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "trigger_run": {
+            "artifact_id": "phase8-trigger:<id>",
+            "artifact_type": "phase8.trigger_run.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+          },
+          "title": "INTC Trigger Watch",
+          "headline": "INTC Trigger Watch: 2 findings (warning highest severity)",
+          "analysis_profile": "phase7.trace_fill_integrity.v1",
+          "trigger_reason": "manual_eval",
+          "trigger_outcome": "triggered",
+          "attention_status": "attention_new",
+          "attention_open": true,
+          "analysis_created": true,
+          "finding_count": 2,
+          "highest_severity": "warning",
+          "has_generated_at_utc": true,
+          "finding_categories": [
+            "evidence_confidence",
+            "trace_integrity"
+          ],
+          "suppression_reason_codes": []
+        }
+      ]
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_watch_definitions": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_list_watch_definitions_local",
+      "result_schema": "phase8.watch-definition-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_watch_definitions"
+    },
+    "ok": true,
+    "result": {
+      "returned_count": 2,
+      "watch_definitions": [
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "title": "INTC Strict Trigger Watch",
+          "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+          "analysis_profile": "phase7.incident_triage.v1",
+          "enabled": true,
+          "evaluation_cadence_minutes": 15,
+          "minimum_finding_count": 99,
+          "minimum_severity": null,
+          "required_category": "never_matches",
+          "has_created_at_utc": true,
+          "has_updated_at_utc": true,
+          "has_latest_evaluation_at_utc": false,
+          "has_next_evaluation_at_utc": true,
+          "latest_trigger_outcome": null,
+          "latest_trigger_artifact_id": null,
+          "bundle_summary": {
+            "bundle_type": "case_bundle",
+            "first_session_seq": 1,
+            "last_session_seq": 4,
+            "source_artifact_id": "case-report:<id>"
+          }
+        },
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "title": "INTC Trigger Watch",
+          "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+          "analysis_profile": "phase7.trace_fill_integrity.v1",
+          "enabled": true,
+          "evaluation_cadence_minutes": 15,
+          "minimum_finding_count": 1,
+          "minimum_severity": null,
+          "required_category": null,
+          "has_created_at_utc": true,
+          "has_updated_at_utc": true,
+          "has_latest_evaluation_at_utc": false,
+          "has_next_evaluation_at_utc": true,
+          "latest_trigger_outcome": null,
+          "latest_trigger_artifact_id": null,
+          "bundle_summary": {
+            "bundle_type": "case_bundle",
+            "first_session_seq": 1,
+            "last_session_seq": 4,
+            "source_artifact_id": "case-report:<id>"
+          }
+        }
+      ]
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_read_trigger_run": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_read_trigger_run_local",
+      "result_schema": "phase8.trigger-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_trigger_run"
+    },
+    "ok": true,
+    "result": {
+      "watch_definition": {
+        "artifact_id": "phase8-watch:<id>",
+        "artifact_type": "phase8.watch_definition.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "trigger_run": {
+        "artifact_id": "phase8-trigger:<id>",
+        "artifact_type": "phase8.trigger_run.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+      },
+      "title": "INTC Trigger Watch",
+      "headline": "INTC Trigger Watch: 2 findings (warning highest severity)",
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "trigger_reason": "manual_eval",
+      "trigger_outcome": "triggered",
+      "attention_status": "attention_new",
+      "attention_open": true,
+      "analysis_created": true,
+      "finding_count": 2,
+      "highest_severity": "warning",
+      "has_generated_at_utc": true,
+      "finding_categories": [
+        "evidence_confidence",
+        "trace_integrity"
+      ],
+      "suppression_reason_codes": []
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_read_trigger_run_suppressed": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_read_trigger_run_local",
+      "result_schema": "phase8.trigger-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_trigger_run"
+    },
+    "ok": true,
+    "result": {
+      "watch_definition": {
+        "artifact_id": "phase8-watch:<id>",
+        "artifact_type": "phase8.watch_definition.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "trigger_run": {
+        "artifact_id": "phase8-trigger:<id>",
+        "artifact_type": "phase8.trigger_run.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+      },
+      "title": "INTC Strict Trigger Watch",
+      "headline": "INTC Strict Trigger Watch: suppressed (finding_count below configured minimum)",
+      "analysis_profile": "phase7.incident_triage.v1",
+      "trigger_reason": "manual_eval",
+      "trigger_outcome": "suppressed",
+      "attention_status": "attention_suppressed",
+      "attention_open": false,
+      "analysis_created": true,
+      "finding_count": 1,
+      "highest_severity": "info",
+      "has_generated_at_utc": true,
+      "finding_categories": [
+        "timeline_hotspot"
+      ],
+      "suppression_reason_codes": [
+        "minimum_finding_count_not_met",
+        "required_category_missing"
+      ]
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_read_watch_definition": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_read_watch_definition_local",
+      "result_schema": "phase8.watch-definition.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_read_watch_definition"
+    },
+    "ok": true,
+    "result": {
+      "watch_definition": {
+        "artifact_id": "phase8-watch:<id>",
+        "artifact_type": "phase8.watch_definition.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+      },
+      "title": "INTC Trigger Watch",
+      "bundle_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack",
+      "analysis_profile": "phase7.trace_fill_integrity.v1",
+      "enabled": true,
+      "evaluation_cadence_minutes": 15,
+      "minimum_finding_count": 1,
+      "minimum_severity": null,
+      "required_category": null,
+      "has_created_at_utc": true,
+      "has_updated_at_utc": true,
+      "has_latest_evaluation_at_utc": false,
+      "has_next_evaluation_at_utc": true,
+      "latest_trigger_outcome": null,
+      "latest_trigger_artifact_id": null,
+      "bundle_summary": {
+        "bundle_type": "case_bundle",
+        "first_session_seq": 1,
+        "last_session_seq": 4,
+        "source_artifact_id": "case-report:<id>"
+      }
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_run_due_watches": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_run_due_watches_local",
+      "result_schema": "phase8.run-due-watches.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_run_due_watches"
+    },
+    "ok": true,
+    "result": {
+      "attention_opened_count": 1,
+      "created_trigger_count": 2,
+      "evaluated_watch_count": 2,
+      "matched_watch_count": 2,
+      "suppressed_count": 1,
+      "trigger_reason": "scheduled_eval",
+      "trigger_runs": [
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "trigger_run": {
+            "artifact_id": "phase8-trigger:<id>",
+            "artifact_type": "phase8.trigger_run.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+          },
+          "title": "INTC Scheduled Strict Trigger Watch",
+          "headline": "INTC Scheduled Strict Trigger Watch: suppressed (finding_count below configured minimum)",
+          "analysis_profile": "phase7.order_impact_review.v1",
+          "trigger_reason": "scheduled_eval",
+          "trigger_outcome": "suppressed",
+          "attention_status": "attention_suppressed",
+          "attention_open": false,
+          "analysis_created": true,
+          "finding_count": 1,
+          "highest_severity": "warning",
+          "has_generated_at_utc": true,
+          "finding_categories": [
+            "fill_quality_risk"
+          ],
+          "suppression_reason_codes": [
+            "minimum_finding_count_not_met",
+            "required_category_missing"
+          ]
+        },
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "trigger_run": {
+            "artifact_id": "phase8-trigger:<id>",
+            "artifact_type": "phase8.trigger_run.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+          },
+          "title": "INTC Scheduled Trigger Watch",
+          "headline": "INTC Scheduled Trigger Watch: 1 finding (warning highest severity)",
+          "analysis_profile": "phase7.fill_quality_review.v1",
+          "trigger_reason": "scheduled_eval",
+          "trigger_outcome": "triggered",
+          "attention_status": "attention_new",
+          "attention_open": true,
+          "analysis_created": true,
+          "finding_count": 1,
+          "highest_severity": "warning",
+          "has_generated_at_utc": true,
+          "finding_categories": [
+            "fill_quality_risk"
+          ],
+          "suppression_reason_codes": []
+        }
+      ]
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_acknowledge_attention_item": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_acknowledge_attention_item_local",
+      "result_schema": "phase8.trigger-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_acknowledge_attention_item"
+    },
+    "ok": true,
+    "result": {
+      "watch_definition": {
+        "artifact_id": "phase8-watch:<id>",
+        "artifact_type": "phase8.watch_definition.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "trigger_run": {
+        "artifact_id": "phase8-trigger:<id>",
+        "artifact_type": "phase8.trigger_run.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+      },
+      "title": "INTC Ack Trigger Watch",
+      "headline": "INTC Ack Trigger Watch: 1 finding (info highest severity)",
+      "analysis_profile": "phase7.liquidity_behavior_review.v1",
+      "trigger_reason": "manual_eval",
+      "trigger_outcome": "triggered",
+      "attention_status": "attention_acknowledged",
+      "attention_open": false,
+      "analysis_created": true,
+      "finding_count": 1,
+      "highest_severity": "info",
+      "has_generated_at_utc": true,
+      "finding_categories": [
+        "analysis_summary"
+      ],
+      "suppression_reason_codes": []
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_snooze_attention_item": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_snooze_attention_item_local",
+      "result_schema": "phase8.trigger-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_snooze_attention_item"
+    },
+    "ok": true,
+    "result": {
+      "watch_definition": {
+        "artifact_id": "phase8-watch:<id>",
+        "artifact_type": "phase8.watch_definition.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "trigger_run": {
+        "artifact_id": "phase8-trigger:<id>",
+        "artifact_type": "phase8.trigger_run.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+      },
+      "title": "INTC Snooze Trigger Watch",
+      "headline": "INTC Snooze Trigger Watch: 1 finding (warning highest severity)",
+      "analysis_profile": "phase7.adverse_selection_review.v1",
+      "trigger_reason": "manual_eval",
+      "trigger_outcome": "triggered",
+      "attention_status": "attention_snoozed",
+      "attention_open": false,
+      "analysis_created": true,
+      "finding_count": 1,
+      "highest_severity": "warning",
+      "has_generated_at_utc": true,
+      "finding_categories": [
+        "fill_quality_risk"
+      ],
+      "suppression_reason_codes": []
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_resolve_attention_item": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_resolve_attention_item_local",
+      "result_schema": "phase8.trigger-run.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_resolve_attention_item"
+    },
+    "ok": true,
+    "result": {
+      "watch_definition": {
+        "artifact_id": "phase8-watch:<id>",
+        "artifact_type": "phase8.watch_definition.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+      },
+      "source_artifact": {
+        "artifact_id": "case-bundle:report:<id>",
+        "artifact_type": "phase6.case_bundle.v1",
+        "contract_version": "phase6-portable-bundle-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+      },
+      "analysis_artifact": {
+        "artifact_id": "phase7-analysis:<id>",
+        "artifact_type": "phase7.analysis_output.v1",
+        "contract_version": "phase7-analyzer-playbook-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+      },
+      "trigger_run": {
+        "artifact_id": "phase8-trigger:<id>",
+        "artifact_type": "phase8.trigger_run.v1",
+        "contract_version": "phase8-trigger-inbox-v1",
+        "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+      },
+      "title": "INTC Ack Trigger Watch",
+      "headline": "INTC Ack Trigger Watch: 1 finding (info highest severity)",
+      "analysis_profile": "phase7.liquidity_behavior_review.v1",
+      "trigger_reason": "manual_eval",
+      "trigger_outcome": "triggered",
+      "attention_status": "attention_resolved",
+      "attention_open": false,
+      "analysis_created": false,
+      "finding_count": 1,
+      "highest_severity": "info",
+      "has_generated_at_utc": true,
+      "finding_categories": [
+        "analysis_summary"
+      ],
+      "suppression_reason_codes": []
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  }
+}

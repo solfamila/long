@@ -138,7 +138,9 @@
     "has_text": true,
     "mime_type": "text/markdown",
     "ok": true,
-    "uri": "tape://artifact/case-report/<id>/markdown"
+    "uri": "tape://artifact/case-report/<id>/markdown",
+    "contains_phase8_watch": false,
+    "contains_phase8_trigger": false
   },
   "resource_read_session_report": {
     "content_count": 1,
@@ -2420,8 +2422,35 @@
   },
   "tools_list": [
     {
+      "name": "tapescript_acknowledge_attention_item",
       "input_required": [],
+      "output_required": [
+        "watch_definition",
+        "source_artifact",
+        "analysis_artifact",
+        "trigger_run",
+        "title",
+        "headline",
+        "analysis_profile",
+        "trigger_reason",
+        "trigger_outcome",
+        "attention_status",
+        "attention_open",
+        "attention_updated_at_utc",
+        "attention_actor",
+        "attention_comment",
+        "snoozed_until_utc",
+        "analysis_created",
+        "finding_count",
+        "highest_severity",
+        "generated_at_utc",
+        "finding_categories",
+        "suppression_reasons"
+      ]
+    },
+    {
       "name": "tapescript_analyzer_run",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2435,8 +2464,33 @@
       ]
     },
     {
-      "input_required": [],
+      "name": "tapescript_create_watch_definition",
+      "input_required": [
+        "bundle_path"
+      ],
+      "output_required": [
+        "watch_definition",
+        "title",
+        "bundle_path",
+        "analysis_profile",
+        "enabled",
+        "evaluation_cadence_minutes",
+        "minimum_finding_count",
+        "minimum_severity",
+        "required_category",
+        "created_at_utc",
+        "updated_at_utc",
+        "latest_evaluation_at_utc",
+        "next_evaluation_at_utc",
+        "latest_trigger_outcome",
+        "latest_trigger_artifact_id",
+        "bundle_summary",
+        "artifact_status"
+      ]
+    },
+    {
       "name": "tapescript_dispatch_execution_journal",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2466,46 +2520,10 @@
       ]
     },
     {
-      "input_required": [
-        "logical_incident_id"
-      ],
       "name": "tapescript_enrich_incident",
-      "output_required": [
-        "request_kind",
-        "artifact_id",
-        "headline",
-        "detail",
-        "local_evidence",
-        "external_context",
-        "interpretation",
-        "provider_metadata",
-        "live_capture_summary",
-        "degradation",
-        "cache"
-      ]
-    },
-    {
-      "input_required": [],
-      "name": "tapescript_enrich_order_case",
-      "output_required": [
-        "request_kind",
-        "artifact_id",
-        "headline",
-        "detail",
-        "local_evidence",
-        "external_context",
-        "interpretation",
-        "provider_metadata",
-        "live_capture_summary",
-        "degradation",
-        "cache"
-      ]
-    },
-    {
       "input_required": [
         "logical_incident_id"
       ],
-      "name": "tapescript_explain_incident",
       "output_required": [
         "request_kind",
         "artifact_id",
@@ -2521,11 +2539,75 @@
       ]
     },
     {
+      "name": "tapescript_enrich_order_case",
+      "input_required": [],
+      "output_required": [
+        "request_kind",
+        "artifact_id",
+        "headline",
+        "detail",
+        "local_evidence",
+        "external_context",
+        "interpretation",
+        "provider_metadata",
+        "live_capture_summary",
+        "degradation",
+        "cache"
+      ]
+    },
+    {
+      "name": "tapescript_evaluate_watch_definition",
+      "input_required": [],
+      "output_required": [
+        "watch_definition",
+        "source_artifact",
+        "analysis_artifact",
+        "trigger_run",
+        "title",
+        "headline",
+        "analysis_profile",
+        "trigger_reason",
+        "trigger_outcome",
+        "attention_status",
+        "attention_open",
+        "attention_updated_at_utc",
+        "attention_actor",
+        "attention_comment",
+        "snoozed_until_utc",
+        "analysis_created",
+        "finding_count",
+        "highest_severity",
+        "generated_at_utc",
+        "finding_categories",
+        "suppression_reasons",
+        "artifact_status"
+      ]
+    },
+    {
+      "name": "tapescript_explain_incident",
+      "input_required": [
+        "logical_incident_id"
+      ],
+      "output_required": [
+        "request_kind",
+        "artifact_id",
+        "headline",
+        "detail",
+        "local_evidence",
+        "external_context",
+        "interpretation",
+        "provider_metadata",
+        "live_capture_summary",
+        "degradation",
+        "cache"
+      ]
+    },
+    {
+      "name": "tapescript_export_artifact",
       "input_required": [
         "artifact_id",
         "export_format"
       ],
-      "name": "tapescript_export_artifact",
       "output_required": [
         "artifact_id",
         "format",
@@ -2535,24 +2617,10 @@
       ]
     },
     {
-      "input_required": [
-        "report_id"
-      ],
       "name": "tapescript_export_case_bundle",
-      "output_required": [
-        "artifact",
-        "bundle",
-        "source_artifact",
-        "source_report",
-        "served_revision_id",
-        "export_status"
-      ]
-    },
-    {
       "input_required": [
         "report_id"
       ],
-      "name": "tapescript_export_session_bundle",
       "output_required": [
         "artifact",
         "bundle",
@@ -2563,16 +2631,30 @@
       ]
     },
     {
-      "input_required": [],
+      "name": "tapescript_export_session_bundle",
+      "input_required": [
+        "report_id"
+      ],
+      "output_required": [
+        "artifact",
+        "bundle",
+        "source_artifact",
+        "source_report",
+        "served_revision_id",
+        "export_status"
+      ]
+    },
+    {
       "name": "tapescript_find_order_anchor",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "events"
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_findings_list",
+      "input_required": [],
       "output_required": [
         "analysis_artifact",
         "analysis_profile",
@@ -2585,10 +2667,10 @@
       ]
     },
     {
+      "name": "tapescript_import_case_bundle",
       "input_required": [
         "bundle_path"
       ],
-      "name": "tapescript_import_case_bundle",
       "output_required": [
         "artifact",
         "imported_case",
@@ -2597,8 +2679,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_analysis_artifacts",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "applied_filters",
@@ -2606,24 +2688,41 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_analysis_profiles",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "analysis_profiles"
       ]
     },
     {
+      "name": "tapescript_list_attention_items",
       "input_required": [],
+      "output_required": [
+        "returned_count",
+        "attention_items"
+      ]
+    },
+    {
       "name": "tapescript_list_case_reports",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "case_reports"
       ]
     },
     {
+      "name": "tapescript_list_due_watches",
       "input_required": [],
+      "output_required": [
+        "returned_count",
+        "matched_count",
+        "watch_definitions"
+      ]
+    },
+    {
       "name": "tapescript_list_execution_applies",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "applied_filters",
@@ -2631,8 +2730,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_execution_journals",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "applied_filters",
@@ -2640,8 +2739,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_execution_ledgers",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "applied_filters",
@@ -2649,40 +2748,40 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_findings",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "findings"
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_imported_cases",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "imported_cases"
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_incidents",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "incidents"
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_order_anchors",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "order_anchors"
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_playbook_artifacts",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "applied_filters",
@@ -2690,24 +2789,40 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_protected_windows",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "protected_windows"
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_list_session_reports",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "session_reports"
       ]
     },
     {
+      "name": "tapescript_list_trigger_runs",
       "input_required": [],
+      "output_required": [
+        "returned_count",
+        "trigger_runs"
+      ]
+    },
+    {
+      "name": "tapescript_list_watch_definitions",
+      "input_required": [],
+      "output_required": [
+        "returned_count",
+        "watch_definitions"
+      ]
+    },
+    {
       "name": "tapescript_playbook_apply",
+      "input_required": [],
       "output_required": [
         "analysis_artifact",
         "playbook_artifact",
@@ -2721,8 +2836,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_prepare_execution_ledger",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2743,8 +2858,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_read_analysis_artifact",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2757,10 +2872,10 @@
       ]
     },
     {
+      "name": "tapescript_read_analysis_profile",
       "input_required": [
         "analysis_profile"
       ],
-      "name": "tapescript_read_analysis_profile",
       "output_required": [
         "analysis_profile",
         "title",
@@ -2771,10 +2886,10 @@
       ]
     },
     {
+      "name": "tapescript_read_artifact",
       "input_required": [
         "artifact_id"
       ],
-      "name": "tapescript_read_artifact",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -2794,10 +2909,10 @@
       ]
     },
     {
+      "name": "tapescript_read_case_report",
       "input_required": [
         "report_id"
       ],
-      "name": "tapescript_read_case_report",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -2817,8 +2932,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_read_execution_apply",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2847,8 +2962,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_read_execution_journal",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2876,8 +2991,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_read_execution_ledger",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -2897,10 +3012,10 @@
       ]
     },
     {
+      "name": "tapescript_read_finding",
       "input_required": [
         "finding_id"
       ],
-      "name": "tapescript_read_finding",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -2920,10 +3035,10 @@
       ]
     },
     {
+      "name": "tapescript_read_incident",
       "input_required": [
         "logical_incident_id"
       ],
-      "name": "tapescript_read_incident",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -2943,18 +3058,18 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_read_live_tail",
+      "input_required": [],
       "output_required": [
         "returned_count",
         "events"
       ]
     },
     {
+      "name": "tapescript_read_order_anchor",
       "input_required": [
         "anchor_id"
       ],
-      "name": "tapescript_read_order_anchor",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -2974,8 +3089,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_read_order_case",
+      "input_required": [],
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -2995,8 +3110,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_read_playbook_artifact",
+      "input_required": [],
       "output_required": [
         "analysis_artifact",
         "playbook_artifact",
@@ -3009,10 +3124,10 @@
       ]
     },
     {
+      "name": "tapescript_read_protected_window",
       "input_required": [
         "window_id"
       ],
-      "name": "tapescript_read_protected_window",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -3032,22 +3147,22 @@
       ]
     },
     {
+      "name": "tapescript_read_range",
       "input_required": [
         "first_session_seq",
         "last_session_seq"
       ],
-      "name": "tapescript_read_range",
       "output_required": [
         "returned_count",
         "events"
       ]
     },
     {
+      "name": "tapescript_read_session_overview",
       "input_required": [
         "first_session_seq",
         "last_session_seq"
       ],
-      "name": "tapescript_read_session_overview",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -3067,11 +3182,11 @@
       ]
     },
     {
+      "name": "tapescript_read_session_quality",
       "input_required": [
         "first_session_seq",
         "last_session_seq"
       ],
-      "name": "tapescript_read_session_quality",
       "output_required": [
         "served_revision_id",
         "includes_mutable_tail",
@@ -3081,10 +3196,10 @@
       ]
     },
     {
+      "name": "tapescript_read_session_report",
       "input_required": [
         "report_id"
       ],
-      "name": "tapescript_read_session_report",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -3104,8 +3219,57 @@
       ]
     },
     {
+      "name": "tapescript_read_trigger_run",
       "input_required": [],
+      "output_required": [
+        "watch_definition",
+        "source_artifact",
+        "analysis_artifact",
+        "trigger_run",
+        "title",
+        "headline",
+        "analysis_profile",
+        "trigger_reason",
+        "trigger_outcome",
+        "attention_status",
+        "attention_open",
+        "attention_updated_at_utc",
+        "attention_actor",
+        "attention_comment",
+        "snoozed_until_utc",
+        "analysis_created",
+        "finding_count",
+        "highest_severity",
+        "generated_at_utc",
+        "finding_categories",
+        "suppression_reasons"
+      ]
+    },
+    {
+      "name": "tapescript_read_watch_definition",
+      "input_required": [],
+      "output_required": [
+        "watch_definition",
+        "title",
+        "bundle_path",
+        "analysis_profile",
+        "enabled",
+        "evaluation_cadence_minutes",
+        "minimum_finding_count",
+        "minimum_severity",
+        "required_category",
+        "created_at_utc",
+        "updated_at_utc",
+        "latest_evaluation_at_utc",
+        "next_evaluation_at_utc",
+        "latest_trigger_outcome",
+        "latest_trigger_artifact_id",
+        "bundle_summary"
+      ]
+    },
+    {
       "name": "tapescript_record_execution_apply_event",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -3136,8 +3300,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_record_execution_journal_event",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -3167,8 +3331,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_record_execution_ledger_review",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -3190,8 +3354,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_refresh_external_context",
+      "input_required": [],
       "output_required": [
         "request_kind",
         "artifact_id",
@@ -3207,10 +3371,10 @@
       ]
     },
     {
+      "name": "tapescript_replay_snapshot",
       "input_required": [
         "target_session_seq"
       ],
-      "name": "tapescript_replay_snapshot",
       "output_required": [
         "served_revision_id",
         "includes_mutable_tail",
@@ -3230,10 +3394,50 @@
       ]
     },
     {
+      "name": "tapescript_resolve_attention_item",
+      "input_required": [],
+      "output_required": [
+        "watch_definition",
+        "source_artifact",
+        "analysis_artifact",
+        "trigger_run",
+        "title",
+        "headline",
+        "analysis_profile",
+        "trigger_reason",
+        "trigger_outcome",
+        "attention_status",
+        "attention_open",
+        "attention_updated_at_utc",
+        "attention_actor",
+        "attention_comment",
+        "snoozed_until_utc",
+        "analysis_created",
+        "finding_count",
+        "highest_severity",
+        "generated_at_utc",
+        "finding_categories",
+        "suppression_reasons"
+      ]
+    },
+    {
+      "name": "tapescript_run_due_watches",
+      "input_required": [],
+      "output_required": [
+        "trigger_reason",
+        "matched_watch_count",
+        "evaluated_watch_count",
+        "created_trigger_count",
+        "attention_opened_count",
+        "suppressed_count",
+        "trigger_runs"
+      ]
+    },
+    {
+      "name": "tapescript_scan_incident_report",
       "input_required": [
         "logical_incident_id"
       ],
-      "name": "tapescript_scan_incident_report",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -3253,8 +3457,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_scan_order_case_report",
+      "input_required": [],
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -3274,11 +3478,11 @@
       ]
     },
     {
+      "name": "tapescript_scan_session_report",
       "input_required": [
         "first_session_seq",
         "last_session_seq"
       ],
-      "name": "tapescript_scan_session_report",
       "output_required": [
         "artifact_id",
         "artifact_kind",
@@ -3298,8 +3502,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_seek_order_anchor",
+      "input_required": [],
       "output_required": [
         "served_revision_id",
         "includes_mutable_tail",
@@ -3311,8 +3515,35 @@
       ]
     },
     {
+      "name": "tapescript_snooze_attention_item",
       "input_required": [],
+      "output_required": [
+        "watch_definition",
+        "source_artifact",
+        "analysis_artifact",
+        "trigger_run",
+        "title",
+        "headline",
+        "analysis_profile",
+        "trigger_reason",
+        "trigger_outcome",
+        "attention_status",
+        "attention_open",
+        "attention_updated_at_utc",
+        "attention_actor",
+        "attention_comment",
+        "snoozed_until_utc",
+        "analysis_created",
+        "finding_count",
+        "highest_severity",
+        "generated_at_utc",
+        "finding_categories",
+        "suppression_reasons"
+      ]
+    },
+    {
       "name": "tapescript_start_execution_apply",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -3342,8 +3573,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_start_execution_journal",
+      "input_required": [],
       "output_required": [
         "source_artifact",
         "analysis_artifact",
@@ -3372,8 +3603,8 @@
       ]
     },
     {
-      "input_required": [],
       "name": "tapescript_status",
+      "input_required": [],
       "output_required": [
         "socket_path",
         "data_dir",
@@ -3385,10 +3616,10 @@
       ]
     },
     {
+      "name": "tapescript_verify_bundle",
       "input_required": [
         "bundle_path"
       ],
-      "name": "tapescript_verify_bundle",
       "output_required": [
         "artifact",
         "bundle",
