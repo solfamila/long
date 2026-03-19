@@ -2809,6 +2809,8 @@
       "input_required": [],
       "output_required": [
         "returned_count",
+        "matched_count",
+        "applied_filters",
         "trigger_runs"
       ]
     },

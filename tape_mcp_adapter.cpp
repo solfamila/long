@@ -2239,7 +2239,11 @@ json toolInputSchemaForList(const ToolSpec& tool) {
                      {"comment", "Handled through existing operator workflow."}}
             });
         case ToolId::ListTriggerRuns:
-            return withSchemaExamples(std::move(schema), {json{{"limit", 10}}});
+            return withSchemaExamples(std::move(schema), {
+                json{{"limit", 10}},
+                json{{"attention_status", "attention_acknowledged"}, {"attention_open", false}, {"limit", 10}},
+                json{{"watch_artifact_id", "watch-case-bundle-1234abcd"}, {"limit", 10}}
+            });
         case ToolId::ReadTriggerRun:
             return withSchemaExamples(std::move(schema), {json{{"trigger_artifact_id", "trigger-watch-case-bundle-1234abcd"}}});
         case ToolId::ListAttentionItems:
@@ -3688,13 +3692,27 @@ json phase8WatchDefinitionListResultSchema() {
 }
 
 json phase8TriggerRunListResultSchema() {
+    const json appliedFiltersSchema = {
+        {"type", "object"},
+        {"properties", {
+            {"watch_artifact_id", nullableStringSchema()},
+            {"attention_status", nullableStringSchema()},
+            {"attention_open", json{{"type", {"boolean", "null"}}}},
+            {"limit", positiveIntegerSchema()},
+            {"matched_count", nonNegativeIntegerSchema()}
+        }},
+        {"required", json::array({"watch_artifact_id", "attention_status", "attention_open", "limit", "matched_count"})},
+        {"additionalProperties", false}
+    };
     return json{
         {"type", "object"},
         {"properties", {
             {"returned_count", nonNegativeIntegerSchema()},
+            {"matched_count", nonNegativeIntegerSchema()},
+            {"applied_filters", appliedFiltersSchema},
             {"trigger_runs", json{{"type", "array"}, {"items", phase8TriggerRunSchema()}}}
         }},
-        {"required", json::array({"returned_count", "trigger_runs"})},
+        {"required", json::array({"returned_count", "matched_count", "applied_filters", "trigger_runs"})},
         {"additionalProperties", false}
     };
 }
@@ -3778,6 +3796,19 @@ json phase8AttentionActionInputSchema(bool includeSnoozeMinutes) {
             json{{"required", json::array({"trigger_manifest_path"})}},
             json{{"required", json::array({"trigger_artifact_id"})}}
         })},
+        {"additionalProperties", false}
+    };
+}
+
+json phase8TriggerRunFilterInputSchema() {
+    return json{
+        {"type", "object"},
+        {"properties", {
+            {"limit", positiveIntegerSchema()},
+            {"watch_artifact_id", stringSchema()},
+            {"attention_status", stringSchema()},
+            {"attention_open", booleanSchema()}
+        }},
         {"additionalProperties", false}
     };
 }
@@ -4436,7 +4467,7 @@ std::vector<ToolSpec> buildToolSpecs() {
         {ToolId::ListTriggerRuns,
          "tapescript_list_trigger_runs",
          "List persisted local Phase 8 trigger-run artifacts.",
-         limitOnlyInputSchema(),
+         phase8TriggerRunFilterInputSchema(),
          phase8TriggerRunListResultSchema(),
          "phase8.trigger-run-list.v1",
          tape_engine::QueryOperation::Unknown,
@@ -5899,6 +5930,70 @@ bool parsePhase8AttentionActionArgs(const json& args,
     return true;
 }
 
+bool parsePhase8TriggerRunInventoryArgs(const json& args,
+                                        tape_phase8::TriggerRunInventorySelection* outSelection,
+                                        std::string* outCode,
+                                        std::string* outMessage) {
+    auto fail = [&](std::string code, std::string message) {
+        if (outCode != nullptr) {
+            *outCode = std::move(code);
+        }
+        if (outMessage != nullptr) {
+            *outMessage = std::move(message);
+        }
+        return false;
+    };
+
+    if (!args.is_object()) {
+        return fail("invalid_arguments", "Tool arguments must be an object.");
+    }
+    if (hasUnexpectedKeys(args, {"limit", "watch_artifact_id", "attention_status", "attention_open"})) {
+        return fail("invalid_arguments",
+                    "trigger run inventory arguments support only limit, watch_artifact_id, attention_status, and attention_open");
+    }
+
+    tape_phase8::TriggerRunInventorySelection selection;
+    if (args.contains("limit")) {
+        const auto limit = asPositiveUInt64(args.at("limit"));
+        if (!limit.has_value()) {
+            return fail("invalid_arguments", "limit must be a positive integer");
+        }
+        selection.limit = static_cast<std::size_t>(*limit);
+    }
+    if (args.contains("watch_artifact_id")) {
+        const auto watchArtifactId = asNonEmptyString(args.at("watch_artifact_id"));
+        if (!watchArtifactId.has_value()) {
+            return fail("invalid_arguments", "watch_artifact_id must be a non-empty string");
+        }
+        selection.watchArtifactId = *watchArtifactId;
+    }
+    if (args.contains("attention_status")) {
+        const auto attentionStatus = asNonEmptyString(args.at("attention_status"));
+        if (!attentionStatus.has_value() ||
+            (*attentionStatus != tape_phase8::kAttentionStatusNew &&
+             *attentionStatus != tape_phase8::kAttentionStatusSuppressed &&
+             *attentionStatus != tape_phase8::kAttentionStatusAcknowledged &&
+             *attentionStatus != tape_phase8::kAttentionStatusSnoozed &&
+             *attentionStatus != tape_phase8::kAttentionStatusResolved)) {
+            return fail("invalid_arguments",
+                        "attention_status must be one of attention_new, attention_suppressed, attention_acknowledged, attention_snoozed, or attention_resolved");
+        }
+        selection.attentionStatus = *attentionStatus;
+    }
+    if (args.contains("attention_open")) {
+        const auto attentionOpen = asBoolean(args.at("attention_open"));
+        if (!attentionOpen.has_value()) {
+            return fail("invalid_arguments", "attention_open must be a boolean");
+        }
+        selection.attentionOpen = *attentionOpen;
+    }
+
+    if (outSelection != nullptr) {
+        *outSelection = std::move(selection);
+    }
+    return true;
+}
+
 bool parsePhase7AnalysisInventoryArgs(const json& args,
                                       Phase7AnalysisInventorySelection* outSelection,
                                       std::string* outCode,
@@ -7004,13 +7099,27 @@ json phase8DueWatchInventoryPayload(const tape_phase8::DueWatchInventoryResult& 
     };
 }
 
-json phase8TriggerRunInventoryPayload(const std::vector<tape_phase8::TriggerRunArtifact>& artifacts) {
+json phase8TriggerRunInventoryPayload(const tape_phase8::TriggerRunInventoryResult& inventory) {
     json rows = json::array();
-    for (const auto& artifact : artifacts) {
+    for (const auto& artifact : inventory.triggerRuns) {
         rows.push_back(tape_phase8::triggerRunToJson(artifact));
     }
     return {
         {"returned_count", rows.size()},
+        {"matched_count", inventory.matchedCount},
+        {"applied_filters", {
+            {"watch_artifact_id", inventory.appliedFilters.watchArtifactId.empty()
+                                     ? json(nullptr)
+                                     : json(inventory.appliedFilters.watchArtifactId)},
+            {"attention_status", inventory.appliedFilters.attentionStatus.empty()
+                                    ? json(nullptr)
+                                    : json(inventory.appliedFilters.attentionStatus)},
+            {"attention_open", inventory.appliedFilters.attentionOpen.has_value()
+                                   ? json(*inventory.appliedFilters.attentionOpen)
+                                   : json(nullptr)},
+            {"limit", inventory.appliedFilters.limit},
+            {"matched_count", inventory.matchedCount}
+        }},
         {"trigger_runs", std::move(rows)}
     };
 }
@@ -11692,10 +11801,10 @@ json Adapter::invokeResolveAttentionItemTool(const ToolSpec& tool, const json& a
 }
 
 json Adapter::invokeListTriggerRunsTool(const ToolSpec& tool, const json& args) const {
-    std::size_t limit = 0;
+    tape_phase8::TriggerRunInventorySelection selection;
     std::string code;
     std::string message;
-    if (!parseLimitOnlyArgs(args, &limit, &code, &message)) {
+    if (!parsePhase8TriggerRunInventoryArgs(args, &selection, &code, &message)) {
         return makeToolResult(makeErrorEnvelope(tool.name,
                                                 toolEngineCommand(tool),
                                                 tool.outputSchemaId,
@@ -11708,8 +11817,8 @@ json Adapter::invokeListTriggerRunsTool(const ToolSpec& tool, const json& args) 
                                                 toolContractVersion(tool)));
     }
 
-    std::vector<tape_phase8::TriggerRunArtifact> artifacts;
-    if (!tape_phase8::listTriggerRuns(limit == 0 ? 25 : limit, &artifacts, &code, &message)) {
+    tape_phase8::TriggerRunInventoryResult inventory;
+    if (!tape_phase8::listTriggerRuns(selection, &inventory, &code, &message)) {
         return makeToolResult(makeErrorEnvelope(tool.name,
                                                 toolEngineCommand(tool),
                                                 tool.outputSchemaId,
@@ -11723,7 +11832,7 @@ json Adapter::invokeListTriggerRunsTool(const ToolSpec& tool, const json& args) 
     }
 
     return makeToolResult(makeSuccessEnvelope(tool,
-                                              phase8TriggerRunInventoryPayload(artifacts),
+                                              phase8TriggerRunInventoryPayload(inventory),
                                               revisionUnavailable()));
 }
 

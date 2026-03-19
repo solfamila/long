@@ -103,6 +103,38 @@ std::vector<std::string> Phase8MinimumSeverityTitles() {
     return {"any", "info", "low", "medium", "high", "critical"};
 }
 
+std::vector<std::string> Phase8TriggerAttentionStatusTitles() {
+    return {
+        "any",
+        tape_phase8::kAttentionStatusNew,
+        tape_phase8::kAttentionStatusAcknowledged,
+        tape_phase8::kAttentionStatusSnoozed,
+        tape_phase8::kAttentionStatusResolved,
+        tape_phase8::kAttentionStatusSuppressed
+    };
+}
+
+std::vector<std::string> Phase8TriggerAttentionOpenTitles() {
+    return {"any", "open", "closed"};
+}
+
+tapescope::Phase8TriggerRunInventorySelection CurrentPhase8TriggerRunSelection(NSString* attentionStatusTitle,
+                                                                               NSString* attentionOpenTitle) {
+    tapescope::Phase8TriggerRunInventorySelection selection;
+    selection.limit = 25;
+    const std::string status = TrimAscii(ToStdString(attentionStatusTitle ?: @""));
+    if (!status.empty() && status != "any") {
+        selection.attentionStatus = status;
+    }
+    const std::string attentionOpen = TrimAscii(ToStdString(attentionOpenTitle ?: @""));
+    if (attentionOpen == "open") {
+        selection.attentionOpen = true;
+    } else if (attentionOpen == "closed") {
+        selection.attentionOpen = false;
+    }
+    return selection;
+}
+
 std::string Phase8WatchPopupTitle(const tapescope::Phase8WatchDefinitionArtifact& artifact) {
     std::ostringstream out;
     out << artifact.watchArtifact.artifactId << "  [" << artifact.analysisProfile << "]";
@@ -297,6 +329,31 @@ std::string Phase8TriggerPopupTitle(const tapescope::Phase8TriggerRunArtifact& a
     [stack addArrangedSubview:_phase8WatchPopup];
 
     [stack addArrangedSubview:MakeSectionLabel(@"Trigger History")];
+    NSStackView* triggerFilters = MakeControlRow();
+    [triggerFilters addArrangedSubview:MakeLabel(@"attention status",
+                                                 [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                 [NSColor secondaryLabelColor])];
+    _phase8TriggerAttentionStatusPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 180, 24) pullsDown:NO];
+    for (const auto& title : Phase8TriggerAttentionStatusTitles()) {
+        [_phase8TriggerAttentionStatusPopup addItemWithTitle:ToNSString(title)];
+    }
+    _phase8TriggerAttentionStatusPopup.target = self;
+    _phase8TriggerAttentionStatusPopup.action = @selector(refreshPhase8Inbox:);
+    [triggerFilters addArrangedSubview:_phase8TriggerAttentionStatusPopup];
+
+    [triggerFilters addArrangedSubview:MakeLabel(@"attention open",
+                                                 [NSFont systemFontOfSize:12.0 weight:NSFontWeightSemibold],
+                                                 [NSColor secondaryLabelColor])];
+    _phase8TriggerAttentionOpenPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 120, 24) pullsDown:NO];
+    for (const auto& title : Phase8TriggerAttentionOpenTitles()) {
+        [_phase8TriggerAttentionOpenPopup addItemWithTitle:ToNSString(title)];
+    }
+    _phase8TriggerAttentionOpenPopup.target = self;
+    _phase8TriggerAttentionOpenPopup.action = @selector(refreshPhase8Inbox:);
+    [triggerFilters addArrangedSubview:_phase8TriggerAttentionOpenPopup];
+
+    [stack addArrangedSubview:triggerFilters];
+
     _phase8TriggerPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 780, 24) pullsDown:NO];
     _phase8TriggerPopup.target = self;
     _phase8TriggerPopup.action = @selector(phase8TriggerSelectionChanged:);
@@ -484,6 +541,8 @@ std::string Phase8TriggerPopupTitle(const tapescope::Phase8TriggerRunArtifact& a
         (selectedAttentionIndex >= 0 && static_cast<std::size_t>(selectedAttentionIndex) < _latestPhase8AttentionItems.size())
             ? _latestPhase8AttentionItems.at(static_cast<std::size_t>(selectedAttentionIndex)).triggerArtifactId
             : selectedTriggerFromHistoryId;
+    const auto triggerSelection = CurrentPhase8TriggerRunSelection(_phase8TriggerAttentionStatusPopup.titleOfSelectedItem,
+                                                                   _phase8TriggerAttentionOpenPopup.titleOfSelectedItem);
 
     _phase8InFlight = YES;
     const std::uint64_t token = [self issueRequestToken:&_phase8RequestToken];
@@ -504,7 +563,7 @@ std::string Phase8TriggerPopupTitle(const tapescope::Phase8TriggerRunArtifact& a
             return;
         }
         const auto watchList = strongSelf->_client->listWatchDefinitionsPayload(25);
-        const auto triggerList = strongSelf->_client->listTriggerRunsPayload(25);
+        const auto triggerList = strongSelf->_client->listTriggerRunsPayload(triggerSelection);
         const auto attentionList = strongSelf->_client->listAttentionInboxPayload(25);
         dispatch_async(dispatch_get_main_queue(), ^{
             TapeScopeWindowController* innerSelf = weakSelf;
@@ -532,7 +591,7 @@ std::string Phase8TriggerPopupTitle(const tapescope::Phase8TriggerRunArtifact& a
             }
 
             innerSelf->_latestPhase8WatchDefinitions = watchList.value;
-            innerSelf->_latestPhase8TriggerRuns = triggerList.value;
+            innerSelf->_latestPhase8TriggerRuns = triggerList.value.artifacts;
             innerSelf->_latestPhase8AttentionItems = attentionList.value;
 
             [innerSelf->_phase8WatchPopup removeAllItems];
@@ -635,6 +694,8 @@ std::string Phase8TriggerPopupTitle(const tapescope::Phase8TriggerRunArtifact& a
                 ToNSString("Phase 8 refreshed: " +
                            std::to_string(innerSelf->_latestPhase8WatchDefinitions.size()) + " watch(es), " +
                            std::to_string(dueCount) + " due, " +
+                           std::to_string(triggerList.value.matchedCount) + " matched trigger(s), " +
+                           std::to_string(innerSelf->_latestPhase8TriggerRuns.size()) + " shown, " +
                            std::to_string(openAttentionCount) + " open attention item(s), " +
                            std::to_string(suppressedCount) + " suppressed trigger(s).");
             innerSelf->_phase8StateLabel.textColor = [NSColor systemGreenColor];

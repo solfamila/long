@@ -1645,6 +1645,36 @@ json projectPhase8TriggerRunResult(const json& result) {
     };
 }
 
+json projectPhase8TriggerRunInventoryResult(const json& result) {
+    json rows = json::array();
+    for (const auto& row : result.value("trigger_runs", json::array())) {
+        rows.push_back(projectPhase8TriggerRunResult(row));
+    }
+    std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
+        if (left.value("title", std::string()) != right.value("title", std::string())) {
+            return left.value("title", std::string()) < right.value("title", std::string());
+        }
+        return left.value("analysis_profile", std::string()) <
+               right.value("analysis_profile", std::string());
+    });
+    const json filters = result.value("applied_filters", json::object());
+    return {
+        {"returned_count", result.value("returned_count", 0ULL)},
+        {"matched_count", result.value("matched_count", 0ULL)},
+        {"applied_filters", {
+            {"watch_artifact_id", [&]() -> json {
+                const std::string artifactId = stringValueOrEmpty(filters, "watch_artifact_id");
+                return artifactId.empty() ? json(nullptr) : json(normalizeArtifactId(artifactId));
+            }()},
+            {"attention_status", stringValueOrNull(filters, "attention_status")},
+            {"attention_open", filters.contains("attention_open") ? filters.at("attention_open") : json(nullptr)},
+            {"limit", filters.value("limit", 0ULL)},
+            {"matched_count", filters.value("matched_count", 0ULL)}
+        }},
+        {"trigger_runs", std::move(rows)}
+    };
+}
+
 json projectPhase8AttentionInboxResult(const json& result) {
     json rows = json::array();
     for (const auto& item : result.value("attention_items", json::array())) {
@@ -2131,21 +2161,7 @@ json projectEnvelope(const json& envelope) {
     } else if (toolName == "tapescript_run_due_watches") {
         projection["result"] = projectPhase8RunDueWatchesResult(result);
     } else if (toolName == "tapescript_list_trigger_runs") {
-        json rows = json::array();
-        for (const auto& row : result.value("trigger_runs", json::array())) {
-            rows.push_back(projectPhase8TriggerRunResult(row));
-        }
-        std::sort(rows.begin(), rows.end(), [](const json& left, const json& right) {
-            if (left.value("title", std::string()) != right.value("title", std::string())) {
-                return left.value("title", std::string()) < right.value("title", std::string());
-            }
-            return left.value("analysis_profile", std::string()) <
-                   right.value("analysis_profile", std::string());
-        });
-        projection["result"] = {
-            {"returned_count", result.value("returned_count", 0ULL)},
-            {"trigger_runs", std::move(rows)}
-        };
+        projection["result"] = projectPhase8TriggerRunInventoryResult(result);
     } else if (toolName == "tapescript_read_trigger_run") {
         projection["result"] = projectPhase8TriggerRunResult(result);
     } else if (toolName == "tapescript_list_attention_items") {
@@ -5319,6 +5335,14 @@ void testTapeMcpPhase8Contracts() {
                             return item.value("title", std::string()) == "INTC Ack Trigger Watch";
                         }),
            "phase8 resolved trigger should leave the open attention inbox");
+    const json acknowledgedTriggerRunListEnvelope = projectEnvelope(envelopeFromToolResult(
+        adapter.callTool("tapescript_list_trigger_runs", json{
+            {"attention_status", tape_phase8::kAttentionStatusAcknowledged},
+            {"attention_open", false},
+            {"limit", 10}
+        })));
+    expect(acknowledgedTriggerRunListEnvelope.value("ok", false),
+           "phase8 filtered acknowledged trigger list should return ok=true");
 
     const json fixture = readJsonFixture("phase8_mcp_contracts.json");
     expect(createWatchEnvelope == fixture.value("tapescript_create_watch_definition", json::object()),
@@ -5359,6 +5383,9 @@ void testTapeMcpPhase8Contracts() {
                resolveAttentionEnvelope.dump(2));
     expect(triggerRunListEnvelope == fixture.value("tapescript_list_trigger_runs", json::object()),
            "phase8 list_trigger_runs envelope should match golden fixture\nactual:\n" + triggerRunListEnvelope.dump(2));
+    expect(acknowledgedTriggerRunListEnvelope == fixture.value("tapescript_list_trigger_runs_acknowledged", json::object()),
+           "phase8 filtered acknowledged list_trigger_runs envelope should match golden fixture\nactual:\n" +
+               acknowledgedTriggerRunListEnvelope.dump(2));
     expect(readTriggerRunEnvelope == fixture.value("tapescript_read_trigger_run", json::object()),
            "phase8 read_trigger_run envelope should match golden fixture\nactual:\n" + readTriggerRunEnvelope.dump(2));
     expect(readSuppressedTriggerRunEnvelope == fixture.value("tapescript_read_trigger_run_suppressed", json::object()),

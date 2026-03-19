@@ -1054,7 +1054,6 @@ NSColor* PaneButtonIdleBorderColor() {
     [surfaceRow addArrangedSubview:surfaceCard];
     [surfaceCard.widthAnchor constraintGreaterThanOrEqualToConstant:760.0].active = YES;
     [tabStack addArrangedSubview:surfaceRow];
-    [surfaceRow.widthAnchor constraintEqualToAnchor:tabStack.widthAnchor].active = YES;
     [root addArrangedSubview:tabCard];
 
     [self selectPaneWithIdentifier:@"SessionOverviewPane"];

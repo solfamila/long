@@ -13,6 +13,19 @@ constexpr std::size_t kRecentHistoryLimit = 24;
 constexpr std::size_t kBundleHistoryLimit = 32;
 NSString* const kTapeScopeStateDefaultsKey = @"TapeScopeStateV1";
 
+bool TabViewHasIdentifier(NSTabView* tabView, const std::string& identifier) {
+    if (tabView == nil || identifier.empty()) {
+        return false;
+    }
+    NSString* needle = ToNSString(identifier);
+    for (NSTabViewItem* item in tabView.tabViewItems) {
+        if ([item.identifier isKindOfClass:[NSString class]] && [(NSString*)item.identifier isEqualToString:needle]) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string InvestigationHeadline(const tapescope::InvestigationPayload& payload,
                                   const std::string& fallbackHeadline) {
     if (!payload.headline.empty()) {
@@ -410,8 +423,10 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
     }
 
     const std::string selectedTab = state.value("selected_tab", std::string());
-    if (!selectedTab.empty()) {
+    if (TabViewHasIdentifier(_tabView, selectedTab)) {
         [_tabView selectTabViewItemWithIdentifier:ToNSString(selectedTab)];
+    } else {
+        [self selectPaneWithIdentifier:@"SessionOverviewPane"];
     }
     [self updatePollingStatusText];
 }

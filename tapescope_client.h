@@ -116,6 +116,19 @@ struct Phase8TriggerRunPayload {
 using Phase8DueWatchInventoryPayload = tape_phase8::DueWatchInventoryResult;
 using Phase8DueWatchRunPayload = tape_phase8::DueWatchRunResult;
 
+struct Phase8TriggerRunInventorySelection {
+    std::string watchArtifactId;
+    std::string attentionStatus;
+    std::optional<bool> attentionOpen;
+    std::size_t limit = 20;
+};
+
+struct Phase8TriggerRunInventoryPayload {
+    std::vector<Phase8TriggerRunArtifact> artifacts;
+    json appliedFilters = json::object();
+    std::size_t matchedCount = 0;
+};
+
 struct Phase7ExecutionApplyInventorySelection {
     std::string journalArtifactId;
     std::string ledgerArtifactId;
@@ -381,8 +394,8 @@ public:
     [[nodiscard]] QueryResult<Phase8DueWatchRunPayload> runDueWatchesPayload(
         std::size_t limit = 20,
         const std::string& triggerReason = {}) const;
-    [[nodiscard]] QueryResult<std::vector<Phase8TriggerRunArtifact>> listTriggerRunsPayload(
-        std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<Phase8TriggerRunInventoryPayload> listTriggerRunsPayload(
+        const Phase8TriggerRunInventorySelection& selection = {}) const;
     [[nodiscard]] QueryResult<Phase8TriggerRunArtifact> readTriggerRunPayload(
         const std::string& artifactId) const;
     [[nodiscard]] QueryResult<Phase8TriggerRunArtifact> acknowledgeAttentionItemPayload(

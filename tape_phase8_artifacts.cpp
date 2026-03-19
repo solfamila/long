@@ -208,6 +208,23 @@ std::string attentionStatusForAction(std::string_view action) {
     return {};
 }
 
+bool triggerMatchesSelection(const TriggerRunArtifact& artifact,
+                             const TriggerRunInventorySelection& selection) {
+    if (!selection.watchArtifactId.empty() &&
+        artifact.watchArtifact.artifactId != selection.watchArtifactId) {
+        return false;
+    }
+    if (!selection.attentionStatus.empty() &&
+        artifact.attentionStatus != selection.attentionStatus) {
+        return false;
+    }
+    if (selection.attentionOpen.has_value() &&
+        artifact.attentionOpen != *selection.attentionOpen) {
+        return false;
+    }
+    return true;
+}
+
 std::string timestampIdSuffixNow() {
     const auto now = std::chrono::system_clock::now();
     const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
@@ -1295,16 +1312,73 @@ bool listTriggerRuns(std::size_t limit,
                      std::vector<TriggerRunArtifact>* out,
                      std::string* errorCode,
                      std::string* errorMessage) {
-    return listArtifactsUnder<TriggerRunArtifact>(
-        phase8RootDir() / "trigger-runs",
-        limit,
-        true,
-        out,
-        errorCode,
-        errorMessage,
-        [](const fs::path& manifestPath, TriggerRunArtifact* artifact, std::string* code, std::string* message) {
-            return loadTriggerRunFromPath(manifestPath, artifact, code, message);
-        });
+    TriggerRunInventorySelection selection;
+    selection.limit = limit;
+    TriggerRunInventoryResult result;
+    if (!listTriggerRuns(selection, &result, errorCode, errorMessage)) {
+        return false;
+    }
+    if (out != nullptr) {
+        *out = std::move(result.triggerRuns);
+    }
+    return true;
+}
+
+bool listTriggerRuns(const TriggerRunInventorySelection& selection,
+                     TriggerRunInventoryResult* out,
+                     std::string* errorCode,
+                     std::string* errorMessage) {
+    if (out == nullptr) {
+        if (errorCode != nullptr) {
+            *errorCode = "invalid_arguments";
+        }
+        if (errorMessage != nullptr) {
+            *errorMessage = "output result is required";
+        }
+        return false;
+    }
+    out->triggerRuns.clear();
+    out->appliedFilters = selection;
+    out->matchedCount = 0;
+
+    std::vector<TriggerRunArtifact> allArtifacts;
+    const std::size_t limit = selection.limit;
+    if (!listArtifactsUnder<TriggerRunArtifact>(
+            phase8RootDir() / "trigger-runs",
+            0,
+            true,
+            &allArtifacts,
+            errorCode,
+            errorMessage,
+            [](const fs::path& manifestPath,
+               TriggerRunArtifact* artifact,
+               std::string* code,
+               std::string* message) {
+                return loadTriggerRunFromPath(manifestPath, artifact, code, message);
+            })) {
+        return false;
+    }
+
+    std::vector<TriggerRunArtifact> filtered;
+    for (auto artifact : allArtifacts) {
+        refreshEffectiveAttentionState(&artifact);
+        if (!triggerMatchesSelection(artifact, selection)) {
+            continue;
+        }
+        filtered.push_back(std::move(artifact));
+    }
+    out->matchedCount = filtered.size();
+    if (limit > 0 && filtered.size() > limit) {
+        filtered.resize(limit);
+    }
+    out->triggerRuns = std::move(filtered);
+    if (errorCode != nullptr) {
+        errorCode->clear();
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
 }
 
 bool listAttentionInbox(std::size_t limit,

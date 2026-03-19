@@ -694,6 +694,14 @@
     },
     "ok": true,
     "result": {
+      "applied_filters": {
+        "attention_open": null,
+        "attention_status": null,
+        "limit": 10,
+        "matched_count": 2,
+        "watch_artifact_id": null
+      },
+      "matched_count": 2,
       "returned_count": 2,
       "trigger_runs": [
         {
@@ -1336,6 +1344,80 @@
         "analysis_summary"
       ],
       "suppression_reason_codes": []
+    },
+    "revision": {
+      "first_session_seq": null,
+      "includes_mutable_tail": false,
+      "last_session_seq": null,
+      "latest_session_seq": null,
+      "manifest_hash": null,
+      "served_revision_id": null,
+      "source": "unavailable"
+    }
+  },
+  "tapescript_list_trigger_runs_acknowledged": {
+    "meta": {
+      "deferred": false,
+      "engine_operation": "phase8_list_trigger_runs_local",
+      "result_schema": "phase8.trigger-run-list.v1",
+      "retryable": false,
+      "supported": true,
+      "tool": "tapescript_list_trigger_runs"
+    },
+    "ok": true,
+    "result": {
+      "applied_filters": {
+        "attention_open": false,
+        "attention_status": "attention_acknowledged",
+        "limit": 10,
+        "matched_count": 1,
+        "watch_artifact_id": null
+      },
+      "matched_count": 1,
+      "returned_count": 1,
+      "trigger_runs": [
+        {
+          "watch_definition": {
+            "artifact_id": "phase8-watch:<id>",
+            "artifact_type": "phase8.watch_definition.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/watch-definitions/phase8-watch:<id>/manifest.json"
+          },
+          "source_artifact": {
+            "artifact_id": "case-bundle:report:<id>",
+            "artifact_type": "phase6.case_bundle.v1",
+            "contract_version": "phase6-portable-bundle-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-engine/bundles/case-bundle-report-000001.msgpack"
+          },
+          "analysis_artifact": {
+            "artifact_id": "phase7-analysis:<id>",
+            "artifact_type": "phase7.analysis_output.v1",
+            "contract_version": "phase7-analyzer-playbook-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase7_artifacts/analysis/phase7-analysis:<id>/manifest.json"
+          },
+          "trigger_run": {
+            "artifact_id": "phase8-trigger:<id>",
+            "artifact_type": "phase8.trigger_run.v1",
+            "contract_version": "phase8-trigger-inbox-v1",
+            "manifest_path": "<tmp>/tape-mcp-phase8-appdata/phase8_artifacts/trigger-runs/phase8-trigger:<id>/manifest.json"
+          },
+          "title": "INTC Ack Trigger Watch",
+          "headline": "INTC Ack Trigger Watch: 1 finding (info highest severity)",
+          "analysis_profile": "phase7.liquidity_behavior_review.v1",
+          "trigger_reason": "manual_eval",
+          "trigger_outcome": "triggered",
+          "attention_status": "attention_acknowledged",
+          "attention_open": false,
+          "analysis_created": true,
+          "finding_count": 1,
+          "highest_severity": "info",
+          "has_generated_at_utc": true,
+          "finding_categories": [
+            "analysis_summary"
+          ],
+          "suppression_reason_codes": []
+        }
+      ]
     },
     "revision": {
       "first_session_seq": null,

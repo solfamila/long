@@ -531,10 +531,10 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
     expect(phase8TriggerRun.value.artifact.analysisArtifact.artifactId ==
                phase7AnalysisArtifact.analysisArtifact.artifactId,
            "TapeScope typed phase8 watch evaluation should reuse the matching durable analysis artifact");
-    const auto typedPhase8TriggerList = client.listTriggerRunsPayload(10);
+    const auto typedPhase8TriggerList = client.listTriggerRunsPayload({.limit = 10});
     expect(typedPhase8TriggerList.ok(), "TapeScope typed phase8 trigger inventory should succeed: " +
                                             tapescope::QueryClient::describeError(typedPhase8TriggerList.error));
-    expect(!typedPhase8TriggerList.value.empty(),
+    expect(!typedPhase8TriggerList.value.artifacts.empty(),
            "TapeScope typed phase8 trigger inventory should expose stored trigger runs");
     const auto typedPhase8TriggerRead =
         client.readTriggerRunPayload(phase8TriggerRun.value.artifact.triggerArtifact.artifactId);
@@ -627,6 +627,23 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                                 phase8AcknowledgeTrigger.value.artifact.triggerArtifact.artifactId;
                         }),
            "TapeScope typed phase8 attention inbox should exclude acknowledged items");
+    const auto typedPhase8AcknowledgedList = client.listTriggerRunsPayload({
+        .attentionStatus = tape_phase8::kAttentionStatusAcknowledged,
+        .attentionOpen = false,
+        .limit = 10
+    });
+    expect(typedPhase8AcknowledgedList.ok(),
+           "TapeScope typed acknowledged trigger inventory should succeed: " +
+               tapescope::QueryClient::describeError(typedPhase8AcknowledgedList.error));
+    expect(typedPhase8AcknowledgedList.value.matchedCount >= 1 &&
+               std::any_of(typedPhase8AcknowledgedList.value.artifacts.begin(),
+                           typedPhase8AcknowledgedList.value.artifacts.end(),
+                           [&](const tapescope::Phase8TriggerRunArtifact& artifact) {
+                               return artifact.title == "INTC Ack Phase 8 Watch" &&
+                                   artifact.attentionStatus == tape_phase8::kAttentionStatusAcknowledged &&
+                                   !artifact.attentionOpen;
+                           }),
+           "TapeScope typed acknowledged trigger inventory should expose closed acknowledged runs");
 
     const auto phase8SnoozeWatchCreate =
         client.createWatchDefinitionPayload(movedCaseBundlePath.string(),
@@ -665,6 +682,23 @@ void testTapeScopeClientReadsPhase4EngineSeam() {
                                 phase8SnoozeTrigger.value.artifact.triggerArtifact.artifactId;
                         }),
            "TapeScope typed phase8 attention inbox should hide snoozed items until they wake up");
+    const auto typedPhase8SnoozedList = client.listTriggerRunsPayload({
+        .attentionStatus = tape_phase8::kAttentionStatusSnoozed,
+        .attentionOpen = false,
+        .limit = 10
+    });
+    expect(typedPhase8SnoozedList.ok(),
+           "TapeScope typed snoozed trigger inventory should succeed: " +
+               tapescope::QueryClient::describeError(typedPhase8SnoozedList.error));
+    expect(typedPhase8SnoozedList.value.matchedCount >= 1 &&
+               std::any_of(typedPhase8SnoozedList.value.artifacts.begin(),
+                           typedPhase8SnoozedList.value.artifacts.end(),
+                           [&](const tapescope::Phase8TriggerRunArtifact& artifact) {
+                               return artifact.title == "INTC Snooze Phase 8 Watch" &&
+                                   artifact.attentionStatus == tape_phase8::kAttentionStatusSnoozed &&
+                                   !artifact.attentionOpen;
+                           }),
+           "TapeScope typed snoozed trigger inventory should expose closed snoozed runs");
 
     const auto phase8ResolveTrigger =
         client.evaluateWatchDefinitionPayload(phase8AcknowledgeWatchCreate.value.artifact.watchArtifact.artifactId);

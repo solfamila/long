@@ -270,6 +270,7 @@ void StylePanel(NSView* view) {
 
     bool _appActive;
     NSProcessInfoThermalState _thermalState;
+    bool _recoveryMaintenanceInFlight;
 
     NSTextField* _twsStatusLabel;
     NSTextField* _accountStatusLabel;
@@ -302,6 +303,8 @@ void StylePanel(NSView* view) {
     NSButton* _cancelAllButton;
     NSButton* _armControllerButton;
     NSButton* _killSwitchButton;
+    NSButton* _loadRecoveryButton;
+    NSButton* _deleteLogsButton;
     NSButton* _settingsButton;
     NSButton* _exportTraceButton;
     NSButton* _exportAllButton;
@@ -333,6 +336,8 @@ void StylePanel(NSView* view) {
 - (PendingUiSyncUpdate)consumeCurrentPendingUiSyncUpdate;
 - (TradingPanelState)currentPanelState;
 - (void)appendAppMessage:(const std::string&)message;
+- (void)loadRecoveryFromLogs:(id)sender;
+- (void)deletePersistedLogs:(id)sender;
 - (void)copyMessages:(id)sender;
 - (void)copyTrace:(id)sender;
 - (BOOL)validateUserInterfaceItem:(id<NSValidatedUserInterfaceItem>)item;
@@ -365,6 +370,7 @@ void StylePanel(NSView* view) {
         _messagesVersionSeen = 0;
         _subscribed = false;
         _shuttingDown = false;
+        _recoveryMaintenanceInFlight = false;
         _appActive = NSApp == nil ? true : NSApp.isActive;
         _thermalState = NSProcessInfo.processInfo.thermalState;
         _refreshScheduler = std::make_unique<TradingRefreshScheduler>();
@@ -520,10 +526,16 @@ void StylePanel(NSView* view) {
     [_armControllerButton.widthAnchor constraintEqualToConstant:150.0].active = YES;
     _killSwitchButton = MakeButton(@"Enable Kill Switch", self, @selector(toggleKillSwitch:));
     [_killSwitchButton.widthAnchor constraintEqualToConstant:180.0].active = YES;
+    _loadRecoveryButton = MakeButton(@"Load Logs", self, @selector(loadRecoveryFromLogs:));
+    [_loadRecoveryButton.widthAnchor constraintEqualToConstant:122.0].active = YES;
+    _deleteLogsButton = MakeButton(@"Delete Logs", self, @selector(deletePersistedLogs:));
+    [_deleteLogsButton.widthAnchor constraintEqualToConstant:122.0].active = YES;
     _settingsButton = MakeButton(@"Settings", self, @selector(openSettings:));
     [_settingsButton.widthAnchor constraintEqualToConstant:118.0].active = YES;
     [statusControls addArrangedSubview:_armControllerButton];
     [statusControls addArrangedSubview:_killSwitchButton];
+    [statusControls addArrangedSubview:_loadRecoveryButton];
+    [statusControls addArrangedSubview:_deleteLogsButton];
     [statusControls addArrangedSubview:_settingsButton];
 
     [statusRow addArrangedSubview:statusLabels];
@@ -1235,6 +1247,88 @@ void StylePanel(NSView* view) {
     [self scheduleRefresh];
 }
 
+- (void)loadRecoveryFromLogs:(id)sender {
+    (void)sender;
+    if (_recoveryMaintenanceInFlight) {
+        return;
+    }
+
+    _recoveryMaintenanceInFlight = true;
+    [self appendAppMessage:"Loading persisted trade logs on demand..."];
+    [self scheduleRefresh];
+
+    __weak TradingWindowController* weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        const RuntimeRecoverySnapshot recovery = loadRuntimeRecoverySnapshotFromLogs(5);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TradingWindowController* strongSelf = weakSelf;
+            if (strongSelf == nil) {
+                return;
+            }
+
+            strongSelf->_recoveryMaintenanceInFlight = false;
+            if (!recovery.bannerText.empty()) {
+                [strongSelf appendAppMessage:("Loaded persisted runtime recovery: " + recovery.bannerText)];
+            } else {
+                [strongSelf appendAppMessage:"Loaded persisted logs; no prior-session recovery work was found"];
+            }
+            [strongSelf scheduleRefresh];
+        });
+    });
+}
+
+- (void)deletePersistedLogs:(id)sender {
+    (void)sender;
+    if (_recoveryMaintenanceInFlight) {
+        return;
+    }
+
+    NSAlert* confirm = [[NSAlert alloc] init];
+    confirm.messageText = @"Delete Persisted Trade Logs?";
+    confirm.informativeText = @"This removes the saved trade trace and runtime journal JSONL files. The app can recreate fresh logs after deletion.";
+    confirm.alertStyle = NSAlertStyleWarning;
+    [confirm addButtonWithTitle:@"Delete Logs"];
+    [confirm addButtonWithTitle:@"Keep Logs"];
+    if ([confirm runModal] != NSAlertFirstButtonReturn) {
+        return;
+    }
+
+    _recoveryMaintenanceInFlight = true;
+    [self scheduleRefresh];
+
+    __weak TradingWindowController* weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        const RuntimeLogDeleteResult result = deletePersistentRuntimeLogs();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            TradingWindowController* strongSelf = weakSelf;
+            if (strongSelf == nil) {
+                return;
+            }
+
+            strongSelf->_recoveryMaintenanceInFlight = false;
+            if (!result.error.empty()) {
+                [strongSelf appendAppMessage:("Failed to delete persisted logs: " + result.error)];
+            } else if (!result.deletedTradeTraceLog && !result.deletedRuntimeJournalLog) {
+                [strongSelf appendAppMessage:"No persisted trade log files were present"];
+            } else {
+                std::string message = "Deleted persisted logs:";
+                if (result.deletedTradeTraceLog) {
+                    message += " trade_trace_events.jsonl";
+                }
+                if (result.deletedRuntimeJournalLog) {
+                    if (result.deletedTradeTraceLog) {
+                        message += ",";
+                    }
+                    message += " trade_runtime_journal.jsonl";
+                }
+                message += ". Fresh logs will be created as new activity occurs.";
+                [strongSelf appendAppMessage:message];
+            }
+            [strongSelf scheduleRefresh];
+        });
+    });
+}
+
 - (void)exportSelectedTrace:(id)sender {
     (void)sender;
     std::string successMessage;
@@ -1395,6 +1489,16 @@ void StylePanel(NSView* view) {
     SetButtonEnabledTint(_killSwitchButton,
                          true,
                          state.status.tradingKillSwitch ? [NSColor systemRedColor] : [NSColor colorWithCalibratedRed:0.40 green:0.40 blue:0.40 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+
+    SetButtonEnabledTint(_loadRecoveryButton,
+                         !_recoveryMaintenanceInFlight,
+                         [NSColor colorWithCalibratedRed:0.16 green:0.56 blue:0.58 alpha:1.0],
+                         [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
+
+    SetButtonEnabledTint(_deleteLogsButton,
+                         !_recoveryMaintenanceInFlight,
+                         [NSColor colorWithCalibratedRed:0.75 green:0.28 blue:0.22 alpha:1.0],
                          [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]);
 
     StyleTintedButton(_settingsButton, [NSColor colorWithCalibratedRed:0.25 green:0.45 blue:0.70 alpha:1.0], [NSColor whiteColor]);
