@@ -26,11 +26,15 @@ json laneSchema(const BuildRequest& request) {
 
 std::string lanePrompt(const json& packetArtifact, const BuildRequest& request, bool strictJsonOnly) {
     const std::string schemaText = laneSchema(request).dump();
+    const std::string focusQuestion = request.focusQuestion.empty()
+        ? std::string()
+        : ("\nOperator focus question: " + request.focusQuestion + "\nPrioritize answering this question using only evidence present in the packet.");
     if (request.lane == Lane::Deep) {
         return std::string("You are evaluating a backend-built deep incident context packet. ") +
             "Use only the evidence present in the packet. Return JSON matching the required schema." +
             (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
             " Schema: " + schemaText +
+            focusQuestion +
             "\n\n" +
             packetArtifact.dump();
     }
@@ -38,6 +42,7 @@ std::string lanePrompt(const json& packetArtifact, const BuildRequest& request, 
         "Use only the evidence present in the packet. Return JSON matching the required schema." +
         (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
         " Schema: " + schemaText +
+        focusQuestion +
         "\n\n" +
         packetArtifact.dump();
 }

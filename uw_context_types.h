@@ -30,6 +30,7 @@ struct BuildRequest {
     std::size_t limit = 0;
     bool includeLiveTail = false;
     std::vector<std::string> requestedFacets;
+    std::string focusQuestion;
 };
 
 struct ProviderStep {

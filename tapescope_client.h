@@ -34,6 +34,7 @@ using EnrichmentPayload = tape_payloads::EnrichmentPayload;
 using SessionQualityPayload = tape_payloads::SessionQualityPayload;
 using SeekOrderPayload = tape_payloads::SeekOrderPayload;
 using IncidentListPayload = tape_payloads::IncidentListPayload;
+using CollectionRowsPayload = tape_payloads::CollectionRowsPayload;
 using ReportInventoryRow = tape_payloads::ReportInventoryRow;
 using ReportInventoryPayload = tape_payloads::ReportInventoryPayload;
 using BundleExportPayload = tape_payloads::BundleExportPayload;
@@ -42,6 +43,7 @@ using ImportedCaseRow = tape_payloads::ImportedCaseRow;
 using ImportedCaseListPayload = tape_payloads::ImportedCaseListPayload;
 using CaseBundleImportPayload = tape_payloads::CaseBundleImportPayload;
 using ArtifactExportPayload = tape_payloads::ArtifactExportPayload;
+using ReplaySnapshotPayload = tape_payloads::ReplaySnapshotPayload;
 using Phase7ArtifactRef = tape_phase7::ArtifactRef;
 using Phase7FindingRecord = tape_phase7::FindingRecord;
 using Phase7AnalyzerProfile = tape_phase7::AnalyzerProfileSpec;
@@ -223,6 +225,9 @@ public:
     [[nodiscard]] QueryResult<std::vector<EventRow>> readLiveTailRows(std::size_t limit = 64) const;
     [[nodiscard]] QueryResult<std::vector<json>> readRange(const RangeQuery& query) const;
     [[nodiscard]] QueryResult<std::vector<EventRow>> readRangeRows(const RangeQuery& query) const;
+    [[nodiscard]] QueryResult<ReplaySnapshotPayload> replaySnapshotPayload(std::uint64_t targetSessionSeq,
+                                                                           std::size_t depthLimit = 5,
+                                                                           bool includeLiveTail = false) const;
     // Legacy JSON envelopes are retained for compatibility, but the UI and tests
     // should prefer the typed payload variants below.
     [[nodiscard]] [[deprecated("Use readSessionQualityPayload() for typed TapeScope quality reads")]]
@@ -241,6 +246,9 @@ public:
     [[nodiscard]] [[deprecated("Use findOrderAnchorPayload() for typed TapeScope order-anchor reads")]]
     QueryResult<json> findOrderAnchor(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<EventListPayload> findOrderAnchorPayload(const OrderAnchorQuery& query) const;
+    [[nodiscard]] [[deprecated("Use listOrderAnchorsPayload() for typed TapeScope order-anchor inventory reads")]]
+    QueryResult<json> listOrderAnchors(std::size_t limit = 20) const;
+    [[nodiscard]] QueryResult<CollectionRowsPayload> listOrderAnchorsPayload(std::size_t limit = 20) const;
     [[nodiscard]] [[deprecated("Use seekOrderAnchorPayload() for typed TapeScope replay-target reads")]]
     QueryResult<json> seekOrderAnchor(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<SeekOrderPayload> seekOrderAnchorPayload(const OrderAnchorQuery& query) const;
@@ -250,6 +258,7 @@ public:
     [[nodiscard]] [[deprecated("Use readOrderCasePayload() for typed TapeScope investigation reads")]]
     QueryResult<json> readOrderCase(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readOrderCasePayload(const OrderAnchorQuery& query) const;
+    [[nodiscard]] QueryResult<InvestigationPayload> readTradeReviewPayload(const OrderAnchorQuery& query) const;
     [[nodiscard]] [[deprecated("Use scanOrderCaseReportPayload() for typed TapeScope report reads")]]
     QueryResult<json> scanOrderCaseReport(const OrderAnchorQuery& query) const;
     [[nodiscard]] QueryResult<InvestigationPayload> scanOrderCaseReportPayload(const OrderAnchorQuery& query) const;
@@ -263,14 +272,21 @@ public:
     QueryResult<json> readIncident(std::uint64_t logicalIncidentId) const;
     [[nodiscard]] QueryResult<InvestigationPayload> readIncidentPayload(std::uint64_t logicalIncidentId) const;
     [[nodiscard]] QueryResult<EnrichmentPayload> enrichIncidentPayload(std::uint64_t logicalIncidentId,
-                                                                       bool includeLiveTail = false) const;
+                                                                       bool includeLiveTail = false,
+                                                                       const std::string& focusQuestion = {}) const;
     [[nodiscard]] QueryResult<EnrichmentPayload> explainIncidentPayload(std::uint64_t logicalIncidentId,
-                                                                        bool includeLiveTail = false) const;
-    [[nodiscard]] QueryResult<EnrichmentPayload> enrichOrderCasePayload(const OrderAnchorQuery& query) const;
+                                                                        bool includeLiveTail = false,
+                                                                        const std::string& focusQuestion = {}) const;
+    [[nodiscard]] QueryResult<EnrichmentPayload> enrichOrderCasePayload(const OrderAnchorQuery& query,
+                                                                        const std::string& focusQuestion = {}) const;
+    [[nodiscard]] QueryResult<EnrichmentPayload> enrichTradeReviewPayload(const OrderAnchorQuery& query,
+                                                                          const std::string& focusQuestion = {}) const;
     [[nodiscard]] QueryResult<EnrichmentPayload> refreshIncidentExternalContextPayload(
         std::uint64_t logicalIncidentId,
         bool includeLiveTail = false) const;
     [[nodiscard]] QueryResult<EnrichmentPayload> refreshOrderCaseExternalContextPayload(
+        const OrderAnchorQuery& query) const;
+    [[nodiscard]] QueryResult<EnrichmentPayload> refreshTradeReviewExternalContextPayload(
         const OrderAnchorQuery& query) const;
     [[nodiscard]] [[deprecated("Use readOrderAnchorPayload() for typed TapeScope investigation reads")]]
     QueryResult<json> readOrderAnchor(std::uint64_t anchorId) const;

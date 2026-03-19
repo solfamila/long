@@ -63,6 +63,8 @@ const char* queryOperationName(QueryOperation operation) {
             return "seek_order_anchor";
         case QueryOperation::ReadOrderCase:
             return "read_order_case";
+        case QueryOperation::ReadTradeReview:
+            return "read_trade_review";
         case QueryOperation::ReadOrderAnchor:
             return "read_order_anchor";
         case QueryOperation::ListOrderAnchors:
@@ -85,8 +87,12 @@ const char* queryOperationName(QueryOperation operation) {
             return "explain_incident";
         case QueryOperation::EnrichOrderCase:
             return "enrich_order_case";
+        case QueryOperation::EnrichTradeReview:
+            return "enrich_trade_review";
         case QueryOperation::RefreshExternalContext:
             return "refresh_external_context";
+        case QueryOperation::RefreshTradeReviewExternalContext:
+            return "refresh_trade_review_external_context";
         case QueryOperation::ReadArtifact:
             return "read_artifact";
         case QueryOperation::ExportArtifact:
@@ -161,6 +167,9 @@ QueryOperation queryOperationFromString(std::string_view operationName) {
     if (normalized == "read_order_case") {
         return QueryOperation::ReadOrderCase;
     }
+    if (normalized == "read_trade_review") {
+        return QueryOperation::ReadTradeReview;
+    }
     if (normalized == "read_order_anchor") {
         return QueryOperation::ReadOrderAnchor;
     }
@@ -194,8 +203,14 @@ QueryOperation queryOperationFromString(std::string_view operationName) {
     if (normalized == "enrich_order_case") {
         return QueryOperation::EnrichOrderCase;
     }
+    if (normalized == "enrich_trade_review") {
+        return QueryOperation::EnrichTradeReview;
+    }
     if (normalized == "refresh_external_context") {
         return QueryOperation::RefreshExternalContext;
+    }
+    if (normalized == "refresh_trade_review_external_context") {
+        return QueryOperation::RefreshTradeReviewExternalContext;
     }
     if (normalized == "read_artifact") {
         return QueryOperation::ReadArtifact;
@@ -355,6 +370,9 @@ json queryRequestToJson(const QueryRequest& request) {
     if (!request.bundlePath.empty()) {
         payload["bundle_path"] = request.bundlePath;
     }
+    if (!request.focusQuestion.empty()) {
+        payload["focus_question"] = request.focusQuestion;
+    }
     return payload;
 }
 
@@ -383,6 +401,7 @@ QueryRequest queryRequestFromJson(const json& payload) {
     request.artifactId = payload.value("artifact_id", std::string());
     request.exportFormat = payload.value("export_format", std::string());
     request.bundlePath = payload.value("bundle_path", std::string());
+    request.focusQuestion = payload.value("focus_question", std::string());
     return request;
 }
 

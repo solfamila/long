@@ -172,6 +172,7 @@ json buildPacketArtifact(const json& localEvidence,
         {"schema", request.lane == Lane::Deep ? "uw_deep_context_packet" : "uw_fast_context_packet"},
         {"packet_kind", packetKind},
         {"task", laneTask(request)},
+        {"focus_question", request.focusQuestion.empty() ? json(nullptr) : json(request.focusQuestion)},
         {"local_evidence", buildLocalEvidencePacket(localEvidence, request)},
         {"external_context", {
             {"provider", normalized.provider},

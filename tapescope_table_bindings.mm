@@ -9,7 +9,32 @@ namespace {
 using tapescope::json;
 using namespace tapescope_support;
 
+std::string SimpleReviewTradeCellText(const json& row) {
+    const json anchor = row.value("anchor", json::object());
+    const std::uint64_t traceId = anchor.value("trace_id", 0ULL);
+    if (traceId > 0) {
+        return "trace " + std::to_string(traceId);
+    }
+    const long long orderId = anchor.value("order_id", 0LL);
+    if (orderId > 0) {
+        return "order " + std::to_string(orderId);
+    }
+    const long long permId = anchor.value("perm_id", 0LL);
+    if (permId > 0) {
+        return "perm " + std::to_string(permId);
+    }
+    const std::string execId = anchor.value("exec_id", std::string());
+    if (!execId.empty()) {
+        return "exec " + execId;
+    }
+    return row.value("artifact_id", std::string());
+}
+
 } // namespace
+
+@interface TapeScopeWindowController (SimpleReviewBindings)
+- (void)selectSimpleReviewRecentTradeAtIndex:(NSInteger)selectedRow autoload:(BOOL)autoload;
+@end
 
 @implementation TapeScopeWindowController (TableBindings)
 
@@ -79,6 +104,9 @@ using namespace tapescope_support;
 - (NSInteger)numberOfRowsInTableView:(NSTableView*)tableView {
     if (tableView == _liveTableView) {
         return static_cast<NSInteger>(_liveEvents.size());
+    }
+    if (tableView == _simpleReviewRecentTradesTableView) {
+        return static_cast<NSInteger>(_simpleReviewRecentTradeRows.size());
     }
     if (tableView == _recentTableView) {
         return static_cast<NSInteger>(_recentHistoryItems.size());
@@ -183,6 +211,11 @@ using namespace tapescope_support;
             return nil;
         }
         eventItem = &_liveEvents.at(static_cast<std::size_t>(row));
+    } else if (tableView == _simpleReviewRecentTradesTableView) {
+        if (static_cast<std::size_t>(row) >= _simpleReviewRecentTradeRows.size()) {
+            return nil;
+        }
+        item = &_simpleReviewRecentTradeRows.at(static_cast<std::size_t>(row));
     } else if (tableView == _recentTableView) {
         if (static_cast<std::size_t>(row) >= _recentHistoryItems.size()) {
             return nil;
@@ -331,6 +364,17 @@ using namespace tapescope_support;
             value = eventItem->eventKind;
         } else {
             value = EventSummaryText(*eventItem);
+        }
+    } else if (tableView == _simpleReviewRecentTradesTableView) {
+        if ([columnId isEqualToString:@"trade"]) {
+            value = SimpleReviewTradeCellText(*item);
+        } else if ([columnId isEqualToString:@"event_kind"]) {
+            value = item->value("event_kind", std::string());
+        } else if ([columnId isEqualToString:@"session_seq"]) {
+            const std::uint64_t sessionSeq = item->value("session_seq", 0ULL);
+            value = sessionSeq == 0 ? std::string() : std::to_string(sessionSeq);
+        } else {
+            value = item->value("note", std::string());
         }
     } else if (tableView == _recentTableView) {
         if ([columnId isEqualToString:@"kind"]) {
@@ -610,7 +654,20 @@ using namespace tapescope_support;
     }
 
     cell.textField.stringValue = ToNSString(value);
+    if (tableView == _liveTableView || tableView == _simpleReviewRecentTradesTableView) {
+        cell.textField.textColor = [NSColor whiteColor];
+    } else {
+        cell.textField.textColor = [NSColor labelColor];
+    }
     return cell;
+}
+
+- (NSTableRowView*)tableView:(NSTableView*)tableView rowViewForRow:(NSInteger)row {
+    (void)row;
+    if (tableView == _liveTableView || tableView == _simpleReviewRecentTradesTableView) {
+        return MakeDarkTableRowView();
+    }
+    return [[NSTableRowView alloc] initWithFrame:NSZeroRect];
 }
 
 - (void)tableViewSelectionDidChange:(NSNotification*)notification {
@@ -618,11 +675,22 @@ using namespace tapescope_support;
     if (tableView == _liveTableView) {
         const NSInteger selected = _liveTableView.selectedRow;
         if (selected < 0 || static_cast<std::size_t>(selected) >= _liveEvents.size()) {
-            _liveTextView.string = @"Select a live event row to inspect the decoded payload.";
+            SetTextViewString(_liveDetailTextView, @"Select a live event row to inspect the decoded event.");
             return;
         }
         const auto& item = _liveEvents.at(static_cast<std::size_t>(selected));
-        _liveTextView.string = ToNSString(item.raw.dump(2));
+        SetTextViewString(_liveDetailTextView, ToNSString(DescribeLiveEventDetail(item)));
+        return;
+    }
+
+    if (tableView == _simpleReviewRecentTradesTableView) {
+        const NSInteger selected = _simpleReviewRecentTradesTableView.selectedRow;
+        if (selected < 0 || static_cast<std::size_t>(selected) >= _simpleReviewRecentTradeRows.size()) {
+            _simpleReviewRecentTradesStateLabel.stringValue = @"Select a recent trade row to load replay, Level 2, and UW/Gemini context.";
+            _simpleReviewRecentTradesStateLabel.textColor = TapeInkMutedColor();
+            return;
+        }
+        [self selectSimpleReviewRecentTradeAtIndex:selected autoload:NO];
         return;
     }
 

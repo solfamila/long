@@ -1698,7 +1698,7 @@ void testBridgeLifecycleEmissionExpandsPrivateOrderEvents() {
 
     CommissionReport commission;
     commission.execId = "EXEC-91";
-    commission.commission = 0.45;
+    commission.commissionAndFees = 0.45;
     commission.currency = "USD";
     recordTraceCommission(commission);
 

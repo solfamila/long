@@ -6,7 +6,39 @@ namespace {
 
 using namespace tapescope_support;
 
+std::optional<std::pair<std::uint64_t, std::uint64_t>> SelectedLiveEventKey(NSTableView* tableView,
+                                                                            const std::vector<tapescope::EventRow>& events) {
+    if (tableView == nil) {
+        return std::nullopt;
+    }
+    const NSInteger selected = tableView.selectedRow;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= events.size()) {
+        return std::nullopt;
+    }
+    const auto& event = events.at(static_cast<std::size_t>(selected));
+    return std::make_pair(event.sessionSeq, event.sourceSeq);
+}
+
+NSInteger FindLiveEventRow(const std::vector<tapescope::EventRow>& events,
+                           const std::optional<std::pair<std::uint64_t, std::uint64_t>>& key) {
+    if (!key.has_value()) {
+        return -1;
+    }
+    for (std::size_t index = 0; index < events.size(); ++index) {
+        const auto& event = events.at(index);
+        if (event.sessionSeq == key->first && event.sourceSeq == key->second) {
+            return static_cast<NSInteger>(index);
+        }
+    }
+    return -1;
+}
+
 } // namespace
+
+@interface TapeScopeWindowController (SimpleReviewProbe)
+- (void)loadSimpleReviewRecentTrades:(id)sender;
+ - (std::vector<tapescope::json>)fallbackSimpleReviewRecentTradeRows;
+@end
 
 @implementation TapeScopeWindowController (Queries)
 
@@ -105,7 +137,7 @@ using namespace tapescope_support;
 }
 
 - (void)startPolling {
-    [self refresh:nil];
+    [self refresh:_refreshNowButton];
     if (!_pollingPaused) {
         _pollTimer = [NSTimer scheduledTimerWithTimeInterval:tapescope_window_internal::kPollIntervalSeconds
                                                       target:self
@@ -170,33 +202,76 @@ using namespace tapescope_support;
         _liveCountValue.stringValue = UInt64String(probe.status.value.liveEventCount);
         _segmentCountValue.stringValue = UInt64String(probe.status.value.segmentCount);
         _manifestHashValue.stringValue = ToNSString(probe.status.value.manifestHash);
+        if (_engineSummaryLabel != nil) {
+            _engineSummaryLabel.stringValue =
+                [NSString stringWithFormat:@"%@  •  seq %@  •  live %@  •  socket %@",
+                                           ToNSString(probe.status.value.instrumentId),
+                                           UInt64String(probe.status.value.latestSessionSeq),
+                                           UInt64String(probe.status.value.liveEventCount),
+                                           ToNSString(probe.status.value.socketPath)];
+        }
+        if (_simpleReviewRecentTradesTableView != nil && _simpleReviewRecentTradeRows.empty()) {
+            _simpleReviewRecentTradeRows = probe.status.value.topOrderAnchors;
+            if (_simpleReviewRecentTradeRows.empty()) {
+                _simpleReviewRecentTradeRows = [self fallbackSimpleReviewRecentTradeRows];
+            }
+            [_simpleReviewRecentTradesTableView reloadData];
+            if (!_simpleReviewRecentTradeRows.empty()) {
+                _simpleReviewRecentTradesStateLabel.stringValue =
+                    [NSString stringWithFormat:@"Loaded %lu recent trades from the engine snapshot. Click any row to open it.",
+                                               static_cast<unsigned long>(_simpleReviewRecentTradeRows.size())];
+                _simpleReviewRecentTradesStateLabel.textColor = [NSColor systemGreenColor];
+                [_simpleReviewRecentTradesTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                                               byExtendingSelection:NO];
+            } else if (!_simpleReviewRecentTradesInFlight) {
+                [self loadSimpleReviewRecentTrades:nil];
+            }
+        }
     } else {
         _bannerLabel.stringValue = ToNSString(tapescope::QueryClient::describeError(probe.status.error));
         [self updateBannerAppearanceWithColor:ErrorColorForKind(probe.status.error.kind)];
-        _socketValue.stringValue = ToNSString(_client ? _client->config().socketPath : tapescope::defaultSocketPath());
+        const std::string configuredSocket = _client ? _client->config().socketPath : tapescope::defaultSocketPath();
+        _socketValue.stringValue = ToNSString(configuredSocket);
         _dataDirValue.stringValue = @"--";
         _instrumentValue.stringValue = @"--";
         _latestSeqValue.stringValue = @"--";
         _liveCountValue.stringValue = @"--";
         _segmentCountValue.stringValue = @"--";
         _manifestHashValue.stringValue = @"--";
+        if (_engineSummaryLabel != nil) {
+            _engineSummaryLabel.stringValue =
+                [NSString stringWithFormat:@"socket %@  •  start tape_engine, then load a trade to review it here",
+                                           ToNSString(configuredSocket)];
+        }
     }
 
     [self updatePollingStatusText];
     _statusTextView.string = ToNSString(DescribeStatusPane(probe.status,
                                                            _client ? _client->config().socketPath : tapescope::defaultSocketPath()));
     if (probe.liveTail.ok()) {
+        const auto selectedKey = SelectedLiveEventKey(_liveTableView, _liveEvents);
         _liveEvents = probe.liveTail.value;
         [_liveTableView reloadData];
         if (!_liveEvents.empty()) {
-            [_liveTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+            NSInteger rowToSelect = FindLiveEventRow(_liveEvents, selectedKey);
+            if (rowToSelect < 0) {
+                rowToSelect = 0;
+            }
+            [_liveTableView selectRowIndexes:[NSIndexSet indexSetWithIndex:static_cast<NSUInteger>(rowToSelect)]
+                           byExtendingSelection:NO];
+            [_liveTableView scrollRowToVisible:rowToSelect];
+            const auto& selectedEvent = _liveEvents.at(static_cast<std::size_t>(rowToSelect));
+            SetTextViewString(_liveDetailTextView, ToNSString(DescribeLiveEventDetail(selectedEvent)));
         } else {
-            _liveTextView.string = @"No live events returned.";
+            SetTextViewString(_liveDetailTextView, @"No live events returned.");
         }
     } else {
         _liveEvents.clear();
         [_liveTableView reloadData];
-        _liveTextView.string = ToNSString(DescribeLiveEventsPane(probe.liveTail));
+        SetTextViewString(_liveDetailTextView,
+                          probe.liveTail.ok()
+                              ? @"No live events returned."
+                              : ToNSString(tapescope::QueryClient::describeError(probe.liveTail.error)));
     }
 }
 

@@ -39,6 +39,8 @@ struct QueryResult {
 };
 
 struct StatusSnapshot {
+    json raw;
+    json summary;
     std::string socketPath;
     std::string dataDir;
     std::string instrumentId;
@@ -46,6 +48,8 @@ struct StatusSnapshot {
     std::uint64_t liveEventCount = 0;
     std::uint64_t segmentCount = 0;
     std::string manifestHash;
+    std::size_t orderAnchorCount = 0;
+    std::vector<json> topOrderAnchors;
 };
 
 struct RangeQuery {

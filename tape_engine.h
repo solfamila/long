@@ -515,6 +515,21 @@ private:
                                const std::string& execId,
                                std::uint64_t frozenRevisionId,
                                bool includeLiveTail) const;
+    std::optional<OrderAnchorRecord> resolveTradeReviewAnchor(const QuerySnapshot& snapshot,
+                                                              std::uint64_t frozenRevisionId,
+                                                              bool includeLiveTail,
+                                                              std::uint64_t anchorId,
+                                                              std::uint64_t traceId,
+                                                              long long orderId,
+                                                              long long permId,
+                                                              const std::string& execId) const;
+    std::optional<ProtectedWindowRecord> latestProtectedWindowForAnchor(const QuerySnapshot& snapshot,
+                                                                        std::uint64_t frozenRevisionId,
+                                                                        bool includeLiveTail,
+                                                                        const BridgeAnchorIdentity& anchor) const;
+    QueryResponse buildTradeReviewResponse(const QueryRequest& request,
+                                           const QuerySnapshot& snapshot,
+                                           std::uint64_t frozenRevisionId) const;
     std::optional<ProtectedWindowRecord> latestIncidentProtectedWindow(const QueryArtifacts& artifacts,
                                                                        std::uint64_t logicalIncidentId) const;
     json buildIncidentDataQualitySummary(const QuerySnapshot& snapshot,

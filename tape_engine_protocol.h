@@ -68,6 +68,7 @@ enum class QueryOperation {
     FindOrderAnchor,
     SeekOrderAnchor,
     ReadOrderCase,
+    ReadTradeReview,
     ReadOrderAnchor,
     ListOrderAnchors,
     ListProtectedWindows,
@@ -79,7 +80,9 @@ enum class QueryOperation {
     EnrichIncident,
     ExplainIncident,
     EnrichOrderCase,
+    EnrichTradeReview,
     RefreshExternalContext,
+    RefreshTradeReviewExternalContext,
     ReadArtifact,
     ExportArtifact,
     ExportSessionBundle,
@@ -144,6 +147,7 @@ struct QueryRequest {
     std::string artifactId;
     std::string exportFormat;
     std::string bundlePath;
+    std::string focusQuestion;
 };
 
 QueryRequest makeQueryRequest(QueryOperation operation, std::string requestId = {});
