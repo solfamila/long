@@ -1566,12 +1566,35 @@ QueryResult<Phase8DueWatchRunPayload> QueryClient::runDueWatchesPayload(std::siz
                                  errorMessage);
 }
 
-QueryResult<std::vector<Phase8TriggerRunArtifact>> QueryClient::listTriggerRunsPayload(std::size_t limit) const {
-    std::vector<Phase8TriggerRunArtifact> artifacts;
+QueryResult<Phase8TriggerRunInventoryPayload> QueryClient::listTriggerRunsPayload(
+    const Phase8TriggerRunInventorySelection& selection) const {
+    tape_phase8::TriggerRunInventorySelection localSelection;
+    localSelection.limit = selection.limit;
+    localSelection.watchArtifactId = selection.watchArtifactId;
+    localSelection.attentionStatus = selection.attentionStatus;
+    localSelection.attentionOpen = selection.attentionOpen;
+
+    tape_phase8::TriggerRunInventoryResult inventory;
     std::string errorCode;
     std::string errorMessage;
-    return packPhase7LocalResult(tape_phase8::listTriggerRuns(limit, &artifacts, &errorCode, &errorMessage),
-                                 std::move(artifacts),
+    return packPhase7LocalResult(tape_phase8::listTriggerRuns(localSelection, &inventory, &errorCode, &errorMessage),
+                                 Phase8TriggerRunInventoryPayload{
+                                     .artifacts = std::move(inventory.triggerRuns),
+                                     .appliedFilters = {
+                                         {"watch_artifact_id", inventory.appliedFilters.watchArtifactId.empty()
+                                                                   ? json(nullptr)
+                                                                   : json(inventory.appliedFilters.watchArtifactId)},
+                                         {"attention_status", inventory.appliedFilters.attentionStatus.empty()
+                                                                  ? json(nullptr)
+                                                                  : json(inventory.appliedFilters.attentionStatus)},
+                                         {"attention_open", inventory.appliedFilters.attentionOpen.has_value()
+                                                                ? json(*inventory.appliedFilters.attentionOpen)
+                                                                : json(nullptr)},
+                                         {"limit", inventory.appliedFilters.limit},
+                                         {"matched_count", inventory.matchedCount}
+                                     },
+                                     .matchedCount = inventory.matchedCount
+                                 },
                                  errorCode,
                                  errorMessage);
 }

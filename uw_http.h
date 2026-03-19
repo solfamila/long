@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -13,6 +14,7 @@ struct HttpResponse {
     std::uint64_t latencyMs = 0;
     std::string body;
     std::string curlError;
+    std::map<std::string, std::string> headers;
 };
 
 HttpResponse httpGet(const std::string& url,

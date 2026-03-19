@@ -540,9 +540,7 @@ bool TradingRuntime::start() {
 
     const RuntimeConnectionConfig connectionConfig = captureRuntimeConnectionConfig();
     const std::string websocketToken = ensureWebSocketAuthToken();
-    const auto unfinishedTraces = recoverUnfinishedTraceSummariesFromLog(5);
-    const RuntimeRecoverySnapshot recovery = recoverRuntimeRecoverySnapshot(5);
-    seedBridgeOutboxRecoveryState(recovery);
+    const RuntimeRecoverySnapshot recovery;
     impl_->invokeOnActionThread([&]() {
         trading_engine::reduce(appState(), trading_engine::RuntimeBootstrapEvent{
             makeSessionIdentifier("app"),
@@ -564,13 +562,6 @@ bool TradingRuntime::start() {
         {"websocketEnabled", connectionConfig.websocketEnabled},
         {"controllerEnabled", connectionConfig.controllerEnabled}
     });
-    if (recovery.bridgeRecoveryRequired) {
-        appendRuntimeJournalEvent("bridge_recovery_pending", {
-            {"pendingCount", recovery.pendingOutboxCount},
-            {"lossCount", recovery.outboxLossCount},
-            {"lastSourceSeq", static_cast<unsigned long long>(recovery.lastOutboxSourceSeq)}
-        });
-    }
     setRuntimeSessionState(RuntimeSessionState::Connecting);
 
     impl_->osSignal = std::make_unique<EReaderOSSignal>(2000);
@@ -675,12 +666,6 @@ bool TradingRuntime::start() {
     }
 
     impl_->started = true;
-    if (!recovery.bannerText.empty()) {
-        appendSharedMessage(recovery.bannerText);
-    }
-    for (const auto& summary : unfinishedTraces) {
-        appendSharedMessage("Recovered unfinished trace from prior run: " + summary);
-    }
     requestUiInvalidation();
     return twsConnected;
 }

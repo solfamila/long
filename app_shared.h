@@ -625,6 +625,12 @@ struct RuntimeRecoverySnapshot {
     std::string bannerText;
 };
 
+struct RuntimeLogDeleteResult {
+    bool deletedTradeTraceLog = false;
+    bool deletedRuntimeJournalLog = false;
+    std::string error;
+};
+
 namespace trading_engine {
 
 struct RuntimeBootstrapEvent {
@@ -952,3 +958,5 @@ void appendRuntimeJournalEvent(const std::string& event, const json& details = {
 std::string canonicalInstrumentIdForSymbol(const std::string& symbol);
 std::vector<std::string> recoverUnfinishedTraceSummariesFromLog(std::size_t maxItems = 20);
 RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems = 20);
+RuntimeRecoverySnapshot loadRuntimeRecoverySnapshotFromLogs(std::size_t maxTraceItems = 20);
+RuntimeLogDeleteResult deletePersistentRuntimeLogs();

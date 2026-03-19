@@ -3,6 +3,7 @@
 #include "tape_phase7_artifacts.h"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -96,6 +97,19 @@ struct DueWatchInventoryResult {
     std::size_t matchedCount = 0;
 };
 
+struct TriggerRunInventorySelection {
+    std::size_t limit = 20;
+    std::string watchArtifactId;
+    std::string attentionStatus;
+    std::optional<bool> attentionOpen;
+};
+
+struct TriggerRunInventoryResult {
+    std::vector<TriggerRunArtifact> triggerRuns;
+    TriggerRunInventorySelection appliedFilters;
+    std::size_t matchedCount = 0;
+};
+
 struct DueWatchRunResult {
     std::string triggerReason = kScheduledTriggerReason;
     std::size_t matchedWatchCount = 0;
@@ -157,6 +171,11 @@ bool loadTriggerRunArtifact(const std::string& manifestPath,
 
 bool listTriggerRuns(std::size_t limit,
                      std::vector<TriggerRunArtifact>* out,
+                     std::string* errorCode,
+                     std::string* errorMessage);
+
+bool listTriggerRuns(const TriggerRunInventorySelection& selection,
+                     TriggerRunInventoryResult* out,
                      std::string* errorCode,
                      std::string* errorMessage);
 

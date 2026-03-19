@@ -50,6 +50,12 @@ const std::string& resolvedAppDataDirectory() {
     return path;
 }
 
+std::uint64_t runtimeSequenceSeed() {
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+    return micros > 0 ? static_cast<std::uint64_t>(micros) : 1ULL;
+}
+
 void reserveTraceIdFloor(std::atomic<std::uint64_t>& nextTraceId, std::uint64_t traceId) {
     std::uint64_t next = nextTraceId.load(std::memory_order_relaxed);
     while (next <= traceId &&
@@ -3793,6 +3799,64 @@ RuntimeRecoverySnapshot recoverRuntimeRecoverySnapshot(std::size_t maxTraceItems
         }
     }
     return snapshot;
+}
+
+RuntimeRecoverySnapshot loadRuntimeRecoverySnapshotFromLogs(std::size_t maxTraceItems) {
+    RuntimeRecoverySnapshot snapshot = recoverRuntimeRecoverySnapshot(maxTraceItems);
+    const std::uint64_t highestTraceId = recoverHighestTraceIdFromLog(tradeTraceLogPath());
+    const std::uint64_t highestSourceSeq = recoverHighestBridgeSourceSeqFromJournal(runtimeJournalLogPath());
+
+    invokeSharedDataMutation([&]() {
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        reserveTraceIdFloor(state.nextTraceId, highestTraceId);
+        reserveTraceIdFloor(state.nextBridgeSourceSeq, highestSourceSeq);
+        state.startupRecoveryBanner = snapshot.bannerText;
+    });
+
+    seedBridgeOutboxRecoveryState(snapshot);
+    requestUiInvalidation();
+    return snapshot;
+}
+
+RuntimeLogDeleteResult deletePersistentRuntimeLogs() {
+    RuntimeLogDeleteResult result;
+
+    const std::filesystem::path tracePath = tradeTraceLogPath();
+    const std::filesystem::path journalPath = runtimeJournalLogPath();
+    std::error_code ec;
+
+    if (std::filesystem::exists(tracePath, ec)) {
+        ec.clear();
+        result.deletedTradeTraceLog = std::filesystem::remove(tracePath, ec);
+        if (ec && result.error.empty()) {
+            result.error = "Failed to delete " + tracePath.string() + ": " + ec.message();
+        }
+    }
+
+    ec.clear();
+    if (std::filesystem::exists(journalPath, ec)) {
+        ec.clear();
+        result.deletedRuntimeJournalLog = std::filesystem::remove(journalPath, ec);
+        if (ec && result.error.empty()) {
+            result.error = "Failed to delete " + journalPath.string() + ": " + ec.message();
+        }
+    }
+
+    invokeSharedDataMutation([&]() {
+        SharedData& state = appState();
+        std::lock_guard<std::recursive_mutex> lock(state.mutex);
+        state.startupRecoveryBanner.clear();
+        state.bridgeRecoveredPendingCount = 0;
+        state.bridgeRecoveredLossCount = 0;
+        state.bridgeRecoveredLastSourceSeq = 0;
+        state.bridgeRecoveryRequired = !state.bridgeOutbox.empty() || state.bridgeOutboxLossCount > 0;
+        reserveTraceIdFloor(state.nextTraceId, runtimeSequenceSeed());
+        reserveTraceIdFloor(state.nextBridgeSourceSeq, runtimeSequenceSeed());
+    });
+
+    requestUiInvalidation();
+    return result;
 }
 
 namespace trading_engine {

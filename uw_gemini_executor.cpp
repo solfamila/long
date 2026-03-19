@@ -6,41 +6,28 @@
 #include <nlohmann/json.hpp>
 
 #include <cctype>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#include <sys/wait.h>
 
 namespace uw_context_service {
 namespace {
 
+using json = nlohmann::json;
+
 constexpr const char* kGeminiGenerateContentBase =
     "https://generativelanguage.googleapis.com/v1beta/models/";
 
-json fastSchema();
-json deepSchema();
-
-std::string laneModel(const BuildRequest&) {
-    return "gemini-3.1-flash-lite-preview";
-}
-
-json laneSchema(const BuildRequest& request) {
-    return request.lane == Lane::Deep ? deepSchema() : fastSchema();
-}
-
-std::string lanePrompt(const json& packetArtifact, const BuildRequest& request, bool strictJsonOnly) {
-    const std::string schemaText = laneSchema(request).dump();
-    if (request.lane == Lane::Deep) {
-        return std::string("You are evaluating a backend-built deep incident context packet. ") +
-            "Use only the evidence present in the packet. Return JSON matching the required schema." +
-            (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
-            " Schema: " + schemaText +
-            "\n\n" +
-            packetArtifact.dump();
-    }
-    return std::string("You are evaluating a backend-built fast incident context packet. ") +
-        "Use only the evidence present in the packet. Return JSON matching the required schema." +
-        (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
-        " Schema: " + schemaText +
-        "\n\n" +
-        packetArtifact.dump();
-}
+#if defined(TWS_GEMINI_SDK_SIDECAR_EXECUTABLE_PATH)
+constexpr const char* kGeminiSdkSidecarExecutablePath = TWS_GEMINI_SDK_SIDECAR_EXECUTABLE_PATH;
+#else
+constexpr const char* kGeminiSdkSidecarExecutablePath = "";
+#endif
 
 json fastSchema() {
     return {
@@ -74,6 +61,17 @@ json deepSchema() {
     };
 }
 
+std::string laneModel(const BuildRequest&) {
+    if (const char* model = std::getenv("LONG_GEMINI_MODEL"); model != nullptr && *model != '\0') {
+        return model;
+    }
+    return "gemini-2.5-flash";
+}
+
+json laneSchema(const BuildRequest& request) {
+    return request.lane == Lane::Deep ? deepSchema() : fastSchema();
+}
+
 std::string trimAscii(std::string value) {
     auto isSpace = [](unsigned char ch) {
         return std::isspace(ch) != 0;
@@ -85,6 +83,80 @@ std::string trimAscii(std::string value) {
         value.pop_back();
     }
     return value;
+}
+
+std::string shellEscape(const std::string& value) {
+    std::string out = "'";
+    for (char ch : value) {
+        if (ch == '\'') {
+            out += "'\\''";
+        } else {
+            out.push_back(ch);
+        }
+    }
+    out.push_back('\'');
+    return out;
+}
+
+bool envFlagEnabled(const char* key, bool defaultValue) {
+    if (const char* raw = std::getenv(key); raw != nullptr && *raw != '\0') {
+        std::string normalized = trimAscii(raw);
+        for (char& ch : normalized) {
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on";
+    }
+    return defaultValue;
+}
+
+std::string geminiSdkSidecarPath() {
+    if (const char* overridePath = std::getenv("LONG_GEMINI_SDK_SIDECAR_PATH"); overridePath != nullptr && *overridePath != '\0') {
+        return overridePath;
+    }
+    return kGeminiSdkSidecarExecutablePath;
+}
+
+int systemExitCode(int rawStatus) {
+    if (rawStatus == -1) {
+        return -1;
+    }
+    if (WIFEXITED(rawStatus)) {
+        return WEXITSTATUS(rawStatus);
+    }
+    return rawStatus;
+}
+
+std::string readCommandOutput(const std::string& command, int& exitCode) {
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr) {
+        exitCode = -1;
+        return {};
+    }
+    std::string output;
+    char buffer[4096];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        output += buffer;
+    }
+    exitCode = systemExitCode(pclose(pipe));
+    return output;
+}
+
+std::string lanePrompt(const json& packetArtifact, const BuildRequest& request, bool strictJsonOnly) {
+    const std::string schemaText = laneSchema(request).dump();
+    if (request.lane == Lane::Deep) {
+        return std::string("You are evaluating a backend-built deep incident context packet. ") +
+            "Use only the evidence present in the packet. Return JSON matching the required schema." +
+            (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
+            " Schema: " + schemaText +
+            "\n\n" +
+            packetArtifact.dump();
+    }
+    return std::string("You are evaluating a backend-built fast incident context packet. ") +
+        "Use only the evidence present in the packet. Return JSON matching the required schema." +
+        (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
+        " Schema: " + schemaText +
+        "\n\n" +
+        packetArtifact.dump();
 }
 
 json parseCandidateText(std::string text) {
@@ -217,6 +289,56 @@ bool validateDeepContent(const json& content) {
         content.contains("confidence") && content.contains("next_questions") && content.contains("warnings");
 }
 
+GeminiExecutionResult runGeminiSdkSidecarAttempt(const json& packetArtifact,
+                                                 const BuildRequest& request,
+                                                 bool strictJsonOnly) {
+    GeminiExecutionResult result;
+    result.model = laneModel(request);
+
+    const std::string executable = geminiSdkSidecarPath();
+    if (executable.empty() || !std::filesystem::exists(executable)) {
+        result.error = "sdk_sidecar_unavailable";
+        return result;
+    }
+
+    const std::string command = shellEscape(executable) + " --model " + shellEscape(result.model) + " " +
+        shellEscape(lanePrompt(packetArtifact, request, strictJsonOnly));
+    int exitCode = -1;
+    const auto start = std::chrono::steady_clock::now();
+    const std::string output = readCommandOutput(command, exitCode);
+    const auto stop = std::chrono::steady_clock::now();
+    result.latencyMs = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count());
+    if (exitCode != 0) {
+        result.error = "sdk_sidecar_exit_" + std::to_string(exitCode);
+        result.rawText = output;
+        return result;
+    }
+
+    const json sidecarPayload = json::parse(output, nullptr, false);
+    if (sidecarPayload.is_discarded() || !sidecarPayload.is_object()) {
+        result.error = "sdk_sidecar_response_parse_failed";
+        result.rawText = output;
+        return result;
+    }
+    result.latencyMs = sidecarPayload.value("elapsed_ms", result.latencyMs);
+    const std::string stderrText = sidecarPayload.value("stderr", std::string());
+    if (!stderrText.empty()) {
+        result.warnings.push_back(stderrText);
+    }
+    const std::string answerText = sidecarPayload.value("stdout", std::string());
+    result.rawText = answerText;
+    const json content = parseCandidateText(answerText);
+    result.jsonValid = !content.is_discarded() && !content.is_null();
+    result.content = result.jsonValid ? content : json(nullptr);
+    result.schemaValid = result.jsonValid &&
+        (request.lane == Lane::Deep ? validateDeepContent(content) : validateFastContent(content));
+    result.status = result.schemaValid ? "completed" : (result.jsonValid ? "invalid_schema" : "invalid_json");
+    if (!result.jsonValid) {
+        result.error = "candidate_text_missing_or_invalid_json";
+    }
+    return result;
+}
+
 GeminiExecutionResult runGeminiAttempt(const json& packetArtifact,
                                        const BuildRequest& request,
                                        const CredentialBinding& binding,
@@ -279,6 +401,23 @@ GeminiExecutionResult executeGeminiPacket(const json& packetArtifact,
     if (!binding.present) {
         result.error = "missing_credentials";
         return result;
+    }
+
+    if (envFlagEnabled("LONG_GEMINI_USE_SDK_SIDECAR", true)) {
+        result = runGeminiSdkSidecarAttempt(packetArtifact, request, false);
+        if (result.status == "completed") {
+            return result;
+        }
+        if (result.status == "invalid_json" || result.status == "invalid_schema") {
+            GeminiExecutionResult retry = runGeminiSdkSidecarAttempt(packetArtifact, request, true);
+            retry.warnings.push_back("initial_result_" + result.status);
+            if (retry.status == "completed") {
+                retry.warnings.push_back("recovered_after_retry");
+                return retry;
+            }
+            result = std::move(retry);
+        }
+        result.warnings.push_back("sdk_sidecar_fallback_to_direct_http");
     }
 
     result = runGeminiAttempt(packetArtifact, request, binding, true, false);

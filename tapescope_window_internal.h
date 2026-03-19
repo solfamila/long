@@ -358,6 +358,8 @@ struct ProbeSnapshot {
     NSButton* _phase8CreateWatchButton;
     NSButton* _phase8RunDueButton;
     NSButton* _phase8EvaluateWatchButton;
+    NSPopUpButton* _phase8TriggerAttentionStatusPopup;
+    NSPopUpButton* _phase8TriggerAttentionOpenPopup;
     NSTextField* _phase8AttentionCommentField;
     NSTextField* _phase8SnoozeMinutesField;
     NSButton* _phase8AcknowledgeButton;

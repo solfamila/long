@@ -251,6 +251,24 @@ add_executable(uw_context_smoke
     uw_packet_builder.cpp
     tape_engine_protocol.cpp
 )
+add_executable(uw_gemini_session_orchestrated_smoke
+    uw_gemini_session_orchestrated_smoke_main.cpp
+    uw_http.cpp
+    uw_runtime.cpp
+)
+add_executable(uw_gemini_sdk_sidecar_smoke
+    uw_gemini_sdk_sidecar_smoke_main.cpp
+)
+add_executable(uw_gemini_remote_mcp_smoke
+    uw_gemini_remote_mcp_smoke_main.cpp
+    uw_http.cpp
+    uw_runtime.cpp
+)
+add_executable(uw_gemini_mcp_smoke
+    uw_gemini_mcp_smoke_main.cpp
+    uw_http.cpp
+    uw_runtime.cpp
+)
 add_executable(mcp_enrichment_live_sanity
     mcp_enrichment_live_sanity.cpp
     tape_engine.cpp
@@ -339,6 +357,22 @@ target_include_directories(uw_context_smoke PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${NLOHMANN_JSON_DIR}/single_include"
 )
+target_include_directories(uw_gemini_session_orchestrated_smoke PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+target_include_directories(uw_gemini_sdk_sidecar_smoke PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+target_include_directories(uw_gemini_remote_mcp_smoke PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+target_include_directories(uw_gemini_mcp_smoke PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
 target_include_directories(mcp_enrichment_live_sanity PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${RUNTIME_REGISTRY_GENERATED_DIR}"
@@ -354,12 +388,12 @@ target_include_directories(phase7_execution_smoke PRIVATE
 )
 
 add_dependencies(tws_gui generate_runtime_registry)
-add_dependencies(tape_engine generate_runtime_registry)
+add_dependencies(tape_engine generate_runtime_registry uw_gemini_sdk_sidecar_smoke)
 add_dependencies(tape_engine_ctl generate_runtime_registry)
 add_dependencies(TapeScope generate_runtime_registry)
 add_dependencies(tape_mcp generate_runtime_registry)
-add_dependencies(phase7_execution_smoke generate_runtime_registry)
-add_dependencies(mcp_enrichment_live_sanity generate_runtime_registry tape_mcp)
+add_dependencies(uw_context_smoke uw_gemini_sdk_sidecar_smoke)
+add_dependencies(mcp_enrichment_live_sanity generate_runtime_registry tape_mcp uw_gemini_sdk_sidecar_smoke)
 
 target_link_libraries(tws_gui PRIVATE
     Threads::Threads
@@ -369,6 +403,10 @@ target_link_libraries(tws_gui PRIVATE
 target_link_libraries(tape_engine PRIVATE
     Threads::Threads
     tws_gui_curl
+)
+
+target_compile_definitions(tape_engine PRIVATE
+    TWS_GEMINI_SDK_SIDECAR_EXECUTABLE_PATH="$<TARGET_FILE:uw_gemini_sdk_sidecar_smoke>"
 )
 
 target_link_libraries(tape_engine_ctl PRIVATE
@@ -383,10 +421,24 @@ target_compile_definitions(uw_mcp_smoke PRIVATE
 )
 target_compile_definitions(uw_context_smoke PRIVATE
     TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    TWS_GEMINI_SDK_SIDECAR_EXECUTABLE_PATH="$<TARGET_FILE:uw_gemini_sdk_sidecar_smoke>"
+)
+target_compile_definitions(uw_gemini_session_orchestrated_smoke PRIVATE
+    TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+target_compile_definitions(uw_gemini_sdk_sidecar_smoke PRIVATE
+    TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+target_compile_definitions(uw_gemini_remote_mcp_smoke PRIVATE
+    TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+target_compile_definitions(uw_gemini_mcp_smoke PRIVATE
+    TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 target_compile_definitions(mcp_enrichment_live_sanity PRIVATE
     TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     TAPE_MCP_EXECUTABLE_PATH="$<TARGET_FILE:tape_mcp>"
+    TWS_GEMINI_SDK_SIDECAR_EXECUTABLE_PATH="$<TARGET_FILE:uw_gemini_sdk_sidecar_smoke>"
 )
 target_link_libraries(uw_ws_smoke PRIVATE
     Threads::Threads
@@ -397,6 +449,21 @@ target_link_libraries(uw_mcp_smoke PRIVATE
     tws_gui_curl
 )
 target_link_libraries(uw_context_smoke PRIVATE
+    Threads::Threads
+    tws_gui_curl
+)
+target_link_libraries(uw_gemini_session_orchestrated_smoke PRIVATE
+    Threads::Threads
+    tws_gui_curl
+)
+target_link_libraries(uw_gemini_sdk_sidecar_smoke PRIVATE
+    Threads::Threads
+)
+target_link_libraries(uw_gemini_remote_mcp_smoke PRIVATE
+    Threads::Threads
+    tws_gui_curl
+)
+target_link_libraries(uw_gemini_mcp_smoke PRIVATE
     Threads::Threads
     tws_gui_curl
 )
@@ -770,9 +837,10 @@ if(BUILD_TESTING)
         "${IXWEBSOCKET_DIR}"
         "${NLOHMANN_JSON_DIR}/single_include"
     )
-    add_dependencies(tws_gui_tests generate_runtime_registry)
+    add_dependencies(tws_gui_tests generate_runtime_registry uw_gemini_sdk_sidecar_smoke)
     target_compile_definitions(tws_gui_tests PRIVATE
         TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        TWS_GEMINI_SDK_SIDECAR_EXECUTABLE_PATH="$<TARGET_FILE:uw_gemini_sdk_sidecar_smoke>"
     )
 
     target_link_libraries(tws_gui_tests PRIVATE
@@ -842,10 +910,11 @@ if(BUILD_TESTING)
         "${IXWEBSOCKET_DIR}"
         "${NLOHMANN_JSON_DIR}/single_include"
     )
-    add_dependencies(tape_mcp_contract_tests generate_runtime_registry tape_mcp)
+    add_dependencies(tape_mcp_contract_tests generate_runtime_registry tape_mcp uw_gemini_sdk_sidecar_smoke)
     target_compile_definitions(tape_mcp_contract_tests PRIVATE
         TWS_GUI_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
         TAPE_MCP_EXECUTABLE_PATH="$<TARGET_FILE:tape_mcp>"
+        TWS_GEMINI_SDK_SIDECAR_EXECUTABLE_PATH="$<TARGET_FILE:uw_gemini_sdk_sidecar_smoke>"
     )
     target_link_libraries(tape_mcp_contract_tests PRIVATE
         Threads::Threads

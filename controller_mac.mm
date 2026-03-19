@@ -265,6 +265,10 @@ void postControllerMessage(const std::string& message) {
 }
 
 - (BOOL)startWithError:(std::string*)error {
+    if ([GCController respondsToSelector:@selector(setShouldMonitorBackgroundEvents:)]) {
+        GCController.shouldMonitorBackgroundEvents = YES;
+    }
+
     __weak LongMacControllerManager* weakSelf = self;
     NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
 
