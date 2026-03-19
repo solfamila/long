@@ -765,6 +765,22 @@ std::string anchorArtifactId(std::uint64_t anchorId) {
     return "anchor:" + std::to_string(anchorId);
 }
 
+std::string tradeReviewArtifactId(const BridgeAnchorIdentity& anchor) {
+    if (!anchor.execId.empty()) {
+        return "trade-review:exec:" + anchor.execId;
+    }
+    if (anchor.orderId > 0) {
+        return "trade-review:order:" + std::to_string(anchor.orderId);
+    }
+    if (anchor.permId > 0) {
+        return "trade-review:perm:" + std::to_string(anchor.permId);
+    }
+    if (anchor.traceId > 0) {
+        return "trade-review:trace:" + std::to_string(anchor.traceId);
+    }
+    return "trade-review:unknown";
+}
+
 std::string anchorSelectorArtifactId(const BridgeAnchorIdentity& anchor) {
     if (!anchor.execId.empty()) {
         return "order-case:exec:" + anchor.execId;
@@ -779,6 +795,17 @@ std::string anchorSelectorArtifactId(const BridgeAnchorIdentity& anchor) {
         return "order-case:trace:" + std::to_string(anchor.traceId);
     }
     return "order-case:unknown";
+}
+
+std::string symbolFromInstrumentId(const std::string& instrumentId) {
+    if (instrumentId.empty()) {
+        return {};
+    }
+    const std::size_t lastColon = instrumentId.rfind(':');
+    if (lastColon == std::string::npos || lastColon + 1 >= instrumentId.size()) {
+        return {};
+    }
+    return instrumentId.substr(lastColon + 1);
 }
 
 json evidenceCitation(std::string type,
@@ -5886,6 +5913,258 @@ std::vector<json> Server::filterEventsByAnchor(const QuerySnapshot& snapshot,
     return results;
 }
 
+std::optional<OrderAnchorRecord> Server::resolveTradeReviewAnchor(const QuerySnapshot& snapshot,
+                                                                  std::uint64_t frozenRevisionId,
+                                                                  bool includeLiveTail,
+                                                                  std::uint64_t anchorId,
+                                                                  std::uint64_t traceId,
+                                                                  long long orderId,
+                                                                  long long permId,
+                                                                  const std::string& execId) const {
+    const auto recordVisible = [&](const OrderAnchorRecord& record) {
+        return record.revisionId <= frozenRevisionId || (includeLiveTail && record.revisionId > frozenRevisionId);
+    };
+
+    if (anchorId > 0) {
+        const auto found = snapshot.orderAnchorsById.find(anchorId);
+        if (found != snapshot.orderAnchorsById.end() && recordVisible(found->second)) {
+            return found->second;
+        }
+    }
+
+    for (auto it = snapshot.orderAnchors.rbegin(); it != snapshot.orderAnchors.rend(); ++it) {
+        if (!recordVisible(*it)) {
+            continue;
+        }
+        if (matchesAnchorSelector(it->anchor, traceId, orderId, permId, execId)) {
+            return *it;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<ProtectedWindowRecord> Server::latestProtectedWindowForAnchor(const QuerySnapshot& snapshot,
+                                                                            std::uint64_t frozenRevisionId,
+                                                                            bool includeLiveTail,
+                                                                            const BridgeAnchorIdentity& anchor) const {
+    std::optional<ProtectedWindowRecord> selected;
+    for (const auto& window : snapshot.protectedWindows) {
+        if (window.revisionId > frozenRevisionId && !includeLiveTail) {
+            continue;
+        }
+        if (!matchesAnchorSelector(window.anchor, anchor.traceId, anchor.orderId, anchor.permId, anchor.execId)) {
+            continue;
+        }
+        if (!selected.has_value() || protectedWindowIsNewer(window, *selected)) {
+            selected = window;
+        }
+    }
+    return selected;
+}
+
+QueryResponse Server::buildTradeReviewResponse(const QueryRequest& request,
+                                               const QuerySnapshot& snapshot,
+                                               std::uint64_t frozenRevisionId) const {
+    QueryResponse response;
+    response.requestId = request.requestId;
+    response.operation = request.operation;
+
+    const std::optional<OrderAnchorRecord> anchorRecord = resolveTradeReviewAnchor(snapshot,
+                                                                                   frozenRevisionId,
+                                                                                   request.includeLiveTail,
+                                                                                   request.anchorId,
+                                                                                   request.traceId,
+                                                                                   request.orderId,
+                                                                                   request.permId,
+                                                                                   request.execId);
+    if (!anchorRecord.has_value()) {
+        return rejectResponse(request, "order/fill anchor not found");
+    }
+
+    const BridgeAnchorIdentity anchor = anchorRecord->anchor;
+    const std::vector<std::string> selectorKeys = anchorSelectorKeys(anchor);
+    const std::unordered_set<std::string> selectorSet(selectorKeys.begin(), selectorKeys.end());
+
+    const std::uint64_t selectorFromSessionSeq = anchorRecord->sessionSeq > 128 ? anchorRecord->sessionSeq - 128 : 1;
+    const std::uint64_t selectorToSessionSeq = anchorRecord->sessionSeq + 256;
+    std::vector<json> anchorEvents = mergedEvents(snapshot,
+                                                  frozenRevisionId,
+                                                  request.includeLiveTail,
+                                                  selectorFromSessionSeq,
+                                                  selectorToSessionSeq,
+                                                  selectorKeys.empty() ? nullptr : &selectorSet);
+    anchorEvents.erase(std::remove_if(anchorEvents.begin(),
+                                      anchorEvents.end(),
+                                      [&](const json& event) {
+                                          return !matchesAnchorSelector(anchorFromJson(event.value("anchor", json::object())),
+                                                                        anchor.traceId,
+                                                                        anchor.orderId,
+                                                                        anchor.permId,
+                                                                        anchor.execId);
+                                      }),
+                      anchorEvents.end());
+
+    std::uint64_t firstSessionSeq = anchorRecord->sessionSeq;
+    std::uint64_t lastSessionSeq = anchorRecord->sessionSeq;
+    std::uint64_t firstFillSessionSeq = 0;
+    std::uint64_t lastFillSessionSeq = 0;
+    std::uint64_t latestStatusSessionSeq = 0;
+    std::uint64_t latestOpenOrderSessionSeq = 0;
+    for (const auto& event : anchorEvents) {
+        const std::uint64_t sessionSeq = event.value("session_seq", 0ULL);
+        if (firstSessionSeq == 0 || (sessionSeq > 0 && sessionSeq < firstSessionSeq)) {
+            firstSessionSeq = sessionSeq;
+        }
+        lastSessionSeq = std::max(lastSessionSeq, sessionSeq);
+
+        const std::string kind = event.value("event_kind", std::string());
+        if (kind == "fill_execution") {
+            if (firstFillSessionSeq == 0 || sessionSeq < firstFillSessionSeq) {
+                firstFillSessionSeq = sessionSeq;
+            }
+            lastFillSessionSeq = std::max(lastFillSessionSeq, sessionSeq);
+        } else if (kind == "order_status") {
+            latestStatusSessionSeq = std::max(latestStatusSessionSeq, sessionSeq);
+        } else if (kind == "open_order") {
+            latestOpenOrderSessionSeq = std::max(latestOpenOrderSessionSeq, sessionSeq);
+        }
+    }
+
+    const std::optional<ProtectedWindowRecord> protectedWindow =
+        latestProtectedWindowForAnchor(snapshot, frozenRevisionId, request.includeLiveTail, anchor);
+    const std::uint64_t replayTargetSessionSeq = lastFillSessionSeq > 0
+        ? lastFillSessionSeq
+        : (latestStatusSessionSeq > 0
+               ? latestStatusSessionSeq
+               : (latestOpenOrderSessionSeq > 0 ? latestOpenOrderSessionSeq : anchorRecord->sessionSeq));
+    const std::uint64_t replayFromSessionSeq = firstSessionSeq > 12 ? firstSessionSeq - 12 : 1;
+    const std::uint64_t replayToSessionSeq = std::max(lastSessionSeq, replayTargetSessionSeq + 24);
+
+    std::vector<json> reviewEvents = filterEventsByRange(snapshot,
+                                                         replayFromSessionSeq,
+                                                         replayToSessionSeq,
+                                                         request.limit == 0 ? 96 : request.limit,
+                                                         frozenRevisionId,
+                                                         request.includeLiveTail);
+    if (reviewEvents.empty()) {
+        reviewEvents = anchorEvents;
+    }
+
+    response.events = json::array();
+    for (const auto& event : reviewEvents) {
+        response.events.push_back(event);
+    }
+
+    json timeline = json::array();
+    for (const auto& event : reviewEvents) {
+        timeline.push_back(timelineEntryFromEvent(event));
+    }
+    timeline = sortAndTrimTimeline(std::move(timeline), 24);
+    const json timelineSummary = buildTimelineSummary(timeline);
+    const json dataQuality = buildDataQualitySummary(reviewEvents.empty() ? anchorEvents : reviewEvents,
+                                                     request.includeLiveTail,
+                                                     anchorRecord->instrumentId);
+
+    std::string headline = "Trade review";
+    if (anchor.orderId > 0) {
+        headline = "Trade review for order " + std::to_string(anchor.orderId);
+    } else if (!anchor.execId.empty()) {
+        headline = "Trade review for fill " + anchor.execId;
+    } else if (anchor.permId > 0) {
+        headline = "Trade review for perm id " + std::to_string(anchor.permId);
+    } else if (anchor.traceId > 0) {
+        headline = "Trade review for trace " + std::to_string(anchor.traceId);
+    }
+
+    std::ostringstream narrative;
+    narrative << "Fast review centered on anchor session_seq " << anchorRecord->sessionSeq
+              << " with replay target session_seq " << replayTargetSessionSeq << ".";
+    if (lastFillSessionSeq > 0) {
+        narrative << " Latest fill was observed at session_seq " << lastFillSessionSeq << ".";
+    } else if (latestStatusSessionSeq > 0) {
+        narrative << " No fill was captured, so the latest order status drives the replay target.";
+    } else if (latestOpenOrderSessionSeq > 0) {
+        narrative << " The replay target falls back to the latest open-order update.";
+    } else {
+        narrative << " No later status or fill was captured, so the anchor event remains the replay target.";
+    }
+    if (protectedWindow.has_value()) {
+        narrative << " A protected window is available for deeper advanced review.";
+    }
+
+    json citations = json::array();
+    citations.push_back(evidenceCitation("order_anchor",
+                                         anchorArtifactId(anchorRecord->anchorId),
+                                         anchorRecord->sessionSeq,
+                                         anchorRecord->sessionSeq,
+                                         anchorRecord->eventKind));
+    if (protectedWindow.has_value()) {
+        citations.push_back(evidenceCitation("protected_window",
+                                             protectedWindowArtifactId(protectedWindow->windowId),
+                                             protectedWindow->firstSessionSeq,
+                                             protectedWindow->lastSessionSeq,
+                                             protectedWindow->reason));
+    }
+
+    json reportSummary = {
+        {"headline", headline},
+        {"summary", narrative.str()},
+        {"timeline_highlights", buildTimelineHighlights(timeline, 3)},
+        {"what_changed_first", firstTimelineHeadline(timeline)},
+        {"replay_target_session_seq", replayTargetSessionSeq},
+        {"replay_from_session_seq", replayFromSessionSeq},
+        {"replay_to_session_seq", replayToSessionSeq},
+        {"symbol", symbolFromInstrumentId(anchorRecord->instrumentId)}
+    };
+    if (protectedWindow.has_value()) {
+        reportSummary["protected_window"] = protectedWindowToJson(*protectedWindow);
+    }
+
+    response.summary = {
+        {"artifact", {
+            {"artifact_id", tradeReviewArtifactId(anchor)},
+            {"artifact_type", "trade_review"},
+            {"first_session_seq", firstSessionSeq},
+            {"last_session_seq", lastSessionSeq},
+            {"revision_id", frozenRevisionId},
+            {"instrument_id", anchorRecord->instrumentId}
+        }},
+        {"entity", {
+            {"type", "trade_review"},
+            {"anchor_id", anchorRecord->anchorId},
+            {"anchor", anchorToJson(anchor)},
+            {"instrument_id", anchorRecord->instrumentId},
+            {"symbol", symbolFromInstrumentId(anchorRecord->instrumentId)}
+        }},
+        {"order_anchor", orderAnchorToJson(*anchorRecord)},
+        {"first_fill_session_seq", firstFillSessionSeq},
+        {"first_session_seq", firstSessionSeq},
+        {"last_fill_session_seq", lastFillSessionSeq},
+        {"last_session_seq", lastSessionSeq},
+        {"latest_open_order_session_seq", latestOpenOrderSessionSeq},
+        {"latest_order_status_session_seq", latestStatusSessionSeq},
+        {"replay_from_session_seq", replayFromSessionSeq},
+        {"replay_target_session_seq", replayTargetSessionSeq},
+        {"replay_to_session_seq", replayToSessionSeq},
+        {"returned_events", response.events.size()},
+        {"data_quality", dataQuality},
+        {"timeline", timeline},
+        {"timeline_summary", timelineSummary},
+        {"evidence", buildEvidenceSection(timeline, timelineSummary, citations, dataQuality)},
+        {"report", reportSummary},
+        {"report_summary", reportSummary}
+    };
+    if (protectedWindow.has_value()) {
+        response.summary["protected_window"] = protectedWindowToJson(*protectedWindow);
+    }
+    annotateInvestigationEnvelope(&response,
+                                  frozenRevisionId,
+                                  request.includeLiveTail,
+                                  "trade_review",
+                                  "trade_review");
+    return response;
+}
+
 json Server::buildOrderCaseSummary(const QuerySnapshot& snapshot,
                                    const QueryArtifacts& artifacts,
                                    const std::vector<json>& events,
@@ -6401,6 +6680,12 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
     }();
     const QuerySnapshot snapshot = captureQuerySnapshot();
     if (operation == QueryOperation::Status) {
+        json topAnchorsJson = json::array();
+        for (auto it = snapshot.orderAnchors.rbegin();
+             it != snapshot.orderAnchors.rend() && topAnchorsJson.size() < 12;
+             ++it) {
+            topAnchorsJson.push_back(orderAnchorToJson(*it));
+        }
         response.summary = {
             {"data_dir", snapshot.dataDir.string()},
             {"instrument_id", snapshot.instrumentId},
@@ -6411,6 +6696,8 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             {"live_event_count", snapshot.liveEvents.size()},
             {"case_report_count", snapshot.caseReports.size()},
             {"imported_case_count", snapshot.importedCases.size()},
+            {"order_anchor_count", snapshot.orderAnchors.size()},
+            {"top_order_anchors", topAnchorsJson},
             {"next_revision_id", snapshot.nextRevisionId},
             {"next_case_report_id", snapshot.caseReports.empty() ? 1ULL : snapshot.caseReports.back().reportId + 1},
             {"next_imported_case_id", snapshot.importedCases.empty() ? 1ULL : snapshot.importedCases.back().importedCaseId + 1},
@@ -6449,7 +6736,9 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
 
     if (operation == QueryOperation::EnrichIncident ||
         operation == QueryOperation::ExplainIncident ||
+        operation == QueryOperation::EnrichTradeReview ||
         operation == QueryOperation::EnrichOrderCase ||
+        operation == QueryOperation::RefreshTradeReviewExternalContext ||
         operation == QueryOperation::RefreshExternalContext) {
         QueryRequest delegated = request;
         if (operation == QueryOperation::EnrichIncident ||
@@ -6457,6 +6746,10 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
             (operation == QueryOperation::RefreshExternalContext && request.logicalIncidentId != 0)) {
             delegated.operationKind = QueryOperation::ReadIncident;
             delegated.operation = queryOperationName(QueryOperation::ReadIncident);
+        } else if (operation == QueryOperation::EnrichTradeReview ||
+                   operation == QueryOperation::RefreshTradeReviewExternalContext) {
+            delegated.operationKind = QueryOperation::ReadTradeReview;
+            delegated.operation = queryOperationName(QueryOperation::ReadTradeReview);
         } else {
             delegated.operationKind = QueryOperation::ReadOrderCase;
             delegated.operation = queryOperationName(QueryOperation::ReadOrderCase);
@@ -6471,10 +6764,14 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         if (operation == QueryOperation::ExplainIncident) {
             buildRequest.requestKind = "deep_enrichment";
             buildRequest.lane = uw_context_service::Lane::Deep;
+        } else if (operation == QueryOperation::EnrichTradeReview) {
+            buildRequest.requestKind = "order_case_enrichment";
+            buildRequest.lane = uw_context_service::Lane::Fast;
         } else if (operation == QueryOperation::EnrichOrderCase) {
             buildRequest.requestKind = "order_case_enrichment";
             buildRequest.lane = uw_context_service::Lane::Fast;
-        } else if (operation == QueryOperation::RefreshExternalContext) {
+        } else if (operation == QueryOperation::RefreshExternalContext ||
+                   operation == QueryOperation::RefreshTradeReviewExternalContext) {
             buildRequest.requestKind = "refresh_external_context";
             buildRequest.forceRefresh = true;
             buildRequest.lane = uw_context_service::Lane::Fast;
@@ -6491,6 +6788,7 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         buildRequest.execId = request.execId;
         buildRequest.limit = request.limit;
         buildRequest.includeLiveTail = request.includeLiveTail;
+        buildRequest.focusQuestion = request.focusQuestion;
         return uw_context_service::buildEnrichmentResponse(request, localEvidence, buildRequest);
     }
 
@@ -7748,6 +8046,16 @@ QueryResponse Server::processQueryFrame(const std::vector<std::uint8_t>& frame) 
         };
         response.result = eventListResultToJson(response.summary, response.events);
         return response;
+    }
+
+    if (operation == QueryOperation::ReadTradeReview) {
+        std::uint64_t frozenRevisionId = 0;
+        try {
+            frozenRevisionId = resolveFrozenRevision(snapshot, request.revisionId);
+        } catch (const std::exception& error) {
+            return rejectResponse(request, error.what());
+        }
+        return buildTradeReviewResponse(request, snapshot, frozenRevisionId);
     }
 
     if (operation == QueryOperation::ReadOrderCase || operation == QueryOperation::ScanOrderCaseReport) {

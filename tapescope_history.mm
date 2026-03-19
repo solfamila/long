@@ -422,12 +422,19 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
         _bundleHistoryTextView.string = ToNSString(DescribeRecentHistoryEntry(_bundleHistoryItems.front()));
     }
 
-    const std::string selectedTab = state.value("selected_tab", std::string());
+    std::string selectedTab = state.value("selected_tab", std::string("SimpleReviewPane"));
+    if (selectedTab.empty()) {
+        selectedTab = "SimpleReviewPane";
+    }
     if (TabViewHasIdentifier(_tabView, selectedTab)) {
         [_tabView selectTabViewItemWithIdentifier:ToNSString(selectedTab)];
     } else {
-        [self selectPaneWithIdentifier:@"SessionOverviewPane"];
+        [_tabView selectTabViewItemWithIdentifier:@"SimpleReviewPane"];
     }
+    if (_tabView.selectedTabViewItem == nil) {
+        [_tabView selectTabViewItemWithIdentifier:@"SimpleReviewPane"];
+    }
+    [self syncPaneSelectionChrome];
     [self updatePollingStatusText];
 }
 
@@ -591,6 +598,18 @@ std::string InvestigationDetail(const tapescope::InvestigationPayload& payload,
             _orderCaseAnchorInputField.stringValue = ToNSString(anchorValue);
             [_tabView selectTabViewItemWithIdentifier:@"OrderCasePane"];
             [self fetchOrderCase:nil];
+        }
+        return;
+    }
+    if (kind == "trade_review") {
+        const std::string anchorKind = entry.value("anchor_kind", std::string("traceId"));
+        const std::string anchorValue = entry.value("anchor_value", std::string());
+        if (!anchorValue.empty()) {
+            [_simpleReviewAnchorTypePopup selectItemAtIndex:OrderAnchorTypeIndexForKey(anchorKind)];
+            [self simpleReviewAnchorTypeChanged:nil];
+            _simpleReviewAnchorInputField.stringValue = ToNSString(anchorValue);
+            [_tabView selectTabViewItemWithIdentifier:@"SimpleReviewPane"];
+            [self loadSimpleReviewContext:nil];
         }
         return;
     }

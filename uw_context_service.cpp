@@ -212,7 +212,8 @@ bool websocketSecondaryLaneRequested(const BuildRequest& request) {
 std::string cacheKeyFor(const json& localEvidence, const BuildRequest& request) {
     return stringValueOrEmpty(localEvidence, "artifact_id") + ":" + request.requestKind + ":" +
         (request.lane == Lane::Deep ? "deep" : "fast") + ":" +
-        (websocketSecondaryLaneRequested(request) ? "live" : "snapshot");
+        (websocketSecondaryLaneRequested(request) ? "live" : "snapshot") + ":" +
+        request.focusQuestion;
 }
 
 json providerStepToJson(const ProviderStep& step) {
@@ -437,6 +438,7 @@ json buildInterpretation(const BuildRequest& request,
         {"task", interpretationTask(request)},
         {"model", hasExternalContext ? json("gemini-3.1-flash-lite-preview") : json(nullptr)},
         {"finish_reason", hasExternalContext ? "pending_execution" : "not_requested"},
+        {"focus_question", request.focusQuestion.empty() ? json(nullptr) : json(request.focusQuestion)},
         {"content", nullptr},
         {"packet_artifact", packetArtifact}
     };

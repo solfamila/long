@@ -1698,7 +1698,11 @@ void testBridgeLifecycleEmissionExpandsPrivateOrderEvents() {
 
     CommissionReport commission;
     commission.execId = "EXEC-91";
+#if defined(TWS_HAS_COMMISSION_AND_FEES_REPORT)
+    commission.commissionAndFees = 0.45;
+#else
     commission.commission = 0.45;
+#endif
     commission.currency = "USD";
     recordTraceCommission(commission);
 

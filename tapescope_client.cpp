@@ -758,6 +758,17 @@ QueryResult<std::vector<EventRow>> QueryClient::readRangeRows(const RangeQuery& 
     return makeSuccess(std::move(rows));
 }
 
+QueryResult<ReplaySnapshotPayload> QueryClient::replaySnapshotPayload(std::uint64_t targetSessionSeq,
+                                                                      std::size_t depthLimit,
+                                                                      bool includeLiveTail) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReplaySnapshot,
+                                                    "tapescope-replay-snapshot");
+    request.targetSessionSeq = targetSessionSeq;
+    request.limit = depthLimit;
+    request.includeLiveTail = includeLiveTail;
+    return packReplaySnapshotPayload(performQuery(request));
+}
+
 QueryResult<json> QueryClient::readSessionQuality(const RangeQuery& query, bool includeLiveTail) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadSessionQuality,
                                                     "tapescope-read-session-quality");
@@ -837,6 +848,22 @@ QueryResult<EventListPayload> QueryClient::findOrderAnchorPayload(const OrderAnc
     return packEventListPayload(performQuery(request));
 }
 
+QueryResult<json> QueryClient::listOrderAnchors(std::size_t limit) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListOrderAnchors,
+                                                    "tapescope-list-order-anchors");
+    applyLimit(&request, limit);
+
+    return packSummaryAndEvents(performQuery(request));
+}
+
+QueryResult<CollectionRowsPayload> QueryClient::listOrderAnchorsPayload(std::size_t limit) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ListOrderAnchors,
+                                                    "tapescope-list-order-anchors");
+    applyLimit(&request, limit);
+
+    return packCollectionRowsPayload(performQuery(request), "order_anchors");
+}
+
 QueryResult<json> QueryClient::seekOrderAnchor(const OrderAnchorQuery& anchorQuery) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::SeekOrderAnchor,
                                                     "tapescope-seek-order-anchor");
@@ -879,6 +906,13 @@ QueryResult<json> QueryClient::readOrderCase(const OrderAnchorQuery& anchorQuery
 QueryResult<InvestigationPayload> QueryClient::readOrderCasePayload(const OrderAnchorQuery& anchorQuery) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadOrderCase,
                                                     "tapescope-read-order-case");
+    applyOrderAnchorQuery(&request, anchorQuery);
+    return packInvestigationPayload(performQuery(request));
+}
+
+QueryResult<InvestigationPayload> QueryClient::readTradeReviewPayload(const OrderAnchorQuery& anchorQuery) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ReadTradeReview,
+                                                    "tapescope-read-trade-review");
     applyOrderAnchorQuery(&request, anchorQuery);
     return packInvestigationPayload(performQuery(request));
 }
@@ -946,27 +980,42 @@ QueryResult<InvestigationPayload> QueryClient::readIncidentPayload(std::uint64_t
 }
 
 QueryResult<EnrichmentPayload> QueryClient::enrichIncidentPayload(std::uint64_t logicalIncidentId,
-                                                                  bool includeLiveTail) const {
+                                                                  bool includeLiveTail,
+                                                                  const std::string& focusQuestion) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::EnrichIncident,
                                                     "tapescope-enrich-incident");
     request.logicalIncidentId = logicalIncidentId;
     request.includeLiveTail = includeLiveTail;
+    request.focusQuestion = focusQuestion;
     return packEnrichmentPayload(performQuery(request));
 }
 
 QueryResult<EnrichmentPayload> QueryClient::explainIncidentPayload(std::uint64_t logicalIncidentId,
-                                                                   bool includeLiveTail) const {
+                                                                   bool includeLiveTail,
+                                                                   const std::string& focusQuestion) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::ExplainIncident,
                                                     "tapescope-explain-incident");
     request.logicalIncidentId = logicalIncidentId;
     request.includeLiveTail = includeLiveTail;
+    request.focusQuestion = focusQuestion;
     return packEnrichmentPayload(performQuery(request));
 }
 
-QueryResult<EnrichmentPayload> QueryClient::enrichOrderCasePayload(const OrderAnchorQuery& query) const {
+QueryResult<EnrichmentPayload> QueryClient::enrichOrderCasePayload(const OrderAnchorQuery& query,
+                                                                   const std::string& focusQuestion) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::EnrichOrderCase,
                                                     "tapescope-enrich-order-case");
     applyOrderAnchorQuery(&request, query);
+    request.focusQuestion = focusQuestion;
+    return packEnrichmentPayload(performQuery(request));
+}
+
+QueryResult<EnrichmentPayload> QueryClient::enrichTradeReviewPayload(const OrderAnchorQuery& query,
+                                                                     const std::string& focusQuestion) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::EnrichTradeReview,
+                                                    "tapescope-enrich-trade-review");
+    applyOrderAnchorQuery(&request, query);
+    request.focusQuestion = focusQuestion;
     return packEnrichmentPayload(performQuery(request));
 }
 
@@ -984,6 +1033,14 @@ QueryResult<EnrichmentPayload> QueryClient::refreshOrderCaseExternalContextPaylo
     const OrderAnchorQuery& query) const {
     tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::RefreshExternalContext,
                                                     "tapescope-refresh-external-context");
+    applyOrderAnchorQuery(&request, query);
+    return packEnrichmentPayload(performQuery(request));
+}
+
+QueryResult<EnrichmentPayload> QueryClient::refreshTradeReviewExternalContextPayload(
+    const OrderAnchorQuery& query) const {
+    tape_engine::QueryRequest request = makeRequest(tape_engine::QueryOperation::RefreshTradeReviewExternalContext,
+                                                    "tapescope-refresh-trade-review-external-context");
     applyOrderAnchorQuery(&request, query);
     return packEnrichmentPayload(performQuery(request));
 }

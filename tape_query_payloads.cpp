@@ -466,6 +466,11 @@ QueryResult<StatusSnapshot> packStatusPayload(const QueryResult<tape_engine::Que
     }
 
     StatusSnapshot snapshot;
+    snapshot.summary = response.value.summary.is_object() ? response.value.summary : json::object();
+    snapshot.raw = json::object();
+    snapshot.raw["result"] = typedResult;
+    snapshot.raw["summary"] = response.value.summary;
+    snapshot.raw["events"] = response.value.events;
     snapshot.socketPath = typedResult.value("socket_path", std::string());
     snapshot.dataDir = typedResult.value("data_dir", std::string());
     snapshot.instrumentId = typedResult.value("instrument_id", std::string());
@@ -473,6 +478,14 @@ QueryResult<StatusSnapshot> packStatusPayload(const QueryResult<tape_engine::Que
     snapshot.liveEventCount = typedResult.value("live_event_count", 0ULL);
     snapshot.segmentCount = typedResult.value("segment_count", 0ULL);
     snapshot.manifestHash = typedResult.value("last_manifest_hash", std::string());
+    snapshot.orderAnchorCount = response.value.summary.value("order_anchor_count", 0ULL);
+    const json topOrderAnchors = response.value.summary.value("top_order_anchors", json::array());
+    if (topOrderAnchors.is_array()) {
+        snapshot.topOrderAnchors.reserve(topOrderAnchors.size());
+        for (const auto& row : topOrderAnchors) {
+            snapshot.topOrderAnchors.push_back(row);
+        }
+    }
     return makeSuccess(std::move(snapshot));
 }
 

@@ -167,6 +167,7 @@ set(TAPE_ENGINE_SOURCES
 
 set(TAPESCOPE_SOURCES
     tapescope_app.mm
+    tapescope_simple_review.mm
     tapescope_history.mm
     tapescope_queries.mm
     tapescope_session_queries.mm
@@ -288,6 +289,25 @@ add_executable(mcp_enrichment_live_sanity
     uw_context_service.cpp
     uw_packet_builder.cpp
 )
+add_executable(tapescope_gui_sanity
+    tapescope_gui_sanity_main.cpp
+    tape_engine.cpp
+    tape_bundle_inspection.cpp
+    tape_engine_client.cpp
+    tape_engine_protocol.cpp
+    phase3_analyzers.cpp
+    bridge_batch_codec.cpp
+    bridge_batch_transport.cpp
+    runtime_qos.cpp
+    uw_context_cache.cpp
+    uw_context_connectors.cpp
+    uw_gemini_executor.cpp
+    uw_http.cpp
+    uw_context_normalizer.cpp
+    uw_runtime.cpp
+    uw_context_service.cpp
+    uw_packet_builder.cpp
+)
 add_executable(phase7_execution_smoke
     phase7_execution_smoke_main.cpp
     tape_phase7_artifacts.cpp
@@ -325,6 +345,13 @@ target_include_directories(tape_engine PRIVATE
 )
 
 target_include_directories(tape_engine_ctl PRIVATE
+    "${CMAKE_SOURCE_DIR}"
+    "${RUNTIME_REGISTRY_GENERATED_DIR}"
+    "${IXWEBSOCKET_DIR}"
+    "${NLOHMANN_JSON_DIR}/single_include"
+)
+
+target_include_directories(tapescope_gui_sanity PRIVATE
     "${CMAKE_SOURCE_DIR}"
     "${RUNTIME_REGISTRY_GENERATED_DIR}"
     "${IXWEBSOCKET_DIR}"
@@ -471,6 +498,10 @@ target_link_libraries(mcp_enrichment_live_sanity PRIVATE
     Threads::Threads
     tws_gui_curl
 )
+target_link_libraries(tapescope_gui_sanity PRIVATE
+    Threads::Threads
+    tws_gui_curl
+)
 
 target_link_libraries(phase7_execution_smoke PRIVATE
     Threads::Threads
@@ -528,6 +559,10 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
             endif()
 
             list(APPEND IB_API_LINK_LIBS protobuf::libprotobuf)
+            get_target_property(PROTOBUF_INTERFACE_INCLUDE_DIRS protobuf::libprotobuf INTERFACE_INCLUDE_DIRECTORIES)
+            if(PROTOBUF_INTERFACE_INCLUDE_DIRS)
+                list(APPEND IB_API_EXTRA_INCLUDE_DIRS ${PROTOBUF_INTERFACE_INCLUDE_DIRS})
+            endif()
         else()
             find_package(Protobuf REQUIRED)
             pkg_check_modules(PROTOBUF REQUIRED IMPORTED_TARGET protobuf)
@@ -625,6 +660,10 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
         "${VENDORED_IB_API_DIR}"
         ${IB_API_EXTRA_INCLUDE_DIRS}
     )
+    target_include_directories(tapescope_gui_sanity PRIVATE
+        "${VENDORED_IB_API_DIR}"
+        ${IB_API_EXTRA_INCLUDE_DIRS}
+    )
     target_include_directories(tape_engine_ctl PRIVATE
         "${VENDORED_IB_API_DIR}"
         ${IB_API_EXTRA_INCLUDE_DIRS}
@@ -643,18 +682,21 @@ if(EXISTS "${VENDORED_IB_API_DIR}/DefaultEWrapper.h")
     )
     target_compile_definitions(tape_engine PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(mcp_enrichment_live_sanity PRIVATE ${IB_API_COMPILE_DEFINITIONS})
+    target_compile_definitions(tapescope_gui_sanity PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(tape_engine_ctl PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(tape_mcp PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(phase7_execution_smoke PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_compile_definitions(TapeScope PRIVATE ${IB_API_COMPILE_DEFINITIONS})
     target_link_libraries(phase7_execution_smoke PRIVATE twsapi)
     target_link_libraries(mcp_enrichment_live_sanity PRIVATE twsapi)
+    target_link_libraries(tapescope_gui_sanity PRIVATE twsapi)
     target_link_libraries(TapeScope PRIVATE twsapi)
     message(STATUS "Using vendored Interactive Brokers API sources from ${VENDORED_IB_API_DIR}")
 elseif(EXISTS "${IB_API_INCLUDE_DIR}/DefaultEWrapper.h")
     target_include_directories(tws_gui PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_engine PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(mcp_enrichment_live_sanity PRIVATE "${IB_API_INCLUDE_DIR}")
+    target_include_directories(tapescope_gui_sanity PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_engine_ctl PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(tape_mcp PRIVATE "${IB_API_INCLUDE_DIR}")
     target_include_directories(phase7_execution_smoke PRIVATE "${IB_API_INCLUDE_DIR}")
@@ -664,6 +706,7 @@ else()
     target_include_directories(tws_gui PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(mcp_enrichment_live_sanity PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
+    target_include_directories(tapescope_gui_sanity PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(tape_engine_ctl PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(phase7_execution_smoke PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
     target_include_directories(TapeScope PRIVATE "${LOCAL_IBAPI_STUB_DIR}")
@@ -679,6 +722,11 @@ else()
         TWS_HAS_ORDER_CANCEL_OBJECT=1
     )
     target_compile_definitions(mcp_enrichment_live_sanity PRIVATE
+        TWS_GUI_MOCK_IBAPI=1
+        TWS_HAS_PROTOBUF_API=1
+        TWS_HAS_ORDER_CANCEL_OBJECT=1
+    )
+    target_compile_definitions(tapescope_gui_sanity PRIVATE
         TWS_GUI_MOCK_IBAPI=1
         TWS_HAS_PROTOBUF_API=1
         TWS_HAS_ORDER_CANCEL_OBJECT=1
@@ -736,9 +784,9 @@ set_target_properties(tws_gui PROPERTIES
 )
 
 set_target_properties(TapeScope PROPERTIES
-    OUTPUT_NAME "TapeScope"
-    MACOSX_BUNDLE_BUNDLE_NAME "TapeScope"
-    MACOSX_BUNDLE_GUI_IDENTIFIER "com.foxy.tapescope"
+    OUTPUT_NAME "TapeScopeReset"
+    MACOSX_BUNDLE_BUNDLE_NAME "TapeScope Reset"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.foxy.tapescope.uireset"
     MACOSX_BUNDLE_BUNDLE_VERSION "${APP_BUNDLE_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${APP_BUNDLE_VERSION}"
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/cmake/Info.plist.in"
@@ -948,6 +996,7 @@ set_source_files_properties(
     main.mm
     mac_observability.mm
     tapescope_app.mm
+    tapescope_simple_review.mm
     tapescope_history.mm
     tapescope_queries.mm
     tapescope_session_queries.mm

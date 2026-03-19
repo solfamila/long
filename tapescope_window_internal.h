@@ -35,6 +35,7 @@ struct ProbeSnapshot {
     NSTimer* _pollTimer;
     BOOL _pollInFlight;
     BOOL _pollingPaused;
+    BOOL _windowClampScheduled;
     NSDate* _lastProbeAt;
     std::uint64_t _rangeRequestToken;
     std::uint64_t _qualityRequestToken;
@@ -45,11 +46,14 @@ struct ProbeSnapshot {
     std::uint64_t _bundleWorkflowRequestToken;
     std::uint64_t _phase7RequestToken;
     std::uint64_t _phase8RequestToken;
+    std::uint64_t _simpleReviewRequestToken;
+    std::uint64_t _simpleReviewRecentTradesRequestToken;
 
     NSBox* _bannerBox;
     NSTextField* _bannerLabel;
     NSTextField* _pollMetaLabel;
     NSTextField* _lastProbeLabel;
+    NSTextField* _engineSummaryLabel;
     NSButton* _refreshNowButton;
     NSButton* _pollingToggleButton;
     NSTextField* _socketValue;
@@ -60,11 +64,39 @@ struct ProbeSnapshot {
     NSTextField* _segmentCountValue;
     NSTextField* _manifestHashValue;
     NSMutableArray<NSButton*>* _paneButtons;
+    NSPopUpButton* _advancedPanePopup;
+    NSButton* _advancedPaneOpenButton;
     NSTextField* _activePaneLabel;
     NSTabView* _tabView;
 
+    NSPopUpButton* _simpleReviewAnchorTypePopup;
+    NSTextField* _simpleReviewAnchorInputField;
+    NSTextField* _simpleReviewQuestionField;
+    NSButton* _simpleReviewRefreshRecentTradesButton;
+    NSButton* _simpleReviewLoadButton;
+    NSButton* _simpleReviewJumpButton;
+    NSButton* _simpleReviewAskButton;
+    NSButton* _simpleReviewRefreshUWButton;
+    NSButton* _simpleReviewOpenAdvancedButton;
+    NSProgressIndicator* _simpleReviewBusySpinner;
+    NSTextField* _simpleReviewStateLabel;
+    NSTextField* _simpleReviewRecentTradesStateLabel;
+    NSTableView* _simpleReviewRecentTradesTableView;
+    NSTextView* _simpleReviewDetailTextView;
+    BOOL _simpleReviewInFlight;
+    BOOL _simpleReviewSuspendedPolling;
+    BOOL _simpleReviewRecentTradesInFlight;
+    BOOL _simpleReviewHasReplayRange;
+    BOOL _simpleReviewDidAutoLoadRecentTrade;
+    BOOL _simpleReviewDidAutorunQuestion;
+    tapescope::RangeQuery _simpleReviewReplayRange;
+    std::string _simpleReviewContextBody;
+    std::string _simpleReviewReplayBody;
+    std::string _simpleReviewAiBody;
+    std::vector<tapescope::json> _simpleReviewRecentTradeRows;
+
     NSTextView* _statusTextView;
-    NSTextView* _liveTextView;
+    NSTextView* _liveDetailTextView;
     NSTableView* _liveTableView;
     std::vector<tapescope::EventRow> _liveEvents;
 
@@ -388,10 +420,24 @@ struct ProbeSnapshot {
 - (void)updateBannerAppearanceWithColor:(NSColor*)color;
 - (void)updatePollingStatusText;
 - (NSButton*)makePaneNavigationButtonWithTitle:(NSString*)title identifier:(NSString*)identifier;
+- (void)populateAdvancedPanePopup;
 - (void)syncPaneSelectionChrome;
 - (void)selectPaneWithIdentifier:(NSString*)identifier;
 - (void)paneNavigationPressed:(id)sender;
+- (void)openSelectedAdvancedPane:(id)sender;
 - (tapescope::InvestigationPaneController*)paneControllerForEvidenceTable:(NSTableView*)tableView;
+
+@end
+
+@interface TapeScopeWindowController (SimpleReview)
+
+- (NSTabViewItem*)simpleReviewTabItem;
+- (void)simpleReviewAnchorTypeChanged:(id)sender;
+- (void)loadSimpleReviewContext:(id)sender;
+- (void)loadSimpleReviewReplay:(id)sender;
+- (void)askSimpleReviewQuestion:(id)sender;
+- (void)refreshSimpleReviewExternalContext:(id)sender;
+- (void)openSimpleReviewAdvanced:(id)sender;
 
 @end
 

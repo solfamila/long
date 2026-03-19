@@ -13,6 +13,7 @@
 @interface ActionTableView : NSTableView
 @property(nonatomic, assign) id primaryActionTarget;
 @property(nonatomic) SEL primaryAction;
+@property(nonatomic, assign) BOOL compactDarkStyle;
 @end
 
 namespace tapescope_support {
@@ -24,6 +25,7 @@ NSColor* TapeCardColor();
 NSColor* TapeCardBorderColor();
 NSColor* TapePanelFillColor();
 NSColor* TapePanelBorderColor();
+NSColor* TapeInkPrimaryColor();
 NSColor* TapeInkMutedColor();
 
 NSString* ToNSString(const std::string& value);
@@ -36,6 +38,9 @@ NSString* UInt64String(std::uint64_t value);
 NSTextField* MakeLabel(NSString* text, NSFont* font, NSColor* color);
 NSTextField* MakeValueLabel();
 NSTextView* MakeReadOnlyTextView();
+NSTextField* MakeReadOnlyBlockLabel();
+void SetBlockLabelString(NSTextField* label, NSString* value);
+void SetTextViewString(NSTextView* textView, NSString* value);
 NSScrollView* MakeScrollView(NSTextView* textView, CGFloat minHeight);
 NSStackView* MakeColumnStack(CGFloat spacing);
 NSBox* MakeCardBox(CGFloat cornerRadius = 18.0);
@@ -56,6 +61,8 @@ NSTextField* MakeMonospacedField(CGFloat width,
                                  NSString* initialValue = nil,
                                  NSString* placeholder = nil);
 NSTableView* MakeStandardTableView(id delegate, id dataSource);
+void ConfigureCompactDarkTableView(NSTableView* tableView);
+void ConfigureCompactDarkTableScrollView(NSScrollView* scrollView);
 void ConfigureTablePrimaryAction(NSTableView* tableView, id target, SEL action);
 void AddTableColumn(NSTableView* tableView,
                     NSString* identifier,
@@ -66,6 +73,7 @@ NSTableView* MakeEvidenceTableView(id delegate, id dataSource);
 NSTableCellView* MakeOrReuseTableCell(NSTableView* tableView,
                                       NSString* identifier,
                                       NSFont* font);
+NSTableRowView* MakeDarkTableRowView(void);
 
 NSColor* ErrorColorForKind(tapescope::QueryErrorKind kind);
 
@@ -86,6 +94,10 @@ std::string DescribeStatusPane(const tapescope::QueryResult<tapescope::StatusSna
                                const std::string& configuredSocketPath);
 std::string DescribeLiveEventsPane(const tapescope::QueryResult<std::vector<json>>& result);
 std::string DescribeLiveEventsPane(const tapescope::QueryResult<std::vector<tapescope::EventRow>>& result);
+std::string DescribeLiveEventSummary(const json& event);
+std::string DescribeLiveEventSummary(const tapescope::EventRow& event);
+std::string DescribeLiveEventDetail(const json& event);
+std::string DescribeLiveEventDetail(const tapescope::EventRow& event);
 std::string DescribeRangeResult(const tapescope::RangeQuery& query,
                                 const tapescope::QueryResult<std::vector<json>>& result);
 std::string DescribeRangeResult(const tapescope::RangeQuery& query,
@@ -102,13 +114,16 @@ std::string DescribeInvestigationPayload(const std::string& heading,
 std::string DescribeInvestigationPayload(const std::string& heading,
                                          const std::string& descriptor,
                                          const tapescope::QueryResult<tapescope::InvestigationPayload>& result);
+std::string DescribeSimpleReviewContext(const tapescope::InvestigationPayload& payload);
 std::string DescribeEnrichmentPayload(const std::string& heading,
                                       const std::string& descriptor,
                                       const tapescope::QueryResult<tapescope::EnrichmentPayload>& result);
+std::string DescribeSimpleReviewAnswer(const tapescope::EnrichmentPayload& payload);
 std::string DescribeSeekOrderResult(const std::string& descriptor,
                                     const tapescope::QueryResult<json>& result);
 std::string DescribeSeekOrderResult(const std::string& descriptor,
                                     const tapescope::QueryResult<tapescope::SeekOrderPayload>& result);
+std::string DescribeReplaySnapshotPayload(const tapescope::QueryResult<tapescope::ReplaySnapshotPayload>& result);
 std::string DescribeReportInventoryResult(const tapescope::QueryResult<json>& sessionReports,
                                           const tapescope::QueryResult<json>& caseReports);
 std::string DescribeReportInventoryResult(const tapescope::QueryResult<tapescope::ReportInventoryPayload>& sessionReports,

@@ -29,6 +29,43 @@ constexpr const char* kGeminiSdkSidecarExecutablePath = TWS_GEMINI_SDK_SIDECAR_E
 constexpr const char* kGeminiSdkSidecarExecutablePath = "";
 #endif
 
+json fastSchema();
+json deepSchema();
+
+std::string laneModel(const BuildRequest&) {
+    if (const char* model = std::getenv("LONG_GEMINI_MODEL"); model != nullptr && *model != '\0') {
+        return model;
+    }
+    return "gemini-3.1-flash-lite-preview";
+}
+
+json laneSchema(const BuildRequest& request) {
+    return request.lane == Lane::Deep ? deepSchema() : fastSchema();
+}
+
+std::string lanePrompt(const json& packetArtifact, const BuildRequest& request, bool strictJsonOnly) {
+    const std::string schemaText = laneSchema(request).dump();
+    const std::string focusQuestion = request.focusQuestion.empty()
+        ? std::string()
+        : ("\nOperator focus question: " + request.focusQuestion + "\nPrioritize answering this question using only evidence present in the packet.");
+    if (request.lane == Lane::Deep) {
+        return std::string("You are evaluating a backend-built deep incident context packet. ") +
+            "Use only the evidence present in the packet. Return JSON matching the required schema." +
+            (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
+            " Schema: " + schemaText +
+            focusQuestion +
+            "\n\n" +
+            packetArtifact.dump();
+    }
+    return std::string("You are evaluating a backend-built fast incident context packet. ") +
+        "Use only the evidence present in the packet. Return JSON matching the required schema." +
+        (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
+        " Schema: " + schemaText +
+        focusQuestion +
+        "\n\n" +
+        packetArtifact.dump();
+}
+
 json fastSchema() {
     return {
         {"type", "object"},
@@ -59,17 +96,6 @@ json deepSchema() {
             {"warnings", json{{"type", "array"}, {"items", json{{"type", "string"}}}}}
         }}
     };
-}
-
-std::string laneModel(const BuildRequest&) {
-    if (const char* model = std::getenv("LONG_GEMINI_MODEL"); model != nullptr && *model != '\0') {
-        return model;
-    }
-    return "gemini-2.5-flash";
-}
-
-json laneSchema(const BuildRequest& request) {
-    return request.lane == Lane::Deep ? deepSchema() : fastSchema();
 }
 
 std::string trimAscii(std::string value) {
@@ -139,24 +165,6 @@ std::string readCommandOutput(const std::string& command, int& exitCode) {
     }
     exitCode = systemExitCode(pclose(pipe));
     return output;
-}
-
-std::string lanePrompt(const json& packetArtifact, const BuildRequest& request, bool strictJsonOnly) {
-    const std::string schemaText = laneSchema(request).dump();
-    if (request.lane == Lane::Deep) {
-        return std::string("You are evaluating a backend-built deep incident context packet. ") +
-            "Use only the evidence present in the packet. Return JSON matching the required schema." +
-            (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
-            " Schema: " + schemaText +
-            "\n\n" +
-            packetArtifact.dump();
-    }
-    return std::string("You are evaluating a backend-built fast incident context packet. ") +
-        "Use only the evidence present in the packet. Return JSON matching the required schema." +
-        (strictJsonOnly ? " Return only raw JSON with no markdown, no prose, and no code fences." : "") +
-        " Schema: " + schemaText +
-        "\n\n" +
-        packetArtifact.dump();
 }
 
 json parseCandidateText(std::string text) {

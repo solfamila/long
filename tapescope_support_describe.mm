@@ -4,6 +4,60 @@
 
 namespace tapescope_support {
 
+namespace {
+
+void AppendLine(std::ostringstream& out, const char* key, const std::string& value) {
+    if (!value.empty()) {
+        out << key << ": " << value << '\n';
+    }
+}
+
+void AppendUIntLine(std::ostringstream& out, const char* key, std::uint64_t value) {
+    if (value > 0) {
+        out << key << ": " << value << '\n';
+    }
+}
+
+void AppendDoubleLine(std::ostringstream& out, const char* key, const json& event, const char* field) {
+    const auto it = event.find(field);
+    if (it != event.end() && it->is_number()) {
+        out << key << ": " << it->get<double>() << '\n';
+    }
+}
+
+void AppendAnchorBlock(std::ostringstream& out, const json& event) {
+    if (!event.is_object()) {
+        return;
+    }
+    const auto anchorIt = event.find("anchor");
+    if (anchorIt == event.end() || !anchorIt->is_object()) {
+        return;
+    }
+    const json& anchor = *anchorIt;
+    const std::uint64_t traceId = FirstPresentUInt64(anchor, {"trace_id"});
+    const std::uint64_t orderId = FirstPresentUInt64(anchor, {"order_id"});
+    const std::uint64_t permId = FirstPresentUInt64(anchor, {"perm_id"});
+    const std::string execId = FirstPresentString(anchor, {"exec_id"});
+    if (traceId == 0 && orderId == 0 && permId == 0 && execId.empty()) {
+        return;
+    }
+    out << "anchor:\n";
+    if (traceId > 0) {
+        out << "  trace_id: " << traceId << '\n';
+    }
+    if (orderId > 0) {
+        out << "  order_id: " << orderId << '\n';
+    }
+    if (permId > 0) {
+        out << "  perm_id: " << permId << '\n';
+    }
+    if (!execId.empty()) {
+        out << "  exec_id: " << execId << '\n';
+    }
+}
+
+} // namespace
+
 std::string FirstPresentString(const json& payload,
                                std::initializer_list<const char*> keys) {
     if (!payload.is_object()) {
@@ -144,6 +198,117 @@ std::string DescribeLiveEventsPane(const tapescope::QueryResult<std::vector<tape
         }
         out << event.raw.dump(2) << "\n\n";
     }
+    return out.str();
+}
+
+std::string DescribeLiveEventSummary(const json& event) {
+    std::ostringstream out;
+    const std::string wallTime = FirstPresentString(event, {"wall_time"});
+    const std::string symbol = FirstPresentString(event, {"symbol"});
+    const std::string kind = FirstPresentString(event, {"event_kind"});
+    const std::string side = FirstPresentString(event, {"side"});
+    const auto priceIt = event.find("price");
+    const auto sizeIt = event.find("size");
+    if (!wallTime.empty()) {
+        out << wallTime << "  ";
+    }
+    if (!symbol.empty()) {
+        out << symbol << "  ";
+    }
+    out << (kind.empty() ? "event" : kind);
+    if (!side.empty()) {
+        out << "  " << side;
+    }
+    if (priceIt != event.end() && priceIt->is_number()) {
+        out << "  @" << priceIt->get<double>();
+    }
+    if (sizeIt != event.end() && sizeIt->is_number()) {
+        out << " x " << sizeIt->get<double>();
+    }
+    out << "\n";
+
+    const std::string summary = FirstPresentString(event, {"summary", "note", "details", "message"});
+    if (!summary.empty()) {
+        out << summary << "\n";
+    }
+
+    const std::uint64_t sessionSeq = FirstPresentUInt64(event, {"session_seq"});
+    const std::uint64_t sourceSeq = FirstPresentUInt64(event, {"source_seq"});
+    if (sessionSeq > 0 || sourceSeq > 0) {
+        out << "session " << sessionSeq;
+        if (sourceSeq > 0) {
+            out << "  •  source " << sourceSeq;
+        }
+        out << "\n";
+    }
+
+    const std::string source = FirstPresentString(event, {"source"});
+    const std::string fallbackState = FirstPresentString(event, {"fallback_state"});
+    const std::string fallbackReason = FirstPresentString(event, {"fallback_reason"});
+    if (!source.empty() || !fallbackState.empty()) {
+        out << (source.empty() ? "live source unavailable" : source);
+        if (!fallbackState.empty()) {
+            out << "  •  " << fallbackState;
+        }
+        if (!fallbackReason.empty()) {
+            out << " (" << fallbackReason << ")";
+        }
+        out << "\n";
+    }
+    return out.str();
+}
+
+std::string DescribeLiveEventSummary(const tapescope::EventRow& event) {
+    return DescribeLiveEventSummary(event.raw);
+}
+
+std::string DescribeLiveEventDetail(const json& event) {
+    std::ostringstream out;
+    AppendUIntLine(out, "session_seq", FirstPresentUInt64(event, {"session_seq"}));
+    AppendUIntLine(out, "source_seq", FirstPresentUInt64(event, {"source_seq"}));
+    AppendLine(out, "wall_time", FirstPresentString(event, {"wall_time"}));
+    AppendLine(out, "event_kind", FirstPresentString(event, {"event_kind"}));
+    AppendLine(out, "record_type", FirstPresentString(event, {"record_type"}));
+    AppendLine(out, "instrument_id", FirstPresentString(event, {"instrument_id"}));
+    AppendLine(out, "symbol", FirstPresentString(event, {"symbol"}));
+    AppendLine(out, "side", FirstPresentString(event, {"side"}));
+    AppendDoubleLine(out, "price", event, "price");
+    AppendDoubleLine(out, "size", event, "size");
+    AppendLine(out, "source", FirstPresentString(event, {"source"}));
+    AppendLine(out, "summary", FirstPresentString(event, {"summary", "note", "details", "message"}));
+    AppendLine(out, "fallback_state", FirstPresentString(event, {"fallback_state"}));
+    AppendLine(out, "fallback_reason", FirstPresentString(event, {"fallback_reason"}));
+    AppendLine(out, "instrument_status", FirstPresentString(event, {"instrument_identity_status"}));
+    AppendAnchorBlock(out, event);
+    out << "\nraw:\n" << event.dump(2);
+    return out.str();
+}
+
+std::string DescribeLiveEventDetail(const tapescope::EventRow& event) {
+    std::ostringstream out;
+    if (event.sessionSeq > 0) {
+        out << "session_seq: " << event.sessionSeq << '\n';
+    }
+    if (event.sourceSeq > 0) {
+        out << "source_seq: " << event.sourceSeq << '\n';
+    }
+    AppendLine(out, "wall_time", FirstPresentString(event.raw, {"wall_time"}));
+    AppendLine(out, "event_kind", event.eventKind);
+    AppendLine(out, "record_type", FirstPresentString(event.raw, {"record_type"}));
+    AppendLine(out, "instrument_id", event.instrumentId);
+    AppendLine(out, "symbol", FirstPresentString(event.raw, {"symbol"}));
+    AppendLine(out, "side", event.side);
+    if (event.price.has_value()) {
+        out << "price: " << *event.price << '\n';
+    }
+    AppendDoubleLine(out, "size", event.raw, "size");
+    AppendLine(out, "source", FirstPresentString(event.raw, {"source"}));
+    AppendLine(out, "summary", !event.summary.empty() ? event.summary : FirstPresentString(event.raw, {"note", "details", "message"}));
+    AppendLine(out, "fallback_state", FirstPresentString(event.raw, {"fallback_state"}));
+    AppendLine(out, "fallback_reason", FirstPresentString(event.raw, {"fallback_reason"}));
+    AppendLine(out, "instrument_status", FirstPresentString(event.raw, {"instrument_identity_status"}));
+    AppendAnchorBlock(out, event.raw);
+    out << "\nraw:\n" << event.raw.dump(2);
     return out.str();
 }
 
@@ -330,6 +495,50 @@ std::string DescribeInvestigationPayload(const std::string& heading,
     return DescribeInvestigationPayload(heading, descriptor, proxy);
 }
 
+std::string DescribeSimpleReviewContext(const tapescope::InvestigationPayload& payload) {
+    std::ostringstream out;
+    out << "trade_context\n";
+    if (!payload.headline.empty()) {
+        out << "  headline: " << payload.headline << "\n";
+    }
+    if (!payload.detail.empty()) {
+        out << "  detail: " << payload.detail << "\n";
+    }
+    out << "  artifact_kind: " << (payload.artifactKind.empty() ? "--" : payload.artifactKind) << "\n";
+    out << "  artifact_id: " << (payload.artifactId.empty() ? "--" : payload.artifactId) << "\n";
+    out << "  incidents: " << payload.incidents.size() << "\n";
+    out << "  citations: " << payload.evidence.size() << "\n";
+    if (payload.replayRange.has_value()) {
+        out << "  replay_window: [" << payload.replayRange->firstSessionSeq
+            << ", " << payload.replayRange->lastSessionSeq << "]\n";
+    }
+    if (!payload.incidents.empty()) {
+        out << "\nranked_incidents:\n";
+        for (std::size_t index = 0; index < payload.incidents.size() && index < 5; ++index) {
+            const auto& incident = payload.incidents[index];
+            out << "  - #" << incident.logicalIncidentId
+                << " " << incident.kind
+                << " score=" << incident.score;
+            if (!incident.title.empty()) {
+                out << " :: " << incident.title;
+            }
+            out << "\n";
+        }
+    }
+    if (!payload.evidence.empty()) {
+        out << "\nkey_citations:\n";
+        for (std::size_t index = 0; index < payload.evidence.size() && index < 5; ++index) {
+            const auto& citation = payload.evidence[index];
+            out << "  - " << (citation.label.empty() ? citation.kind : citation.label);
+            if (!citation.artifactId.empty()) {
+                out << " [" << citation.artifactId << "]";
+            }
+            out << "\n";
+        }
+    }
+    return out.str();
+}
+
 std::string DescribeEnrichmentPayload(const std::string& heading,
                                       const std::string& descriptor,
                                       const tapescope::QueryResult<tapescope::EnrichmentPayload>& result) {
@@ -492,6 +701,9 @@ std::string DescribeEnrichmentPayload(const std::string& heading,
     out << "  status: " << payload.interpretation.value("status", std::string("--")) << "\n";
     out << "  lane: " << payload.interpretation.value("lane", std::string("--")) << "\n";
     out << "  task: " << payload.interpretation.value("task", std::string("--")) << "\n";
+    if (payload.interpretation.contains("focus_question") && payload.interpretation["focus_question"].is_string()) {
+        out << "  focus_question: " << payload.interpretation.value("focus_question", std::string()) << "\n";
+    }
     out << "  model: " << payload.interpretation.value("model", std::string("--")) << "\n";
     out << "  finish_reason: " << payload.interpretation.value("finish_reason", std::string("--")) << "\n";
     if (payload.interpretation.contains("content") && !payload.interpretation["content"].is_null()) {
@@ -505,6 +717,75 @@ std::string DescribeEnrichmentPayload(const std::string& heading,
     out << "provider_metadata:\n" << payload.providerMetadata.dump(2) << "\n\n";
     out << "degradation:\n" << payload.degradation.dump(2) << "\n\n";
     out << "cache:\n" << payload.cache.dump(2) << '\n';
+    return out.str();
+}
+
+std::string DescribeSimpleReviewAnswer(const tapescope::EnrichmentPayload& payload) {
+    std::ostringstream out;
+    const json interpretation = payload.interpretation.is_object() ? payload.interpretation : json::object();
+    const json content = interpretation.value("content", json(nullptr));
+    const json liveCapture = payload.liveCaptureSummary.is_object()
+        ? payload.liveCaptureSummary
+        : payload.providerMetadata.value("live_capture_summary", json::object());
+
+    out << "uw_gemini_answer\n";
+    if (interpretation.contains("focus_question") && interpretation["focus_question"].is_string()) {
+        out << "  question: " << interpretation.value("focus_question", std::string()) << "\n";
+    }
+    out << "  model: " << interpretation.value("model", std::string("--")) << "\n";
+    out << "  status: " << interpretation.value("status", std::string("--")) << "\n";
+    if (!payload.headline.empty()) {
+        out << "  headline: " << payload.headline << "\n";
+    }
+    if (content.is_object()) {
+        const std::string summary = content.value("summary",
+            content.value("headline", content.value("why_it_matters", std::string())));
+        if (!summary.empty()) {
+            out << "\nanswer:\n  " << summary << "\n";
+        }
+        const json tags = content.value("tags", json::array());
+        if (tags.is_array() && !tags.empty()) {
+            out << "\ntags:\n";
+            for (const auto& tag : tags) {
+                if (tag.is_string()) {
+                    out << "  - " << tag.get<std::string>() << "\n";
+                }
+            }
+        }
+        const json topEvidence = content.value("top_evidence", json::array());
+        if (topEvidence.is_array() && !topEvidence.empty()) {
+            out << "\nwhy_gemini_thinks_that:\n";
+            for (const auto& item : topEvidence) {
+                if (item.is_string()) {
+                    out << "  - " << item.get<std::string>() << "\n";
+                }
+            }
+        }
+        const json rankedCauses = content.value("ranked_causes", json::array());
+        if (rankedCauses.is_array() && !rankedCauses.empty()) {
+            out << "\nranked_causes:\n";
+            for (const auto& cause : rankedCauses) {
+                if (!cause.is_object()) {
+                    continue;
+                }
+                out << "  - " << cause.value("cause", std::string("--"))
+                    << " (" << cause.value("score", 0.0) << ")\n";
+            }
+        }
+        if (content.contains("confidence")) {
+            out << "\nconfidence: " << content.value("confidence", 0.0) << "\n";
+        }
+    }
+    out << "\nuw_context:\n";
+    out << "  live_capture: "
+        << (liveCapture.is_object() ? liveCapture.value("outcome", std::string("--")) : std::string("--")) << "\n";
+    if (liveCapture.is_object() && liveCapture.contains("summary_text")) {
+        out << "  live_detail: " << liveCapture.value("summary_text", std::string("--")) << "\n";
+    }
+    const json degradation = payload.degradation.is_object() ? payload.degradation : json::object();
+    if (degradation.value("is_degraded", false)) {
+        out << "  degradation: " << degradation.value("message", std::string("context degraded")) << "\n";
+    }
     return out.str();
 }
 
@@ -625,6 +906,56 @@ std::string DescribeReportInventoryResult(const tapescope::QueryResult<tapescope
                 << " report_type=" << row.reportType
                 << " headline=" << row.headline << '\n';
         }
+    }
+    return out.str();
+}
+
+std::string DescribeReplaySnapshotPayload(const tapescope::QueryResult<tapescope::ReplaySnapshotPayload>& result) {
+    std::ostringstream out;
+    if (!result.ok()) {
+        out << tapescope::QueryClient::describeError(result.error) << '\n';
+        return out.str();
+    }
+
+    const auto& payload = result.value;
+    out << "replay_snapshot\n";
+    out << "  target_session_seq: " << payload.targetSessionSeq << "\n";
+    out << "  replayed_through_session_seq: " << payload.replayedThroughSessionSeq << "\n";
+    out << "  applied_event_count: " << payload.appliedEventCount << "\n";
+    out << "  includes_mutable_tail: " << (payload.includesMutableTail ? "yes" : "no") << "\n";
+    out << "  checkpoint_used: " << (payload.checkpointUsed ? "yes" : "no") << "\n";
+    if (payload.bidPrice.is_number()) {
+        out << "  best_bid: " << payload.bidPrice.get<double>() << "\n";
+    }
+    if (payload.askPrice.is_number()) {
+        out << "  best_ask: " << payload.askPrice.get<double>() << "\n";
+    }
+    if (payload.lastPrice.is_number()) {
+        out << "  last_trade: " << payload.lastPrice.get<double>() << "\n";
+    }
+    out << "\nlevel_2_book:\n";
+    const std::size_t levelCount = std::max(payload.bidBook.is_array() ? payload.bidBook.size() : 0ULL,
+                                            payload.askBook.is_array() ? payload.askBook.size() : 0ULL);
+    if (levelCount == 0) {
+        out << "  No bid/ask book levels available.\n";
+    } else {
+        out << "  ask_size   ask_price   |   bid_price   bid_size\n";
+        for (std::size_t index = 0; index < levelCount; ++index) {
+            const json ask = payload.askBook.is_array() && index < payload.askBook.size()
+                ? payload.askBook.at(index)
+                : json::object();
+            const json bid = payload.bidBook.is_array() && index < payload.bidBook.size()
+                ? payload.bidBook.at(index)
+                : json::object();
+            const std::string askSize = ask.contains("size") ? std::to_string(ask.value("size", 0.0)) : std::string("--");
+            const std::string askPrice = ask.contains("price") ? std::to_string(ask.value("price", 0.0)) : std::string("--");
+            const std::string bidPrice = bid.contains("price") ? std::to_string(bid.value("price", 0.0)) : std::string("--");
+            const std::string bidSize = bid.contains("size") ? std::to_string(bid.value("size", 0.0)) : std::string("--");
+            out << "  " << askSize << "   " << askPrice << "   |   " << bidPrice << "   " << bidSize << "\n";
+        }
+    }
+    if (payload.dataQuality.is_object() && !payload.dataQuality.empty()) {
+        out << "\ndata_quality:\n" << payload.dataQuality.dump(2) << "\n";
     }
     return out.str();
 }

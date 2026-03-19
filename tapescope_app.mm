@@ -29,12 +29,110 @@ NSColor* PaneButtonIdleBorderColor() {
     return [NSColor colorWithCalibratedRed:0.827 green:0.792 blue:0.714 alpha:1.0];
 }
 
+NSAttributedString* StyledPaneButtonTitle(NSString* title, BOOL selected) {
+    NSColor* color = selected ? [NSColor whiteColor] : TapeInkPrimaryColor();
+    NSFont* font = [NSFont systemFontOfSize:13.0 weight:selected ? NSFontWeightBold : NSFontWeightSemibold];
+    return [[NSAttributedString alloc] initWithString:title ?: @"Pane"
+                                           attributes:@{
+        NSForegroundColorAttributeName: color,
+        NSFontAttributeName: font
+    }];
+}
+
+NSRect ClampedWindowFrameForVisibleScreen(NSWindow* window) {
+    NSScreen* screen = window.screen ?: [NSScreen mainScreen];
+    if (screen == nil) {
+        return NSMakeRect(0, 0, 1180, 760);
+    }
+
+    const NSRect visible = screen.visibleFrame;
+    const CGFloat horizontalInset = 20.0;
+    const CGFloat verticalInset = 20.0;
+    const CGFloat maxWidth = std::max<CGFloat>(820.0, visible.size.width - horizontalInset * 2.0);
+    const CGFloat maxHeight = std::max<CGFloat>(520.0, visible.size.height - verticalInset * 2.0);
+    const CGFloat preferredWidth = std::min<CGFloat>(1180.0, maxWidth);
+    const CGFloat preferredHeight = std::min<CGFloat>(760.0, maxHeight);
+
+    NSRect frame = window.frame;
+    const bool unusableFrame =
+        frame.size.width <= 0.0 || frame.size.height <= 0.0 ||
+        frame.size.width > maxWidth || frame.size.height > maxHeight ||
+        !NSIntersectsRect(frame, visible);
+    if (unusableFrame) {
+        frame.size = NSMakeSize(preferredWidth, preferredHeight);
+        frame.origin.x = NSMidX(visible) - frame.size.width / 2.0;
+        frame.origin.y = NSMidY(visible) - frame.size.height / 2.0;
+    } else {
+        frame.size.width = std::min(frame.size.width, maxWidth);
+        frame.size.height = std::min(frame.size.height, maxHeight);
+        frame.origin.x = std::max(NSMinX(visible) + horizontalInset,
+                                  std::min(frame.origin.x,
+                                           NSMaxX(visible) - horizontalInset - frame.size.width));
+        frame.origin.y = std::max(NSMinY(visible) + verticalInset,
+                                  std::min(frame.origin.y,
+                                           NSMaxY(visible) - verticalInset - frame.size.height));
+    }
+    return NSIntegralRect(frame);
+}
+
+NSRect PreferredStartupWindowFrameForVisibleScreen(NSWindow* window) {
+    NSScreen* screen = window.screen ?: [NSScreen mainScreen];
+    if (screen == nil) {
+        return NSMakeRect(0, 0, 1120, 700);
+    }
+
+    const NSRect visible = screen.visibleFrame;
+    const CGFloat horizontalInset = 20.0;
+    const CGFloat verticalInset = 20.0;
+    const CGFloat width = std::min<CGFloat>(1120.0, std::max<CGFloat>(860.0, visible.size.width - horizontalInset * 2.0));
+    const CGFloat height = std::min<CGFloat>(700.0, std::max<CGFloat>(520.0, visible.size.height - verticalInset * 2.0));
+    NSRect frame = NSMakeRect(NSMidX(visible) - width / 2.0,
+                              NSMidY(visible) - height / 2.0,
+                              width,
+                              height);
+    return NSIntegralRect(frame);
+}
+
+NSString* OptionalEnvString(const char* key) {
+    const char* value = std::getenv(key);
+    if (value == nullptr || value[0] == '\0') {
+        return nil;
+    }
+    return [NSString stringWithUTF8String:value];
+}
+
 } // namespace
 
 @implementation TapeScopeWindowController
 
+- (void)clampWindowToVisibleScreen {
+    if (self.window == nil) {
+        return;
+    }
+    const NSRect clamped = ClampedWindowFrameForVisibleScreen(self.window);
+    if (!NSEqualRects(self.window.frame, clamped)) {
+        [self.window setFrame:clamped display:YES];
+    }
+}
+
+- (void)scheduleClampWindowToVisibleScreen {
+    if (_windowClampScheduled) {
+        return;
+    }
+    _windowClampScheduled = YES;
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            return;
+        }
+        strongSelf->_windowClampScheduled = NO;
+        [strongSelf clampWindowToVisibleScreen];
+    });
+}
+
 - (instancetype)init {
-    NSRect frame = NSMakeRect(0, 0, 1120, 760);
+    NSRect frame = NSMakeRect(0, 0, 1120, 700);
     NSWindow* window = [[NSWindow alloc] initWithContentRect:frame
                                                    styleMask:(NSWindowStyleMaskTitled |
                                                               NSWindowStyleMaskClosable |
@@ -48,14 +146,14 @@ NSColor* PaneButtonIdleBorderColor() {
     }
 
     window.title = @"TapeScope";
-    window.minSize = NSMakeSize(900, 620);
+    window.minSize = NSMakeSize(780, 460);
     window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace;
-    if (@available(macOS 11.0, *)) {
-        window.toolbarStyle = NSWindowToolbarStyleUnified;
-    }
-    window.titleVisibility = NSWindowTitleHidden;
-    window.titlebarAppearsTransparent = YES;
+    window.delegate = (id<NSWindowDelegate>)self;
+    window.titleVisibility = NSWindowTitleVisible;
+    window.titlebarAppearsTransparent = NO;
+    window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
     window.contentView.wantsLayer = YES;
+    window.contentView.appearance = window.appearance;
     window.contentView.layer.backgroundColor = TapeBackgroundColor().CGColor;
 
     tapescope::ClientConfig config;
@@ -79,6 +177,7 @@ NSColor* PaneButtonIdleBorderColor() {
 
     [self buildInterface];
     [self restoreApplicationState];
+    NSLog(@"TapeScopeWindowController init window=%@ visible=%d", window, window.isVisible);
     return self;
 }
 
@@ -115,20 +214,57 @@ NSColor* PaneButtonIdleBorderColor() {
     NSStackView* stack = paneWithStack.stack;
     NSView* pane = paneWithStack.view;
 
-    [stack addArrangedSubview:MakeIntroLabel(@"Live tape: recent mutable-tail events from tape_engine with row-level drilldown.")];
-
     _liveTableView = MakeStandardTableView(self, self);
-    AddTableColumn(_liveTableView, @"session_seq", @"session_seq", 120.0);
-    AddTableColumn(_liveTableView, @"source_seq", @"source_seq", 120.0);
-    AddTableColumn(_liveTableView, @"event_kind", @"event_kind", 180.0);
-    AddTableColumn(_liveTableView, @"summary", @"summary", 460.0);
-    [stack addArrangedSubview:MakeTableScrollView(_liveTableView, 170.0)];
+    AddTableColumn(_liveTableView, @"session_seq", @"", 120.0);
+    AddTableColumn(_liveTableView, @"source_seq", @"", 120.0);
+    AddTableColumn(_liveTableView, @"event_kind", @"", 180.0);
+    AddTableColumn(_liveTableView, @"summary", @"", 460.0);
+    ConfigureCompactDarkTableView(_liveTableView);
+    _liveDetailTextView = MakeReadOnlyTextView();
+    SetTextViewString(_liveDetailTextView, @"Waiting for the first live-tail response…");
 
-    [stack addArrangedSubview:MakeSectionLabel(@"Selected Live Event")];
+    NSScrollView* liveTableScroll = MakeTableScrollView(_liveTableView, 260.0);
+    ConfigureCompactDarkTableScrollView(liveTableScroll);
+    const auto liveDetailCardWithStack = MakeCardWithStack(4.0);
+    liveDetailCardWithStack.stack.alignment = NSLayoutAttributeWidth;
+    NSBox* liveDetailCard = liveDetailCardWithStack.box;
+    [liveDetailCardWithStack.stack addArrangedSubview:MakeScrollView(_liveDetailTextView, 260.0)];
 
-    _liveTextView = MakeReadOnlyTextView();
-    _liveTextView.string = @"Waiting for the first live-tail response…";
-    [stack addArrangedSubview:MakeScrollView(_liveTextView, 240.0)];
+    const auto tableCardWithStack = MakeCardWithStack(6.0);
+    tableCardWithStack.stack.alignment = NSLayoutAttributeWidth;
+    [tableCardWithStack.stack addArrangedSubview:MakeSectionLabel(@"Live Tape")];
+    [tableCardWithStack.stack addArrangedSubview:liveTableScroll];
+
+    const auto detailCardContainerWithStack = MakeCardWithStack(6.0);
+    detailCardContainerWithStack.stack.alignment = NSLayoutAttributeWidth;
+    [detailCardContainerWithStack.stack addArrangedSubview:MakeSectionLabel(@"Selected Live Event")];
+    [detailCardContainerWithStack.stack addArrangedSubview:liveDetailCard];
+
+    NSStackView* columns = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    columns.translatesAutoresizingMaskIntoConstraints = NO;
+    columns.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    columns.alignment = NSLayoutAttributeTop;
+    columns.distribution = NSStackViewDistributionFill;
+    columns.spacing = 10.0;
+    [columns addArrangedSubview:tableCardWithStack.box];
+    [columns addArrangedSubview:detailCardContainerWithStack.box];
+    [tableCardWithStack.box.widthAnchor constraintGreaterThanOrEqualToConstant:560.0].active = YES;
+    [detailCardContainerWithStack.box.widthAnchor constraintGreaterThanOrEqualToConstant:300.0].active = YES;
+    [tableCardWithStack.box setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [detailCardContainerWithStack.box setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [tableCardWithStack.box setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [detailCardContainerWithStack.box setContentCompressionResistancePriority:NSLayoutPriorityDefaultHigh
+                                                               forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [liveTableScroll setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                              forOrientation:NSLayoutConstraintOrientationVertical];
+    [tableCardWithStack.box setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                     forOrientation:NSLayoutConstraintOrientationVertical];
+    [detailCardContainerWithStack.box setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                               forOrientation:NSLayoutConstraintOrientationVertical];
+    [stack addArrangedSubview:columns];
 
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"LiveEventsPane"];
     item.label = @"Live";
@@ -910,13 +1046,16 @@ NSColor* PaneButtonIdleBorderColor() {
 
 - (void)buildInterface {
     NSView* contentView = self.window.contentView;
-    NSStackView* root = MakeColumnStack(18.0);
+    NSView* root = [[NSView alloc] initWithFrame:NSZeroRect];
+    root.translatesAutoresizingMaskIntoConstraints = NO;
+    root.wantsLayer = YES;
+    root.layer.backgroundColor = TapeBackgroundColor().CGColor;
     [contentView addSubview:root];
     [NSLayoutConstraint activateConstraints:@[
-        [root.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor constant:22.0],
-        [root.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor constant:-22.0],
-        [root.topAnchor constraintEqualToAnchor:contentView.topAnchor constant:20.0],
-        [root.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor constant:-20.0]
+        [root.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor constant:10.0],
+        [root.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor constant:-10.0],
+        [root.topAnchor constraintEqualToAnchor:contentView.topAnchor constant:10.0],
+        [root.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor constant:-10.0]
     ]];
 
     const auto headerCardWithStack = MakeCardWithStack(10.0);
@@ -924,12 +1063,12 @@ NSColor* PaneButtonIdleBorderColor() {
     NSBox* headerCard = headerCardWithStack.box;
 
     NSTextField* title = MakeLabel(@"TapeScope",
-                                   [NSFont systemFontOfSize:30.0 weight:NSFontWeightBlack],
-                                   [NSColor labelColor]);
+                                   [NSFont systemFontOfSize:18.0 weight:NSFontWeightBold],
+                                   TapeInkPrimaryColor());
     [headerStack addArrangedSubview:title];
 
-    NSTextField* subtitle = MakeLabel(@"Phase 4/6/7: native status, live-tail, overview, incident, replay-target, range, quality, finding, anchor, order case, report inventory, artifact/export, portable bundle workflows, and local Phase 7 artifact reopen flows backed by the engine and durable artifact seams.",
-                                      [NSFont systemFontOfSize:13.0 weight:NSFontWeightMedium],
+    NSTextField* subtitle = MakeLabel(@"Review the trade you took, inspect the replay and Level 2 around it, then ask UW + Gemini what mattered.",
+                                      [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium],
                                       TapeInkMutedColor());
     subtitle.lineBreakMode = NSLineBreakByWordWrapping;
     subtitle.maximumNumberOfLines = 2;
@@ -938,12 +1077,12 @@ NSColor* PaneButtonIdleBorderColor() {
     const auto bannerCardWithStack = MakeCardWithStack(4.0);
     NSStackView* bannerStack = bannerCardWithStack.stack;
     _bannerBox = bannerCardWithStack.box;
-    _bannerBox.fillColor = [[NSColor secondaryLabelColor] colorWithAlphaComponent:0.10];
-    _bannerBox.borderColor = [[NSColor secondaryLabelColor] colorWithAlphaComponent:0.18];
+    _bannerBox.fillColor = [TapeInkMutedColor() colorWithAlphaComponent:0.10];
+    _bannerBox.borderColor = [TapeInkMutedColor() colorWithAlphaComponent:0.18];
 
     _bannerLabel = MakeLabel(@"Waiting for tape_engine",
                              [NSFont systemFontOfSize:14.0 weight:NSFontWeightSemibold],
-                             [NSColor secondaryLabelColor]);
+                             TapeInkPrimaryColor());
     [bannerStack addArrangedSubview:_bannerLabel];
 
     NSStackView* bannerControls = MakeControlRow();
@@ -967,37 +1106,23 @@ NSColor* PaneButtonIdleBorderColor() {
                                               action:@selector(togglePolling:)];
     [bannerControls addArrangedSubview:_pollingToggleButton];
     [bannerStack addArrangedSubview:bannerControls];
+    _engineSummaryLabel = MakeLabel(@"Waiting for the first engine probe…",
+                                    [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium],
+                                    TapeInkMutedColor());
+    _engineSummaryLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    [bannerStack addArrangedSubview:_engineSummaryLabel];
     [headerStack addArrangedSubview:_bannerBox];
-    [root addArrangedSubview:headerCard];
-
-    NSGridView* summaryGrid = [NSGridView gridViewWithViews:@[
-        @[MakeSectionLabel(@"Socket"), (_socketValue = MakeValueLabel())],
-        @[MakeSectionLabel(@"Data Dir"), (_dataDirValue = MakeValueLabel())],
-        @[MakeSectionLabel(@"Instrument"), (_instrumentValue = MakeValueLabel())],
-        @[MakeSectionLabel(@"Latest Session Seq"), (_latestSeqValue = MakeValueLabel())],
-        @[MakeSectionLabel(@"Live Event Count"), (_liveCountValue = MakeValueLabel())],
-        @[MakeSectionLabel(@"Segment Count"), (_segmentCountValue = MakeValueLabel())],
-        @[MakeSectionLabel(@"Manifest Hash"), (_manifestHashValue = MakeValueLabel())]
-    ]];
-    summaryGrid.translatesAutoresizingMaskIntoConstraints = NO;
-    summaryGrid.rowSpacing = 8.0;
-    summaryGrid.columnSpacing = 18.0;
-
-    const auto summaryCardWithStack = MakeCardWithStack(12.0);
-    NSStackView* summaryStack = summaryCardWithStack.stack;
-    NSBox* summaryCard = summaryCardWithStack.box;
-    [summaryStack addArrangedSubview:MakeSectionLabel(@"Engine Snapshot")];
-    [summaryStack addArrangedSubview:summaryGrid];
-    [summaryGrid.widthAnchor constraintEqualToAnchor:summaryStack.widthAnchor].active = YES;
-    [root addArrangedSubview:summaryCard];
+    [root addSubview:headerCard];
 
     _tabView = [[NSTabView alloc] initWithFrame:NSZeroRect];
     _tabView.translatesAutoresizingMaskIntoConstraints = NO;
     _tabView.delegate = self;
     _tabView.tabViewType = NSNoTabsNoBorder;
-    [_tabView addTabViewItem:[self textTabItemWithIdentifier:@"StatusPane" label:@"Status" textView:&_statusTextView]];
+    [_tabView addTabViewItem:[self simpleReviewTabItem]];
     [_tabView addTabViewItem:[self liveEventsTabItem]];
     [_tabView addTabViewItem:[self recentHistoryTabItem]];
+    [_tabView addTabViewItem:[self phase8InboxTabItem]];
+    [_tabView addTabViewItem:[self textTabItemWithIdentifier:@"StatusPane" label:@"Status" textView:&_statusTextView]];
     [_tabView addTabViewItem:[self bundleHistoryTabItem]];
     [_tabView addTabViewItem:[self overviewTabItem]];
     [_tabView addTabViewItem:[self incidentTabItem]];
@@ -1010,53 +1135,51 @@ NSColor* PaneButtonIdleBorderColor() {
     [_tabView addTabViewItem:[self orderCaseTabItem]];
     [_tabView addTabViewItem:[self reportInventoryTabItem]];
     [_tabView addTabViewItem:[self phase7ArtifactsTabItem]];
-    [_tabView addTabViewItem:[self phase8InboxTabItem]];
     [_tabView addTabViewItem:[self artifactTabItem]];
-    [_tabView.heightAnchor constraintGreaterThanOrEqualToConstant:520.0].active = YES;
 
-    const auto tabCardWithStack = MakeCardWithStack(12.0);
+    const auto tabCardWithStack = MakeCardWithStack(8.0);
     NSStackView* tabStack = tabCardWithStack.stack;
-    NSBox* tabCard = tabCardWithStack.box;
-    [tabStack addArrangedSubview:MakeSectionLabel(@"Investigation Surface")];
+    [tabStack addArrangedSubview:MakeSectionLabel(@"Workflow")];
 
-    NSStackView* surfaceRow = [[NSStackView alloc] initWithFrame:NSZeroRect];
-    surfaceRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    surfaceRow.alignment = NSLayoutAttributeTop;
-    surfaceRow.spacing = 14.0;
-    surfaceRow.translatesAutoresizingMaskIntoConstraints = NO;
-
-    const auto navCardWithStack = MakeCardWithStack(10.0);
-    NSBox* navCard = navCardWithStack.box;
-    NSStackView* navStack = navCardWithStack.stack;
-    [navCard.widthAnchor constraintEqualToConstant:210.0].active = YES;
-    [navStack addArrangedSubview:MakeSectionLabel(@"Panes")];
-    [navStack addArrangedSubview:MakeIntroLabel(@"Jump between overview, incidents, orders, artifacts, and Phase 7/8 workflows.", 3)];
+    NSStackView* modeRow = MakeControlRow();
     _paneButtons = [[NSMutableArray alloc] init];
-    for (NSTabViewItem* item in _tabView.tabViewItems) {
-        NSButton* button = [self makePaneNavigationButtonWithTitle:item.label ?: @"Pane"
-                                                         identifier:(NSString*)item.identifier];
+    for (NSDictionary* item in @[
+            @{@"title": @"Review", @"identifier": @"SimpleReviewPane"},
+            @{@"title": @"Live", @"identifier": @"LiveEventsPane"},
+            @{@"title": @"Recent", @"identifier": @"RecentPane"},
+            @{@"title": @"Inbox", @"identifier": @"Phase8Pane"}
+         ]) {
+        NSButton* button = [self makePaneNavigationButtonWithTitle:item[@"title"]
+                                                         identifier:item[@"identifier"]];
         [_paneButtons addObject:button];
-        [navStack addArrangedSubview:button];
+        [modeRow addArrangedSubview:button];
     }
+    [tabStack addArrangedSubview:modeRow];
+    [tabStack addArrangedSubview:_tabView];
+    [_tabView.widthAnchor constraintEqualToAnchor:tabStack.widthAnchor].active = YES;
+    [_tabView.heightAnchor constraintGreaterThanOrEqualToConstant:240.0].active = YES;
+    [_tabView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                       forOrientation:NSLayoutConstraintOrientationVertical];
+    [_tabView setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                         forOrientation:NSLayoutConstraintOrientationVertical];
+    [root addSubview:tabCardWithStack.box];
+    [headerCard setContentCompressionResistancePriority:NSLayoutPriorityDefaultHigh
+                                         forOrientation:NSLayoutConstraintOrientationVertical];
+    [tabCardWithStack.box setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                   forOrientation:NSLayoutConstraintOrientationVertical];
+    [tabCardWithStack.box setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                     forOrientation:NSLayoutConstraintOrientationVertical];
+    [NSLayoutConstraint activateConstraints:@[
+        [headerCard.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+        [headerCard.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+        [headerCard.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [tabCardWithStack.box.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+        [tabCardWithStack.box.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+        [tabCardWithStack.box.topAnchor constraintEqualToAnchor:headerCard.bottomAnchor constant:10.0],
+        [tabCardWithStack.box.bottomAnchor constraintEqualToAnchor:root.bottomAnchor]
+    ]];
 
-    const auto surfaceCardWithStack = MakeCardWithStack(12.0);
-    NSBox* surfaceCard = surfaceCardWithStack.box;
-    NSStackView* surfaceStack = surfaceCardWithStack.stack;
-    _activePaneLabel = MakeLabel(@"Overview",
-                                 [NSFont systemFontOfSize:18.0 weight:NSFontWeightBold],
-                                 [NSColor labelColor]);
-    [surfaceStack addArrangedSubview:_activePaneLabel];
-    [surfaceStack addArrangedSubview:MakeIntroLabel(@"Use the pane list on the left to move between investigation surfaces. The overview pane auto-loads a report on startup.",
-                                                    2)];
-    [surfaceStack addArrangedSubview:_tabView];
-
-    [surfaceRow addArrangedSubview:navCard];
-    [surfaceRow addArrangedSubview:surfaceCard];
-    [surfaceCard.widthAnchor constraintGreaterThanOrEqualToConstant:760.0].active = YES;
-    [tabStack addArrangedSubview:surfaceRow];
-    [root addArrangedSubview:tabCard];
-
-    [self selectPaneWithIdentifier:@"SessionOverviewPane"];
+    [self selectPaneWithIdentifier:@"SimpleReviewPane"];
 
     _overviewPane->bind(_overviewStateLabel,
                         _overviewTextView,
@@ -1121,44 +1244,71 @@ NSColor* PaneButtonIdleBorderColor() {
         {_artifactEvidenceTableView, _artifactPane.get()}
     };
 
-    _statusTextView.string = @"Waiting for the first status response…";
-    _liveTextView.string = @"Waiting for the first live-tail response…";
-    [self updateBannerAppearanceWithColor:[NSColor secondaryLabelColor]];
+    SetTextViewString(_statusTextView, @"Waiting for the first status response…");
+    SetTextViewString(_liveDetailTextView, @"Waiting for the first live-tail response…");
+    [self updateBannerAppearanceWithColor:TapeInkMutedColor()];
 }
 
 - (void)showWindowAndStart {
-    [self.window center];
+    NSLog(@"showWindowAndStart begin window=%@ visible=%d", self.window, self.window.isVisible);
+    [self.window setFrame:PreferredStartupWindowFrameForVisibleScreen(self.window) display:NO];
     [self showWindow:nil];
     [self.window deminiaturize:nil];
     [self.window orderFrontRegardless];
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+    [self.window.contentView layoutSubtreeIfNeeded];
+    [self clampWindowToVisibleScreen];
+    NSLog(@"showWindowAndStart after show window=%@ visible=%d frame=%@", self.window, self.window.isVisible, NSStringFromRect(self.window.frame));
 
-    if (_tabView.selectedTabViewItem == nil ||
-        [_tabView.selectedTabViewItem.identifier isEqual:@"StatusPane"]) {
-        [self selectPaneWithIdentifier:@"SessionOverviewPane"];
-        [self persistApplicationState];
+    NSString* startupPane = OptionalEnvString("LONG_TAPESCOPE_START_PANE");
+    if (startupPane.length > 0) {
+        [self selectPaneWithIdentifier:startupPane];
     }
 
-    [self.window makeFirstResponder:_overviewFirstField];
+    [self.window makeFirstResponder:_simpleReviewAnchorInputField];
     [self startPolling];
-    [self refreshIncidentList:nil];
-    [self refreshReportInventory:nil];
-    if (_tabView.selectedTabViewItem != nil &&
-        [_tabView.selectedTabViewItem.identifier isEqual:@"SessionOverviewPane"] &&
-        _overviewTextView != nil &&
-        [_overviewTextView.string containsString:@"Read a session overview"]) {
-        [self scanOverviewReport:nil];
-    }
+    [self persistApplicationState];
+    [self scheduleWindowSnapshotIfRequested];
 }
 
 - (void)updateBannerAppearanceWithColor:(NSColor*)color {
-    NSColor* tone = color ?: [NSColor secondaryLabelColor];
+    NSColor* tone = color ?: TapeInkMutedColor();
     _bannerLabel.textColor = tone;
     if (_bannerBox != nil) {
         _bannerBox.fillColor = [tone colorWithAlphaComponent:0.12];
         _bannerBox.borderColor = [tone colorWithAlphaComponent:0.24];
     }
+}
+
+- (void)scheduleWindowSnapshotIfRequested {
+    NSString* capturePath = OptionalEnvString("LONG_TAPESCOPE_CAPTURE_PATH");
+    if (capturePath.length == 0 || self.window == nil || self.window.contentView == nil) {
+        return;
+    }
+    __weak TapeScopeWindowController* weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        TapeScopeWindowController* strongSelf = weakSelf;
+        if (strongSelf == nil || strongSelf.window == nil || strongSelf.window.contentView == nil) {
+            return;
+        }
+        NSView* view = strongSelf.window.contentView;
+        [view layoutSubtreeIfNeeded];
+        NSBitmapImageRep* rep = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
+        if (rep == nil) {
+            NSLog(@"TapeScope snapshot skipped: no bitmap rep");
+            return;
+        }
+        [view cacheDisplayInRect:view.bounds toBitmapImageRep:rep];
+        NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        if (png == nil) {
+            NSLog(@"TapeScope snapshot skipped: no PNG data");
+            return;
+        }
+        BOOL ok = [png writeToFile:capturePath atomically:YES];
+        NSLog(@"TapeScope snapshot %@ path=%@", ok ? @"saved" : @"failed", capturePath);
+    });
 }
 
 - (void)updatePollingStatusText {
@@ -1188,10 +1338,37 @@ NSColor* PaneButtonIdleBorderColor() {
     button.bezelStyle = NSBezelStyleRounded;
     button.buttonType = NSButtonTypeMomentaryPushIn;
     button.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
-    button.alignment = NSTextAlignmentLeft;
+    button.alignment = NSTextAlignmentCenter;
     [button.heightAnchor constraintEqualToConstant:30.0].active = YES;
-    [button.widthAnchor constraintGreaterThanOrEqualToConstant:170.0].active = YES;
+    [button.widthAnchor constraintGreaterThanOrEqualToConstant:92.0].active = YES;
     return button;
+}
+
+- (void)populateAdvancedPanePopup {
+    if (_advancedPanePopup == nil) {
+        return;
+    }
+    [_advancedPanePopup removeAllItems];
+    NSArray<NSDictionary*>* advancedItems = @[
+        @{@"title": @"Status", @"identifier": @"StatusPane"},
+        @{@"title": @"Bundles", @"identifier": @"BundleHistoryPane"},
+        @{@"title": @"Overview", @"identifier": @"SessionOverviewPane"},
+        @{@"title": @"Incident", @"identifier": @"IncidentPane"},
+        @{@"title": @"Replay", @"identifier": @"ReplayTargetPane"},
+        @{@"title": @"Range", @"identifier": @"RangePane"},
+        @{@"title": @"Quality", @"identifier": @"QualityPane"},
+        @{@"title": @"Finding", @"identifier": @"FindingPane"},
+        @{@"title": @"Anchor", @"identifier": @"AnchorPane"},
+        @{@"title": @"Orders", @"identifier": @"OrderLookupPane"},
+        @{@"title": @"Order Case", @"identifier": @"OrderCasePane"},
+        @{@"title": @"Reports", @"identifier": @"ReportInventoryPane"},
+        @{@"title": @"Phase 7", @"identifier": @"Phase7Pane"},
+        @{@"title": @"Artifact", @"identifier": @"ArtifactPane"}
+    ];
+    for (NSDictionary* item in advancedItems) {
+        [_advancedPanePopup addItemWithTitle:item[@"title"]];
+        _advancedPanePopup.lastItem.representedObject = item[@"identifier"];
+    }
 }
 
 - (void)syncPaneSelectionChrome {
@@ -1204,11 +1381,27 @@ NSColor* PaneButtonIdleBorderColor() {
     }
     for (NSButton* button in _paneButtons) {
         const bool selected = identifier != nil && [button.identifier isEqualToString:identifier];
+        button.enabled = YES;
+        button.alphaValue = 1.0;
         button.bezelColor = selected ? PaneButtonActiveColor() : PaneButtonIdleColor();
-        button.contentTintColor = selected ? [NSColor whiteColor] : [NSColor labelColor];
-        button.font = [NSFont systemFontOfSize:13.0 weight:selected ? NSFontWeightBold : NSFontWeightSemibold];
+        button.contentTintColor = selected ? [NSColor whiteColor] : TapeInkPrimaryColor();
+        button.attributedTitle = StyledPaneButtonTitle(button.title, selected);
         if (!selected && button.wantsLayer) {
             button.layer.borderColor = PaneButtonIdleBorderColor().CGColor;
+        }
+    }
+    if (_advancedPanePopup != nil) {
+        NSInteger matchingIndex = -1;
+        for (NSInteger index = 0; index < _advancedPanePopup.numberOfItems; ++index) {
+            NSMenuItem* item = [_advancedPanePopup itemAtIndex:index];
+            if ([item.representedObject isKindOfClass:[NSString class]] &&
+                [(NSString*)item.representedObject isEqualToString:identifier]) {
+                matchingIndex = index;
+                break;
+            }
+        }
+        if (matchingIndex >= 0) {
+            [_advancedPanePopup selectItemAtIndex:matchingIndex];
         }
     }
 }
@@ -1231,11 +1424,44 @@ NSColor* PaneButtonIdleBorderColor() {
     }
 }
 
+- (void)openSelectedAdvancedPane:(id)sender {
+    (void)sender;
+    if (_advancedPanePopup == nil || _advancedPanePopup.selectedItem == nil) {
+        return;
+    }
+    NSString* identifier = _advancedPanePopup.selectedItem.representedObject;
+    if (identifier.length > 0) {
+        [self selectPaneWithIdentifier:identifier];
+        [self persistApplicationState];
+    }
+}
+
 - (void)tabView:(NSTabView*)tabView didSelectTabViewItem:(nullable NSTabViewItem*)tabViewItem {
     if (tabView != _tabView || tabViewItem == nil) {
         return;
     }
     [self syncPaneSelectionChrome];
+}
+
+- (void)windowDidResize:(NSNotification*)notification {
+    (void)notification;
+    [self clampWindowToVisibleScreen];
+}
+
+- (NSSize)windowWillResize:(NSWindow*)sender toSize:(NSSize)frameSize {
+    NSScreen* screen = sender.screen ?: [NSScreen mainScreen];
+    if (screen == nil) {
+        return frameSize;
+    }
+    const NSRect visible = screen.visibleFrame;
+    const CGFloat maxWidth = std::max<CGFloat>(780.0, visible.size.width - 20.0);
+    const CGFloat maxHeight = std::max<CGFloat>(460.0, visible.size.height - 20.0);
+    return NSMakeSize(std::min(frameSize.width, maxWidth),
+                      std::min(frameSize.height, maxHeight));
+}
+
+- (void)windowDidMove:(NSNotification*)notification {
+    (void)notification;
 }
 
 - (void)refreshNow:(id)sender {
@@ -1282,6 +1508,7 @@ NSColor* PaneButtonIdleBorderColor() {
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
     (void)notification;
+    NSLog(@"applicationDidFinishLaunching");
 
     NSMenu* mainMenu = [[NSMenu alloc] initWithTitle:@""];
     NSMenuItem* appMenuItem = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
@@ -1298,11 +1525,42 @@ NSColor* PaneButtonIdleBorderColor() {
 
     self.windowController = [[TapeScopeWindowController alloc] init];
     [self.windowController showWindowAndStart];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(0.25 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (self.windowController != nil && (self.windowController.window == nil || !self.windowController.window.isVisible)) {
+            [self.windowController showWindowAndStart];
+        }
+    });
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
     (void)sender;
     return YES;
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender;
+    if (!flag && self.windowController != nil) {
+        [self.windowController showWindowAndStart];
+    }
+    return YES;
+}
+
+- (BOOL)applicationSupportsSecureRestorableState:(NSApplication*)app {
+    (void)app;
+    return YES;
+}
+
+- (BOOL)application:(NSApplication*)application shouldSaveApplicationState:(NSCoder*)coder {
+    (void)application;
+    (void)coder;
+    return NO;
+}
+
+- (BOOL)application:(NSApplication*)application shouldRestoreApplicationState:(NSCoder*)coder {
+    (void)application;
+    (void)coder;
+    return NO;
 }
 
 - (void)applicationWillTerminate:(NSNotification*)notification {
